@@ -8,6 +8,12 @@
 - id: session-title-llm
   disabled: true
 
+# SpecDev owns Spec `/plan` as a SpecDev command (later phase). Keep native
+# plan-mode off for the sdk SpecDev composition so the two do not collide
+# (web-app precedent: disable by base row id).
+- id: plan-mode
+  disabled: true
+
 - insert:
     - id: sdk-app-startup
       name: '@deepseek-ai/dsh-sdk-app'
@@ -19,3 +25,7 @@
       inject: [sdkAppStartup, loader]
       config:
         maxTokensAsSuccess: !!js "process.env.DSH_MAX_TOKENS_AS_SUCCESS === undefined ? true : JSON.parse(process.env.DSH_MAX_TOKENS_AS_SUCCESS)"
+
+    # SpecDev runtime only in Phase 1 — gate/advance/commands/presets mount later.
+    - id: specdev
+      name: '@deepseek-ai/dsh-specdev'
