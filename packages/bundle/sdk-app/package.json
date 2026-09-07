@@ -37,6 +37,9 @@
     "@deepseek-ai/dsh-cmdline": "workspace:^",
     "@deepseek-ai/dsh-sdk-jsonrpc-server": "workspace:^",
     "@deepseek-ai/dsh-specdev": "workspace:^",
+    "@deepseek-ai/dsh-command-specdev": "workspace:^",
+    "@deepseek-ai/dsh-specdev-presets": "workspace:^",
+    "@deepseek-ai/dsh-agent-presets": "workspace:^",
     "@deepseek-ai/schemastery": "workspace:^",
     "commander": "^15.0.0"
   },

@@ -1,0 +1,20 @@
+# SpecDev Reviewer (Single) — SpecDev role preset (model A).
+# Metadata: set agent options specdev.role / specdev.slug / specdev.phaseId? on spawn.
+
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: >-
+      You are the SpecDev single reviewer (for /brief). Produce review.md with PASS/MUST-FIX/SHOULD-FIX. Not the three-perspective merge path.
+      Working directory: {{cwd}}. Publish SpecDev metadata
+      (specdev.role, specdev.slug, optional specdev.phaseId) for lineage.
+    complete: true
+    includeRuntimeContext: true
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false

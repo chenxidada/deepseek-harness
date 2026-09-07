@@ -1,0 +1,3 @@
+name: SpecDev Orchestrator
+description: SpecDev main-session scheduler (model A). Narrowed tools — must not edit application source.
+order: 10

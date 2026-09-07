@@ -24,6 +24,7 @@ import {
 import type SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import type { SubagentRunEndInfo } from '@deepseek-ai/dsh-subagent'
 import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek'
+import { attachOrchestratorMetadata } from '@deepseek-ai/dsh-specdev'
 import type {
   InitializeParams,
   InitializeResult,
@@ -390,20 +391,42 @@ export class HarnessSdkJsonRpcServer {
   }
 
   private async createSession(sessionId: string): Promise<SessionRecord> {
-    // No preset composition: this server's compositions keep the model-facing
-    // rows in the host plane, so this agent reads them from the global layer. A
-    // deployment that configures a roster has to join one here first
-    // (@deepseek-ai/dsh-agent-presets README, "Composing a child agent").
+    // SpecDev model A (sdk-app): when agent-presets is present, join the
+    // configured default (specdev-orchestrator) so persona + tool policy apply.
+    // Rosterless deployments keep host-plane composition (no setup mount).
+    const presets = this.ctx.get('agentPresets') as {
+      readonly defaultId: string
+      mount(agentCtx: Context, id?: string): Promise<unknown>
+    } | undefined
     const handle = await this.ctx.agents.create({
       sessionId: brandString<SessionId>(sessionId),
-      meta: { cwd: this.cwd },
+      meta: {
+        cwd: this.cwd,
+        ...presets === undefined ? {} : { agentPreset: presets.defaultId },
+      },
       agentOptions: {
         provider: this.provider,
         model: this.model,
         ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
         ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
       },
+      ...presets === undefined
+        ? {}
+        : {
+          setup: async (agentCtx: Context) => {
+            await presets.mount(agentCtx)
+          },
+        },
     })
+
+    const specdev = this.ctx.get('specdev') as {
+      active?: (options?: { cwd?: string }) => { slug: string } | null
+    } | undefined
+    if (typeof specdev?.active === 'function') {
+      const active = specdev.active({ cwd: this.cwd })
+      attachOrchestratorMetadata(handle.agent, active?.slug ?? `sdk-${sessionId}`)
+    }
+
     const rec: SessionRecord = { handle }
     this.sessions.set(sessionId, rec)
     return rec

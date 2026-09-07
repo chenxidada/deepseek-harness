@@ -25,8 +25,10 @@ SpecDev 组把 Spec 驱动开发带进 harness：在用户工作区落地持久 
 | 包 | 职责 | ctx 键 |
 |---|---|---|
 | [`specdev`](specdev/README.zh.md) | 工作区根、状态 I/O、`confirmGate`、事件、`specdev/status` 投影 | `ctx.specdev` |
+| [`command-specdev`](command-specdev/README.zh.md) | 斜杠命令 `/feature`…`/wiki`、`/confirm-gate`、`/status` | （commands 注册表） |
+| [`specdev-presets`](specdev-presets/README.zh.md) | Orchestrator + 角色 presets；发布 `presetRoot` | `ctx.specdevPresets` |
 
-计划中的兄弟包（后续 Phase，尚未交付）：`command-specdev`、`specdev-gate`、`specdev-advance`、`specdev-presets`。
+计划中的兄弟包（后续 Phase）：`specdev-gate`、`specdev-advance`。
 
 -----
 

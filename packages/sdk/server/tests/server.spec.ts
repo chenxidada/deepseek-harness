@@ -1188,6 +1188,56 @@ describe('HarnessSdkJsonRpcServer', () => {
     await server.shutdown()
   })
 
+  it('mounts default agent preset and attaches orchestrator metadata when agentPresets+specdev exist', async () => {
+    const mount = vi.fn(async () => ({ id: 'specdev-orchestrator' }))
+    const create = vi.fn(async (options: {
+      sessionId: string
+      meta?: { agentPreset?: string }
+      setup?: (agentCtx: Context) => Promise<void>
+    }) => {
+      const agent = {
+        id: options.sessionId,
+        options: {} as Record<string, unknown>,
+        session: { id: options.sessionId, header: { cwd: '/tmp' } },
+      } as unknown as Agent
+      if (options.setup !== undefined) {
+        await options.setup({} as Context)
+      }
+      return {
+        agent,
+        dispose: async () => undefined,
+      }
+    })
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, get: () => undefined },
+      get(name: string) {
+        if (name === 'agentPresets') {
+          return { defaultId: 'specdev-orchestrator', mount }
+        }
+        if (name === 'specdev') {
+          return { active: () => ({ slug: 'demo-workflow' }) }
+        }
+        return undefined
+      },
+    } as unknown as Context
+
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    const internal = server as unknown as {
+      createSession(sessionId: string): Promise<{ handle: AgentHandle }>
+      cwd: string
+    }
+    internal.cwd = '/tmp'
+    const rec = await internal.createSession('orch-main')
+    expect(create).toHaveBeenCalledOnce()
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      meta: { cwd: '/tmp', agentPreset: 'specdev-orchestrator' },
+    })
+    expect(mount).toHaveBeenCalledOnce()
+    expect(rec.handle.agent.options['specdev.role']).toBe('orchestrator')
+    expect(rec.handle.agent.options['specdev.slug']).toBe('demo-workflow')
+  })
+
   it('settles every teardown and aggregates multiple failures', async () => {
     const firstDispose = vi.fn(() => { throw new Error('first teardown failed') })
     const secondDispose = vi.fn(() => Promise.reject(new Error('second teardown failed')))

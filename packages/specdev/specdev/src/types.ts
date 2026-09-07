@@ -6,8 +6,15 @@
  * @module @deepseek-ai/dsh-specdev/types
  */
 
-/** Schema version of durable `current-status.json` and bridge snapshots. */
-export const SPECDEV_SCHEMA_VERSION = 1 as const
+/**
+ * Schema version of bridge snapshots (`SpecdevSnapshot.schemaVersion`).
+ *
+ * - v1: base status projection (slug/stage/phase/gates/steps/pendingGate/loopCount).
+ * - v2: additive optional `pipelineMode` + `initiatingCommand` for workflow-start
+ *   command identity (`feature` | `bugfix` | `brief` | …). Older v1 snapshots
+ *   without those fields remain valid (optional fields).
+ */
+export const SPECDEV_SCHEMA_VERSION = 2 as const
 
 /** Human Gate identifiers SpecDev can confirm. */
 export type SpecdevGateId = 'hg1' | 'hg2' | 'hg3' | 'phase-entry'
@@ -64,6 +71,16 @@ export const SPECDEV_META = {
 export interface CurrentStatusJson {
   readonly slug: string
   readonly description?: string
+  /**
+   * Slash command that started this workflow (`feature` | `bugfix` | `brief` | …).
+   * Additive (schema v2); absent on legacy files until backfilled.
+   */
+  readonly initiating_command?: string
+  /**
+   * Durable pipeline mode key, typically equal to {@link initiating_command}.
+   * Additive (schema v2); absent on legacy files until backfilled.
+   */
+  readonly pipeline_mode?: string
   readonly created: string
   readonly current_stage: string
   readonly current_phase: string | null
@@ -108,6 +125,10 @@ export interface SpecdevSnapshot {
   readonly loopCount: number
   readonly nextAction?: string
   readonly techDebtSummary?: { readonly blocking: number; readonly total: number }
+  /** Snapshot v2+: initiating slash command (`feature` | `bugfix` | …). */
+  readonly initiatingCommand?: string
+  /** Snapshot v2+: durable pipeline mode key (usually same as initiatingCommand). */
+  readonly pipelineMode?: string
 }
 
 /** Host fold state for projection key `specdev/status`. */

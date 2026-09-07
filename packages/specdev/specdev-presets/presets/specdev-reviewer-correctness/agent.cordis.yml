@@ -1,0 +1,20 @@
+# SpecDev Reviewer (Correctness) — SpecDev role preset (model A).
+# Metadata: set agent options specdev.role / specdev.slug / specdev.phaseId? on spawn.
+
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: >-
+      You are SpecDev reviewer-correctness. Focus only on: does the code actually work? Detect stubs. Write review-correctness.md.
+      Working directory: {{cwd}}. Publish SpecDev metadata
+      (specdev.role, specdev.slug, optional specdev.phaseId) for lineage.
+    complete: true
+    includeRuntimeContext: true
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false

@@ -121,10 +121,17 @@ export function parseCurrentStatus(raw: unknown): CurrentStatusJson {
     phases,
     last_update: record.last_update,
   }
+  let withOptional: CurrentStatusJson = status
   if (typeof record.description === 'string') {
-    return { ...status, description: record.description }
+    withOptional = { ...withOptional, description: record.description }
   }
-  return status
+  if (typeof record.initiating_command === 'string' && record.initiating_command.trim().length > 0) {
+    withOptional = { ...withOptional, initiating_command: record.initiating_command.trim() }
+  }
+  if (typeof record.pipeline_mode === 'string' && record.pipeline_mode.trim().length > 0) {
+    withOptional = { ...withOptional, pipeline_mode: record.pipeline_mode.trim() }
+  }
+  return withOptional
 }
 
 /**
@@ -181,7 +188,7 @@ export function snapshotFromStatus(
   status: CurrentStatusJson,
   pendingGate: SpecdevGateId | null = inferPendingGate(status),
 ): SpecdevSnapshot {
-  return {
+  const snap: SpecdevSnapshot = {
     schemaVersion: SPECDEV_SCHEMA_VERSION,
     slug: status.slug,
     stage: status.current_stage,
@@ -191,14 +198,33 @@ export function snapshotFromStatus(
     pendingGate,
     loopCount: status.loop_count,
   }
+  if (status.initiating_command !== undefined) {
+    return {
+      ...snap,
+      initiatingCommand: status.initiating_command,
+      ...(status.pipeline_mode === undefined ? {} : { pipelineMode: status.pipeline_mode }),
+    }
+  }
+  if (status.pipeline_mode !== undefined) {
+    return { ...snap, pipelineMode: status.pipeline_mode }
+  }
+  return snap
 }
 
 /**
  * Build an initial durable status for a new workflow slug.
  * @param slug - workflow slug.
  * @param description - optional human description (often the command name).
+ * @param pipeline - optional initiating command / pipeline mode for schema v2.
  */
-export function createInitialStatus(slug: string, description?: string): CurrentStatusJson {
+export function createInitialStatus(
+  slug: string,
+  description?: string,
+  pipeline?: {
+    readonly initiating_command?: string
+    readonly pipeline_mode?: string
+  },
+): CurrentStatusJson {
   const now = new Date().toISOString()
   const base: CurrentStatusJson = {
     slug: slug.trim(),
@@ -210,8 +236,15 @@ export function createInitialStatus(slug: string, description?: string): Current
     phases: {},
     last_update: now,
   }
-  if (description !== undefined) return { ...base, description }
-  return base
+  let status: CurrentStatusJson = base
+  if (description !== undefined) status = { ...status, description }
+  if (pipeline?.initiating_command !== undefined && pipeline.initiating_command.trim().length > 0) {
+    status = { ...status, initiating_command: pipeline.initiating_command.trim() }
+  }
+  if (pipeline?.pipeline_mode !== undefined && pipeline.pipeline_mode.trim().length > 0) {
+    status = { ...status, pipeline_mode: pipeline.pipeline_mode.trim() }
+  }
+  return status
 }
 
 /**

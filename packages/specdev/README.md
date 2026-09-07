@@ -25,8 +25,10 @@ The SpecDev group brings Spec-driven development into the harness: a durable `.s
 | Package | Role | ctx key |
 |---|---|---|
 | [`specdev`](specdev/README.md) | Workspace root, status I/O, `confirmGate`, events, `specdev/status` projection | `ctx.specdev` |
+| [`command-specdev`](command-specdev/README.md) | Slash commands `/feature`…`/wiki`, `/confirm-gate`, `/status` | (commands registry) |
+| [`specdev-presets`](specdev-presets/README.md) | Orchestrator + role presets; publishes `presetRoot` | `ctx.specdevPresets` |
 
-Planned siblings (later phases; not shipped yet): `command-specdev`, `specdev-gate`, `specdev-advance`, `specdev-presets`.
+Planned siblings (later phases): `specdev-gate`, `specdev-advance`.
 
 -----
 
@@ -44,6 +46,6 @@ Planned siblings (later phases; not shipped yet): `command-specdev`, `specdev-ga
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-Phase 1 ships only `@deepseek-ai/dsh-specdev` plus the sdk-app mount. Command / gate / advance / presets packages arrive in later phases and must not be empty composition stubs.
+Phase 1 shipped `@deepseek-ai/dsh-specdev` plus the sdk-app mount. Phase 2 adds `command-specdev` and `specdev-presets` (with sdk `agent-presets` roots). Gate / advance packages arrive in later phases.
 
 </details>

@@ -1,0 +1,3 @@
+name: SpecDev Plan Generator
+description: Writes design.md + phase-plan.md toward HG-2.
+order: 20

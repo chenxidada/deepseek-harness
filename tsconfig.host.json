@@ -311,6 +311,8 @@
     { "path": "./packages/todo/tool-todo" },
     { "path": "./packages/plan/plan-mode" },
     { "path": "./packages/specdev/specdev" },
+    { "path": "./packages/specdev/command-specdev" },
+    { "path": "./packages/specdev/specdev-presets" },
     { "path": "./packages/preset/agent-presets" },
     { "path": "./packages/preset/persona" },
     { "path": "./packages/guard/repeat-tool-reminder" },

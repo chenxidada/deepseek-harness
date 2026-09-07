@@ -93,3 +93,4 @@ Independent of model request tokens: SpecDev status lives in workspace files and
 - **Slash commands / Orchestrator presets** — not registered here; later SpecDev packages own `/feature`…`/wiki` and role `agent.cordis.yml` assets.
 - **Gate waterfall / advance listeners** — `specdev-gate` and `specdev-advance` packages are deferred; Phase 1 freezes the runtime contract only.
 - **phase-entry debt disposition** — `confirmGate` accepts the gate id and timestamps; structured debt disposition payloads land with Phase Entry Gate work.
+- **Snapshot schema v2** — `SpecdevSnapshot` may include optional `pipelineMode` / `initiatingCommand` (from durable `pipeline_mode` / `initiating_command`). Fold accepts both v1 (without those fields) and v2 payloads.

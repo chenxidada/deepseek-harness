@@ -59,6 +59,9 @@ export const specdevSnapshotSchema: ZodType<SpecdevSnapshot> = zod.object({
     blocking: zod.number().int().nonnegative(),
     total: zod.number().int().nonnegative(),
   }).strict().optional(),
+  // Schema v2 additive fields (optional for backward-compatible fold of v1 events).
+  initiatingCommand: zod.string().min(1).optional(),
+  pipelineMode: zod.string().min(1).optional(),
 }).strict() as ZodType<SpecdevSnapshot>
 
 const projectionStateSchema: ZodType<SpecdevStatusProjectionState> = zod.object({
