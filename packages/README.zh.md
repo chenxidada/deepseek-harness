@@ -70,6 +70,7 @@ harness 由 `packages/` 下的 npm 包组装而成，按能力系列分组：会
 | [`workspace/`](workspace/README.zh.md) | Workspace 实体 |
 | [`sdk/`](sdk/README.zh.md) | 进程外 SDK：JSON-RPC 协议与 TypeScript 客户端／服务器 |
 | [`acp/`](acp/README.zh.md) | 仅面向自动化的 Agent Client Protocol 服务器 |
+| [`ide/`](ide/README.zh.md) | 面向 `ide` profile 与 VS Code 扩展的 IDE Host bridge |
 | [`interaction/`](interaction/README.zh.md) | 人机协作平面：批准/交互 seam、权限预设、命令、询问用户的工具 |
 | [`boot/`](boot/README.zh.md) | 共享的 app bin 启动粘合层 |
 | [`host/`](host/README.zh.md) | web GUI 宿主半侧：API 网关 + HTTP 路由服务器 |

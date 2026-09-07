@@ -1,0 +1,50 @@
+---
+description: "IDE profile bundle for users and maintainers launching the SDK runtime with a Host bridge for VS Code."
+kind: "package-bundle"
+---
+
+# `@deepseek-ai/dsh-ide`
+
+English | [中文](README.zh.md)
+
+## Summary
+
+The IDE application as a `dsh` profile bundle stacked on [`dsh-base`](../base/README.md) and [`dsh-sdk-app`](../sdk-app/README.md). The patch sets the SDK startup `profile` to `ide` and inserts [`dsh-ide-bridge`](../../ide/ide-bridge/README.md). Stdout remains exclusive to SDK JSON-RPC; Host approval and user-questions traffic uses `DSH_IDE_BRIDGE_SOCK`. The bundle must not mount `ui-approval` or `ui-user-questions`.
+
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+-----
+
+<a id="use-this-package"></a>
+## Use this package
+
+`dsh --profile ide` auto-initializes from `PROFILE_TEMPLATES.ide` as `dsh-base` + `dsh-sdk-app` + `dsh-ide`. Launch from a Host that listens on the bridge socket and injects `DSH_IDE_BRIDGE_SOCK` before spawn. `dsh --profile ide --help` prints help without claiming stdio, matching sdk-app startup gating.
+
+<a id="model-experience"></a>
+## Model Experience
+
+None, as the ide layer only inserts the Host bridge and renames the sdk-app profile; model-facing persona and tools remain owned by `dsh-sdk-app` and `dsh-base`.
+
+#### KV Cache effect
+
+No additional model-request effect beyond the stacked sdk-app and base layers.
+
+## Known Limitations and Deferred Work
+
+- **Host interaction UI is deferred** — answerer stubs fail closed until Phase 3 completes the Extension panels.
+- **User patches can violate mutual exclusion** — profile and `--patch` overlays are trusted; the shipped bundle asserts absence of Web UI answerer rows, but cannot contain arbitrary later inserts.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+**Runtime invariant:** No companion is published. Composition tests own the AC-5 exclusion; the ide profile e2e smoke owns dual-channel initialize.
+
+</details>
