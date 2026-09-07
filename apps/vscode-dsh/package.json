@@ -33,7 +33,10 @@
     "onCommand:dsh.newConversation",
     "onCommand:dsh.switchConversation",
     "onCommand:dsh.closeConversation",
-    "onCommand:dsh.selectPermissionPreset"
+    "onCommand:dsh.selectPermissionPreset",
+    "onCommand:dsh.reviewWorkspaceDiffs",
+    "onCommand:dsh.openTimelineDiff",
+    "onView:dsh.timeline"
   ],
   "contributes": {
     "commands": [
@@ -64,6 +67,14 @@
       {
         "command": "dsh.selectPermissionPreset",
         "title": "DeepSeek Harness: Select Permission Preset"
+      },
+      {
+        "command": "dsh.reviewWorkspaceDiffs",
+        "title": "DeepSeek Harness: Review Workspace Diffs"
+      },
+      {
+        "command": "dsh.openTimelineDiff",
+        "title": "DeepSeek Harness: Open Timeline Diff"
       }
     ],
     "viewsContainers": {
@@ -80,6 +91,10 @@
         {
           "id": "dsh.conversations",
           "name": "Conversations"
+        },
+        {
+          "id": "dsh.timeline",
+          "name": "Timeline"
         }
       ]
     }

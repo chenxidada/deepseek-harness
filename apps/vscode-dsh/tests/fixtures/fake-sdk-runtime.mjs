@@ -15,6 +15,11 @@
  * - `FAKE_EMIT_QUESTIONS_SESSION`: after bridge hello, emit one user-questions/request.
  * - `FAKE_EXIT_AFTER_MS`: exit the process after N ms (AC-30 child-death probe).
  * - `FAKE_PERMISSION_LOG`: append permission RPC lines.
+ * - `FAKE_EMIT_TURN_EVENTS`: after each prompt, stream session.status + session.event
+ *   (turn / step / assistant / optional write tool) for timeline tests (Phase 4).
+ * - `FAKE_EMIT_WRITE_DIFF`: with turn events, include write tool/call + tool/result
+ *   carrying `meta.diffs` for post-hoc Diff (AC-23/25).
+ * - `FAKE_SUBAGENT`: with turn events, also emit subagent.started/finished + child event.
  */
 
 import process from 'node:process'
@@ -25,6 +30,86 @@ import { randomUUID } from 'node:crypto'
 
 function write(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`)
+}
+
+function notify(method, params) {
+  write({ jsonrpc: '2.0', method, params })
+}
+
+let eventSeq = 0
+function event(sessionId, type, data) {
+  notify('session.event', {
+    sessionId,
+    event: { type, seq: eventSeq++, time: Date.now(), data },
+  })
+}
+
+function emitTurnEvents(sessionId) {
+  if (process.env.FAKE_EMIT_TURN_EVENTS === undefined) return
+  notify('session.status', { sessionId, status: 'running' })
+  event(sessionId, 'turn/start', { turn: 0 })
+  event(sessionId, 'step/start', { turn: 0, step: 0 })
+  event(sessionId, 'assistant/message', {
+    turn: 0,
+    step: 0,
+    message: {
+      id: `fake-assistant-${eventSeq}`,
+      role: 'assistant',
+      content: [{ type: 'text', text: 'hello from fake timeline runtime' }],
+      source: { kind: 'model', provider: 'fake', model: 'fake' },
+    },
+  })
+  if (process.env.FAKE_EMIT_WRITE_DIFF !== undefined) {
+    const callId = `fake-call-${eventSeq}`
+    const path = 'fake-write.txt'
+    event(sessionId, 'tool/call', {
+      turn: 0,
+      step: 0,
+      callId,
+      name: 'write',
+      arguments: JSON.stringify({ file_path: path, content: 'fake written content' }),
+    })
+    event(sessionId, 'tool/result', {
+      turn: 0,
+      step: 0,
+      message: {
+        id: `fake-tool-result-${eventSeq}`,
+        role: 'tool',
+        callId,
+        name: 'write',
+        content: [{ type: 'text', text: 'wrote file' }],
+      },
+      meta: {
+        diffs: [{ path, oldText: '', newText: 'fake written content' }],
+      },
+    })
+  }
+  event(sessionId, 'step/end', { turn: 0, step: 0 })
+  event(sessionId, 'turn/end', { turn: 0, reason: { kind: 'completed' } })
+  if (process.env.FAKE_SUBAGENT !== undefined) {
+    const childId = `${sessionId}-child`
+    notify('subagent.started', { parentSessionId: sessionId, childSessionId: childId })
+    event(childId, 'assistant/message', {
+      turn: 0,
+      step: 0,
+      message: {
+        id: `fake-child-assistant-${eventSeq}`,
+        role: 'assistant',
+        content: [{ type: 'text', text: 'child says hi' }],
+        source: { kind: 'model', provider: 'fake', model: 'fake' },
+      },
+    })
+    notify('subagent.finished', {
+      provider: 'spawn',
+      agentId: childId,
+      parentSessionId: sessionId,
+      childSessionId: childId,
+      status: 'ok',
+      stopReason: 'completed',
+      lastAssistantMessage: [{ type: 'text', text: 'child says hi' }],
+    })
+  }
+  notify('session.status', { sessionId, status: 'idle' })
 }
 
 const sessions = new Set()
@@ -182,6 +267,9 @@ rl.on('line', (line) => {
     if (typeof logPath === 'string' && logPath !== '') {
       appendFileSync(logPath, `${JSON.stringify({ sessionId, contentBlocks, messageId })}\n`)
     }
+    // Emit turn stream before the RPC result so clients can observe events
+    // while awaiting the prompt receipt (mirrors real runtime ordering).
+    emitTurnEvents(sessionId)
     write({
       jsonrpc: '2.0',
       id: frame.id,

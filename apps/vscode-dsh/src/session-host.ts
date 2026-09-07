@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import {
   HarnessClient,
   TransportClosedError,
+  type HarnessNotification,
   type SdkPromptContentBlock,
 } from '@deepseek-ai/dsh-sdk-client'
 import {
@@ -88,6 +89,7 @@ export class IdeSessionHost {
   }>()
   private transportWatch: (() => void) | undefined
   private readonly errorListeners = new Set<(message: string) => void>()
+  private readonly notificationListeners = new Set<(notification: HarnessNotification) => void>()
 
   /**
    * Whether the Host bridge has received a runtime `hello` frame.
@@ -107,6 +109,20 @@ export class IdeSessionHost {
     this.errorListeners.add(listener)
     return () => {
       this.errorListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Subscribe to SDK notifications (session.event / session.status / subagent.*).
+   * The transport watcher demultiplexes every notification to listeners while still
+   * detecting transport death (AC-13). Listeners must not throw.
+   * @param listener - receives each notification payload.
+   * @returns disposer that removes the listener.
+   */
+  onNotification(listener: (notification: HarnessNotification) => void): () => void {
+    this.notificationListeners.add(listener)
+    return () => {
+      this.notificationListeners.delete(listener)
     }
   }
 
@@ -285,7 +301,16 @@ export class IdeSessionHost {
     let stopped = false
     const loop = async (): Promise<void> => {
       try {
-        for (;;) await subscription.next()
+        for (;;) {
+          const notification = await subscription.next()
+          for (const listener of this.notificationListeners) {
+            try {
+              listener(notification)
+            } catch {
+              // Listener failures must not interrupt transport death detection.
+            }
+          }
+        }
       } catch {
         if (!stopped) {
           void this.onTransportDeath('SDK transport closed or child process exited')

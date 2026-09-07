@@ -4,7 +4,7 @@
  * @module @deepseek-ai/dsh-vscode-dsh/conversation-controller
  */
 
-import type { SdkPromptContentBlock } from '@deepseek-ai/dsh-sdk-client'
+import type { HarnessNotification, SdkPromptContentBlock } from '@deepseek-ai/dsh-sdk-client'
 import {
   ConversationRegistry,
   titleFromFirstMessage,
@@ -12,19 +12,27 @@ import {
   type ConversationTab,
 } from './conversation-registry.ts'
 import type { IdeSessionHost } from './session-host.ts'
+import { TimelineStore } from './timeline-store.ts'
 
 /**
  * Binds {@link ConversationRegistry} to a connected {@link IdeSessionHost}.
  * Ensures prompts target the active Tab `sessionId` and close disposes via bridge.
+ * Projects SDK notifications into a per-session timeline (AC-13).
  */
 export class ConversationController {
   readonly registry = new ConversationRegistry()
+  /** Session-scoped timeline projection (turn / step / tool / assistant / Diff). */
+  readonly timeline = new TimelineStore()
+  private stopNotifications: (() => void) | undefined
 
   /**
    * @param host - window-scoped ide process owner (one process, many sessionIds).
    */
   constructor(private readonly host: IdeSessionHost) {
     this.host.setConversationRegistry?.(this.registry)
+    this.stopNotifications = this.host.onNotification((notification) => {
+      this.onSdkNotification(notification)
+    })
   }
 
   /**
@@ -60,6 +68,7 @@ export class ConversationController {
       `conversation Tab closed (${tabId})`,
     )
     await this.host.disposeSession(tab.sessionId)
+    this.timeline.clearSession(tab.sessionId)
     this.registry.close(tabId)
   }
 
@@ -132,7 +141,21 @@ export class ConversationController {
 
   /** Clear local Tabs on window shutdown (process teardown owns remote sessions). */
   clearLocal(): void {
+    this.stopNotifications?.()
+    this.stopNotifications = undefined
     this.host.setConversationRegistry?.(undefined)
+    this.timeline.clear()
     this.registry.clear()
+  }
+
+  private onSdkNotification(notification: HarnessNotification): void {
+    this.timeline.apply(notification)
+    if (notification.method !== 'session.status') return
+    const sessionId = notification.params.sessionId
+    const status = notification.params.status
+    if (typeof sessionId !== 'string' || (status !== 'idle' && status !== 'running')) return
+    const tab = this.registry.getBySessionId(sessionId)
+    if (tab === undefined) return
+    this.registry.setStatus(tab.tabId, status === 'running' ? 'running' : 'idle')
   }
 }

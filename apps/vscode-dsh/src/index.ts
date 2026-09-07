@@ -15,6 +15,23 @@ export {
 } from './conversation-registry.ts'
 export { ConversationController } from './conversation-controller.ts'
 export {
+  TimelineStore,
+  type TimelineItem,
+  type TimelineItemKind,
+  type TimelineDiffHunk,
+} from './timeline-store.ts'
+export {
+  timelineTreeItems,
+  type TimelineTreeItem,
+} from './timeline-view.ts'
+export {
+  DEFAULT_POST_HOC_DIFF_ONLY,
+  buildDiffOpenArgs,
+  openTimelineDiff,
+  reviewWorkspaceDiffs,
+  type DiffOpenArgs,
+} from './diff-entry.ts'
+export {
   InteractionCoordinator,
   type HostApprovalRequest,
   type HostQuestionsRequest,
@@ -32,6 +49,9 @@ export {
   deactivate,
   getConversationSnapshot,
   buildConversationTreeItems,
+  getActiveTimelineItems,
+  getTimelineTreeItems,
+  getWriteDiffEntries,
 } from './extension.ts'
 export {
   conversationTreeItems,
