@@ -17,6 +17,7 @@ export class IdeBridgeClient {
   private socket: Socket | undefined
   private framing: NdjsonSocket | undefined
   private frameHandler: ((frame: BridgeFrame) => void) | undefined
+  private readonly disconnectListeners = new Set<() => void>()
 
   /**
    * @param state - shared connection state published on the Cordis context.
@@ -29,6 +30,18 @@ export class IdeBridgeClient {
    */
   onFrame(handler: (frame: BridgeFrame) => void): void {
     this.frameHandler = handler
+  }
+
+  /**
+   * Subscribe to disconnect / close. Used to fail-close pending interactions.
+   * @param listener - called when the socket closes or is destroyed.
+   * @returns disposer.
+   */
+  onDisconnect(listener: () => void): () => void {
+    this.disconnectListeners.add(listener)
+    return () => {
+      this.disconnectListeners.delete(listener)
+    }
   }
 
   /**
@@ -64,9 +77,11 @@ export class IdeBridgeClient {
         }
       })
       socket.once('close', () => {
+        const wasConnected = this.state.connected
         this.state.connected = false
         this.framing = undefined
         this.socket = undefined
+        if (wasConnected || settled) this.emitDisconnect()
       })
     })
   }
@@ -82,10 +97,16 @@ export class IdeBridgeClient {
 
   /** Close the socket and clear connection state. */
   close(): void {
+    const wasConnected = this.state.connected
     this.framing?.close()
     this.framing = undefined
     this.socket?.destroy()
     this.socket = undefined
     this.state.connected = false
+    if (wasConnected) this.emitDisconnect()
+  }
+
+  private emitDisconnect(): void {
+    for (const listener of [...this.disconnectListeners]) listener()
   }
 }

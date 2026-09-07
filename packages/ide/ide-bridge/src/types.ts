@@ -4,6 +4,7 @@
  */
 
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval/types'
+import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions/types'
 
 /** Environment variable naming the Host bridge socket or named pipe. */
 export const IDE_BRIDGE_SOCK_ENV = 'DSH_IDE_BRIDGE_SOCK'
@@ -16,6 +17,12 @@ export const IDE_BRIDGE_SERVICE = 'ideBridge'
  * Published by `@deepseek-ai/dsh-sdk-jsonrpc-server` as `sdkSessionDispose`.
  */
 export const SDK_SESSION_DISPOSE_SERVICE = 'sdkSessionDispose'
+
+/** Cordis service key for permission presets (consumed via `ctx.get`). */
+export const PERMISSION_PRESETS_SERVICE = 'permissionPresets'
+
+/** Cordis service key for the session store (consumed via `ctx.get`). */
+export const SESSIONS_SERVICE = 'sessions'
 
 /** Live connection state exposed to the runtime and tests. */
 export interface IdeBridgeConnectionState {
@@ -39,11 +46,46 @@ export interface SdkSessionDisposeCapability {
   disposeSession(sessionId: string): Promise<void>
 }
 
+/** Minimal session handle needed to apply a permission preset. */
+export interface IdeBridgeSessionHandle {
+  /** Session identity matching the Host Tab `sessionId`. */
+  readonly id: string
+}
+
+/**
+ * Permission-presets write surface used by Host `permission/select`.
+ * Duck-typed against `PermissionPresetService` so ide-bridge stays free of a
+ * hard dependency on that package.
+ */
+export interface IdeBridgePermissionPresets {
+  /** Advertised switchable preset names. */
+  readonly names: readonly string[]
+  /**
+   * Apply one preset through the sole permission authority.
+   * @param session - live session object.
+   * @param name - preset table key.
+   */
+  set(session: IdeBridgeSessionHandle, name: string): void
+  /**
+   * Resolve the effective preset for a session.
+   * @param session - live session object.
+   */
+  current(session: IdeBridgeSessionHandle): string
+}
+
+/** Session store lookup used by permission RPC. */
+export interface IdeBridgeSessions {
+  /**
+   * Look up a live session by id.
+   * @param id - session identity (SDK / Tab sessionId).
+   */
+  get(id: string): IdeBridgeSessionHandle | undefined
+}
+
 /**
  * NDJSON frames exchanged on the Host bridge (not SDK stdout).
- * Request/response pairs for approval and user-questions round-trips are
- * defined here; Phase 1 answerers may still fail-closed without waiting.
- * `session/dispose` is Host→runtime teardown for multi-Tab close (Q-3).
+ * Approval / user-questions round-trips and permission-preset RPC share this
+ * channel; illegal inbound frames must be rejected (AC-31).
  */
 export type BridgeFrame =
   | { kind: 'hello'; role: 'runtime' | 'host' }
@@ -59,13 +101,38 @@ export type BridgeFrame =
     kind: 'user-questions/request'
     id: string
     sessionId: string
-    questions: unknown[]
+    questions: AskUserQuestionItem[]
   }
-  | { kind: 'user-questions/response'; id: string; answer?: unknown; error?: string }
+  | {
+    kind: 'user-questions/response'
+    id: string
+    answer?: AskUserQuestionAnswer
+    error?: string
+  }
   | { kind: 'session/dispose'; id: string; sessionId: string }
   | { kind: 'session/dispose/response'; id: string; ok: true }
   | { kind: 'session/dispose/response'; id: string; ok: false; error: string }
+  | { kind: 'permission/select'; id: string; sessionId: string; preset: string }
+  | { kind: 'permission/select/response'; id: string; ok: true; preset: string }
+  | { kind: 'permission/select/response'; id: string; ok: false; error: string }
+  | { kind: 'permission/list'; id: string; sessionId: string }
+  | {
+    kind: 'permission/list/response'
+    id: string
+    ok: true
+    presets: string[]
+    current: string
+  }
+  | { kind: 'permission/list/response'; id: string; ok: false; error: string }
   | { kind: 'error'; id?: string; message: string }
 
+/** Closed approval outcomes accepted on the wire. */
+export const APPROVAL_OUTCOMES: readonly ApprovalOutcome[] = [
+  'allowed-once',
+  'rejected',
+  'cancelled',
+  'unavailable',
+]
+
 /** Re-export for Host consumers that only depend on the bridge types. */
-export type { ApprovalOutcome }
+export type { ApprovalOutcome, AskUserQuestionAnswer, AskUserQuestionItem }

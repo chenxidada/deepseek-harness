@@ -1,5 +1,6 @@
 /**
- * Conversation controller: Tab registry + IdeSessionHost prompt/dispose routing.
+ * Conversation controller: Tab registry + IdeSessionHost prompt/dispose routing
+ * and interaction Tab binding (AC-10).
  * @module @deepseek-ai/dsh-vscode-dsh/conversation-controller
  */
 
@@ -22,7 +23,9 @@ export class ConversationController {
   /**
    * @param host - window-scoped ide process owner (one process, many sessionIds).
    */
-  constructor(private readonly host: IdeSessionHost) {}
+  constructor(private readonly host: IdeSessionHost) {
+    this.host.setConversationRegistry?.(this.registry)
+  }
 
   /**
    * Create a new conversation Tab (AC-6 / AC-9).
@@ -51,6 +54,11 @@ export class ConversationController {
   async closeConversation(tabId: string): Promise<void> {
     const tab = this.registry.get(tabId)
     if (tab === undefined) return
+    // AD-5 / GAP-009: fail-closed this session's Host UI waits before dispose.
+    this.host.interactions.failClosedSession(
+      tab.sessionId,
+      `conversation Tab closed (${tabId})`,
+    )
     await this.host.disposeSession(tab.sessionId)
     this.registry.close(tabId)
   }
@@ -92,6 +100,29 @@ export class ConversationController {
   }
 
   /**
+   * Apply a permission-presets name on the active Tab session (AC-21 / AC-22).
+   * @param preset - preset table key from dsh-permission-presets.
+   * @returns the applied preset name.
+   */
+  async selectPermissionPreset(preset: string): Promise<{ sessionId: string; preset: string }> {
+    const active = this.registry.getActive()
+    if (active === undefined) throw new Error('no active conversation Tab')
+    const applied = await this.host.selectPermissionPreset(active.sessionId, preset)
+    return { sessionId: active.sessionId, preset: applied }
+  }
+
+  /**
+   * List permission-presets for the active Tab via Host bridge (AC-21).
+   * @returns advertised presets and current selection from the runtime.
+   */
+  async listPermissionPresets(): Promise<{ sessionId: string; presets: string[]; current: string }> {
+    const active = this.registry.getActive()
+    if (active === undefined) throw new Error('no active conversation Tab')
+    const listed = await this.host.listPermissionPresets(active.sessionId)
+    return { sessionId: active.sessionId, ...listed }
+  }
+
+  /**
    * Registry snapshot for Tab bar UI.
    * @returns current Tabs and active pointer.
    */
@@ -101,6 +132,7 @@ export class ConversationController {
 
   /** Clear local Tabs on window shutdown (process teardown owns remote sessions). */
   clearLocal(): void {
+    this.host.setConversationRegistry?.(undefined)
     this.registry.clear()
   }
 }

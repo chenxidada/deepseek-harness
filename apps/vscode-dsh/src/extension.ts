@@ -12,6 +12,7 @@ import {
   type ConversationTreeItem,
 } from './conversation-tab-bar.ts'
 import { IdeSessionHost } from './session-host.ts'
+import { createVscodeInteractionUi, pickPermissionPreset, type InteractionWindow, type InteractionQuickPick } from './interaction-ui.ts'
 import { redactSecrets } from './redact.ts'
 import type { ConversationRegistrySnapshot, ConversationTab } from './conversation-registry.ts'
 
@@ -22,6 +23,7 @@ interface QuickPickItemLike {
   label: string
   description?: string
   tabId: string
+  value?: string
 }
 
 /** Minimal vscode API surface used by this Extension. */
@@ -31,8 +33,14 @@ interface VsCodeLike {
     showInformationMessage(message: string): Promise<unknown>
     showQuickPick?(
       items: QuickPickItemLike[],
-      options?: { placeHolder?: string },
-    ): Promise<QuickPickItemLike | undefined>
+      options?: { placeHolder?: string; title?: string; canPickMany?: boolean },
+    ): Promise<QuickPickItemLike | QuickPickItemLike[] | undefined>
+    showInputBox?(options: {
+      prompt?: string
+      title?: string
+      placeHolder?: string
+    }): Promise<string | undefined>
+    createQuickPick?(): InteractionQuickPick
   }
   workspace: {
     workspaceFolders?: readonly { uri: { fsPath: string } }[]
@@ -57,9 +65,10 @@ let host: IdeSessionHost | undefined
 let conversations: ConversationController | undefined
 let tabBarRefresh: (() => void) | undefined
 let stopRegistryWatch: (() => void) | undefined
+let stopErrorWatch: (() => void) | undefined
 
 /**
- * Activate the Extension: register window host + multi-Tab conversation commands.
+ * Activate the Extension: register window host + multi-Tab + interaction commands.
  * @param context - VS Code extension context.
  * @param vscode - the vscode module (injected for testability).
  */
@@ -81,6 +90,14 @@ export function activate(context: ExtensionContextLike, vscode: VsCodeLike): voi
       return
     }
     const next = new IdeSessionHost()
+    if (vscode.window.showQuickPick !== undefined) {
+      next.setInteractionUi(createVscodeInteractionUi(vscode.window as InteractionWindow))
+    }
+    // GAP-005 / AC-30: surface asynchronous transport/child death to the user.
+    stopErrorWatch?.()
+    stopErrorWatch = next.onError((message) => {
+      void vscode.window.showErrorMessage(`DeepSeek Harness session error: ${message}`)
+    })
     host = next
     try {
       await next.start({ cwd: folder })
@@ -88,6 +105,8 @@ export function activate(context: ExtensionContextLike, vscode: VsCodeLike): voi
       conversations!.newConversation('New conversation')
       await vscode.window.showInformationMessage('DeepSeek Harness IDE session connected.')
     } catch (error) {
+      stopErrorWatch?.()
+      stopErrorWatch = undefined
       unbindConversations()
       const message = redactSecrets(error instanceof Error ? error.message : String(error))
       await vscode.window.showErrorMessage(`DeepSeek Harness failed to connect: ${message}`)
@@ -97,6 +116,8 @@ export function activate(context: ExtensionContextLike, vscode: VsCodeLike): voi
   const stop = vscode.commands.registerCommand('dsh.stopSession', async () => {
     const current = host
     host = undefined
+    stopErrorWatch?.()
+    stopErrorWatch = undefined
     unbindConversations()
     if (current === undefined) {
       await vscode.window.showInformationMessage('No DeepSeek Harness IDE session is running.')
@@ -149,7 +170,7 @@ export function activate(context: ExtensionContextLike, vscode: VsCodeLike): voi
     const picked = vscode.window.showQuickPick === undefined
       ? undefined
       : await vscode.window.showQuickPick(items, { placeHolder: 'Switch conversation Tab' })
-    if (picked === undefined) return
+    if (picked === undefined || Array.isArray(picked)) return
     controller.switchConversation(picked.tabId)
     await vscode.window.showInformationMessage(`Switched to ${picked.label}.`)
   })
@@ -198,7 +219,43 @@ export function activate(context: ExtensionContextLike, vscode: VsCodeLike): voi
     }
   })
 
-  context.subscriptions.push(start, stop, newConversation, switchConversation, closeConversation, promptActive)
+  const selectPermission = vscode.commands.registerCommand('dsh.selectPermissionPreset', async () => {
+    const controller = requireConversations()
+    if (controller === undefined) {
+      await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before selecting permissions.')
+      return
+    }
+    if (vscode.window.showQuickPick === undefined) {
+      await vscode.window.showErrorMessage('QuickPick is unavailable in this host.')
+      return
+    }
+    try {
+      const listed = await controller.listPermissionPresets()
+      const picked = await pickPermissionPreset(
+        vscode.window as InteractionWindow,
+        listed.presets,
+        listed.current,
+      )
+      if (picked === undefined) return
+      const applied = await controller.selectPermissionPreset(picked)
+      await vscode.window.showInformationMessage(
+        `Permission preset "${applied.preset}" applied to session ${shortId(applied.sessionId)}.`,
+      )
+    } catch (error) {
+      const message = redactSecrets(error instanceof Error ? error.message : String(error))
+      await vscode.window.showErrorMessage(`Permission preset failed: ${message}`)
+    }
+  })
+
+  context.subscriptions.push(
+    start,
+    stop,
+    newConversation,
+    switchConversation,
+    closeConversation,
+    promptActive,
+    selectPermission,
+  )
 }
 
 /**
@@ -207,6 +264,8 @@ export function activate(context: ExtensionContextLike, vscode: VsCodeLike): voi
 export async function deactivate(): Promise<void> {
   const current = host
   host = undefined
+  stopErrorWatch?.()
+  stopErrorWatch = undefined
   unbindConversations()
   if (current !== undefined) await current.shutdown()
 }

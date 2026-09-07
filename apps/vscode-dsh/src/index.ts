@@ -15,6 +15,19 @@ export {
 } from './conversation-registry.ts'
 export { ConversationController } from './conversation-controller.ts'
 export {
+  InteractionCoordinator,
+  type HostApprovalRequest,
+  type HostQuestionsRequest,
+  type InteractionUi,
+  type PendingHostInteraction,
+} from './interaction-coordinator.ts'
+export {
+  createVscodeInteractionUi,
+  pickPermissionPreset,
+  type InteractionWindow,
+  type InteractionQuickPickItem,
+} from './interaction-ui.ts'
+export {
   activate,
   deactivate,
   getConversationSnapshot,

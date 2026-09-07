@@ -1,4 +1,6 @@
-/** ide-bridge NDJSON transport, session/dispose, and fail-closed answerer stubs. */
+/**
+ * ide-bridge: validation, Host round-trips, fail-closed paths, permission RPC.
+ */
 
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -11,13 +13,18 @@ import {
   IDE_BRIDGE_SOCK_ENV,
   IdeBridgeClient,
   IdeBridgeHostServer,
+  isApprovalOutcome,
+  isAskUserQuestionAnswer,
   parseBridgeFrame,
+  PERMISSION_PRESETS_SERVICE,
   SDK_SESSION_DISPOSE_SERVICE,
+  SESSIONS_SERVICE,
+  validateBridgeFrame,
   type BridgeFrame,
   type IdeBridgeConnectionState,
 } from '../src/index.ts'
 
-describe('ide-bridge framing', () => {
+describe('ide-bridge framing validation (AC-31)', () => {
   it('parses hello frames and ignores garbage', () => {
     expect(parseBridgeFrame('{"kind":"hello","role":"runtime"}')).toEqual({
       kind: 'hello',
@@ -27,11 +34,33 @@ describe('ide-bridge framing', () => {
     expect(parseBridgeFrame('')).toBeUndefined()
   })
 
-  it('parses session/dispose frames', () => {
-    expect(parseBridgeFrame('{"kind":"session/dispose","id":"1","sessionId":"s"}')).toEqual({
-      kind: 'session/dispose',
+  it('rejects approval/response with illegal outcome', () => {
+    expect(parseBridgeFrame('{"kind":"approval/response","id":"1","outcome":"allow-all"}')).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'approval/response', id: '1', outcome: 'allowed-once' })).toEqual({
+      kind: 'approval/response',
+      id: '1',
+      outcome: 'allowed-once',
+    })
+    expect(isApprovalOutcome('allowed-once')).toBe(true)
+    expect(isApprovalOutcome('allow-all')).toBe(false)
+  })
+
+  it('rejects malformed user-questions answer payloads', () => {
+    expect(isAskUserQuestionAnswer({ answers: [{ id: 'q1', selected: ['yes'] }] })).toBe(true)
+    expect(isAskUserQuestionAnswer({ answers: [{ id: 'q1', selected: [1] }] })).toBe(false)
+    expect(parseBridgeFrame(JSON.stringify({
+      kind: 'user-questions/response',
+      id: '1',
+      answer: { answers: [{ id: 'q1', selected: [1] }] },
+    }))).toBeUndefined()
+  })
+
+  it('parses permission frames', () => {
+    expect(parseBridgeFrame('{"kind":"permission/select","id":"1","sessionId":"s","preset":"workspace-write"}')).toEqual({
+      kind: 'permission/select',
       id: '1',
       sessionId: 's',
+      preset: 'workspace-write',
     })
   })
 })
@@ -60,18 +89,7 @@ describe('ide-bridge Host socket round-trip (AC-18)', () => {
     const client = new IdeBridgeClient(state)
     await client.connect()
     expect(state.connected).toBe(true)
-    await new Promise<void>((resolve) => {
-      const deadline = Date.now() + 2000
-      const poll = (): void => {
-        if (hellos.includes('runtime')) {
-          resolve()
-          return
-        }
-        if (Date.now() >= deadline) throw new Error('timed out waiting for hello')
-        setTimeout(poll, 10)
-      }
-      poll()
-    })
+    await waitFor(() => hellos.includes('runtime'), 2_000)
     expect(host.connectionCount()).toBe(1)
     client.close()
     await host.close()
@@ -113,39 +131,14 @@ describe('ide-bridge session/dispose (AC-8 / Q-3)', () => {
     })
     process.env[IDE_BRIDGE_SOCK_ENV] = path
     apply(ctx, {})
-    await new Promise<void>((resolve, reject) => {
-      const deadline = Date.now() + 3000
-      const poll = (): void => {
-        if (host.connectionCount() >= 1) {
-          resolve()
-          return
-        }
-        if (Date.now() >= deadline) {
-          reject(new Error('timed out waiting for runtime connect'))
-          return
-        }
-        setTimeout(poll, 10)
-      }
-      poll()
-    })
+    await waitFor(() => host.connectionCount() >= 1, 3_000)
 
     const requestId = 'dispose-1'
     expect(host.broadcast({ kind: 'session/dispose', id: requestId, sessionId: 'sess-a' })).toBe(1)
-    await new Promise<void>((resolve, reject) => {
-      const deadline = Date.now() + 3000
-      const poll = (): void => {
-        if (responses.some(frame => frame.kind === 'session/dispose/response' && frame.id === requestId)) {
-          resolve()
-          return
-        }
-        if (Date.now() >= deadline) {
-          reject(new Error('timed out waiting for dispose response'))
-          return
-        }
-        setTimeout(poll, 10)
-      }
-      poll()
-    })
+    await waitFor(
+      () => responses.some(frame => frame.kind === 'session/dispose/response' && frame.id === requestId),
+      3_000,
+    )
     expect(disposed).toEqual(['sess-a'])
     expect(responses).toContainEqual({ kind: 'session/dispose/response', id: requestId, ok: true })
 
@@ -154,25 +147,251 @@ describe('ide-bridge session/dispose (AC-8 / Q-3)', () => {
   })
 })
 
-describe('ide-bridge answerer stubs', () => {
-  it('claims approval as unavailable and rejects user-questions (Phase 3 stubs)', async () => {
-    const previous = process.env[IDE_BRIDGE_SOCK_ENV]
+describe('ide-bridge approval / user-questions round-trip (AC-16/17/20)', () => {
+  const dirs: string[] = []
+  let previousSock: string | undefined
+
+  afterEach(async () => {
+    while (dirs.length > 0) {
+      await rm(dirs.pop()!, { recursive: true, force: true })
+    }
+    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
+  })
+
+  it('forwards approval to Host and maps legal outcome without next()', async () => {
+    previousSock = process.env[IDE_BRIDGE_SOCK_ENV]
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-approval-rt-'))
+    dirs.push(dir)
+    const path = join(dir, 'bridge.sock')
+    const host = new IdeBridgeHostServer()
+    host.onFrame((frame, connection) => {
+      if (frame.kind === 'approval/request') {
+        connection.send({ kind: 'approval/response', id: frame.id, outcome: 'allowed-once' })
+      }
+    })
+    await host.listen(path)
+    process.env[IDE_BRIDGE_SOCK_ENV] = path
+    const ctx = new Context()
+    apply(ctx, { interactionTimeoutMs: 5_000 })
+    await waitFor(() => host.connectionCount() >= 1, 3_000)
+
+    let nextCalled = false
+    const outcome = await ctx.waterfall(
+      'approval/request',
+      { agent: { id: 'a', session: { id: 'sess-1' } }, toolName: 'bash' },
+      () => {
+        nextCalled = true
+        return Promise.resolve('allowed-once' as const)
+      },
+    )
+    expect(outcome).toBe('allowed-once')
+    expect(nextCalled).toBe(false)
+
+    await ctx.fiber.dispose()
+    await host.close()
+  })
+
+  it('forwards user-questions and returns Host answer', async () => {
+    previousSock = process.env[IDE_BRIDGE_SOCK_ENV]
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-questions-rt-'))
+    dirs.push(dir)
+    const path = join(dir, 'bridge.sock')
+    const host = new IdeBridgeHostServer()
+    host.onFrame((frame, connection) => {
+      if (frame.kind === 'user-questions/request') {
+        connection.send({
+          kind: 'user-questions/response',
+          id: frame.id,
+          answer: { answers: [{ id: 'q1', selected: ['yes'] }] },
+        })
+      }
+    })
+    await host.listen(path)
+    process.env[IDE_BRIDGE_SOCK_ENV] = path
+    const ctx = new Context()
+    apply(ctx, { interactionTimeoutMs: 5_000 })
+    await waitFor(() => host.connectionCount() >= 1, 3_000)
+
+    const answer = await ctx.waterfall(
+      'user-questions/request',
+      {
+        agent: { id: 'a', session: { id: 'sess-1' } },
+        questions: [{ id: 'q1', question: 'ok?' }],
+      },
+      () => Promise.reject(new UserQuestionError('fallback', 'NO_PROVIDER')),
+    )
+    expect(answer).toEqual({ answers: [{ id: 'q1', selected: ['yes'] }] })
+
+    await ctx.fiber.dispose()
+    await host.close()
+  })
+})
+
+describe('ide-bridge fail-closed (AC-19)', () => {
+  const dirs: string[] = []
+  let previousSock: string | undefined
+
+  afterEach(async () => {
+    while (dirs.length > 0) {
+      await rm(dirs.pop()!, { recursive: true, force: true })
+    }
+    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
+  })
+
+  it('returns unavailable when bridge env is unset (no next)', async () => {
+    previousSock = process.env[IDE_BRIDGE_SOCK_ENV]
     delete process.env[IDE_BRIDGE_SOCK_ENV]
     const ctx = new Context()
     apply(ctx, {})
+    let nextCalled = false
     const approval = await ctx.waterfall(
       'approval/request',
       { agent: { id: 'a', session: { id: 's' } }, toolName: 'bash' },
-      () => Promise.resolve('allowed-once' as const),
+      () => {
+        nextCalled = true
+        return Promise.resolve('allowed-once' as const)
+      },
     )
     expect(approval).toBe('unavailable')
+    expect(nextCalled).toBe(false)
     await expect(ctx.waterfall(
       'user-questions/request',
       { questions: [{ id: 'q1', question: 'ok?' }] },
       () => Promise.reject(new UserQuestionError('fallback', 'NO_PROVIDER')),
     )).rejects.toMatchObject({ code: 'NO_PROVIDER' })
     await ctx.fiber.dispose()
-    if (previous === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
-    else process.env[IDE_BRIDGE_SOCK_ENV] = previous
+  })
+
+  it('times out approval to unavailable without silent allow', async () => {
+    previousSock = process.env[IDE_BRIDGE_SOCK_ENV]
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-timeout-'))
+    dirs.push(dir)
+    const path = join(dir, 'bridge.sock')
+    const host = new IdeBridgeHostServer()
+    // Intentionally never answer approval/request.
+    host.onFrame(() => {})
+    await host.listen(path)
+    process.env[IDE_BRIDGE_SOCK_ENV] = path
+    const ctx = new Context()
+    apply(ctx, { interactionTimeoutMs: 80 })
+    await waitFor(() => host.connectionCount() >= 1, 3_000)
+
+    const outcome = await ctx.waterfall(
+      'approval/request',
+      { agent: { id: 'a', session: { id: 's' } }, toolName: 'bash' },
+      () => Promise.resolve('allowed-once' as const),
+    )
+    expect(outcome).toBe('unavailable')
+
+    await ctx.fiber.dispose()
+    await host.close()
+  })
+
+  it('fail-closes pending approval when Host disconnects', async () => {
+    previousSock = process.env[IDE_BRIDGE_SOCK_ENV]
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-disconnect-'))
+    dirs.push(dir)
+    const path = join(dir, 'bridge.sock')
+    const host = new IdeBridgeHostServer()
+    host.onFrame(() => {})
+    await host.listen(path)
+    process.env[IDE_BRIDGE_SOCK_ENV] = path
+    const ctx = new Context()
+    apply(ctx, { interactionTimeoutMs: 10_000 })
+    await waitFor(() => host.connectionCount() >= 1, 3_000)
+
+    const pending = ctx.waterfall(
+      'approval/request',
+      { agent: { id: 'a', session: { id: 's' } }, toolName: 'bash' },
+      () => Promise.resolve('allowed-once' as const),
+    )
+    await waitFor(() => host.connectionCount() >= 1, 1_000)
+    await host.close()
+    expect(await pending).toBe('unavailable')
+    await ctx.fiber.dispose()
   })
 })
+
+describe('ide-bridge permission RPC (AC-21/22)', () => {
+  const dirs: string[] = []
+  let previousSock: string | undefined
+
+  afterEach(async () => {
+    while (dirs.length > 0) {
+      await rm(dirs.pop()!, { recursive: true, force: true })
+    }
+    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
+  })
+
+  it('applies permission-presets.set for a known session', async () => {
+    previousSock = process.env[IDE_BRIDGE_SOCK_ENV]
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-perm-'))
+    dirs.push(dir)
+    const path = join(dir, 'bridge.sock')
+    const applied: string[] = []
+    const session = { id: 'sess-perm' }
+    const host = new IdeBridgeHostServer()
+    const responses: BridgeFrame[] = []
+    host.onFrame((frame) => {
+      if (frame.kind === 'hello') return
+      responses.push(frame)
+    })
+    await host.listen(path)
+    process.env[IDE_BRIDGE_SOCK_ENV] = path
+    const ctx = new Context()
+    ctx.provide(SESSIONS_SERVICE, {
+      get: (id: string) => id === session.id ? session : undefined,
+    })
+    ctx.provide(PERMISSION_PRESETS_SERVICE, {
+      names: ['workspace-write', 'danger-full-access'],
+      set: (_session: { id: string }, name: string) => {
+        applied.push(name)
+      },
+      current: () => 'workspace-write',
+    })
+    apply(ctx, {})
+    await waitFor(() => host.connectionCount() >= 1, 3_000)
+
+    host.broadcast({
+      kind: 'permission/select',
+      id: 'p1',
+      sessionId: 'sess-perm',
+      preset: 'danger-full-access',
+    })
+    await waitFor(
+      () => responses.some(f => f.kind === 'permission/select/response' && f.id === 'p1'),
+      3_000,
+    )
+    expect(applied).toEqual(['danger-full-access'])
+    expect(responses).toContainEqual({
+      kind: 'permission/select/response',
+      id: 'p1',
+      ok: true,
+      preset: 'danger-full-access',
+    })
+
+    await ctx.fiber.dispose()
+    await host.close()
+  })
+})
+
+function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs
+    const poll = (): void => {
+      if (predicate()) {
+        resolve()
+        return
+      }
+      if (Date.now() >= deadline) {
+        reject(new Error('timed out'))
+        return
+      }
+      setTimeout(poll, 10)
+    }
+    poll()
+  })
+}

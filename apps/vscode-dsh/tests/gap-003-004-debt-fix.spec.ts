@@ -18,6 +18,7 @@ describe('GAP-003: dispose before registry.close', () => {
     let controller!: ConversationController
     let dropTabId = ''
     const host = {
+      interactions: { failClosedSession() {} },
       async disposeSession(_sessionId: string): Promise<void> {
         sawTabDuringDispose = controller.registry.get(dropTabId) !== undefined
         await new Promise(resolve => setTimeout(resolve, 5))
@@ -36,6 +37,7 @@ describe('GAP-003: dispose before registry.close', () => {
 
   it('retains the Tab when disposeSession fails so close can be retried', async () => {
     const host = {
+      interactions: { failClosedSession() {} },
       async disposeSession(): Promise<void> {
         throw new Error('bridge dispose failed')
       },
@@ -53,6 +55,11 @@ describe('GAP-003: dispose before registry.close', () => {
   it('calls disposeSession before registry.close on the success path', async () => {
     const order: string[] = []
     const host = {
+      interactions: {
+        failClosedSession(sessionId: string) {
+          order.push(`failClosed:${sessionId}`)
+        },
+      },
       async disposeSession(sessionId: string): Promise<void> {
         order.push(`dispose:${sessionId}`)
       },
@@ -67,7 +74,11 @@ describe('GAP-003: dispose before registry.close', () => {
 
     await controller.closeConversation(drop.tabId)
 
-    expect(order).toEqual([`dispose:${drop.sessionId}`, `close:${drop.tabId}`])
+    expect(order).toEqual([
+      `failClosed:${drop.sessionId}`,
+      `dispose:${drop.sessionId}`,
+      `close:${drop.tabId}`,
+    ])
   })
 })
 describe('GAP-004: TreeView item command wires switchConversation', () => {

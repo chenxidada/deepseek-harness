@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-ide-bridge` is the Host-side answerer plugin for `dsh --profile ide`. It connects to the Extension-owned Unix domain socket (or Windows named pipe) named by `DSH_IDE_BRIDGE_SOCK`, publishes connection state, and registers terminal listeners for `approval/request` and `user-questions/request`. SDK stdout stays exclusive to JSON-RPC; bridge traffic never writes there.
+`dsh-ide-bridge` is the Host-side answerer plugin for `dsh --profile ide`. It connects to the Extension-owned Unix domain socket (or Windows named pipe) named by `DSH_IDE_BRIDGE_SOCK`, publishes connection state, and registers terminal listeners for `approval/request` and `user-questions/request`. Legal Host outcomes map back into the waterfall; disconnect, timeout, and illegal payloads fail closed without calling `next()`. Host `permission/select` and `permission/list` frames apply presets only through `dsh-permission-presets`. SDK stdout stays exclusive to JSON-RPC; bridge traffic never writes there.
 
 ## Table of Contents
 
@@ -28,8 +28,9 @@ Mount through the [`dsh-ide`](../../bundle/ide/README.md) profile bundle. The Ex
 | Field | Default | Meaning |
 |---|---|---|
 | `sockEnv` | `DSH_IDE_BRIDGE_SOCK` | Environment variable naming the Host socket path |
+| `interactionTimeoutMs` | `120000` | Bound waiting for Host approval / user-questions responses |
 
-Exported helpers `IdeBridgeHostServer` and `IdeBridgeClient` share the NDJSON frame format for Extension and tests.
+Exported helpers `IdeBridgeHostServer` and `IdeBridgeClient` share the NDJSON frame format for Extension and tests. Inbound frames are validated (`parseBridgeFrame` / `validateBridgeFrame`); malformed payloads are dropped (AC-31).
 
 <a id="model-experience"></a>
 ## Model Experience
@@ -42,9 +43,8 @@ No direct model-request effect; Host decisions may change later tool outcomes wi
 
 ## Known Limitations and Deferred Work
 
-- **Full Host UI round-trips are deferred** — Phase 1 answerers return `unavailable` / `NO_PROVIDER` without waiting on Extension panels; Phase 3 fills the bridge request/response loop (`@STUB(phase-3-interaction-fail-closed)`).
-- **permission RPC is deferred** — permission-preset bridge methods arrive in a later phase.
-- **`session/dispose` is implemented** — Host→runtime dispose frames call the Cordis `sdkSessionDispose` service (Map clear + `AgentHandle.dispose()`); not an SDK stdout method.
+- **Windows named-pipe latency** — Host server supports pipe paths; most fail-closed coverage is UDS-oriented.
+- **Live approval policy injection** — `permission/select` calls `permissionPresets.set(session, name)` (session-log writers). Live-agent `approval.setPolicy` narration used by `/permission` is not duplicated on the bridge path.
 
 <a id="dev-note"></a>
 ### Dev Note
@@ -52,6 +52,6 @@ No direct model-request effect; Host decisions may change later tool outcomes wi
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-No companion invariant is published. Dual-channel purity is owned by profile composition tests and the ide profile e2e smoke.
+No companion invariant is published. Dual-channel purity is owned by profile composition tests and the ide profile e2e smoke. Terminal answerers claim every request on the ide profile so an absent Web Host cannot silently allow.
 
 </details>

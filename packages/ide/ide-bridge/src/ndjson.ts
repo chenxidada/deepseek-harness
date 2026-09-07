@@ -6,10 +6,11 @@
 import { StringDecoder } from 'node:string_decoder'
 import type { Duplex } from 'node:stream'
 import type { BridgeFrame } from './types.ts'
+import { validateBridgeFrame } from './validate.ts'
 
 /**
  * Parse one NDJSON line into a {@link BridgeFrame}, or `undefined` when the
- * line is empty or not a recognized frame object.
+ * line is empty or fails AC-31 validation.
  * @param line - one trimmed NDJSON line.
  * @returns the frame, or `undefined` when the line should be ignored.
  */
@@ -22,10 +23,7 @@ export function parseBridgeFrame(line: string): BridgeFrame | undefined {
   } catch {
     return undefined
   }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-  const kind = (value as { kind?: unknown }).kind
-  if (typeof kind !== 'string') return undefined
-  return value as BridgeFrame
+  return validateBridgeFrame(value)
 }
 
 /**

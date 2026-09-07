@@ -23,6 +23,7 @@ export class IdeBridgeHostServer {
   private server: Server | undefined
   private readonly connections = new Set<NdjsonSocket>()
   private frameHandler: ((frame: BridgeFrame, connection: IdeBridgeHostConnection) => void) | undefined
+  private disconnectHandler: (() => void) | undefined
   private path: string | undefined
 
   /**
@@ -31,6 +32,14 @@ export class IdeBridgeHostServer {
    */
   onFrame(handler: (frame: BridgeFrame, connection: IdeBridgeHostConnection) => void): void {
     this.frameHandler = handler
+  }
+
+  /**
+   * Install a handler invoked when a runtime connection closes (AC-30).
+   * @param handler - called after the connection is removed from the set.
+   */
+  onDisconnect(handler: () => void): void {
+    this.disconnectHandler = handler
   }
 
   /**
@@ -111,6 +120,7 @@ export class IdeBridgeHostServer {
     framing.onFrame(frame => this.frameHandler?.(frame, handle))
     socket.once('close', () => {
       this.connections.delete(framing)
+      this.disconnectHandler?.()
     })
   }
 }

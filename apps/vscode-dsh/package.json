@@ -32,7 +32,8 @@
     "onCommand:dsh.startSession",
     "onCommand:dsh.newConversation",
     "onCommand:dsh.switchConversation",
-    "onCommand:dsh.closeConversation"
+    "onCommand:dsh.closeConversation",
+    "onCommand:dsh.selectPermissionPreset"
   ],
   "contributes": {
     "commands": [
@@ -59,6 +60,10 @@
       {
         "command": "dsh.promptActiveConversation",
         "title": "DeepSeek Harness: Prompt Active Conversation"
+      },
+      {
+        "command": "dsh.selectPermissionPreset",
+        "title": "DeepSeek Harness: Select Permission Preset"
       }
     ],
     "viewsContainers": {
