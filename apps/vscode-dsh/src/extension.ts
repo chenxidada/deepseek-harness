@@ -4,14 +4,35 @@
  * @module @deepseek-ai/dsh-vscode-dsh/extension
  */
 
+import { ConversationController } from './conversation-controller.ts'
+import {
+  canRegisterConversationTabBar,
+  conversationTreeItems,
+  createConversationTabBar,
+  type ConversationTreeItem,
+} from './conversation-tab-bar.ts'
 import { IdeSessionHost } from './session-host.ts'
 import { redactSecrets } from './redact.ts'
+import type { ConversationRegistrySnapshot, ConversationTab } from './conversation-registry.ts'
+
+export type { ConversationTreeItem }
+
+/** Minimal QuickPick item for conversation switching. */
+interface QuickPickItemLike {
+  label: string
+  description?: string
+  tabId: string
+}
 
 /** Minimal vscode API surface used by this Extension. */
 interface VsCodeLike {
   window: {
-    showErrorMessage(message: string): Thenable<unknown>
-    showInformationMessage(message: string): Thenable<unknown>
+    showErrorMessage(message: string): Promise<unknown>
+    showInformationMessage(message: string): Promise<unknown>
+    showQuickPick?(
+      items: QuickPickItemLike[],
+      options?: { placeHolder?: string },
+    ): Promise<QuickPickItemLike | undefined>
   }
   workspace: {
     workspaceFolders?: readonly { uri: { fsPath: string } }[]
@@ -33,13 +54,22 @@ interface ExtensionContextLike {
 }
 
 let host: IdeSessionHost | undefined
+let conversations: ConversationController | undefined
+let tabBarRefresh: (() => void) | undefined
+let stopRegistryWatch: (() => void) | undefined
 
 /**
- * Activate the Extension: register start/stop commands.
+ * Activate the Extension: register window host + multi-Tab conversation commands.
  * @param context - VS Code extension context.
  * @param vscode - the vscode module (injected for testability).
  */
 export function activate(context: ExtensionContextLike, vscode: VsCodeLike): void {
+  if (canRegisterConversationTabBar(vscode)) {
+    const tabBar = createConversationTabBar(vscode, getConversationSnapshot)
+    tabBarRefresh = () => tabBar.refresh()
+    context.subscriptions.push(tabBar)
+  }
+
   const start = vscode.commands.registerCommand('dsh.startSession', async () => {
     if (host !== undefined && host.status === 'connected') {
       await vscode.window.showInformationMessage('DeepSeek Harness IDE session is already connected.')
@@ -54,15 +84,20 @@ export function activate(context: ExtensionContextLike, vscode: VsCodeLike): voi
     host = next
     try {
       await next.start({ cwd: folder })
+      bindConversations(new ConversationController(next))
+      conversations!.newConversation('New conversation')
       await vscode.window.showInformationMessage('DeepSeek Harness IDE session connected.')
     } catch (error) {
+      unbindConversations()
       const message = redactSecrets(error instanceof Error ? error.message : String(error))
       await vscode.window.showErrorMessage(`DeepSeek Harness failed to connect: ${message}`)
     }
   })
+
   const stop = vscode.commands.registerCommand('dsh.stopSession', async () => {
     const current = host
     host = undefined
+    unbindConversations()
     if (current === undefined) {
       await vscode.window.showInformationMessage('No DeepSeek Harness IDE session is running.')
       return
@@ -70,7 +105,100 @@ export function activate(context: ExtensionContextLike, vscode: VsCodeLike): voi
     await current.shutdown()
     await vscode.window.showInformationMessage('DeepSeek Harness IDE session stopped.')
   })
-  context.subscriptions.push(start, stop)
+
+  const newConversation = vscode.commands.registerCommand('dsh.newConversation', async () => {
+    const controller = requireConversations()
+    if (controller === undefined) {
+      await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before creating a conversation.')
+      return
+    }
+    const tab = controller.newConversation('New conversation')
+    await vscode.window.showInformationMessage(`Created conversation Tab ${shortId(tab.sessionId)}.`)
+  })
+
+  const switchConversation = vscode.commands.registerCommand('dsh.switchConversation', async (tabIdArg?: unknown) => {
+    const controller = requireConversations()
+    if (controller === undefined) {
+      await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before switching conversations.')
+      return
+    }
+    // TreeView item.command passes tabId (GAP-004); bare command uses QuickPick.
+    if (typeof tabIdArg === 'string' && tabIdArg !== '') {
+      try {
+        controller.switchConversation(tabIdArg)
+        const tab = controller.registry.get(tabIdArg)
+        await vscode.window.showInformationMessage(
+          `Switched to ${tab === undefined ? shortId(tabIdArg) : tabTitle(tab)}.`,
+        )
+      } catch (error) {
+        const message = redactSecrets(error instanceof Error ? error.message : String(error))
+        await vscode.window.showErrorMessage(`Failed to switch conversation: ${message}`)
+      }
+      return
+    }
+    const snap = controller.snapshot()
+    if (snap.tabs.length === 0) {
+      await vscode.window.showInformationMessage('No conversation Tabs are open.')
+      return
+    }
+    const items = snap.tabs.map((tab): QuickPickItemLike => ({
+      label: tabTitle(tab),
+      description: tab.tabId === snap.activeTabId ? 'active' : tab.sessionId.slice(0, 8),
+      tabId: tab.tabId,
+    }))
+    const picked = vscode.window.showQuickPick === undefined
+      ? undefined
+      : await vscode.window.showQuickPick(items, { placeHolder: 'Switch conversation Tab' })
+    if (picked === undefined) return
+    controller.switchConversation(picked.tabId)
+    await vscode.window.showInformationMessage(`Switched to ${picked.label}.`)
+  })
+
+  const closeConversation = vscode.commands.registerCommand('dsh.closeConversation', async () => {
+    const controller = requireConversations()
+    if (controller === undefined) {
+      await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before closing a conversation.')
+      return
+    }
+    const active = controller.registry.getActive()
+    if (active === undefined) {
+      await vscode.window.showInformationMessage('No conversation Tab to close.')
+      return
+    }
+    try {
+      await controller.closeConversation(active.tabId)
+      await vscode.window.showInformationMessage(
+        `Closed conversation and ended session ${shortId(active.sessionId)}.`,
+      )
+    } catch (error) {
+      const message = redactSecrets(error instanceof Error ? error.message : String(error))
+      await vscode.window.showErrorMessage(`Failed to close conversation: ${message}`)
+    }
+  })
+
+  const promptActive = vscode.commands.registerCommand('dsh.promptActiveConversation', async (text?: unknown) => {
+    const controller = requireConversations()
+    if (controller === undefined) {
+      await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before prompting.')
+      return
+    }
+    const body = typeof text === 'string' && text.trim() !== '' ? text : undefined
+    if (body === undefined) {
+      await vscode.window.showErrorMessage('Provide prompt text for dsh.promptActiveConversation.')
+      return
+    }
+    try {
+      const result = await controller.promptActive(body)
+      await vscode.window.showInformationMessage(
+        `Prompted session ${shortId(result.sessionId)} (message ${shortId(result.messageId)}).`,
+      )
+    } catch (error) {
+      const message = redactSecrets(error instanceof Error ? error.message : String(error))
+      await vscode.window.showErrorMessage(`Prompt failed: ${message}`)
+    }
+  })
+
+  context.subscriptions.push(start, stop, newConversation, switchConversation, closeConversation, promptActive)
 }
 
 /**
@@ -79,5 +207,55 @@ export function activate(context: ExtensionContextLike, vscode: VsCodeLike): voi
 export async function deactivate(): Promise<void> {
   const current = host
   host = undefined
+  unbindConversations()
   if (current !== undefined) await current.shutdown()
+}
+
+/**
+ * Read-only Tab bar snapshot for TreeView / tests (AC-9).
+ * @returns current registry snapshot, or an empty snapshot when disconnected.
+ */
+export function getConversationSnapshot(): ConversationRegistrySnapshot {
+  return conversations?.snapshot() ?? { activeTabId: undefined, tabs: [] }
+}
+
+/**
+ * Build TreeItem-like rows for a conversation Tab bar view.
+ * @param snapshot - registry snapshot.
+ * @returns ordered Tab bar items.
+ */
+export function buildConversationTreeItems(snapshot: ConversationRegistrySnapshot): ConversationTreeItem[] {
+  return conversationTreeItems(snapshot)
+}
+
+function bindConversations(controller: ConversationController): void {
+  stopRegistryWatch?.()
+  conversations = controller
+  stopRegistryWatch = controller.registry.onChange(() => {
+    tabBarRefresh?.()
+  })
+  tabBarRefresh?.()
+}
+
+function unbindConversations(): void {
+  stopRegistryWatch?.()
+  stopRegistryWatch = undefined
+  conversations?.clearLocal()
+  conversations = undefined
+  tabBarRefresh?.()
+}
+
+function requireConversations(): ConversationController | undefined {
+  if (host === undefined || host.status !== 'connected' || conversations === undefined) {
+    return undefined
+  }
+  return conversations
+}
+
+function tabTitle(tab: ConversationTab): string {
+  return tab.title ?? `Conversation ${shortId(tab.sessionId)}`
+}
+
+function shortId(id: string): string {
+  return id.slice(0, 8)
 }

@@ -199,6 +199,28 @@ export class HarnessSdkJsonRpcServer {
   }
 
   /**
+   * Dispose one server-owned session without touching stdout protocol methods.
+   * Clears the Map entry before `handle.dispose()` so a later prompt can
+   * recreate the id instead of hitting the zombie-agent error path.
+   * @param sessionId - SDK session identity to tear down.
+   */
+  async disposeSession(sessionId: string): Promise<void> {
+    if (this.shuttingDown) throw new Error('SDK server is shutting down')
+    const pending = this.sessionCreations.get(sessionId)
+    if (pending !== undefined) {
+      try {
+        await pending
+      } catch {
+        // Creation failed; there is nothing left to dispose for this id.
+      }
+    }
+    const rec = this.sessions.get(sessionId)
+    if (rec === undefined) return
+    this.sessions.delete(sessionId)
+    await Promise.resolve().then(() => rec.handle.dispose())
+  }
+
+  /**
    * Dispose server-owned agents, adapter, and subscriptions to quiescence.
    * The surrounding context remains running.
    * @returns empty JSON-RPC result.

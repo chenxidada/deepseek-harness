@@ -14,8 +14,22 @@ import type { Readable, Writable } from 'node:stream'
 import Schema from '@deepseek-ai/schemastery'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
 import { HarnessSdkJsonRpcServer } from './server.ts'
+import {
+  SDK_SESSION_DISPOSE_SERVICE,
+  type SdkSessionDispose,
+} from './session-dispose.ts'
 
 export * from './server.ts'
+export {
+  SDK_SESSION_DISPOSE_SERVICE,
+  type SdkSessionDispose,
+} from './session-dispose.ts'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    sdkSessionDispose: SdkSessionDispose
+  }
+}
 
 export const name = 'sdk-jsonrpc-server'
 // Only the agent factory is required; initialize reads the optional LLM seam with ctx.get().
@@ -60,6 +74,10 @@ export function apply(ctx: Context, config: JsonRpcConfig): void {
   const server = new HarnessSdkJsonRpcServer(ctx, transport, {
     maxTokensAsSuccess: resolvedConfig.maxTokensAsSuccess,
   })
+  const sessionDispose: SdkSessionDispose = {
+    disposeSession: sessionId => server.disposeSession(sessionId),
+  }
+  ctx.provide(SDK_SESSION_DISPOSE_SERVICE, sessionDispose)
 
   // Share one exit task so racing shutdown requests cannot dispose the root or
   // exit the process more than once.

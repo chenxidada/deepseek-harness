@@ -352,6 +352,37 @@ describe('HarnessSdkJsonRpcServer', () => {
     await server.shutdown()
   })
 
+  it('disposeSession clears the Map then dispose so the id can be recreated', async () => {
+    const dispose = vi.fn(() => Promise.resolve())
+    const followup = vi.fn<Agent['followup']>()
+    const agent = ({
+      id: SessionId('owned'),
+      followup,
+      whenIdle: vi.fn(() => Promise.resolve()),
+    } satisfies Pick<Agent, 'id' | 'followup' | 'whenIdle'>) as unknown as Agent
+    const handle = { agent, dispose }
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: {
+        create: vi.fn(async () => handle),
+        get: (id: SessionId) => (String(id) === 'owned' ? agent : undefined),
+      },
+      get: () => undefined,
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    ;(server as unknown as { initialized: boolean }).initialized = true
+
+    await server.prompt({ sessionId: 'owned', contentBlocks: [{ type: 'text', text: 'hi' }] })
+    await server.disposeSession('owned')
+    expect(dispose).toHaveBeenCalledOnce()
+
+    // After owned dispose, a later prompt recreates instead of hitting the zombie path.
+    await server.prompt({ sessionId: 'owned', contentBlocks: [{ type: 'text', text: 'again' }] })
+    expect(ctx.agents.create).toHaveBeenCalledTimes(2)
+    await server.disposeSession('missing-id')
+    await server.shutdown()
+  })
+
   it('forwards whole-agent status without attributing a turn outcome', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

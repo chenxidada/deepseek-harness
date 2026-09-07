@@ -42,6 +42,19 @@ export class IdeBridgeHostServer {
   }
 
   /**
+   * Send one frame to every open runtime connection.
+   * @param frame - Host→runtime frame.
+   * @returns the number of connections that accepted the write.
+   */
+  broadcast(frame: BridgeFrame): number {
+    let sent = 0
+    for (const connection of this.connections) {
+      if (connection.send(frame)) sent += 1
+    }
+    return sent
+  }
+
+  /**
    * Bind and listen on the given path.
    * @param path - Unix domain socket path or Windows named pipe path.
    * @returns settles when the server is listening.

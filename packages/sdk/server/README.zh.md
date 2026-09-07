@@ -122,7 +122,7 @@ Stdout 只承载 JSON-RPC 帧，客户端可以逐字节解析；诊断信息应
 
 这些限制说明本插件何时需要特别的运维注意。它们是当前包约束，不是与其他服务方式的对比或任务积压。
 
-- **协议没有逐会话关闭或提示词取消方法**——SDK 创建的 agent 会一直存活到进程关闭。
+- **协议没有逐会话关闭或提示词取消方法**——stdout 协议方法仍仅为 `initialize` / `session/prompt` / `shutdown`。ide profile 的逐会话拆除通过 Cordis `sdkSessionDispose` 服务（Host bridge `session/dispose`）完成，而不是新增 stdout 方法。
 - **没有逐提示词结果**——`MessageId` 只标识 inbox 准入；拥有自动化活动区间的客户端必须自行定义并观察该区间。
 - **stdout 纯净性由部署保证**——外围配置仍可能加载 stdout logger 并破坏 JSON-RPC 通道；此插件不会检查或否决同级 logger。
 - **自动挂载适配器仅支持 DeepSeek**——`initialize` 可以复用任何预先注册的模型适配器，但唯一的回退行为是挂载 DeepSeek 适配器。

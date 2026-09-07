@@ -22,13 +22,17 @@
   "files": [
     "lib/index.js",
     "lib/extension.js",
-    "lib/types/**/*.d.ts"
+    "lib/types/**/*.d.ts",
+    "media/**/*"
   ],
   "engines": {
     "vscode": "^1.90.0"
   },
   "activationEvents": [
-    "onCommand:dsh.startSession"
+    "onCommand:dsh.startSession",
+    "onCommand:dsh.newConversation",
+    "onCommand:dsh.switchConversation",
+    "onCommand:dsh.closeConversation"
   ],
   "contributes": {
     "commands": [
@@ -39,8 +43,41 @@
       {
         "command": "dsh.stopSession",
         "title": "DeepSeek Harness: Stop IDE Session"
+      },
+      {
+        "command": "dsh.newConversation",
+        "title": "DeepSeek Harness: New Conversation Tab"
+      },
+      {
+        "command": "dsh.switchConversation",
+        "title": "DeepSeek Harness: Switch Conversation Tab"
+      },
+      {
+        "command": "dsh.closeConversation",
+        "title": "DeepSeek Harness: Close Conversation Tab"
+      },
+      {
+        "command": "dsh.promptActiveConversation",
+        "title": "DeepSeek Harness: Prompt Active Conversation"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dsh",
+          "title": "DeepSeek Harness",
+          "icon": "media/dsh.svg"
+        }
+      ]
+    },
+    "views": {
+      "dsh": [
+        {
+          "id": "dsh.conversations",
+          "name": "Conversations"
+        }
+      ]
+    }
   },
   "license": "MIT",
   "dependencies": {

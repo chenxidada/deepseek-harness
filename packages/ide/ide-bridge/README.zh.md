@@ -43,7 +43,8 @@ None, as the bridge only relays Host interaction outcomes and registers no promp
 ## 已知限制与延期工作
 
 - **完整 Host UI 往返延期** — Phase 1 应答方返回 `unavailable` / `NO_PROVIDER`，不等待扩展面板；Phase 3 补齐 bridge 请求/应答循环（`@STUB(phase-3-interaction-fail-closed)`）。
-- **session/dispose 与 permission RPC 延期** — 多 Tab dispose 与权限档位 bridge 方法在后续 Phase 落地。
+- **permission RPC 延期** — 权限档位 bridge 方法在后续 Phase 落地。
+- **`session/dispose` 已实现** — Host→runtime dispose 帧调用 Cordis `sdkSessionDispose` 服务（清理 Map + `AgentHandle.dispose()`）；不是 SDK stdout 方法。
 
 <a id="dev-note"></a>
 ### 开发备注

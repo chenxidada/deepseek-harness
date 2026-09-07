@@ -43,7 +43,8 @@ No direct model-request effect; Host decisions may change later tool outcomes wi
 ## Known Limitations and Deferred Work
 
 - **Full Host UI round-trips are deferred** — Phase 1 answerers return `unavailable` / `NO_PROVIDER` without waiting on Extension panels; Phase 3 fills the bridge request/response loop (`@STUB(phase-3-interaction-fail-closed)`).
-- **session/dispose and permission RPC are deferred** — multi-tab dispose and permission-preset bridge methods arrive in later phases.
+- **permission RPC is deferred** — permission-preset bridge methods arrive in a later phase.
+- **`session/dispose` is implemented** — Host→runtime dispose frames call the Cordis `sdkSessionDispose` service (Map clear + `AgentHandle.dispose()`); not an SDK stdout method.
 
 <a id="dev-note"></a>
 ### Dev Note

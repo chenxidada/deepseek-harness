@@ -122,7 +122,7 @@ Append-only; newly visible content follows the reusable request prefix and does 
 
 These limits define when the plugin needs special operational care. They are current package constraints, not a comparison with other serving approaches or a task backlog.
 
-- **The wire has no per-session close or prompt-cancel method** — SDK-created agents remain live until process shutdown.
+- **The wire has no per-session close or prompt-cancel method** — stdout protocol methods stay `initialize` / `session/prompt` / `shutdown` only. Per-session teardown for the ide profile uses the Cordis `sdkSessionDispose` service (Host bridge `session/dispose`), not a new stdout method.
 - **There is no per-prompt result** — `MessageId` identifies inbox admission only; clients that own an automation interval must define and observe that interval themselves.
 - **stdout purity is deployment-enforced** — a surrounding config can still load a stdout logger and corrupt the JSON-RPC channel; this plugin does not inspect or veto sibling loggers.
 - **Automatic adapter mounting is DeepSeek-specific** — `initialize` can reuse any pre-registered model adapter, but its only fallback mounts the DeepSeek adapter.
