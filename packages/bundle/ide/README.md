@@ -36,8 +36,8 @@ No additional model-request effect beyond the stacked sdk-app and base layers.
 
 ## Known Limitations and Deferred Work
 
-- **Host interaction UI is deferred** — answerer stubs fail closed until Phase 3 completes the Extension panels.
 - **User patches can violate mutual exclusion** — profile and `--patch` overlays are trusted; the shipped bundle asserts absence of Web UI answerer rows, but cannot contain arbitrary later inserts.
+- **Replaceability scope** — transport / UI presenter / permission-presets are swappable without `agent-loop` edits; Spec/hooks product packs remain out of scope. See [`dsh-ide-bridge` replaceability](../../ide/ide-bridge/README.md#replaceability-contract-ad-8).
 
 <a id="dev-note"></a>
 ### Dev Note

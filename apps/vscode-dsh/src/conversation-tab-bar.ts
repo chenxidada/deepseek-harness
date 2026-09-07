@@ -14,6 +14,8 @@ export interface ConversationTreeItem {
   label: string
   description: string
   active: boolean
+  /** Override click command (empty-state Start Session). Default: switchConversation. */
+  commandId?: string
 }
 
 /** Duck-typed TreeItem command payload (VS Code Command). */
@@ -58,9 +60,18 @@ export interface ConversationTabBarVsCode {
 /**
  * Build TreeItem-like rows for a conversation Tab bar view.
  * @param snapshot - registry snapshot.
- * @returns ordered Tab bar items.
+ * @returns ordered Tab bar items (or a Start Session placeholder when empty).
  */
 export function conversationTreeItems(snapshot: ConversationRegistrySnapshot): ConversationTreeItem[] {
+  if (snapshot.tabs.length === 0) {
+    return [{
+      tabId: '',
+      label: 'Start IDE Session…',
+      description: 'Click here, or use the Command Palette',
+      active: false,
+      commandId: 'dsh.startSession',
+    }]
+  }
   return snapshot.tabs.map(tab => ({
     tabId: tab.tabId,
     label: tabBarLabel(tab),
@@ -90,6 +101,15 @@ export function createConversationTabBar(
     },
     getTreeItem(element: ConversationTreeItem): TreeItemLike {
       const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None)
+      if (element.commandId === 'dsh.startSession') {
+        item.description = element.description
+        item.contextValue = 'dshConversationStart'
+        item.command = {
+          command: 'dsh.startSession',
+          title: 'Start IDE Session',
+        }
+        return item
+      }
       item.description = element.active ? `${element.description} · active` : element.description
       item.contextValue = element.active ? 'dshConversationActive' : 'dshConversation'
       // Click / select → switchConversation with this Tab id (GAP-004); QuickPick remains for the bare command.

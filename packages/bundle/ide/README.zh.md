@@ -36,8 +36,8 @@ None, as the ide layer only inserts the Host bridge and renames the sdk-app prof
 
 ## 已知限制与延期工作
 
-- **Host 交互 UI 延期** — 应答桩在 Phase 3 完成扩展面板前 fail-closed。
 - **用户 patch 可能破坏互斥** — profile 与 `--patch` 覆盖受信任；随附组合包断言不存在 Web UI 应答行，但无法约束任意后续插入。
+- **可替换范围** — 传输 / UI 呈现 / permission-presets 可在不改 `agent-loop` 的前提下替换；Spec/hooks 产品包仍不在范围内。见 [`dsh-ide-bridge` 可替换性](../../ide/ide-bridge/README.zh.md#replaceability-contract-ad-8)。
 
 <a id="dev-note"></a>
 ### 开发备注

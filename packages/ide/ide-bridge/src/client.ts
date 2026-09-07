@@ -64,7 +64,7 @@ export class IdeBridgeClient {
         this.framing.onFrame(frame => this.frameHandler?.(frame))
         this.framing.send({ kind: 'hello', role: 'runtime' })
         this.state.connected = true
-        this.state.error = undefined
+        delete this.state.error
         settled = true
         resolve()
       })

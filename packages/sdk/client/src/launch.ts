@@ -89,23 +89,47 @@ export function resolveDshNodeLaunchFromManifests(
   sourceLoaderUrl?: string,
 ): DshNodeLaunch {
   const bin = resolveDshBinFromManifests(dshManifestUrl, clientManifestUrl)
-  if (existsSync(bin)) return { nodeArgs: [bin], patches: [], environment: {} }
-
   const packageDir = dirname(fileURLToPath(dshManifestUrl))
   const sourceBin = resolve(packageDir, 'src/bin.ts')
   const sourcePatch = resolve(packageDir, 'src/sdk-source.cordis.patch.yml')
   const sourceTsconfig = resolve(packageDir, 'tsconfig.json')
-  if (!existsSync(sourceBin) || !existsSync(sourcePatch) || !existsSync(sourceTsconfig)) {
-    throw new Error(
-      `@deepseek-ai/dsh is missing its built executable ${bin} and complete source launch files ${sourceBin}, ${sourcePatch}, ${sourceTsconfig}`,
-    )
+  const hasSourceLaunch = existsSync(sourceBin)
+    && existsSync(sourcePatch)
+    && existsSync(sourceTsconfig)
+
+  // Source checkouts keep `src/` next to a possibly-built `lib/bin.js`. Prefer
+  // the tsx source entry + sdk-source patch so workspace package resolution and
+  // missing build-generated Typert rows match `pnpm dsh` / profile e2e. Published
+  // installs ship only `lib/` and take the built entry below.
+  if (hasSourceLaunch) {
+    const loader = sourceLoaderUrl ?? import.meta.resolve('tsx/esm')
+    return {
+      nodeArgs: ['--import', loader, sourceBin],
+      patches: [sourcePatch],
+      environment: { TSX_TSCONFIG_PATH: sourceTsconfig },
+    }
   }
-  const loader = sourceLoaderUrl ?? import.meta.resolve('tsx/esm')
-  return {
-    nodeArgs: ['--import', loader, sourceBin],
-    patches: [sourcePatch],
-    environment: { TSX_TSCONFIG_PATH: sourceTsconfig },
+  if (existsSync(bin)) return { nodeArgs: [bin], patches: [], environment: {} }
+
+  throw new Error(
+    `@deepseek-ai/dsh is missing its built executable ${bin} and complete source launch files ${sourceBin}, ${sourcePatch}, ${sourceTsconfig}`,
+  )
+}
+
+/**
+ * Node executable used to spawn dsh. Extension Hosts expose Electron as
+ * `process.execPath`; that binary cannot resolve this monorepo's workspace
+ * packages the way a real Node does, so prefer `DSH_NODE_BIN` or `node` on PATH.
+ * @returns absolute Node path, or the `node` command name for PATH lookup.
+ */
+export function resolveNodeExecutable(): string {
+  if (process.env.DSH_NODE_BIN !== undefined && process.env.DSH_NODE_BIN !== '') {
+    return process.env.DSH_NODE_BIN
   }
+  if (process.versions.electron !== undefined) {
+    return 'node'
+  }
+  return process.execPath
 }
 
 /**
@@ -139,7 +163,7 @@ export function resolveDshLaunch(
   ]
   const dshHome = options.dshHome === undefined ? undefined : resolve(callerCwd, options.dshHome)
   return {
-    command: process.execPath,
+    command: resolveNodeExecutable(),
     args: [...dshLaunch.nodeArgs, '--profile', profile, ...patches.flatMap(path => ['--patch', path])],
     ...options.processCwd === undefined ? {} : { cwd: resolve(callerCwd, options.processCwd) },
     environment: () => ({

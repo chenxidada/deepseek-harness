@@ -120,7 +120,7 @@ export function createVscodeInteractionUi(window: InteractionWindow): Interactio
           })
           continue
         }
-        const items: InteractionQuickPickItem[] = options.map(option => ({
+        const items: InteractionQuickPickItem[] = options.map((option: { label: string; description?: string }) => ({
           label: option.label,
           ...option.description === undefined ? {} : { description: option.description },
           value: option.label,
@@ -172,7 +172,7 @@ export async function pickPermissionPreset(
   }
   const items: InteractionQuickPickItem[] = presets.map(name => ({
     label: name,
-    description: name === current ? 'current' : undefined,
+    ...name === current ? { description: 'current' } : {},
     value: name,
   }))
   const picked = await pickItems(window, items, {
@@ -213,8 +213,8 @@ async function pickItems(
         finish(undefined)
       }
       qp.items = items
-      qp.placeholder = options.placeHolder
-      qp.title = options.title
+      if (options.placeHolder !== undefined) qp.placeholder = options.placeHolder
+      if (options.title !== undefined) qp.title = options.title
       if (options.canPickMany === true) qp.canSelectMany = true
       const acceptDisp = qp.onDidAccept(() => {
         const selected = [...qp.selectedItems]

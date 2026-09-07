@@ -28,6 +28,7 @@ import { createVscodeInteractionUi, pickPermissionPreset, type InteractionWindow
 import { redactSecrets } from './redact.ts'
 import type { ConversationRegistrySnapshot, ConversationTab } from './conversation-registry.ts'
 import type { TimelineDiffHunk, TimelineItem } from './timeline-store.ts'
+import { createRequire } from 'node:module'
 
 export type { ConversationTreeItem, TimelineTreeItem }
 
@@ -101,15 +102,23 @@ let timelineRefresh: (() => void) | undefined
 let stopRegistryWatch: (() => void) | undefined
 let stopTimelineWatch: (() => void) | undefined
 let stopErrorWatch: (() => void) | undefined
-let vscodeRef: VsCodeLike | undefined
+
+/**
+ * Resolve the vscode module when the Extension Host activates without an
+ * injected test double (Method A / real VS Code only passes `context`).
+ */
+function loadVscodeApi(): VsCodeLike {
+  const require = createRequire(import.meta.url)
+  return require('vscode') as VsCodeLike
+}
 
 /**
  * Activate the Extension: register window host + multi-Tab + timeline + Diff commands.
  * @param context - VS Code extension context.
- * @param vscode - the vscode module (injected for testability).
+ * @param vscodeArg - optional vscode module (injected for testability).
  */
-export function activate(context: ExtensionContextLike, vscode: VsCodeLike): void {
-  vscodeRef = vscode
+export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike): void {
+  const vscode = vscodeArg ?? loadVscodeApi()
   if (canRegisterConversationTabBar(vscode)) {
     const tabBar = createConversationTabBar(vscode, getConversationSnapshot)
     tabBarRefresh = () => tabBar.refresh()
@@ -142,7 +151,18 @@ export function activate(context: ExtensionContextLike, vscode: VsCodeLike): voi
     })
     host = next
     try {
-      await next.start({ cwd: folder })
+      // scrubbedParentEnv strips KEY|PASSWORD|SECRET|TOKEN names; reinject
+      // credential-shaped parent env so the ide child can reach the model.
+      const credentials: NodeJS.ProcessEnv = {}
+      for (const [key, value] of Object.entries(process.env)) {
+        if (value !== undefined && /KEY|PASSWORD|SECRET|TOKEN/i.test(key)) {
+          credentials[key] = value
+        }
+      }
+      await next.start({
+        cwd: folder,
+        ...Object.keys(credentials).length === 0 ? {} : { credentials },
+      })
       bindConversations(new ConversationController(next))
       conversations!.newConversation('New conversation')
       await vscode.window.showInformationMessage('DeepSeek Harness IDE session connected.')
@@ -386,7 +406,6 @@ export async function deactivate(): Promise<void> {
   stopErrorWatch?.()
   stopErrorWatch = undefined
   unbindConversations()
-  vscodeRef = undefined
   if (current !== undefined) await current.shutdown()
 }
 

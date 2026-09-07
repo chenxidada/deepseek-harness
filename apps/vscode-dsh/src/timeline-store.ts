@@ -232,7 +232,7 @@ export class TimelineStore {
       this.push(sessionId, {
         kind: 'assistant',
         label: text === undefined || text === '' ? 'assistant' : truncate(text, 80),
-        description: text,
+        ...text === undefined ? {} : { description: text },
         depth,
       })
       return

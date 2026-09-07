@@ -41,6 +41,7 @@ export {
   type SdkSessionDisposeCapability,
   type ApprovalOutcome,
   type AskUserQuestionAnswer,
+  type AskUserQuestionItem,
 } from './types.ts'
 export { IdeBridgeHostServer, type IdeBridgeHostConnection } from './host.ts'
 export { IdeBridgeClient } from './client.ts'
@@ -156,22 +157,35 @@ export function apply(ctx: Context, config: Config = {}): void {
   // waterfall never falls through to an absent Web Host answerer (AD-4).
   ctx.on('approval/request', (request, _next) => {
     return awaitHostApproval(client, state, pendingApprovals, {
-      sessionId: request.agent.session.id,
+      sessionId: resolveBridgeSessionId(request.agent),
       toolName: request.toolName,
       ...request.reason === undefined ? {} : { reason: request.reason },
-      signal: request.signal,
+      ...request.signal === undefined ? {} : { signal: request.signal },
       timeoutMs: interactionTimeoutMs,
     })
   })
 
   ctx.on('user-questions/request', (request, _next) => {
     return awaitHostQuestions(client, state, pendingQuestions, {
-      sessionId: request.agent?.session.id ?? 'unknown',
+      sessionId: request.agent === undefined
+        ? 'unknown'
+        : resolveBridgeSessionId(request.agent),
       questions: request.questions,
-      signal: request.signal,
+      ...request.signal === undefined ? {} : { signal: request.signal },
       timeoutMs: interactionTimeoutMs,
     })
   })
+}
+
+/**
+ * Prefer a live agent `session.id` when present; fall back to `Agent.id`
+ * (SessionId) from the type-only Agent surface.
+ */
+function resolveBridgeSessionId(
+  agent: { id: string; session?: { id?: string } },
+): string {
+  const fromSession = agent.session?.id
+  return fromSession === undefined || fromSession === '' ? agent.id : fromSession
 }
 
 /**
@@ -211,7 +225,7 @@ async function awaitHostApproval(
 
   return await raceInteraction(response, {
     timeoutMs: options.timeoutMs,
-    signal: options.signal,
+    ...options.signal === undefined ? {} : { signal: options.signal },
     onTimeout: () => {
       pending.delete(id)
       return 'unavailable' as const
@@ -266,7 +280,7 @@ async function awaitHostQuestions(
   try {
     return await raceInteraction(response, {
       timeoutMs: options.timeoutMs,
-      signal: options.signal,
+      ...options.signal === undefined ? {} : { signal: options.signal },
       onTimeout: () => {
         pending.delete(id)
         throw new UserQuestionError(

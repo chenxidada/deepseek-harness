@@ -14,6 +14,7 @@ kind: "package-reference"
 ## 目录
 
 - [使用本包](#use-this-package)
+- [可替换性契约（AD-8）](#replaceability-contract-ad-8)
 - [模型体验](#model-experience)
 - [已知限制与延期工作](#known-limitations-and-deferred-work)
 - [开发备注](#dev-note)
@@ -31,6 +32,30 @@ kind: "package-reference"
 | `interactionTimeoutMs` | `120000` | 等待 Host 审批 / 提问应答的上限 |
 
 导出的辅助类 `IdeBridgeHostServer` 与 `IdeBridgeClient` 共享 NDJSON 帧格式，供扩展与测试使用。入站帧经 `parseBridgeFrame` / `validateBridgeFrame` 校验；畸形载荷丢弃（AC-31）。
+
+<a id="replaceability-contract-ad-8"></a>
+## 可替换性契约（AD-8）
+
+本包装载 ide 双通道设计中的 **Host bridge** 面。更换下表各面 **不得** 要求修改 `packages/core/agent-loop`（AC-27）；新行为落在 `ide-bridge` / VS Code 扩展边界内（AC-28）。
+
+### 双通道不变量
+
+| 通道 | 拥有方 | 可承载内容 |
+|---|---|---|
+| **SDK stdout** | `dsh-sdk-jsonrpc-server`（sdk-app） | 仅 JSON-RPC（`initialize` / `session/prompt` / `shutdown` + 通知） |
+| **Host bridge** | 本包 + 扩展 Host 监听端 | NDJSON `BridgeFrame`：审批、用户提问、permission RPC、`session/dispose`、`hello` |
+
+Bridge 流量 **绝不** 写入 SDK stdout。断连、超时与非法载荷 **fail-closed**（终端应答方不调用 `next()`）。
+
+### 可替换面
+
+| 面 | 生产绑定 | 如何替换 | 证明 |
+|---|---|---|---|
+| **传输适配器** | `IdeBridgeHostServer` / `IdeBridgeClient`（UDS 或 named pipe） | 任意 Node `Duplex` + `NdjsonSocket`，沿用同一 `validateBridgeFrame` / `BridgeFrame` | `tests/replaceability-memory-transport.spec.ts`（PassThrough 对：hello + 审批往返） |
+| **UI 呈现** | 扩展 `InteractionUi`（QuickPick） | 实现 `presentApproval` / `presentQuestions`，经 `IdeSessionHost.setInteractionUi` 注入 | 见 `apps/vscode-dsh` README 的 Replaceability 节；测试 `replaceability-interaction-ui.spec.ts` |
+| **Auto-allow / permission** | Host `permission/select` → `dsh-permission-presets.set` | 切换档位（如 `danger-full-access` → 审批策略 `never`），或经同一 Cordis 服务挂载其它 presets 表；扩展不得自建第二策略库 | 本包 Host permission 帧 + 扩展 `dsh.selectPermissionPreset` |
+
+本 feature 可替换范围之外：Spec 面板与 hooks 产品包。
 
 <a id="model-experience"></a>
 ## 模型体验

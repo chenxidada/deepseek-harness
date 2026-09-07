@@ -62,6 +62,16 @@ export interface TimelineViewVsCode {
  * @returns ordered view rows.
  */
 export function timelineTreeItems(items: readonly TimelineItem[]): TimelineTreeItem[] {
+  if (items.length === 0) {
+    return [{
+      id: 'empty',
+      label: 'No timeline yet',
+      description: 'Start a session, then Prompt Active Conversation',
+      kind: 'assistant',
+      depth: 0,
+      hasDiff: false,
+    }]
+  }
   return items.map(item => ({
     id: item.id,
     label: `${indent(item.depth)}${item.label}`,

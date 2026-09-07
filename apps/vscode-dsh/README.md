@@ -46,6 +46,18 @@ Closing a conversation Tab **ends that session**: the Extension sends a Host-bri
 ## Dual channel
 
 - **SDK stdout** — JSON-RPC only (`initialize` / `session/prompt` / `shutdown`) plus server notifications (`session.event`, `session.status`, `subagent.*`). No `session/close` on stdout.
-- **Host bridge** — UDS/named-pipe NDJSON for `session/dispose`, approval/questions, and permission RPC.
+- **Host bridge** — UDS/named-pipe NDJSON for `session/dispose`, approval/questions, and permission RPC. Bridge traffic never shares stdout with the SDK.
 
-The Extension does **not** reimplement agent-loop, tool execution, or session persistence (AC-15).
+The Extension does **not** reimplement agent-loop, tool execution, or session persistence (AC-15). Fail-closed approvals / questions live in `InteractionCoordinator` + `ide-bridge` terminal answerers — not in `packages/core/agent-loop`.
+
+## Replaceability (AD-8)
+
+Authoritative transport + frame contract: [`@deepseek-ai/dsh-ide-bridge` README § Replaceability](../../packages/ide/ide-bridge/README.md#replaceability-contract-ad-8). This Extension owns the **UI presenter** and **permission picker** faces only.
+
+| Face | Seam in this app | Default | Replace without agent-loop |
+|---|---|---|---|
+| UI presenter | `InteractionUi` via `IdeSessionHost.setInteractionUi` / `InteractionCoordinator.setUi` | `createVscodeInteractionUi` (QuickPick / InputBox) | Any object returning legal `ApprovalOutcome` / `AskUserQuestionAnswer`; proof: `tests/replaceability-interaction-ui.spec.ts` |
+| Auto-allow | `dsh.selectPermissionPreset` → Host `permission/select` | `workspace-write`; `danger-full-access` maps to approval `never` | Switch presets through `dsh-permission-presets` only — do not store a parallel policy in the Extension |
+| Transport | Host listens with `IdeBridgeHostServer` | UDS / named pipe | Swap at the duplex / `NdjsonSocket` layer in ide-bridge (memory proof lives there) |
+
+Changing QuickPick → Webview (or another presenter), swapping the bridge duplex, or selecting an auto-allow preset must stay inside `apps/vscode-dsh` + `packages/ide/ide-bridge` (AC-27 / AC-28).

@@ -271,6 +271,7 @@ export class IdeSessionHost {
       preset,
     })
     if (!result.ok) throw new Error(result.error)
+    if (!('preset' in result)) throw new Error('unexpected permission/list response for select')
     return result.preset
   }
 
@@ -284,6 +285,7 @@ export class IdeSessionHost {
       sessionId,
     })
     if (!result.ok) throw new Error(result.error)
+    if (!('presets' in result)) throw new Error('unexpected permission/select response for list')
     return { presets: result.presets, current: result.current }
   }
 

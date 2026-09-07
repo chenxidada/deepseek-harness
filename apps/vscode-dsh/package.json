@@ -1,5 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-vscode-dsh",
+  "displayName": "DeepSeek Harness IDE",
+  "publisher": "deepseek-ai",
   "description": "VS Code Extension host for the dsh ide profile: SDK stdio client plus Host bridge server",
   "version": "0.1.2-rc.1",
   "private": true,
@@ -29,6 +31,7 @@
     "vscode": "^1.90.0"
   },
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:dsh.startSession",
     "onCommand:dsh.newConversation",
     "onCommand:dsh.switchConversation",
@@ -36,6 +39,7 @@
     "onCommand:dsh.selectPermissionPreset",
     "onCommand:dsh.reviewWorkspaceDiffs",
     "onCommand:dsh.openTimelineDiff",
+    "onView:dsh.conversations",
     "onView:dsh.timeline"
   ],
   "contributes": {

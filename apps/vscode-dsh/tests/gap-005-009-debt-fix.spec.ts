@@ -204,6 +204,10 @@ describe('GAP-009: closeConversation fail-closes session Host UI', () => {
     })
     const host = {
       interactions: coordinator,
+      setConversationRegistry() {},
+      onNotification() {
+        return () => {}
+      },
       async disposeSession(sessionId: string): Promise<void> {
         order.push(`dispose:${sessionId}`)
       },

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/ide/ide-bridge/README.md
-README.md: 97c468131c4865c906fba049e9b2b6896251ceed
-README.zh.md: 75b2ea51c7ac82ac48be282fde84e06ee596f8bb
+README.md: 3325d4112536ae5f3a853d232957dc553cce55b5
+README.zh.md: 16abf1c209c072b305f1a21ca5d098abcb7a47d1

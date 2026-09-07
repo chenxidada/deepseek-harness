@@ -14,6 +14,7 @@ English | [中文](README.zh.md)
 ## Table of Contents
 
 - [Use this package](#use-this-package)
+- [Replaceability contract (AD-8)](#replaceability-contract-ad-8)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
@@ -31,6 +32,30 @@ Mount through the [`dsh-ide`](../../bundle/ide/README.md) profile bundle. The Ex
 | `interactionTimeoutMs` | `120000` | Bound waiting for Host approval / user-questions responses |
 
 Exported helpers `IdeBridgeHostServer` and `IdeBridgeClient` share the NDJSON frame format for Extension and tests. Inbound frames are validated (`parseBridgeFrame` / `validateBridgeFrame`); malformed payloads are dropped (AC-31).
+
+<a id="replaceability-contract-ad-8"></a>
+## Replaceability contract (AD-8)
+
+This package owns the **Host bridge** face of the ide dual-channel design. Replacing the surfaces below must not require edits to `packages/core/agent-loop` (AC-27); new behavior stays in `ide-bridge` / the VS Code Extension (AC-28).
+
+### Dual-channel invariants
+
+| Channel | Owner | May carry |
+|---|---|---|
+| **SDK stdout** | `dsh-sdk-jsonrpc-server` (sdk-app) | JSON-RPC only (`initialize` / `session/prompt` / `shutdown` + notifications) |
+| **Host bridge** | this package + Extension Host listener | NDJSON `BridgeFrame`s: approval, user-questions, permission RPC, `session/dispose`, `hello` |
+
+Bridge traffic **never** writes SDK stdout. Disconnect, timeout, and illegal payloads **fail closed** (terminal answerers do not call `next()`).
+
+### Replaceable faces
+
+| Face | Production binding | How to replace | Proof |
+|---|---|---|---|
+| **Transport adapter** | `IdeBridgeHostServer` / `IdeBridgeClient` over UDS or named pipe | Any Node `Duplex` under `NdjsonSocket` + the same `validateBridgeFrame` / `BridgeFrame` kinds | `tests/replaceability-memory-transport.spec.ts` (PassThrough pair: hello + approval round-trip) |
+| **UI presenter** | Extension `InteractionUi` (QuickPick) | Inject another object implementing `presentApproval` / `presentQuestions` via `IdeSessionHost.setInteractionUi` | Documented under `apps/vscode-dsh` README § Replaceability; test `replaceability-interaction-ui.spec.ts` |
+| **Auto-allow / permission** | Host `permission/select` → `dsh-permission-presets.set` | Switch preset (e.g. `danger-full-access` → approval policy `never`) or mount another presets table through the same Cordis service; do not invent a second policy store in the Extension | Host permission frames in this package + Extension `dsh.selectPermissionPreset` |
+
+Out of replaceability scope for this feature: Spec panels and hooks product packs.
 
 <a id="model-experience"></a>
 ## Model Experience
