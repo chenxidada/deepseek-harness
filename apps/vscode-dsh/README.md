@@ -29,20 +29,42 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 
 | Command | Action |
 |---|---|
-| `dsh.startSession` | Start the window session host and **restore** persisted non-empty `openTabSet` (else open a blank Tab) |
-| `dsh.stopSession` | Shut down the session host |
-| `dsh.newConversation` | Add a Tab with a fresh `sessionId` |
-| `dsh.switchConversation` | Switch the active Tab (TreeView click or QuickPick) |
+| `dsh.startSession` | Start / reuse the window session host (via AutoStartOrchestrator) and **restore** persisted non-empty `openTabSet` (else open a blank Tab) |
+| `dsh.stopSession` | Shut down the session host (user Stop → orchestrator idle) |
+| `dsh.newConversation` | Add a Tab with a fresh `sessionId` (auto-starts Host if needed) |
+| `dsh.switchConversation` | Switch the active Tab (TreeView click or QuickPick) — **does not** full auto-start |
 | `dsh.closeConversation` | Close (unload) the active Tab — **does not** dispose the session |
-| `dsh.deleteConversation` | Explicitly delete: confirm → `session/dispose` + clear index |
-| `dsh.continueConversation` | Continue this session (same-id resume → same `tabId` `replay→live`) |
+| `dsh.deleteConversation` | Explicitly delete: confirm → `session/dispose` + clear index. Offline → **「Host 连接后可删除」** (no fake delete, no auto-start) |
+| `dsh.deleteHistory` | Delete a history-list session (`session/dispose` + clear index). Offline → **「Host 连接后可删除」** (no fake delete, no auto-start) |
+| `dsh.continueConversation` | Continue this session (auto-starts Host if needed) |
 | `dsh.restoreMoreTabs` | Hydrate deferred restore Tabs（「查看更多 / 全部恢复」） |
-| `dsh.promptActiveConversation` | Prompt the active Tab's `sessionId` (tests / scripting) |
+| `dsh.promptActiveConversation` | Prompt the active Tab's `sessionId` (tests / scripting; auto-starts if needed) |
 | `dsh.selectPermissionPreset` | Pick a permission-presets name for the active Tab |
 | `dsh.reviewWorkspaceDiffs` | Open post-hoc Diff for write/edit paths on the active Tab |
 | `dsh.openTimelineDiff` | Open Diff from a Timeline write row (AC-25) |
+| `dsh.showPanel` | Reveal Conversation view / connection error details (**does not** force Start) |
+| `dsh.openExtensionSettings` | Open VS Code Settings filtered to this extension (missing-credentials deep link) |
+| `dsh.statusBarAction` | Status-bar click: reveal panel **and** auto-start (`status-bar` reason) |
+
+### Auto-start command matrix (AC-1c / AC-1e)
+
+| Class | Commands | Auto Start? |
+|---|---|:---:|
+| **Start** | `dsh.startSession` | ✅ (`command-start`) |
+| **Send / New** | `dsh.newConversation`, `dsh.promptActiveConversation`, `dsh.continueConversation` | ✅ (`command-send`) |
+| **Query / browse** | `dsh.openHistory`, `dsh.switchConversation`, History/Conversations refresh | ❌ |
+| **Delete** | `dsh.deleteConversation`, `dsh.deleteHistory` | ❌ — offline shows「Host 连接后可删除」; never fake-deletes authority |
+| **Panel / settings** | `dsh.showPanel`, `dsh.openExtensionSettings` | ❌ (show details / settings only) |
+| **Status bar** | `dsh.statusBarAction` | ✅ (`status-bar`) |
+| **Visibility** | Conversation `onDidChangeVisibility` / activity-bar open | ✅ |
+
+`onStartupFinished` / `activate` **only registers** commands, views, status bar, and the orchestrator — it does **not** Start (AC-1a).
+
+Settings prefix for credentials / extension config deep link: `@ext:deepseek-ai.dsh-vscode-dsh`.
 
 ### L2 test hooks (scripting / Extension Host harness)
+
+Registered **only** when `VSCODE_DSH_TEST=1` or when `activate` receives an injected vscode test double (AD-CR-10). **Not** contributed to the production command palette.
 
 | Command | Action |
 |---|---|
@@ -56,6 +78,14 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 | `dsh.test.continue` | Continue active replay Tab (optional resume stub) |
 | `dsh.test.restoreMoreTabs` | 「查看更多」 hydrate |
 | `dsh.test.diffAvailability` | Probe recoverable log Diffs (no workspace impersonation) |
+| `dsh.test.getStartState` | Orchestrator snapshot (`idle`/`starting`/`disconnected`/…) |
+| `dsh.test.simulateStartupOnly` | AC-1a reverse: activate-only metrics (no Start) |
+| `dsh.test.setCredentialPresence` | Simulate credential presence for AC-2 |
+| `dsh.test.fireConversationVisibility` | Drive production visibility latch entry |
+| `dsh.test.openActivityBar` | AC-1b: reveal Conversation + `activity-bar` start reason |
+| `dsh.test.requestStart` | Direct orchestrator `request(reason)` |
+| `dsh.test.hostCreateCount` | Host construct count (AC-5) |
+| `dsh.test.injectDisconnect` | Fire unexpected disconnect (AC-6a) |
 
 ## Views
 
@@ -77,7 +107,7 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 - **Close Tab** unloads UI and destroys `tabId`, but **does not** call bridge `session/dispose`. Authority stays recoverable. Empty Tabs never enter persisted `openTabSet`.
 - **Delete Conversation** requires confirmation (and Stop & Delete when running). Only then does the Extension send `session/dispose`, clear MessageStore/Timeline for that session, and tombstone the index. Parent delete does not cascade to child session authority.
 - Running close prompts **Stop and Close** / **Cancel**; cancel leaves the Tab open.
-- Host not ready → delete is disabled / errors (no index-only fake delete).
+- Host not ready → delete is disabled / errors with「Host 连接后可删除」(no index-only fake delete; no auto-start).
 
 `openTabSet` / `activeSessionId` are written to `workspaceState` on every change (not only on deactivate).
 

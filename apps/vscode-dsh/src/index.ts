@@ -3,6 +3,20 @@
  * @module @deepseek-ai/dsh-vscode-dsh
  */
 
+export {
+  AutoStartOrchestrator,
+  type StartErrorKind,
+  type StartHostPort,
+  type StartOrchestratorSnapshot,
+  type StartOrchestratorState,
+  type StartReason,
+} from './auto-start-orchestrator.ts'
+export {
+  AutoReadyLatchSeam,
+  ConnectionUiController,
+  type ConnectionUiPhase,
+  type ConnectionUiState,
+} from './connection-ui.ts'
 export { IdeSessionHost, type IdeSessionHostStartOptions, type IdeSessionHostStatus } from './session-host.ts'
 export { buildIdeChildEnv, type IdeChildEnvOptions } from './env.ts'
 export { redactSecrets } from './redact.ts'

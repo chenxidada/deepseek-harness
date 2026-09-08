@@ -8,8 +8,10 @@ import type { ChatMessage, MessageStore } from '../message-store.ts'
 import type { ConversationRegistry } from '../conversation-registry.ts'
 import type { ExtensionIndex } from '../extension-index.ts'
 import type { InteractionCoordinator } from '../interaction-coordinator.ts'
+import type { ConnectionUiState } from '../connection-ui.ts'
 import {
   parseWebviewToHostMessage,
+  type ConnectionPhase,
   type HostToWebviewMessage,
   type PanelMode,
   type PanelStatus,
@@ -69,6 +71,10 @@ export interface ChatPanelHostDeps {
     label?: string
     sessionId: string
   }
+  /** Optional manual retry after failed / disconnected connection (AC-2 / AC-14). */
+  requestRetryConnect?: () => Promise<void>
+  /** Optional settings deep-link (missing credentials). */
+  requestOpenSettings?: () => Promise<void>
 }
 
 /**
@@ -78,11 +84,40 @@ export class ChatPanelHost {
   private port: WebviewMessagePort | undefined
   private stopPort: (() => void) | undefined
   private readonly outbound: HostToWebviewMessage[] = []
+  private connectionPhase: ConnectionPhase = 'idle'
+  private connectionMessage: string | undefined
+  private settingsDeepLinkAvailable = false
 
   /**
    * @param deps - registry / store / send gate callbacks.
    */
   constructor(private readonly deps: ChatPanelHostDeps) {}
+
+  /**
+   * Apply ConnectionUiState into panel/state + banner (AC-13 / AC-14).
+   * @param state - routed connection UI state.
+   */
+  applyConnectionState(state: ConnectionUiState): void {
+    this.connectionPhase = state.phase
+    this.connectionMessage = state.message
+    this.settingsDeepLinkAvailable = state.settingsDeepLinkAvailable
+    if (state.phase === 'connecting') {
+      this.pushBanner(state.message ?? 'Connecting to Host…', 'connecting')
+    } else if (state.phase === 'failed' || state.phase === 'disconnected-manual'
+      || state.phase === 'disconnected-retrying') {
+      this.pushBanner(state.message ?? 'Host connection issue', state.phase)
+    } else if (state.phase === 'connected' || state.phase === 'idle') {
+      // Re-push full state so connecting banner does not stick.
+      this.pushFullState()
+      return
+    }
+    this.pushFullState()
+  }
+
+  /** Last connection phase for L2 assertions. */
+  getConnectionPhase(): ConnectionPhase {
+    return this.connectionPhase
+  }
 
   /**
    * Attach a Webview (or fake) port. Replaces any previous port.
@@ -129,6 +164,11 @@ export class ChatPanelHost {
    */
   pushFullState(): void {
     const active = this.deps.registry.getActive()
+    const connectionFields = {
+      connectionPhase: this.connectionPhase,
+      ...this.connectionMessage === undefined ? {} : { connectionMessage: this.connectionMessage },
+      settingsDeepLinkAvailable: this.settingsDeepLinkAvailable,
+    }
     if (active === undefined) {
       const mode: PanelMode = this.deps.isHostReady() ? 'empty' : 'waiting-host'
       this.post({
@@ -136,6 +176,7 @@ export class ChatPanelHost {
         mode,
         continue: { visibility: 'hidden' },
         deferredRestoreCount: this.deps.resolveDeferredRestoreCount?.() ?? 0,
+        ...connectionFields,
       })
       // Clear message list on empty chrome — Host projection may still hold closed-Tab content.
       this.post({ type: 'messages/replace', sessionId: '', messages: [] })
@@ -152,6 +193,7 @@ export class ChatPanelHost {
       ...active.title === undefined ? {} : { title: active.title },
       ...continueChrome === undefined ? {} : { continue: continueChrome },
       deferredRestoreCount: this.deps.resolveDeferredRestoreCount?.() ?? 0,
+      ...connectionFields,
     })
     this.post({
       type: 'messages/replace',
@@ -265,6 +307,14 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/restore-more') {
       await this.deps.requestRestoreMore?.(message.all === true)
+      return
+    }
+    if (message.type === 'action/retry-connect') {
+      await this.deps.requestRetryConnect?.()
+      return
+    }
+    if (message.type === 'action/open-settings') {
+      await this.deps.requestOpenSettings?.()
       return
     }
     if (message.type === 'scroll/reveal') {

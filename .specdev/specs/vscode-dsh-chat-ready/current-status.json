@@ -1,0 +1,23 @@
+{
+  "slug": "vscode-dsh-chat-ready",
+  "description": "点开即可聊：自动建连/恢复/新建 + 可用级 Chat UI 底盘 + 对话界面新建会话按钮",
+  "created": "2026-09-08T08:58:25Z",
+  "current_stage": "phase-implementation",
+  "current_phase": "phase-1-auto-start-orchestrator",
+  "loop_count": 0,
+  "human_gates": {
+    "hg1": "passed",
+    "hg2": "passed",
+    "hg3": "pending"
+  },
+  "phases": {
+    "phase-1-auto-start-orchestrator": {
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed",
+      "code_explorer": "completed"
+    }
+  },
+  "last_update": "2026-09-08T12:02:20Z",
+  "notes": "phase-1 verifier PASS after SF#2/#3. Awaiting HG-3. Residual SF#1/#4 deferred."
+}

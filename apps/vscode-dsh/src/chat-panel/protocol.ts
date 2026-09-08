@@ -26,6 +26,15 @@ export type PanelStatus =
   | 'disconnected'
   | 'generating'
 
+/** Host connection projection seam (AC-13 / AC-14). */
+export type ConnectionPhase =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'failed'
+  | 'disconnected-retrying'
+  | 'disconnected-manual'
+
 /** Host → Webview frames. */
 export type HostToWebviewMessage =
   | {
@@ -42,6 +51,10 @@ export type HostToWebviewMessage =
     }
     /** Remaining deferred restore Tabs (「查看更多」). */
     deferredRestoreCount?: number
+    /** Auto-start / connection projection (phase-1 seam). */
+    connectionPhase?: ConnectionPhase
+    connectionMessage?: string
+    settingsDeepLinkAvailable?: boolean
   }
   | {
     type: 'messages/replace'
@@ -82,6 +95,8 @@ export type WebviewToHostMessage =
   | { type: 'action/delete' }
   | { type: 'action/continue' }
   | { type: 'action/restore-more'; all?: boolean }
+  | { type: 'action/retry-connect' }
+  | { type: 'action/open-settings' }
   | { type: 'scroll/reveal'; callId?: string }
 
 /**
@@ -96,6 +111,8 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'ready') return { type: 'ready' }
   if (type === 'action/delete') return { type: 'action/delete' }
   if (type === 'action/continue') return { type: 'action/continue' }
+  if (type === 'action/retry-connect') return { type: 'action/retry-connect' }
+  if (type === 'action/open-settings') return { type: 'action/open-settings' }
   if (type === 'action/restore-more') {
     return {
       type: 'action/restore-more',

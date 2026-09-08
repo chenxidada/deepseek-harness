@@ -51,8 +51,20 @@ import {
   canRegisterChatPanel,
   registerChatPanelProvider,
   type ChatPanelHostDeps,
+  type WebviewViewLike,
 } from './chat-panel/index.ts'
+import {
+  AutoStartOrchestrator,
+  type StartHostPort,
+  type StartReason,
+} from './auto-start-orchestrator.ts'
+import {
+  AutoReadyLatchSeam,
+  ConnectionUiController,
+  type ConnectionUiState,
+} from './connection-ui.ts'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
 
 export type { ConversationTreeItem, TimelineTreeItem }
 
@@ -87,6 +99,14 @@ interface VsCodeLike {
       provider: unknown,
       options?: unknown,
     ): { dispose(): void }
+    createStatusBarItem?(alignment?: number, priority?: number): {
+      text: string
+      tooltip?: string
+      command?: string | { command: string; title?: string; arguments?: unknown[] }
+      show(): void
+      hide(): void
+      dispose(): void
+    }
   }
   workspace: {
     workspaceFolders?: readonly { uri: { fsPath: string } }[]
@@ -112,6 +132,7 @@ interface VsCodeLike {
     dispose(): void
   }
   Uri?: DiffVsCodeLike['Uri']
+  StatusBarAlignment?: { Left: number; Right: number }
 }
 
 /** Disposable registration handle. */
@@ -135,8 +156,21 @@ let historyRefresh: (() => void) | undefined
 let stopRegistryWatch: (() => void) | undefined
 let stopTimelineWatch: (() => void) | undefined
 let stopErrorWatch: (() => void) | undefined
+let stopStatusWatch: (() => void) | undefined
+let stopOrchestratorWatch: (() => void) | undefined
 let workspaceState: WorkspaceStateLike | undefined
 let workspaceKey = ''
+let orchestrator: AutoStartOrchestrator | undefined
+let connectionUi: ConnectionUiController | undefined
+let autoReadyLatch: AutoReadyLatchSeam | undefined
+let conversationView: WebviewViewLike | undefined
+let conversationVisible = false
+/** L2 override for credential presence (`undefined` = scan env). */
+let credentialPresenceOverride: boolean | undefined
+/** Suppress unexpected-disconnect handling during intentional user Stop. */
+let userStopping = false
+/** Host instances created via StartHostPort (AC-5 ≤1 effective connection). */
+let hostCreateCount = 0
 
 /**
  * Resolve the vscode module when the Extension Host activates without an
@@ -149,6 +183,7 @@ function loadVscodeApi(): VsCodeLike {
 
 /**
  * Activate the Extension: register window host + multi-Tab + timeline + chat panel.
+ * `onStartupFinished` / activate only registers — does not Start (AC-1a).
  * @param context - VS Code extension context.
  * @param vscodeArg - optional vscode module (injected for testability).
  */
@@ -156,6 +191,12 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   const vscode = vscodeArg ?? loadVscodeApi()
   workspaceState = context.workspaceState
   workspaceKey = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''
+  credentialPresenceOverride = undefined
+  userStopping = false
+  hostCreateCount = 0
+  conversationView = undefined
+  conversationVisible = false
+  autoReadyLatch = new AutoReadyLatchSeam()
 
   if (canRegisterConversationTabBar(vscode)) {
     const tabBar = createConversationTabBar(vscode, getConversationSnapshot)
@@ -175,75 +216,80 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
 
   // Chat panel Host is created eagerly so L2 hooks work before/without a Webview.
   panelHost = createPanelHost(vscode)
+  connectionUi = new ConnectionUiController(vscode, {
+    isConversationVisible: () => conversationVisible,
+    applyConnectionState(state: ConnectionUiState) {
+      panelHost?.applyConnectionState(state)
+    },
+  })
+  context.subscriptions.push({ dispose: () => connectionUi?.dispose() })
+
+  const startPort = createStartHostPort(vscode)
+  orchestrator = new AutoStartOrchestrator(startPort)
+  stopOrchestratorWatch?.()
+  stopOrchestratorWatch = orchestrator.onChange(snap => {
+    connectionUi?.projectOrchestrator(snap)
+    autoReadyLatch?.onHostReadyChanged(snap.state === 'started')
+  })
+
   if (canRegisterChatPanel(vscode)) {
-    context.subscriptions.push(registerChatPanelProvider(vscode, panelHost))
+    context.subscriptions.push(registerChatPanelProvider(vscode, panelHost, {
+      onViewResolved(view) {
+        conversationView = view
+      },
+      onVisibilityChanged(visible) {
+        handleConversationVisibility(visible)
+      },
+    }))
   }
 
+  const showPanel = vscode.commands.registerCommand('dsh.showPanel', async () => {
+    await revealConversationPanel(vscode)
+    return { ok: true as const, viewId: 'dsh.chat', visible: conversationVisible }
+  })
+
+  const statusBarAction = vscode.commands.registerCommand('dsh.statusBarAction', async () => {
+    await revealConversationPanel(vscode)
+    await orchestrator?.request('status-bar')
+    return { ok: true as const }
+  })
+
+  const openSettings = vscode.commands.registerCommand('dsh.openExtensionSettings', async () => {
+    await vscode.commands.executeCommand?.(
+      'workbench.action.openSettings',
+      '@ext:deepseek-ai.dsh-vscode-dsh',
+    )
+    return { ok: true as const }
+  })
+
   const start = vscode.commands.registerCommand('dsh.startSession', async () => {
-    if (host !== undefined && host.status === 'connected') {
-      await vscode.window.showInformationMessage('DeepSeek Harness IDE session is already connected.')
-      return
-    }
-    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-    if (folder === undefined) {
-      await vscode.window.showErrorMessage('Open a workspace folder before starting a DeepSeek Harness session.')
-      return
-    }
-    const next = new IdeSessionHost()
-    if (vscode.window.showQuickPick !== undefined) {
-      next.setInteractionUi(createVscodeInteractionUi(vscode.window as InteractionWindow))
-    }
-    stopErrorWatch?.()
-    stopErrorWatch = next.onError((message) => {
-      void vscode.window.showErrorMessage(`DeepSeek Harness session error: ${message}`)
-    })
-    host = next
-    try {
-      const credentials: NodeJS.ProcessEnv = {}
-      for (const [key, value] of Object.entries(process.env)) {
-        if (value !== undefined && /KEY|PASSWORD|SECRET|TOKEN/i.test(key)) {
-          credentials[key] = value
-        }
-      }
-      await next.start({
-        cwd: folder,
-        ...Object.keys(credentials).length === 0 ? {} : { credentials },
-      })
-      bindConversations(new ConversationController(next, workspaceState, folder))
-      const restored = await conversations!.restoreOpenTabSet()
-      if (restored.outcome === 'empty' || restored.outcome === 'waiting-host') {
-        // waiting-host should not occur after successful start; empty → blank Tab.
-        if (restored.outcome === 'empty') {
-          conversations!.newConversation('New conversation')
-        }
-      }
-      panelHost?.pushFullState()
-      await vscode.window.showInformationMessage('DeepSeek Harness IDE session connected.')
-    } catch (error) {
-      stopErrorWatch?.()
-      stopErrorWatch = undefined
-      unbindConversations()
-      const message = redactSecrets(error instanceof Error ? error.message : String(error))
-      await vscode.window.showErrorMessage(`DeepSeek Harness failed to connect: ${message}`)
-    }
+    await orchestrator!.request('command-start')
   })
 
   const stop = vscode.commands.registerCommand('dsh.stopSession', async () => {
+    userStopping = true
+    orchestrator?.onUserStop()
     const current = host
     host = undefined
     stopErrorWatch?.()
     stopErrorWatch = undefined
+    stopStatusWatch?.()
+    stopStatusWatch = undefined
     unbindConversations()
+    autoReadyLatch?.onHostReadyChanged(false)
     if (current === undefined) {
+      userStopping = false
       await vscode.window.showInformationMessage('No DeepSeek Harness IDE session is running.')
       return
     }
     await current.shutdown()
+    userStopping = false
     panelHost?.pushFullState()
     await vscode.window.showInformationMessage('DeepSeek Harness IDE session stopped.')
   })
 
   const newConversation = vscode.commands.registerCommand('dsh.newConversation', async () => {
+    await ensureHostForSend(vscode)
     const controller = requireConversations()
     if (controller === undefined) {
       await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before creating a conversation.')
@@ -373,6 +419,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   })
 
   const promptActive = vscode.commands.registerCommand('dsh.promptActiveConversation', async (text?: unknown) => {
+    await ensureHostForSend(vscode)
     const controller = requireConversations()
     if (controller === undefined) {
       await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before prompting.')
@@ -497,6 +544,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   const continueConversation = vscode.commands.registerCommand(
     'dsh.continueConversation',
     async (tabIdArg?: unknown) => {
+      await ensureHostForSend(vscode)
       const controller = requireConversations()
       if (controller === undefined) {
         await vscode.window.showErrorMessage(
@@ -535,169 +583,225 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     },
   )
 
-  // --- L2 Host test hooks (test-only; do not change product semantics) ---
-  const testSendPrompt = vscode.commands.registerCommand('dsh.test.sendPrompt', async (text?: unknown) => {
-    if (panelHost === undefined) return { ok: false, reason: 'no-host' as const }
-    return panelHost.sendPrompt(typeof text === 'string' ? text : '')
-  })
-  const testClose = vscode.commands.registerCommand('dsh.test.closeConversation', async (opts?: unknown) => {
-    const controller = conversations
-    if (controller === undefined) return { outcome: 'missing' as const }
-    const active = controller.registry.getActive()
-    if (active === undefined) return { outcome: 'missing' as const }
-    const confirmStopClose = typeof opts === 'object' && opts !== null
-      && (opts as { confirmStopClose?: boolean }).confirmStopClose === true
-    return controller.closeConversation(active.tabId, { confirmStopClose })
-  })
-  const testDelete = vscode.commands.registerCommand('dsh.test.deleteConversation', async (opts?: unknown) => {
-    const controller = conversations
-    if (controller === undefined) return { outcome: 'host-not-ready' as const }
-    const active = controller.registry.getActive()
-    if (active === undefined) return { outcome: 'missing' as const }
-    const confirmed = typeof opts === 'object' && opts !== null
-      && (opts as { confirmed?: boolean }).confirmed === true
-    return controller.deleteConversation(active.tabId, { confirmed })
-  })
-  const testPanelSnapshot = vscode.commands.registerCommand('dsh.test.panelSnapshot', () => {
-    return conversations?.panelSnapshot() ?? {
-      mode: host?.status === 'connected' ? 'empty' : 'waiting-host',
-      messages: [],
-      index: { workspaceKey, sessions: [], openTabSet: [], ui: { restoreUiLimit: 8 } },
-      continue: { visibility: 'hidden' as const },
-      deferredRestoreCount: 0,
-      pendingRestore: false,
-    }
-  })
-  const testGetIndex = vscode.commands.registerCommand('dsh.test.getIndex', () => {
-    return resolveWorkspaceIndex().read()
-  })
-  const testOpenPanel = vscode.commands.registerCommand('dsh.test.openPanel', () => {
-    panelHost?.pushFullState()
-    return { ok: true, viewId: 'dsh.chat' }
-  })
-  const testOpenHistory = vscode.commands.registerCommand(
-    'dsh.test.openHistory',
-    async (sessionId?: unknown, opts?: unknown) => {
-      const controller = conversations
-      if (controller === undefined) {
-        return { outcome: 'host-not-ready' as const, sessionId: String(sessionId ?? '') }
-      }
-      if (typeof sessionId !== 'string' || sessionId === '') {
-        return { outcome: 'missing' as const, sessionId: '' }
-      }
-      const events = typeof opts === 'object' && opts !== null
-        && Array.isArray((opts as { events?: unknown }).events)
-        ? (opts as { events: unknown[] }).events
-        : undefined
-      return controller.openFromHistory(
-        sessionId,
-        events === undefined ? {} : { events: events as never },
-      )
-    },
-  )
-  const testListHistory = vscode.commands.registerCommand('dsh.test.listHistory', () => {
-    return listHistoryFromIndex(resolveWorkspaceIndex())
-  })
-  const testInjectAssistant = vscode.commands.registerCommand('dsh.test.injectAssistant', (opts?: unknown) => {
-    const controller = conversations
-    if (controller === undefined) return { ok: false as const, reason: 'no-host' }
-    if (typeof opts !== 'object' || opts === null) return { ok: false as const, reason: 'bad-args' }
-    const sessionId = (opts as { sessionId?: unknown }).sessionId
-    const text = (opts as { text?: unknown }).text
-    if (typeof sessionId !== 'string' || typeof text !== 'string') return { ok: false as const, reason: 'bad-args' }
-    controller.injectAssistantMessage(sessionId, text)
-    tabBarRefresh?.()
-    return { ok: true as const, unread: controller.registry.getBySessionId(sessionId)?.unread === true }
-  })
-  const testSwitchTab = vscode.commands.registerCommand('dsh.test.switchConversation', (tabId?: unknown) => {
-    const controller = conversations
-    if (controller === undefined || typeof tabId !== 'string') return { ok: false as const }
-    controller.switchConversation(tabId)
-    return { ok: true as const, activeTabId: controller.registry.getActive()?.tabId }
-  })
-  const testPending = vscode.commands.registerCommand('dsh.test.listPendingInteractions', () => {
-    return host?.interactions.listPending() ?? []
-  })
-  const testReveal = vscode.commands.registerCommand('dsh.test.reveal', (callId?: unknown) => {
-    const controller = conversations
-    const active = controller?.registry.getActive()
-    if (controller === undefined || active === undefined) return { kind: 'none' as const }
-    return {
-      sessionId: active.sessionId,
-      ...controller.revealTarget(active.sessionId, typeof callId === 'string' ? callId : undefined),
-    }
-  })
   const deleteHistorySession = async (sessionId?: unknown) => {
     const controller = conversations
-    if (controller === undefined || typeof sessionId !== 'string') {
+    // AC-1e / AD-CR-9: authority delete offline → prompt, never silent fail / never auto-start.
+    if (controller === undefined) {
+      await vscode.window.showErrorMessage('Host 连接后可删除')
       return { outcome: 'host-not-ready' as const }
     }
+    if (typeof sessionId !== 'string') {
+      await vscode.window.showInformationMessage('No history session to delete.')
+      return { outcome: 'missing' as const }
+    }
     const result = await controller.deleteSession(sessionId, { confirmed: true })
+    if (result.outcome === 'host-not-ready') {
+      await vscode.window.showErrorMessage('Host 连接后可删除')
+      return result
+    }
     historyRefresh?.()
     return result
   }
   const deleteHistory = vscode.commands.registerCommand('dsh.deleteHistory', deleteHistorySession)
-  const testDeleteHistory = vscode.commands.registerCommand('dsh.test.deleteHistory', deleteHistorySession)
-  const testChangedFileCount = vscode.commands.registerCommand('dsh.test.changedFileCount', () => {
-    const controller = conversations
-    const active = controller?.registry.getActive()
-    if (controller === undefined || active === undefined) return { count: 0 }
-    return { count: controller.changedFileCount(active.sessionId) }
-  })
-  const testRestoreOpenTabs = vscode.commands.registerCommand(
-    'dsh.test.restoreOpenTabs',
-    async (opts?: unknown) => {
-      const controller = conversations
-      if (controller === undefined) return { outcome: 'waiting-host' as const, pendingSessionIds: [] }
-      const eventsBySession = parseEventsBySession(opts)
-      return controller.restoreOpenTabSet(
-        eventsBySession === undefined ? {} : { eventsBySession },
-      )
-    },
-  )
-  const testContinue = vscode.commands.registerCommand('dsh.test.continue', async (opts?: unknown) => {
-    const controller = conversations
-    if (controller === undefined) return { outcome: 'host-not-ready' as const }
-    if (typeof opts === 'object' && opts !== null) {
-      const resume = (opts as { resumeSession?: unknown }).resumeSession
-      const eventsBySession = parseEventsBySession(opts)
-      controller.installTestHooks({
-        ...typeof resume === 'function'
-          ? { resumeSession: resume as (sessionId: string) => Promise<void> }
-          : {},
-        ...eventsBySession === undefined ? {} : { eventsBySession },
-      })
-    }
-    const tabId = typeof opts === 'object' && opts !== null
-      && typeof (opts as { tabId?: unknown }).tabId === 'string'
-      ? (opts as { tabId: string }).tabId
-      : undefined
-    return controller.continueConversation(tabId)
-  })
-  const testRestoreMore = vscode.commands.registerCommand('dsh.test.restoreMoreTabs', async (all?: unknown) => {
-    const controller = conversations
-    if (controller === undefined) return { outcome: 'waiting-host' as const, pendingSessionIds: [] }
-    return controller.restoreMoreTabs(all === true)
-  })
-  const testDiffAvailability = vscode.commands.registerCommand('dsh.test.diffAvailability', () => {
-    const controller = conversations
-    const active = controller?.registry.getActive()
-    if (controller === undefined || active === undefined) {
-      return { available: false, reason: 'no-active' as const, hunks: [] as const }
-    }
-    const hunks = controller.timeline.writeDiffsForSessionTree(active.sessionId)
-    if (hunks.length === 0) {
-      return { available: false, reason: 'no-diffs' as const, hunks: [] as const }
-    }
-    const recoverable = hunks.filter(h => typeof h.newText === 'string'
-      && (typeof h.oldText === 'string' || h.oldText === null))
-    if (recoverable.length === 0) {
-      return { available: false, reason: 'missing-before' as const, hunks }
-    }
-    return { available: true, reason: 'ok' as const, hunks: recoverable }
-  })
+
+  // --- L2 Host test hooks (AD-CR-10: VSCODE_DSH_TEST / injected vscode harness only) ---
+  const testDisposables: { dispose(): void }[] = []
+  if (shouldRegisterTestHooks(vscodeArg)) {
+    testDisposables.push(
+      vscode.commands.registerCommand('dsh.test.sendPrompt', async (text?: unknown) => {
+        if (panelHost === undefined) return { ok: false, reason: 'no-host' as const }
+        return panelHost.sendPrompt(typeof text === 'string' ? text : '')
+      }),
+      vscode.commands.registerCommand('dsh.test.closeConversation', async (opts?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { outcome: 'missing' as const }
+        const active = controller.registry.getActive()
+        if (active === undefined) return { outcome: 'missing' as const }
+        const confirmStopClose = typeof opts === 'object' && opts !== null
+          && (opts as { confirmStopClose?: boolean }).confirmStopClose === true
+        return controller.closeConversation(active.tabId, { confirmStopClose })
+      }),
+      vscode.commands.registerCommand('dsh.test.deleteConversation', async (opts?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { outcome: 'host-not-ready' as const }
+        const active = controller.registry.getActive()
+        if (active === undefined) return { outcome: 'missing' as const }
+        const confirmed = typeof opts === 'object' && opts !== null
+          && (opts as { confirmed?: boolean }).confirmed === true
+        return controller.deleteConversation(active.tabId, { confirmed })
+      }),
+      vscode.commands.registerCommand('dsh.test.panelSnapshot', () => {
+        return conversations?.panelSnapshot() ?? {
+          mode: host?.status === 'connected' ? 'empty' : 'waiting-host',
+          messages: [],
+          index: { workspaceKey, sessions: [], openTabSet: [], ui: { restoreUiLimit: 8 } },
+          continue: { visibility: 'hidden' as const },
+          deferredRestoreCount: 0,
+          pendingRestore: false,
+        }
+      }),
+      vscode.commands.registerCommand('dsh.test.getIndex', () => resolveWorkspaceIndex().read()),
+      vscode.commands.registerCommand('dsh.test.openPanel', () => {
+        panelHost?.pushFullState()
+        return { ok: true, viewId: 'dsh.chat' }
+      }),
+      vscode.commands.registerCommand(
+        'dsh.test.openHistory',
+        async (sessionId?: unknown, opts?: unknown) => {
+          const controller = conversations
+          if (controller === undefined) {
+            return { outcome: 'host-not-ready' as const, sessionId: String(sessionId ?? '') }
+          }
+          if (typeof sessionId !== 'string' || sessionId === '') {
+            return { outcome: 'missing' as const, sessionId: '' }
+          }
+          const events = typeof opts === 'object' && opts !== null
+            && Array.isArray((opts as { events?: unknown }).events)
+            ? (opts as { events: unknown[] }).events
+            : undefined
+          return controller.openFromHistory(
+            sessionId,
+            events === undefined ? {} : { events: events as never },
+          )
+        },
+      ),
+      vscode.commands.registerCommand('dsh.test.listHistory', () => listHistoryFromIndex(resolveWorkspaceIndex())),
+      vscode.commands.registerCommand('dsh.test.injectAssistant', (opts?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { ok: false as const, reason: 'no-host' }
+        if (typeof opts !== 'object' || opts === null) return { ok: false as const, reason: 'bad-args' }
+        const sessionId = (opts as { sessionId?: unknown }).sessionId
+        const text = (opts as { text?: unknown }).text
+        if (typeof sessionId !== 'string' || typeof text !== 'string') {
+          return { ok: false as const, reason: 'bad-args' }
+        }
+        controller.injectAssistantMessage(sessionId, text)
+        tabBarRefresh?.()
+        return { ok: true as const, unread: controller.registry.getBySessionId(sessionId)?.unread === true }
+      }),
+      vscode.commands.registerCommand('dsh.test.switchConversation', (tabId?: unknown) => {
+        const controller = conversations
+        if (controller === undefined || typeof tabId !== 'string') return { ok: false as const }
+        controller.switchConversation(tabId)
+        return { ok: true as const, activeTabId: controller.registry.getActive()?.tabId }
+      }),
+      vscode.commands.registerCommand(
+        'dsh.test.listPendingInteractions',
+        () => host?.interactions.listPending() ?? [],
+      ),
+      vscode.commands.registerCommand('dsh.test.reveal', (callId?: unknown) => {
+        const controller = conversations
+        const active = controller?.registry.getActive()
+        if (controller === undefined || active === undefined) return { kind: 'none' as const }
+        return {
+          sessionId: active.sessionId,
+          ...controller.revealTarget(active.sessionId, typeof callId === 'string' ? callId : undefined),
+        }
+      }),
+      vscode.commands.registerCommand('dsh.test.deleteHistory', deleteHistorySession),
+      vscode.commands.registerCommand('dsh.test.changedFileCount', () => {
+        const controller = conversations
+        const active = controller?.registry.getActive()
+        if (controller === undefined || active === undefined) return { count: 0 }
+        return { count: controller.changedFileCount(active.sessionId) }
+      }),
+      vscode.commands.registerCommand('dsh.test.restoreOpenTabs', async (opts?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { outcome: 'waiting-host' as const, pendingSessionIds: [] }
+        const eventsBySession = parseEventsBySession(opts)
+        return controller.restoreOpenTabSet(
+          eventsBySession === undefined ? {} : { eventsBySession },
+        )
+      }),
+      vscode.commands.registerCommand('dsh.test.continue', async (opts?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { outcome: 'host-not-ready' as const }
+        if (typeof opts === 'object' && opts !== null) {
+          const resume = (opts as { resumeSession?: unknown }).resumeSession
+          const eventsBySession = parseEventsBySession(opts)
+          controller.installTestHooks({
+            ...typeof resume === 'function'
+              ? { resumeSession: resume as (sessionId: string) => Promise<void> }
+              : {},
+            ...eventsBySession === undefined ? {} : { eventsBySession },
+          })
+        }
+        const tabId = typeof opts === 'object' && opts !== null
+          && typeof (opts as { tabId?: unknown }).tabId === 'string'
+          ? (opts as { tabId: string }).tabId
+          : undefined
+        return controller.continueConversation(tabId)
+      }),
+      vscode.commands.registerCommand('dsh.test.restoreMoreTabs', async (all?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { outcome: 'waiting-host' as const, pendingSessionIds: [] }
+        return controller.restoreMoreTabs(all === true)
+      }),
+      vscode.commands.registerCommand('dsh.test.diffAvailability', () => {
+        const controller = conversations
+        const active = controller?.registry.getActive()
+        if (controller === undefined || active === undefined) {
+          return { available: false, reason: 'no-active' as const, hunks: [] as const }
+        }
+        const hunks = controller.timeline.writeDiffsForSessionTree(active.sessionId)
+        if (hunks.length === 0) {
+          return { available: false, reason: 'no-diffs' as const, hunks: [] as const }
+        }
+        const recoverable = hunks.filter(h => typeof h.newText === 'string'
+          && (typeof h.oldText === 'string' || h.oldText === null))
+        if (recoverable.length === 0) {
+          return { available: false, reason: 'missing-before' as const, hunks }
+        }
+        return { available: true, reason: 'ok' as const, hunks: recoverable }
+      }),
+      vscode.commands.registerCommand('dsh.test.getStartState', () => {
+        return orchestrator?.getSnapshot() ?? { state: 'idle', pendingReasons: [], autoRetryUsed: false }
+      }),
+      vscode.commands.registerCommand('dsh.test.simulateStartupOnly', () => ({
+        ok: true as const,
+        startState: orchestrator?.getStartState() ?? 'idle',
+        hostStatus: host?.status,
+        hostCreateCount,
+        tabs: getConversationSnapshot().tabs.length,
+        openTabSet: resolveWorkspaceIndex().read().openTabSet.length,
+      })),
+      vscode.commands.registerCommand('dsh.test.setCredentialPresence', (present?: unknown) => {
+        credentialPresenceOverride = present === true ? true : present === false ? false : undefined
+        return { ok: true as const, present: credentialPresenceOverride }
+      }),
+      vscode.commands.registerCommand('dsh.test.fireConversationVisibility', (visible?: unknown) => {
+        handleConversationVisibility(visible === true)
+        return {
+          ok: true as const,
+          visible: conversationVisible,
+          latch: {
+            conversationViewVisible: autoReadyLatch?.conversationViewVisible ?? false,
+            visibilityEpoch: autoReadyLatch?.visibilityEpoch ?? 0,
+          },
+        }
+      }),
+      vscode.commands.registerCommand('dsh.test.requestStart', async (reason?: unknown) => {
+        const r = typeof reason === 'string' ? reason as StartReason : 'manual-retry'
+        await orchestrator?.request(r)
+        return orchestrator?.getSnapshot()
+      }),
+      vscode.commands.registerCommand('dsh.test.hostCreateCount', () => ({ count: hostCreateCount })),
+      vscode.commands.registerCommand('dsh.test.injectDisconnect', () => {
+        orchestrator?.onUnexpectedDisconnect()
+        return orchestrator?.getSnapshot()
+      }),
+      vscode.commands.registerCommand('dsh.test.openActivityBar', async () => {
+        const revealed = conversationVisible !== true
+        await onActivityBarOpened(vscode)
+        return { ok: true as const, revealed, visible: conversationVisible }
+      }),
+    )
+  }
 
   context.subscriptions.push(
+    showPanel,
+    statusBarAction,
+    openSettings,
     start,
     stop,
     newConversation,
@@ -712,24 +816,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     selectPermission,
     reviewDiffs,
     openDiff,
-    testSendPrompt,
-    testClose,
-    testDelete,
-    testPanelSnapshot,
-    testGetIndex,
-    testOpenPanel,
-    testOpenHistory,
-    testListHistory,
-    testInjectAssistant,
-    testSwitchTab,
-    testPending,
-    testReveal,
-    testDeleteHistory,
-    testChangedFileCount,
-    testRestoreOpenTabs,
-    testContinue,
-    testRestoreMore,
-    testDiffAvailability,
+    ...testDisposables,
   )
 }
 
@@ -737,13 +824,25 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
  * Deactivate: shut down any live host.
  */
 export async function deactivate(): Promise<void> {
+  userStopping = true
+  orchestrator?.onUserStop()
   const current = host
   host = undefined
   stopErrorWatch?.()
   stopErrorWatch = undefined
+  stopStatusWatch?.()
+  stopStatusWatch = undefined
+  stopOrchestratorWatch?.()
+  stopOrchestratorWatch = undefined
   unbindConversations()
+  connectionUi?.dispose()
+  connectionUi = undefined
+  orchestrator = undefined
+  autoReadyLatch = undefined
+  conversationView = undefined
   panelHost?.detach()
   if (current !== undefined) await current.shutdown()
+  userStopping = false
 }
 
 /**
@@ -840,6 +939,15 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       if (controller === undefined) return
       await controller.restoreMoreTabs(all === true)
     },
+    requestRetryConnect: async () => {
+      await orchestrator?.request('manual-retry')
+    },
+    requestOpenSettings: async () => {
+      await vscode.commands.executeCommand?.(
+        'workbench.action.openSettings',
+        '@ext:deepseek-ai.dsh-vscode-dsh',
+      )
+    },
     resolveContinueChrome: () => conversations?.continueChromeForTab(),
     resolveDeferredRestoreCount: () => conversations?.panelSnapshot().deferredRestoreCount ?? 0,
     resolveReveal: (callId) => {
@@ -930,9 +1038,7 @@ async function runCloseTab(
 async function runDeleteActive(vscode: VsCodeLike, tabIdArg?: string): Promise<void> {
   const controller = requireConversations()
   if (controller === undefined) {
-    await vscode.window.showErrorMessage(
-      'Host is not ready. Start a DeepSeek Harness IDE session before deleting a conversation.',
-    )
+    await vscode.window.showErrorMessage('Host 连接后可删除')
     return
   }
   const tabId = tabIdArg !== undefined && tabIdArg !== ''
@@ -944,7 +1050,7 @@ async function runDeleteActive(vscode: VsCodeLike, tabIdArg?: string): Promise<v
   }
   const pending = await controller.deleteConversation(tabId)
   if (pending.outcome === 'host-not-ready') {
-    await vscode.window.showErrorMessage('Host is not ready; cannot delete conversation.')
+    await vscode.window.showErrorMessage('Host 连接后可删除')
     return
   }
   if (pending.outcome === 'missing') {
@@ -979,6 +1085,190 @@ function tabTitle(tab: ConversationTab): string {
 
 function shortId(id: string): string {
   return id.slice(0, 8)
+}
+
+/**
+ * AD-CR-10: register `dsh.test.*` only under test env or injected vscode harness.
+ * @param vscodeArg - injected module from Node tests.
+ */
+function shouldRegisterTestHooks(vscodeArg?: VsCodeLike): boolean {
+  if (process.env.VSCODE_DSH_TEST === '1' || process.env.VSCODE_DSH_TEST === 'true') return true
+  return vscodeArg !== undefined
+}
+
+/**
+ * Resolve Start cwd: workspace folder, else process.cwd(), else os.tmpdir() (AD-CR-5).
+ * @param vscode - duck-typed vscode.
+ */
+function resolveStartCwd(vscode: VsCodeLike): string {
+  const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  if (folder !== undefined && folder !== '') return folder
+  try {
+    const cwd = process.cwd()
+    if (cwd !== '') return cwd
+  } catch {
+    // process.cwd can throw if the directory was deleted.
+  }
+  return tmpdir()
+}
+
+/**
+ * Scan env for credential-like keys (never log values).
+ */
+function detectCredentialsFromEnv(): boolean {
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && value !== '' && /KEY|PASSWORD|SECRET|TOKEN/i.test(key)) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Collect credential env bag for IdeSessionHost.start (redacted elsewhere).
+ */
+function collectCredentialsEnv(): NodeJS.ProcessEnv {
+  const credentials: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && /KEY|PASSWORD|SECRET|TOKEN/i.test(key)) {
+      credentials[key] = value
+    }
+  }
+  return credentials
+}
+
+/**
+ * Build the singleton StartHostPort used by AutoStartOrchestrator.
+ * @param vscode - duck-typed vscode.
+ */
+function createStartHostPort(vscode: VsCodeLike): StartHostPort {
+  return {
+    isConnected: () => host?.status === 'connected',
+    hasCredentials: () => {
+      if (credentialPresenceOverride !== undefined) return credentialPresenceOverride
+      return detectCredentialsFromEnv()
+    },
+    async start(_reason: StartReason): Promise<void> {
+      if (host?.status === 'connected') return
+      const previous = host
+      host = undefined
+      stopErrorWatch?.()
+      stopErrorWatch = undefined
+      stopStatusWatch?.()
+      stopStatusWatch = undefined
+      if (previous !== undefined) {
+        try {
+          await previous.shutdown()
+        } catch {
+          // Previous Host may already be dead after transport error.
+        }
+      }
+      const cwd = resolveStartCwd(vscode)
+      workspaceKey = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''
+      const next = new IdeSessionHost()
+      hostCreateCount += 1
+      if (vscode.window.showQuickPick !== undefined) {
+        next.setInteractionUi(createVscodeInteractionUi(vscode.window as InteractionWindow))
+      }
+      stopErrorWatch = next.onError((message) => {
+        // Secondary diagnostic — ConnectionUi remains the primary carrier (AC-2 / AD-CR-4).
+        void vscode.window.showErrorMessage(`DeepSeek Harness session error: ${message}`)
+      })
+      stopStatusWatch = next.onStatusChange((status) => {
+        if (userStopping) return
+        if (status === 'error' || status === 'disconnected') {
+          const state = orchestrator?.getStartState()
+          if (state === 'started') {
+            orchestrator?.onUnexpectedDisconnect()
+          }
+        }
+      })
+      host = next
+      try {
+        const credentials = collectCredentialsEnv()
+        await next.start({
+          cwd,
+          ...Object.keys(credentials).length === 0 ? {} : { credentials },
+        })
+        bindConversations(new ConversationController(next, workspaceState, cwd))
+        // Phase-1 keeps restore-on-start temporarily; AutoReady (phase-2) will own New when visible.
+        const restored = await conversations!.restoreOpenTabSet()
+        if (restored.outcome === 'empty') {
+          conversations!.newConversation('New conversation')
+        }
+        panelHost?.pushFullState()
+      } catch (error) {
+        stopErrorWatch?.()
+        stopErrorWatch = undefined
+        stopStatusWatch?.()
+        stopStatusWatch = undefined
+        unbindConversations()
+        host = undefined
+        throw error instanceof Error
+          ? error
+          : new Error(redactSecrets(String(error)))
+      }
+    },
+  }
+}
+
+/**
+ * Conversation visibility → auto-start + AutoReady latch (AD-CR-2).
+ * @param visible - WebviewView.visible.
+ */
+function handleConversationVisibility(visible: boolean): void {
+  conversationVisible = visible
+  connectionUi?.setConversationVisible(visible)
+  autoReadyLatch?.onVisibilityChanged(visible)
+  if (visible) {
+    void orchestrator?.request('conversation-view-visible')
+  }
+}
+
+/**
+ * Activity-bar open: reveal Conversation if needed (AC-1b), then request activity-bar.
+ * @param vscode - duck-typed vscode.
+ */
+async function onActivityBarOpened(vscode: VsCodeLike): Promise<void> {
+  if (!conversationVisible) {
+    await revealConversationPanel(vscode, false)
+  }
+  await orchestrator?.request('activity-bar')
+}
+
+/**
+ * Reveal Conversation view (AC-1b) and optionally treat as activity-bar open.
+ * @param vscode - duck-typed vscode.
+ * @param requestActivityBar - when true, also request('activity-bar').
+ */
+async function revealConversationPanel(
+  vscode: VsCodeLike,
+  requestActivityBar = false,
+): Promise<void> {
+  if (conversationView?.show !== undefined) {
+    conversationView.show(false)
+  } else {
+    await vscode.commands.executeCommand?.('dsh.chat.focus')
+    await vscode.commands.executeCommand?.('workbench.view.extension.dsh')
+  }
+  if (!conversationVisible) {
+    // Mark visible for routing; production onDidChangeVisibility will also fire.
+    conversationVisible = true
+    connectionUi?.setConversationVisible(true)
+    autoReadyLatch?.onVisibilityChanged(true)
+  }
+  if (requestActivityBar) {
+    await orchestrator?.request('activity-bar')
+  }
+}
+
+/**
+ * Ensure Host for send/new/continue commands (AC-1c start·send class).
+ * @param vscode - duck-typed vscode.
+ */
+async function ensureHostForSend(_vscode: VsCodeLike): Promise<void> {
+  if (host?.status === 'connected') return
+  await orchestrator?.request('command-send')
 }
 
 /**

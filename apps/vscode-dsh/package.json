@@ -104,76 +104,16 @@
         "title": "DeepSeek Harness: Restore More Tabs"
       },
       {
-        "command": "dsh.test.sendPrompt",
-        "title": "DeepSeek Harness Test: Send Prompt"
+        "command": "dsh.showPanel",
+        "title": "DeepSeek Harness: Show Conversation Panel"
       },
       {
-        "command": "dsh.test.closeConversation",
-        "title": "DeepSeek Harness Test: Close Conversation"
+        "command": "dsh.openExtensionSettings",
+        "title": "DeepSeek Harness: Open Extension Settings"
       },
       {
-        "command": "dsh.test.deleteConversation",
-        "title": "DeepSeek Harness Test: Delete Conversation"
-      },
-      {
-        "command": "dsh.test.panelSnapshot",
-        "title": "DeepSeek Harness Test: Panel Snapshot"
-      },
-      {
-        "command": "dsh.test.getIndex",
-        "title": "DeepSeek Harness Test: Get Index"
-      },
-      {
-        "command": "dsh.test.openPanel",
-        "title": "DeepSeek Harness Test: Open Panel"
-      },
-      {
-        "command": "dsh.test.openHistory",
-        "title": "DeepSeek Harness Test: Open History"
-      },
-      {
-        "command": "dsh.test.listHistory",
-        "title": "DeepSeek Harness Test: List History"
-      },
-      {
-        "command": "dsh.test.injectAssistant",
-        "title": "DeepSeek Harness Test: Inject Assistant"
-      },
-      {
-        "command": "dsh.test.switchConversation",
-        "title": "DeepSeek Harness Test: Switch Conversation"
-      },
-      {
-        "command": "dsh.test.listPendingInteractions",
-        "title": "DeepSeek Harness Test: List Pending Interactions"
-      },
-      {
-        "command": "dsh.test.reveal",
-        "title": "DeepSeek Harness Test: Reveal"
-      },
-      {
-        "command": "dsh.test.deleteHistory",
-        "title": "DeepSeek Harness Test: Delete History"
-      },
-      {
-        "command": "dsh.test.changedFileCount",
-        "title": "DeepSeek Harness Test: Changed File Count"
-      },
-      {
-        "command": "dsh.test.restoreOpenTabs",
-        "title": "DeepSeek Harness Test: Restore Open Tabs"
-      },
-      {
-        "command": "dsh.test.continue",
-        "title": "DeepSeek Harness Test: Continue Conversation"
-      },
-      {
-        "command": "dsh.test.restoreMoreTabs",
-        "title": "DeepSeek Harness Test: Restore More Tabs"
-      },
-      {
-        "command": "dsh.test.diffAvailability",
-        "title": "DeepSeek Harness Test: Diff Availability"
+        "command": "dsh.statusBarAction",
+        "title": "DeepSeek Harness: Status Bar Connect"
       }
     ],
     "menus": {

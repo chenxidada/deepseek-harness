@@ -16,10 +16,13 @@ export {
   canRegisterChatPanel,
   registerChatPanelProvider,
   type ChatPanelVsCode,
+  type ChatPanelProviderHooks,
+  type WebviewViewLike,
 } from './chat-panel-provider.ts'
 export {
   isMessagesAppend,
   parseWebviewToHostMessage,
+  type ConnectionPhase,
   type HostToWebviewMessage,
   type PanelMode,
   type PanelStatus,

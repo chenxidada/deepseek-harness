@@ -16,11 +16,13 @@ interface WebviewLike {
 }
 
 /** Duck-typed WebviewView. */
-interface WebviewViewLike {
+export interface WebviewViewLike {
   webview: WebviewLike
   title?: string
   description?: string
+  visible?: boolean
   show?(preserveFocus?: boolean): void
+  onDidChangeVisibility?: (listener: () => void) => { dispose(): void }
 }
 
 /** Duck-typed vscode surface for WebviewView registration. */
@@ -40,6 +42,20 @@ export interface ChatPanelVsCode {
   }
 }
 
+/** Optional wiring for auto-start / AutoReady visibility (AD-CR-2). */
+export interface ChatPanelProviderHooks {
+  /**
+   * Fired when Conversation visibility changes (same path as production).
+   * @param visible - webviewView.visible.
+   */
+  onVisibilityChanged?: (visible: boolean) => void
+  /**
+   * Fired once when the WebviewView is resolved (holds show() for reveal).
+   * @param view - resolved Conversation view.
+   */
+  onViewResolved?: (view: WebviewViewLike) => void
+}
+
 /** Conversation panel view id contributed in package.json. */
 export const CHAT_PANEL_VIEW_ID = 'dsh.chat'
 
@@ -57,17 +73,20 @@ export function canRegisterChatPanel(vscode: unknown): vscode is ChatPanelVsCode
  * Register the Conversation WebviewView and bind it to {@link ChatPanelHost}.
  * @param vscode - duck-typed vscode module.
  * @param panelHost - protocol Host.
+ * @param hooks - optional visibility / reveal hooks for auto-start.
  * @returns disposable registration handle.
  */
 export function registerChatPanelProvider(
   vscode: ChatPanelVsCode,
   panelHost: ChatPanelHost,
+  hooks?: ChatPanelProviderHooks,
 ): { dispose(): void } {
   const register = vscode.window.registerWebviewViewProvider
   if (register === undefined) {
     return { dispose() {} }
   }
-  return register(
+  const disposers: { dispose(): void }[] = []
+  const registration = register(
     CHAT_PANEL_VIEW_ID,
     {
       resolveWebviewView(webviewView) {
@@ -82,10 +101,25 @@ export function registerChatPanelProvider(
             return webviewView.webview.onDidReceiveMessage(listener)
           },
         })
+        hooks?.onViewResolved?.(webviewView)
+        if (typeof webviewView.onDidChangeVisibility === 'function') {
+          disposers.push(webviewView.onDidChangeVisibility(() => {
+            hooks?.onVisibilityChanged?.(webviewView.visible === true)
+          }))
+        }
+        if (webviewView.visible === true) {
+          hooks?.onVisibilityChanged?.(true)
+        }
       },
     },
     { webviewOptions: { retainContextWhenHidden: true } },
   )
+  return {
+    dispose() {
+      for (const d of disposers) d.dispose()
+      registration.dispose()
+    },
+  }
 }
 
 /**
@@ -107,6 +141,8 @@ export function buildThinChatHtml(cspSource?: string): string {
     #banner, #status { font-size: 12px; opacity: 0.85; margin-bottom: 6px; }
     #chrome { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
     #chrome button[hidden] { display: none !important; }
+    #connectionActions { display: flex; gap: 6px; margin-bottom: 8px; }
+    #connectionActions button[hidden] { display: none !important; }
     #messages { display: flex; flex-direction: column; gap: 8px; min-height: 120px; }
     .msg { white-space: pre-wrap; padding: 6px 8px; border-radius: 4px; background: var(--vscode-editor-inactiveSelectionBackground); }
     .msg.user { border-left: 3px solid var(--vscode-focusBorder); }
@@ -118,6 +154,10 @@ export function buildThinChatHtml(cspSource?: string): string {
 </head>
 <body>
   <div id="banner"></div>
+  <div id="connectionActions">
+    <button id="retryConnectBtn" type="button" hidden>Retry</button>
+    <button id="openSettingsBtn" type="button" hidden>Open settings</button>
+  </div>
   <div id="chrome">
     <button id="continueBtn" type="button" hidden>Continue</button>
     <button id="restoreMoreBtn" type="button" hidden>查看更多</button>
@@ -141,6 +181,8 @@ export function buildThinChatHtml(cspSource?: string): string {
     const sendEl = document.getElementById('send');
     const continueBtn = document.getElementById('continueBtn');
     const restoreMoreBtn = document.getElementById('restoreMoreBtn');
+    const retryConnectBtn = document.getElementById('retryConnectBtn');
+    const openSettingsBtn = document.getElementById('openSettingsBtn');
 
     function renderMessages(list) {
       messagesEl.innerHTML = '';
@@ -161,6 +203,23 @@ export function buildThinChatHtml(cspSource?: string): string {
       const live = mode === 'live';
       inputEl.disabled = !live;
       sendEl.disabled = !live;
+    }
+    function syncConnection(msg) {
+      const phase = msg.connectionPhase || 'idle';
+      const connecting = phase === 'connecting' || phase === 'disconnected-retrying';
+      const failed = phase === 'failed' || phase === 'disconnected-manual';
+      retryConnectBtn.hidden = !(failed || connecting === false && phase === 'disconnected-manual');
+      if (phase === 'failed' || phase === 'disconnected-manual') {
+        retryConnectBtn.hidden = false;
+      } else {
+        retryConnectBtn.hidden = true;
+      }
+      openSettingsBtn.hidden = !msg.settingsDeepLinkAvailable;
+      if (phase === 'connecting') {
+        bannerEl.textContent = msg.connectionMessage || 'Connecting to Host…';
+      } else if (failed && msg.connectionMessage) {
+        bannerEl.textContent = msg.connectionMessage;
+      }
     }
     function syncChrome(msg) {
       const cont = msg.continue;
@@ -183,6 +242,7 @@ export function buildThinChatHtml(cspSource?: string): string {
         restoreMoreBtn.hidden = true;
         restoreMoreBtn.textContent = '查看更多';
       }
+      syncConnection(msg);
     }
     window.addEventListener('message', (event) => {
       const msg = event.data;
@@ -234,6 +294,12 @@ export function buildThinChatHtml(cspSource?: string): string {
     });
     restoreMoreBtn.addEventListener('click', () => {
       vscode.postMessage({ type: 'action/restore-more' });
+    });
+    retryConnectBtn.addEventListener('click', () => {
+      vscode.postMessage({ type: 'action/retry-connect' });
+    });
+    openSettingsBtn.addEventListener('click', () => {
+      vscode.postMessage({ type: 'action/open-settings' });
     });
     sendEl.addEventListener('click', () => {
       rejectEl.textContent = '';
