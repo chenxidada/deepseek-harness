@@ -135,6 +135,32 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       if (typeof record.error !== 'string') return undefined
       return { kind, id: record.id, ok: false, error: record.error }
     }
+    case 'session/resume': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
+      return { kind, id: record.id, sessionId: record.sessionId }
+    }
+    case 'session/resume/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) return { kind, id: record.id, ok: true }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'session/continue-capability': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
+      return { kind, id: record.id, sessionId: record.sessionId }
+    }
+    case 'session/continue-capability/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        const capability = record.capability
+        if (capability !== 'same-id' && capability !== 'derive-only' && capability !== 'unknown') {
+          return undefined
+        }
+        return { kind, id: record.id, ok: true, capability }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
     case 'permission/select': {
       if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
       if (!isNonEmptyString(record.preset)) return undefined

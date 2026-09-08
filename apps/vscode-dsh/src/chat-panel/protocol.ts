@@ -34,6 +34,14 @@ export type HostToWebviewMessage =
     sessionId?: string
     tabId?: string
     title?: string
+    /** Top-bar Continue chrome (AD-CU-8); omitted when not applicable. */
+    continue?: {
+      visibility: 'hidden' | 'disabled' | 'enabled'
+      capability?: 'same-id' | 'derive-only' | 'unknown'
+      tooltip?: string
+    }
+    /** Remaining deferred restore Tabs (「查看更多」). */
+    deferredRestoreCount?: number
   }
   | {
     type: 'messages/replace'
@@ -67,11 +75,13 @@ export type HostToWebviewMessage =
     label?: string
   }
 
-/** Webview → Host frames (Phase 1 subset + reveal). */
+/** Webview → Host frames (Phase 1–3). */
 export type WebviewToHostMessage =
   | { type: 'ready' }
   | { type: 'composer/send'; text: string }
   | { type: 'action/delete' }
+  | { type: 'action/continue' }
+  | { type: 'action/restore-more'; all?: boolean }
   | { type: 'scroll/reveal'; callId?: string }
 
 /**
@@ -85,6 +95,13 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   const type = record.type
   if (type === 'ready') return { type: 'ready' }
   if (type === 'action/delete') return { type: 'action/delete' }
+  if (type === 'action/continue') return { type: 'action/continue' }
+  if (type === 'action/restore-more') {
+    return {
+      type: 'action/restore-more',
+      ...record.all === true ? { all: true } : {},
+    }
+  }
   if (type === 'composer/send') {
     if (typeof record.text !== 'string') return undefined
     return { type: 'composer/send', text: record.text }

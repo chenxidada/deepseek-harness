@@ -76,7 +76,9 @@ describe('timeline + post-hoc Diff integration (AC-12/13/23/24)', () => {
     const openArgs = buildDiffOpenArgs(diffs[0]!)
     expect(openArgs.command).toBe('vscode.diff')
     expect(openArgs.leftScheme).toBe('dsh-diff')
-    expect(openArgs.rightPath).toContain('fake-write.txt')
+    expect(openArgs.path).toContain('fake-write.txt')
+    expect(openArgs.rightScheme).toBe('dsh-diff')
+    expect(openArgs.leftScheme).toBe('dsh-diff')
 
     // Tab B timeline stays empty (no cross-talk).
     expect(controller.timeline.itemsForSessionTree(tabB.sessionId)).toHaveLength(0)

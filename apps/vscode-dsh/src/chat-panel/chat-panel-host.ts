@@ -47,6 +47,18 @@ export interface ChatPanelHostDeps {
   acceptSend: (text: string) => Promise<{ messageId: string; sessionId: string; tabId: string }>
   /** Optional delete action requested from the panel. */
   requestDelete?: () => Promise<void>
+  /** Optional Continue action (AD-CU-8). */
+  requestContinue?: () => Promise<void>
+  /** Optional 「查看更多」 restore. */
+  requestRestoreMore?: (all?: boolean) => Promise<void>
+  /** Optional Continue chrome resolver for panel/state. */
+  resolveContinueChrome?: () => {
+    visibility: 'hidden' | 'disabled' | 'enabled'
+    capability?: 'same-id' | 'derive-only' | 'unknown'
+    tooltip?: string
+  } | undefined
+  /** Optional deferred restore count for 「查看更多」. */
+  resolveDeferredRestoreCount?: () => number
   /**
    * Optional scroll/reveal resolver (AC-56).
    * @param callId - optional tool call id.
@@ -119,19 +131,27 @@ export class ChatPanelHost {
     const active = this.deps.registry.getActive()
     if (active === undefined) {
       const mode: PanelMode = this.deps.isHostReady() ? 'empty' : 'waiting-host'
-      this.post({ type: 'panel/state', mode })
+      this.post({
+        type: 'panel/state',
+        mode,
+        continue: { visibility: 'hidden' },
+        deferredRestoreCount: this.deps.resolveDeferredRestoreCount?.() ?? 0,
+      })
       // Clear message list on empty chrome — Host projection may still hold closed-Tab content.
       this.post({ type: 'messages/replace', sessionId: '', messages: [] })
       this.post({ type: 'status/set', status: this.deps.isHostReady() ? 'idle' : 'disconnected' })
       return
     }
     const mode: PanelMode = active.mode === 'replay' ? 'replay' : 'live'
+    const continueChrome = this.deps.resolveContinueChrome?.()
     this.post({
       type: 'panel/state',
       mode,
       sessionId: active.sessionId,
       tabId: active.tabId,
       ...active.title === undefined ? {} : { title: active.title },
+      ...continueChrome === undefined ? {} : { continue: continueChrome },
+      deferredRestoreCount: this.deps.resolveDeferredRestoreCount?.() ?? 0,
     })
     this.post({
       type: 'messages/replace',
@@ -142,6 +162,19 @@ export class ChatPanelHost {
       type: 'status/set',
       sessionId: active.sessionId,
       status: this.resolveStatus(active.sessionId, active.status),
+    })
+  }
+
+  /**
+   * Push a UI banner (derive Continue / restore hints).
+   * @param text - banner copy.
+   * @param kind - optional kind tag.
+   */
+  pushBanner(text: string, kind?: string): void {
+    this.post({
+      type: 'ui/banner',
+      text,
+      ...kind === undefined ? {} : { kind },
     })
   }
 
@@ -224,6 +257,14 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/delete') {
       await this.deps.requestDelete?.()
+      return
+    }
+    if (message.type === 'action/continue') {
+      await this.deps.requestContinue?.()
+      return
+    }
+    if (message.type === 'action/restore-more') {
+      await this.deps.requestRestoreMore?.(message.all === true)
       return
     }
     if (message.type === 'scroll/reveal') {

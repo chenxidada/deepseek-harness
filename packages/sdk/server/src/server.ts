@@ -221,6 +221,28 @@ export class HarnessSdkJsonRpcServer {
   }
 
   /**
+   * Resume one persisted session into the live SDK Map (Continue same-id).
+   * No-op when already live. Uses `agents.resume` — never stdout `agents.create`.
+   * @param sessionId - SDK session identity to restore.
+   */
+  async resumeSession(sessionId: string): Promise<void> {
+    if (this.shuttingDown) throw new Error('SDK server is shutting down')
+    const pending = this.sessionCreations.get(sessionId)
+    if (pending !== undefined) {
+      await pending
+      return
+    }
+    if (this.sessions.has(sessionId)) return
+    const creation = this.resumePersistedSession(sessionId)
+    this.sessionCreations.set(sessionId, creation)
+    try {
+      await creation
+    } finally {
+      this.sessionCreations.delete(sessionId)
+    }
+  }
+
+  /**
    * Dispose server-owned agents, adapter, and subscriptions to quiescence.
    * The surrounding context remains running.
    * @returns empty JSON-RPC result.
@@ -301,6 +323,25 @@ export class HarnessSdkJsonRpcServer {
     const handle = await this.ctx.agents.create({
       sessionId: brandString<SessionId>(sessionId),
       meta: { cwd: this.cwd },
+      agentOptions: {
+        provider: this.provider,
+        model: this.model,
+        ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
+        ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
+      },
+    })
+    const rec: SessionRecord = { handle }
+    this.sessions.set(sessionId, rec)
+    return rec
+  }
+
+  /**
+   * Resume a disposed / cold session via `agents.resume` and register the handle.
+   * @param sessionId - persisted session identity.
+   */
+  private async resumePersistedSession(sessionId: string): Promise<SessionRecord> {
+    const handle = await this.ctx.agents.resume({
+      resumeSessionId: brandString<SessionId>(sessionId),
       agentOptions: {
         provider: this.provider,
         model: this.model,

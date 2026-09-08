@@ -210,7 +210,13 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         ...Object.keys(credentials).length === 0 ? {} : { credentials },
       })
       bindConversations(new ConversationController(next, workspaceState, folder))
-      conversations!.newConversation('New conversation')
+      const restored = await conversations!.restoreOpenTabSet()
+      if (restored.outcome === 'empty' || restored.outcome === 'waiting-host') {
+        // waiting-host should not occur after successful start; empty → blank Tab.
+        if (restored.outcome === 'empty') {
+          conversations!.newConversation('New conversation')
+        }
+      }
       panelHost?.pushFullState()
       await vscode.window.showInformationMessage('DeepSeek Harness IDE session connected.')
     } catch (error) {
@@ -488,6 +494,47 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     await openTimelineDiff(vscode as DiffVsCodeLike, hunk)
   })
 
+  const continueConversation = vscode.commands.registerCommand(
+    'dsh.continueConversation',
+    async (tabIdArg?: unknown) => {
+      const controller = requireConversations()
+      if (controller === undefined) {
+        await vscode.window.showErrorMessage(
+          'Start a DeepSeek Harness IDE session before continuing a conversation.',
+        )
+        return
+      }
+      const result = await controller.continueConversation(
+        typeof tabIdArg === 'string' ? tabIdArg : undefined,
+      )
+      panelHost?.pushFullState()
+      if (result.outcome === 'continued') {
+        await vscode.window.showInformationMessage(
+          `Continued session ${shortId(result.sessionId)} in live mode.`,
+        )
+      } else if (result.outcome === 'disabled') {
+        await vscode.window.showInformationMessage(result.tooltip)
+      } else if (result.outcome === 'hidden') {
+        await vscode.window.showInformationMessage('Continue is not available for this session.')
+      } else if (result.outcome === 'error') {
+        await vscode.window.showErrorMessage(`Continue failed: ${result.error}`)
+      }
+      return result
+    },
+  )
+
+  const restoreMore = vscode.commands.registerCommand(
+    'dsh.restoreMoreTabs',
+    async (allArg?: unknown) => {
+      const controller = requireConversations()
+      if (controller === undefined) {
+        await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before restoring Tabs.')
+        return
+      }
+      return controller.restoreMoreTabs(allArg === true || allArg === 'all')
+    },
+  )
+
   // --- L2 Host test hooks (test-only; do not change product semantics) ---
   const testSendPrompt = vscode.commands.registerCommand('dsh.test.sendPrompt', async (text?: unknown) => {
     if (panelHost === undefined) return { ok: false, reason: 'no-host' as const }
@@ -516,6 +563,9 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       mode: host?.status === 'connected' ? 'empty' : 'waiting-host',
       messages: [],
       index: { workspaceKey, sessions: [], openTabSet: [], ui: { restoreUiLimit: 8 } },
+      continue: { visibility: 'hidden' as const },
+      deferredRestoreCount: 0,
+      pendingRestore: false,
     }
   })
   const testGetIndex = vscode.commands.registerCommand('dsh.test.getIndex', () => {
@@ -594,6 +644,58 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     if (controller === undefined || active === undefined) return { count: 0 }
     return { count: controller.changedFileCount(active.sessionId) }
   })
+  const testRestoreOpenTabs = vscode.commands.registerCommand(
+    'dsh.test.restoreOpenTabs',
+    async (opts?: unknown) => {
+      const controller = conversations
+      if (controller === undefined) return { outcome: 'waiting-host' as const, pendingSessionIds: [] }
+      const eventsBySession = parseEventsBySession(opts)
+      return controller.restoreOpenTabSet(
+        eventsBySession === undefined ? {} : { eventsBySession },
+      )
+    },
+  )
+  const testContinue = vscode.commands.registerCommand('dsh.test.continue', async (opts?: unknown) => {
+    const controller = conversations
+    if (controller === undefined) return { outcome: 'host-not-ready' as const }
+    if (typeof opts === 'object' && opts !== null) {
+      const resume = (opts as { resumeSession?: unknown }).resumeSession
+      const eventsBySession = parseEventsBySession(opts)
+      controller.installTestHooks({
+        ...typeof resume === 'function'
+          ? { resumeSession: resume as (sessionId: string) => Promise<void> }
+          : {},
+        ...eventsBySession === undefined ? {} : { eventsBySession },
+      })
+    }
+    const tabId = typeof opts === 'object' && opts !== null
+      && typeof (opts as { tabId?: unknown }).tabId === 'string'
+      ? (opts as { tabId: string }).tabId
+      : undefined
+    return controller.continueConversation(tabId)
+  })
+  const testRestoreMore = vscode.commands.registerCommand('dsh.test.restoreMoreTabs', async (all?: unknown) => {
+    const controller = conversations
+    if (controller === undefined) return { outcome: 'waiting-host' as const, pendingSessionIds: [] }
+    return controller.restoreMoreTabs(all === true)
+  })
+  const testDiffAvailability = vscode.commands.registerCommand('dsh.test.diffAvailability', () => {
+    const controller = conversations
+    const active = controller?.registry.getActive()
+    if (controller === undefined || active === undefined) {
+      return { available: false, reason: 'no-active' as const, hunks: [] as const }
+    }
+    const hunks = controller.timeline.writeDiffsForSessionTree(active.sessionId)
+    if (hunks.length === 0) {
+      return { available: false, reason: 'no-diffs' as const, hunks: [] as const }
+    }
+    const recoverable = hunks.filter(h => typeof h.newText === 'string'
+      && (typeof h.oldText === 'string' || h.oldText === null))
+    if (recoverable.length === 0) {
+      return { available: false, reason: 'missing-before' as const, hunks }
+    }
+    return { available: true, reason: 'ok' as const, hunks: recoverable }
+  })
 
   context.subscriptions.push(
     start,
@@ -604,6 +706,8 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     deleteConversation,
     openHistory,
     deleteHistory,
+    continueConversation,
+    restoreMore,
     promptActive,
     selectPermission,
     reviewDiffs,
@@ -622,6 +726,10 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     testReveal,
     testDeleteHistory,
     testChangedFileCount,
+    testRestoreOpenTabs,
+    testContinue,
+    testRestoreMore,
+    testDiffAvailability,
   )
 }
 
@@ -722,6 +830,18 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestDelete: async () => {
       await runDeleteActive(vscode)
     },
+    requestContinue: async () => {
+      const controller = conversations
+      if (controller === undefined) return
+      await controller.continueConversation()
+    },
+    requestRestoreMore: async (all) => {
+      const controller = conversations
+      if (controller === undefined) return
+      await controller.restoreMoreTabs(all === true)
+    },
+    resolveContinueChrome: () => conversations?.continueChromeForTab(),
+    resolveDeferredRestoreCount: () => conversations?.panelSnapshot().deferredRestoreCount ?? 0,
     resolveReveal: (callId) => {
       const controller = conversations
       const active = controller?.registry.getActive()
@@ -859,4 +979,34 @@ function tabTitle(tab: ConversationTab): string {
 
 function shortId(id: string): string {
   return id.slice(0, 8)
+}
+
+/**
+ * Parse optional `{ eventsBySession: Record<string, unknown[]> }` from L2 hook args.
+ * @param opts - raw command argument.
+ */
+function parseEventsBySession(
+  opts: unknown,
+): Map<string, readonly import('./replay-hydrator.ts').HydratorSessionEvent[]> | undefined {
+  if (typeof opts !== 'object' || opts === null) return undefined
+  const raw = (opts as { eventsBySession?: unknown }).eventsBySession
+  if (raw === undefined) return undefined
+  const map = new Map<string, readonly import('./replay-hydrator.ts').HydratorSessionEvent[]>()
+  if (raw instanceof Map) {
+    for (const [key, value] of raw) {
+      if (typeof key === 'string' && Array.isArray(value)) {
+        map.set(key, value as import('./replay-hydrator.ts').HydratorSessionEvent[])
+      }
+    }
+    return map
+  }
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (Array.isArray(value)) {
+        map.set(key, value as import('./replay-hydrator.ts').HydratorSessionEvent[])
+      }
+    }
+    return map
+  }
+  return undefined
 }

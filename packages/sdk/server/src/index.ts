@@ -18,16 +18,25 @@ import {
   SDK_SESSION_DISPOSE_SERVICE,
   type SdkSessionDispose,
 } from './session-dispose.ts'
+import {
+  SDK_SESSION_RESUME_SERVICE,
+  type SdkSessionResume,
+} from './session-resume.ts'
 
 export * from './server.ts'
 export {
   SDK_SESSION_DISPOSE_SERVICE,
   type SdkSessionDispose,
 } from './session-dispose.ts'
+export {
+  SDK_SESSION_RESUME_SERVICE,
+  type SdkSessionResume,
+} from './session-resume.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
     sdkSessionDispose: SdkSessionDispose
+    sdkSessionResume: SdkSessionResume
   }
 }
 
@@ -78,6 +87,10 @@ export function apply(ctx: Context, config: JsonRpcConfig): void {
     disposeSession: sessionId => server.disposeSession(sessionId),
   }
   ctx.provide(SDK_SESSION_DISPOSE_SERVICE, sessionDispose)
+  const sessionResume: SdkSessionResume = {
+    resumeSession: sessionId => server.resumeSession(sessionId),
+  }
+  ctx.provide(SDK_SESSION_RESUME_SERVICE, sessionResume)
 
   // Share one exit task so racing shutdown requests cannot dispose the root or
   // exit the process more than once.

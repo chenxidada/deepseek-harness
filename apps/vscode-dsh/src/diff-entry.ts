@@ -18,13 +18,15 @@ export interface DiffOpenArgs {
   command: 'vscode.diff'
   /** Virtual document scheme for the left (old) side. */
   leftScheme: 'dsh-diff'
-  /** Right-side workspace path (file URI path). */
-  rightPath: string
+  /** Virtual document scheme for the right (new) side — log snapshot only. */
+  rightScheme: 'dsh-diff'
+  /** Logical path label (never used as a workspace before/after source). */
+  path: string
   /** Diff editor title. */
   title: string
-  /** Old text for the left virtual document. */
+  /** Old text for the left virtual document (from log `oldText`). */
   oldText: string
-  /** New text (informational; right side prefers the workspace file). */
+  /** New text for the right virtual document (from log `newText`). */
   newText: string
 }
 
@@ -58,13 +60,15 @@ let providerRegistered = false
 
 /**
  * Build Diff open metadata from a timeline hunk (testable without VS Code).
+ * Both sides come from authoritative log snapshots (AD-CU-6) — never workspace files.
  * @param hunk - write/edit diff from tool meta.
  */
 export function buildDiffOpenArgs(hunk: TimelineDiffHunk): DiffOpenArgs {
   return {
     command: 'vscode.diff',
     leftScheme: 'dsh-diff',
-    rightPath: hunk.path,
+    rightScheme: 'dsh-diff',
+    path: hunk.path,
     title: `DeepSeek Harness: ${hunk.path}`,
     // Create (oldText null) → empty left document; never invent workspace before.
     oldText: hunk.oldText ?? '',
@@ -73,24 +77,34 @@ export function buildDiffOpenArgs(hunk: TimelineDiffHunk): DiffOpenArgs {
 }
 
 /**
- * Open a post-hoc Diff for one write/edit hunk (AC-23/25).
- * Registers a one-shot `dsh-diff` content provider for the old side when needed.
+ * Whether a Diff hunk is recoverable for replay (AC-76 / AD-CU-6).
+ * Requires path + newText + oldText (string|null). Missing oldText key → unavailable.
+ * @param hunk - candidate Diff.
+ */
+export function isRecoverableReplayDiff(hunk: TimelineDiffHunk | undefined): boolean {
+  if (hunk === undefined) return false
+  if (typeof hunk.path !== 'string' || typeof hunk.newText !== 'string') return false
+  return typeof hunk.oldText === 'string' || hunk.oldText === null
+}
+
+/**
+ * Open a post-hoc Diff for one write/edit hunk (AC-23/25 / AD-CU-6).
+ * Both sides are virtual `dsh-diff` documents from the log — never current disk.
  * @param vscode - duck-typed vscode module.
  * @param hunk - structured diff from timeline / tool meta.
  */
 export async function openTimelineDiff(vscode: DiffVsCodeLike, hunk: TimelineDiffHunk): Promise<void> {
+  if (!isRecoverableReplayDiff(hunk)) {
+    throw new Error('Diff unavailable: missing authoritative before/after snapshot')
+  }
   ensureDiffProvider(vscode)
   const args = buildDiffOpenArgs(hunk)
-  const leftKey = encodeURIComponent(hunk.path)
+  const leftKey = encodeURIComponent(`old:${hunk.path}`)
+  const rightKey = encodeURIComponent(`new:${hunk.path}`)
   const leftUri = vscode.Uri.parse(`dsh-diff:${leftKey}`)
+  const rightUri = vscode.Uri.parse(`dsh-diff:${rightKey}`)
   leftContents.set(leftUri.toString(), args.oldText)
-  // Prefer workspace file on the right; fall back to another virtual doc with newText.
-  const rightUri = looksAbsolute(hunk.path)
-    ? vscode.Uri.file(hunk.path)
-    : vscode.Uri.parse(`dsh-diff:new-${leftKey}`)
-  if (!looksAbsolute(hunk.path)) {
-    leftContents.set(rightUri.toString(), args.newText)
-  }
+  leftContents.set(rightUri.toString(), args.newText)
   await vscode.commands.executeCommand(args.command, leftUri, rightUri, args.title)
 }
 
@@ -120,10 +134,6 @@ function ensureDiffProvider(vscode: DiffVsCodeLike): void {
     },
   })
   providerRegistered = true
-}
-
-function looksAbsolute(path: string): boolean {
-  return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
 }
 
 /** Test-only: reset provider registration flag between e2e cases. */

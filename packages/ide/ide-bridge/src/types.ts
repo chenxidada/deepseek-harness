@@ -18,6 +18,12 @@ export const IDE_BRIDGE_SERVICE = 'ideBridge'
  */
 export const SDK_SESSION_DISPOSE_SERVICE = 'sdkSessionDispose'
 
+/**
+ * Cordis service key for server-owned per-session resume (Continue same-id).
+ * Published by `@deepseek-ai/dsh-sdk-jsonrpc-server` as `sdkSessionResume`.
+ */
+export const SDK_SESSION_RESUME_SERVICE = 'sdkSessionResume'
+
 /** Cordis service key for permission presets (consumed via `ctx.get`). */
 export const PERMISSION_PRESETS_SERVICE = 'permissionPresets'
 
@@ -66,6 +72,20 @@ export interface SdkSessionDisposeCapability {
    * @param sessionId - SDK session identity.
    */
   disposeSession(sessionId: string): Promise<void>
+}
+
+/**
+ * Server-owned session resume capability for Continue (GAP-001 / AD-CU-8).
+ * Must register the resumed AgentHandle in the SDK session Map so later
+ * `session/prompt` reuses the live agent instead of `agents.create`.
+ */
+export interface SdkSessionResumeCapability {
+  /**
+   * Resume one persisted session into the live SDK Map.
+   * No-op (success) when already live. Uses `agents.resume`, never stdout create.
+   * @param sessionId - SDK session identity.
+   */
+  resumeSession(sessionId: string): Promise<void>
 }
 
 /** Minimal session handle needed to apply a permission preset. */
@@ -143,6 +163,22 @@ export type BridgeFrame =
     events: unknown[]
   }
   | { kind: 'session/read-log/response'; id: string; ok: false; error: string }
+  | { kind: 'session/resume'; id: string; sessionId: string }
+  | { kind: 'session/resume/response'; id: string; ok: true }
+  | { kind: 'session/resume/response'; id: string; ok: false; error: string }
+  | { kind: 'session/continue-capability'; id: string; sessionId: string }
+  | {
+    kind: 'session/continue-capability/response'
+    id: string
+    ok: true
+    capability: 'same-id' | 'derive-only' | 'unknown'
+  }
+  | {
+    kind: 'session/continue-capability/response'
+    id: string
+    ok: false
+    error: string
+  }
   | { kind: 'permission/select'; id: string; sessionId: string; preset: string }
   | { kind: 'permission/select/response'; id: string; ok: true; preset: string }
   | { kind: 'permission/select/response'; id: string; ok: false; error: string }

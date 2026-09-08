@@ -69,13 +69,28 @@ export function hydrateFromAuthoritativeLog(
 ): HydrationResult {
   const foldedMessages = foldMessages(events)
   const foldedTimeline = foldTimeline(events)
-  const messages: ChatMessage[] = foldedMessages.map(bar => ({
-    id: bar.id ?? randomUUID(),
-    sessionId,
-    role: bar.role,
-    kind: 'text',
-    text: bar.text,
-  }))
+  const incomplete = detectIncomplete(events)
+  const messages: ChatMessage[] = foldedMessages.map((bar, index) => {
+    const isLast = index === foldedMessages.length - 1
+    return {
+      id: bar.id ?? randomUUID(),
+      sessionId,
+      role: bar.role,
+      kind: 'text' as const,
+      text: bar.text,
+      ...incomplete && isLast ? { incomplete: true as const } : {},
+    }
+  })
+  if (incomplete) {
+    messages.push({
+      id: randomUUID(),
+      sessionId,
+      role: 'notice',
+      kind: 'notice',
+      text: '已停止/未完成',
+      incomplete: true,
+    })
+  }
   const timelineItems = foldedTimeline.map(row => {
     const base: Omit<TimelineItem, 'id' | 'sessionId'> = {
       kind: row.kind,
@@ -248,6 +263,27 @@ export function recoverableDiffsFromMeta(meta: unknown): TimelineDiffHunk[] {
     out.push({ path, oldText, newText })
   }
   return out
+}
+
+/**
+ * Whether the event log represents an incomplete / interrupted turn (AC-77).
+ * Open turn/start without turn/end, or turn/end reason.kind=interrupted.
+ * @param events - authoritative session events (raw or cold-balanced).
+ * @returns true when the Conversation panel must mark 「已停止/未完成」.
+ */
+export function detectIncomplete(events: readonly HydratorSessionEvent[]): boolean {
+  let openTurns = 0
+  let interrupted = false
+  for (const event of events) {
+    if (event.type === 'turn/start') openTurns += 1
+    if (event.type === 'turn/end') {
+      openTurns = Math.max(0, openTurns - 1)
+      const data = asRecord(event.data)
+      const reason = asRecord(data?.reason)
+      if (reason?.kind === 'interrupted') interrupted = true
+    }
+  }
+  return openTurns > 0 || interrupted
 }
 
 function textFromContent(content: unknown): string {

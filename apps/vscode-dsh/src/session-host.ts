@@ -65,8 +65,6 @@ export interface IdeSessionHostStartOptions {
  * Multiple conversation Tabs share this process and route by `sessionId` (AD-1).
  */
 export class IdeSessionHost {
-  /** Current lifecycle status for UI. */
-  status: IdeSessionHostStatus = 'idle'
   /** Redacted diagnostic message when status is `error`. */
   errorMessage: string | undefined
   /** Coordinates approval / questions UI waits bound to Tabs. */
@@ -92,9 +90,33 @@ export class IdeSessionHost {
     resolve: (events: unknown[]) => void
     reject: (error: Error) => void
   }>()
+  private readonly pendingResume = new Map<string, {
+    resolve: () => void
+    reject: (error: Error) => void
+  }>()
+  private resumeTimeoutMs = 15_000
   private transportWatch: (() => void) | undefined
   private readonly errorListeners = new Set<(message: string) => void>()
   private readonly notificationListeners = new Set<(notification: HarnessNotification) => void>()
+  private readonly statusListeners = new Set<(status: IdeSessionHostStatus) => void>()
+  private _status: IdeSessionHostStatus = 'idle'
+
+  /** Current lifecycle status for UI. */
+  get status(): IdeSessionHostStatus {
+    return this._status
+  }
+
+  set status(value: IdeSessionHostStatus) {
+    if (this._status === value) return
+    this._status = value
+    for (const listener of this.statusListeners) {
+      try {
+        listener(value)
+      } catch {
+        // Status listeners must not interrupt Host lifecycle transitions.
+      }
+    }
+  }
 
   /**
    * Whether the Host bridge has received a runtime `hello` frame.
@@ -114,6 +136,18 @@ export class IdeSessionHost {
     this.errorListeners.add(listener)
     return () => {
       this.errorListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Subscribe to Host lifecycle status transitions (idle/starting/connected/error/disconnected).
+   * @param listener - receives each new status value.
+   * @returns disposer that removes the listener.
+   */
+  onStatusChange(listener: (status: IdeSessionHostStatus) => void): () => void {
+    this.statusListeners.add(listener)
+    return () => {
+      this.statusListeners.delete(listener)
     }
   }
 
@@ -300,6 +334,40 @@ export class IdeSessionHost {
   }
 
   /**
+   * Resume one session via Host bridge `session/resume` → `agents.resume` (GAP-001).
+   * @param sessionId - Tab-bound SDK session identity.
+   */
+  async resumeSession(sessionId: string): Promise<void> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot resume session')
+    }
+    const id = randomUUID()
+    const response = new Promise<void>((resolve, reject) => {
+      this.pendingResume.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingResume.get(id)
+      if (pending === undefined) return
+      this.pendingResume.delete(id)
+      pending.reject(new Error(`session/resume timed out after ${this.resumeTimeoutMs}ms`))
+    }, this.resumeTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'session/resume', id, sessionId })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive session/resume')
+      }
+      await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingResume.delete(id)
+    }
+  }
+
+  /**
    * Apply a permission-presets name for a session via Host bridge (AC-21 / AC-22).
    * @param sessionId - Tab-bound SDK session identity.
    * @param preset - preset table key owned by dsh-permission-presets.
@@ -383,6 +451,10 @@ export class IdeSessionHost {
       this.pendingReadLog.delete(id)
       pending.reject(new Error(reason))
     }
+    for (const [id, pending] of this.pendingResume) {
+      this.pendingResume.delete(id)
+      pending.reject(new Error(reason))
+    }
     this.notifyError(this.errorMessage)
   }
 
@@ -421,6 +493,17 @@ export class IdeSessionHost {
       this.pendingReadLog.delete(frame.id)
       if (frame.ok) {
         pending.resolve(frame.events)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'session/resume/response') {
+      const pending = this.pendingResume.get(frame.id)
+      if (pending === undefined) return
+      this.pendingResume.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve()
         return
       }
       pending.reject(new Error(frame.error))
@@ -523,6 +606,10 @@ export class IdeSessionHost {
     for (const [id, pending] of this.pendingReadLog) {
       this.pendingReadLog.delete(id)
       pending.reject(new Error(`${reason} during session/read-log`))
+    }
+    for (const [id, pending] of this.pendingResume) {
+      this.pendingResume.delete(id)
+      pending.reject(new Error(`${reason} during session/resume`))
     }
     this.transportWatch?.()
     this.transportWatch = undefined

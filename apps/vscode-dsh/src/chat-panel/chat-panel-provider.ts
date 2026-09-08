@@ -105,6 +105,8 @@ export function buildThinChatHtml(cspSource?: string): string {
   <style>
     body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); margin: 0; padding: 8px; }
     #banner, #status { font-size: 12px; opacity: 0.85; margin-bottom: 6px; }
+    #chrome { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+    #chrome button[hidden] { display: none !important; }
     #messages { display: flex; flex-direction: column; gap: 8px; min-height: 120px; }
     .msg { white-space: pre-wrap; padding: 6px 8px; border-radius: 4px; background: var(--vscode-editor-inactiveSelectionBackground); }
     .msg.user { border-left: 3px solid var(--vscode-focusBorder); }
@@ -116,6 +118,10 @@ export function buildThinChatHtml(cspSource?: string): string {
 </head>
 <body>
   <div id="banner"></div>
+  <div id="chrome">
+    <button id="continueBtn" type="button" hidden>Continue</button>
+    <button id="restoreMoreBtn" type="button" hidden>查看更多</button>
+  </div>
   <div id="status"></div>
   <div id="messages"></div>
   <div id="reject"></div>
@@ -133,6 +139,8 @@ export function buildThinChatHtml(cspSource?: string): string {
     const rejectEl = document.getElementById('reject');
     const inputEl = document.getElementById('input');
     const sendEl = document.getElementById('send');
+    const continueBtn = document.getElementById('continueBtn');
+    const restoreMoreBtn = document.getElementById('restoreMoreBtn');
 
     function renderMessages(list) {
       messagesEl.innerHTML = '';
@@ -154,6 +162,28 @@ export function buildThinChatHtml(cspSource?: string): string {
       inputEl.disabled = !live;
       sendEl.disabled = !live;
     }
+    function syncChrome(msg) {
+      const cont = msg.continue;
+      if (!cont || cont.visibility === 'hidden') {
+        continueBtn.hidden = true;
+        continueBtn.disabled = true;
+        continueBtn.removeAttribute('title');
+      } else {
+        continueBtn.hidden = false;
+        continueBtn.disabled = cont.visibility === 'disabled';
+        if (cont.tooltip) continueBtn.title = cont.tooltip;
+        else continueBtn.removeAttribute('title');
+      }
+      const deferredRestoreCount = typeof msg.deferredRestoreCount === 'number'
+        ? msg.deferredRestoreCount : 0;
+      if (deferredRestoreCount > 0) {
+        restoreMoreBtn.hidden = false;
+        restoreMoreBtn.textContent = '查看更多 (' + deferredRestoreCount + ')';
+      } else {
+        restoreMoreBtn.hidden = true;
+        restoreMoreBtn.textContent = '查看更多';
+      }
+    }
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (!msg || typeof msg.type !== 'string') return;
@@ -169,6 +199,7 @@ export function buildThinChatHtml(cspSource?: string): string {
           renderMessages([]);
         }
         syncComposer();
+        syncChrome(msg);
         return;
       }
       if (msg.type === 'messages/replace') {
@@ -197,6 +228,12 @@ export function buildThinChatHtml(cspSource?: string): string {
         rejectEl.textContent = 'Send rejected: ' + msg.reason;
         return;
       }
+    });
+    continueBtn.addEventListener('click', () => {
+      vscode.postMessage({ type: 'action/continue' });
+    });
+    restoreMoreBtn.addEventListener('click', () => {
+      vscode.postMessage({ type: 'action/restore-more' });
     });
     sendEl.addEventListener('click', () => {
       rejectEl.textContent = '';

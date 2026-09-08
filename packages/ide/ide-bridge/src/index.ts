@@ -18,6 +18,7 @@ import {
   IDE_BRIDGE_SOCK_ENV,
   PERMISSION_PRESETS_SERVICE,
   SDK_SESSION_DISPOSE_SERVICE,
+  SDK_SESSION_RESUME_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   type BridgeFrame,
@@ -25,6 +26,7 @@ import {
   type IdeBridgePermissionPresets,
   type IdeBridgeSessions,
   type SdkSessionDisposeCapability,
+  type SdkSessionResumeCapability,
   type SessionPersistenceReadCapability,
 } from './types.ts'
 import { isApprovalOutcome, isAskUserQuestionAnswer } from './validate.ts'
@@ -34,6 +36,7 @@ export {
   IDE_BRIDGE_SOCK_ENV,
   PERMISSION_PRESETS_SERVICE,
   SDK_SESSION_DISPOSE_SERVICE,
+  SDK_SESSION_RESUME_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   APPROVAL_OUTCOMES,
@@ -42,6 +45,7 @@ export {
   type IdeBridgePermissionPresets,
   type IdeBridgeSessions,
   type SdkSessionDisposeCapability,
+  type SdkSessionResumeCapability,
   type SessionPersistenceReadCapability,
   type ApprovalOutcome,
   type AskUserQuestionAnswer,
@@ -412,6 +416,14 @@ async function handleHostFrame(
     await handleReadLog(ctx, client, frame)
     return
   }
+  if (frame.kind === 'session/resume') {
+    await handleResume(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'session/continue-capability') {
+    await handleContinueCapability(ctx, client, frame)
+    return
+  }
   if (frame.kind === 'permission/select') {
     handlePermissionSelect(ctx, client, frame)
     return
@@ -499,6 +511,82 @@ async function handleReadLog(
       error: error instanceof Error ? error.message : String(error),
     })
   }
+}
+
+/**
+ * Resume a persisted session via SDK-owned `sdkSessionResume` → `agents.resume`
+ * (GAP-001 / AC-32). Does not expand SDK stdout create.
+ */
+async function handleResume(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'session/resume' }>,
+): Promise<void> {
+  const resumer = ctx.get(SDK_SESSION_RESUME_SERVICE) as SdkSessionResumeCapability | undefined
+  if (resumer === undefined) {
+    client.send({
+      kind: 'session/resume/response',
+      id: frame.id,
+      ok: false,
+      error: `${SDK_SESSION_RESUME_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    await resumer.resumeSession(frame.sessionId)
+    client.send({ kind: 'session/resume/response', id: frame.id, ok: true })
+  } catch (error) {
+    client.send({
+      kind: 'session/resume/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Probe continueCapability for one session (AD-CU-8).
+ * Prefer same-id when resume service is mounted and the session log exists.
+ */
+async function handleContinueCapability(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'session/continue-capability' }>,
+): Promise<void> {
+  const resumer = ctx.get(SDK_SESSION_RESUME_SERVICE) as SdkSessionResumeCapability | undefined
+  const persistence = ctx.get(SESSION_PERSISTENCE_SERVICE) as SessionPersistenceReadCapability | undefined
+  if (resumer === undefined) {
+    client.send({
+      kind: 'session/continue-capability/response',
+      id: frame.id,
+      ok: true,
+      capability: 'unknown',
+    })
+    return
+  }
+  let sessionExists = false
+  if (persistence !== undefined) {
+    try {
+      const handle = await persistence.open(frame.sessionId, 'read')
+      try {
+        const events = await handle.read(0)
+        sessionExists = events.length > 0
+      } finally {
+        await handle.close()
+      }
+    } catch {
+      sessionExists = false
+    }
+  }
+  // T-0b Gate is same-id PASS; without a log the probe stays unknown.
+  const capability = sessionExists ? 'same-id' as const : 'unknown' as const
+  client.send({
+    kind: 'session/continue-capability/response',
+    id: frame.id,
+    ok: true,
+    capability,
+  })
 }
 
 async function applyInterruptClosers(events: unknown[]): Promise<unknown[]> {

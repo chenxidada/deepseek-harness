@@ -96,6 +96,14 @@
         "title": "DeepSeek Harness: Delete History Session"
       },
       {
+        "command": "dsh.continueConversation",
+        "title": "DeepSeek Harness: Continue This Session"
+      },
+      {
+        "command": "dsh.restoreMoreTabs",
+        "title": "DeepSeek Harness: Restore More Tabs"
+      },
+      {
         "command": "dsh.test.sendPrompt",
         "title": "DeepSeek Harness Test: Send Prompt"
       },
@@ -150,6 +158,22 @@
       {
         "command": "dsh.test.changedFileCount",
         "title": "DeepSeek Harness Test: Changed File Count"
+      },
+      {
+        "command": "dsh.test.restoreOpenTabs",
+        "title": "DeepSeek Harness Test: Restore Open Tabs"
+      },
+      {
+        "command": "dsh.test.continue",
+        "title": "DeepSeek Harness Test: Continue Conversation"
+      },
+      {
+        "command": "dsh.test.restoreMoreTabs",
+        "title": "DeepSeek Harness Test: Restore More Tabs"
+      },
+      {
+        "command": "dsh.test.diffAvailability",
+        "title": "DeepSeek Harness Test: Diff Availability"
       }
     ],
     "menus": {

@@ -14,11 +14,13 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 
 ## Library
 
-- `IdeSessionHost` — Node-testable lifecycle owner (prompt + bridge `session/dispose` + notification fan-out)
-- `ConversationRegistry` / `ConversationController` — Tab ↔ `sessionId` binding; recoverable close vs delete
+- `IdeSessionHost` — Node-testable lifecycle owner (prompt + bridge `session/dispose` / `session/read-log` / `session/resume` + notification fan-out)
+- `ConversationRegistry` / `ConversationController` — Tab ↔ `sessionId` binding; recoverable close vs delete; **restart restore** + **Continue**
 - `MessageStore` — per-session chat projection for the Conversation panel (not an authority DB)
 - `ExtensionIndex` — immediate `workspaceState` writes for `openTabSet` / `activeSessionId` (metadata only)
-- `ChatPanelHost` — Host↔Webview protocol + send gate
+- `ReplayHydrator` / `restore-planner` — authoritative-log hydrate; empty-Tab strip; active-first UI cap N
+- `continue-capability` — T-0b Gate + AD-CU-8 top-bar Continue chrome (list hints stay decoupled)
+- `ChatPanelHost` — Host↔Webview protocol + send gate + Continue / 查看更多
 - `TimelineStore` — pure session-scoped turn / step / tool / short assistant label / Diff projection
 - `buildIdeChildEnv` — scrub-then-reinject child environment
 - `redactSecrets` — AC-32 log hygiene
@@ -27,12 +29,14 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 
 | Command | Action |
 |---|---|
-| `dsh.startSession` | Start the window session host and open the first conversation Tab |
+| `dsh.startSession` | Start the window session host and **restore** persisted non-empty `openTabSet` (else open a blank Tab) |
 | `dsh.stopSession` | Shut down the session host |
 | `dsh.newConversation` | Add a Tab with a fresh `sessionId` |
 | `dsh.switchConversation` | Switch the active Tab (TreeView click or QuickPick) |
 | `dsh.closeConversation` | Close (unload) the active Tab — **does not** dispose the session |
 | `dsh.deleteConversation` | Explicitly delete: confirm → `session/dispose` + clear index |
+| `dsh.continueConversation` | Continue this session (same-id resume → same `tabId` `replay→live`) |
+| `dsh.restoreMoreTabs` | Hydrate deferred restore Tabs（「查看更多 / 全部恢复」） |
 | `dsh.promptActiveConversation` | Prompt the active Tab's `sessionId` (tests / scripting) |
 | `dsh.selectPermissionPreset` | Pick a permission-presets name for the active Tab |
 | `dsh.reviewWorkspaceDiffs` | Open post-hoc Diff for write/edit paths on the active Tab |
@@ -45,9 +49,13 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 | `dsh.test.sendPrompt` | Host-gated send (same gate as Webview `composer/send`) |
 | `dsh.test.closeConversation` | Recoverable close; pass `{ confirmStopClose: true }` for running |
 | `dsh.test.deleteConversation` | Delete path; pass `{ confirmed: true }` after confirm |
-| `dsh.test.panelSnapshot` | Read panel mode / messages / index |
+| `dsh.test.panelSnapshot` | Read panel mode / messages / index / Continue chrome |
 | `dsh.test.getIndex` | Read persisted ExtensionIndex snapshot |
 | `dsh.test.openPanel` | Push panel state (smoke open) |
+| `dsh.test.restoreOpenTabs` | Restart restore orchestrator (optional `eventsBySession`) |
+| `dsh.test.continue` | Continue active replay Tab (optional resume stub) |
+| `dsh.test.restoreMoreTabs` | 「查看更多」 hydrate |
+| `dsh.test.diffAvailability` | Probe recoverable log Diffs (no workspace impersonation) |
 
 ## Views
 
@@ -73,10 +81,29 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 
 `openTabSet` / `activeSessionId` are written to `workspaceState` on every change (not only on deactivate).
 
+## Restart restore (AD-CU-3/4/10)
+
+- On `dsh.startSession`, the Extension reads persisted `openTabSet`, **strips empty Tabs** (no messages / never sent), writes the sanitized set back immediately, and hydrates a UI subset of size **N** (`ui.restoreUiLimit`, default **8**).
+- The last **active** session is always forced into the UI set and focused (AC-34). Remaining index rows stay in `openTabSet` (AC-70); use `dsh.restoreMoreTabs` / `action/restore-more` for 「查看更多 / 全部恢复」.
+- Restored Tabs are always `mode=replay` (even if `liveIntent` was stored). No automatic Continue / prompt.
+- Host not ready → `waiting-host`; when Host connects, restore hydrates automatically (AC-69).
+
+## Continue this session (AD-CU-8 / T-0b same-id)
+
+- T-0b Gate is **PASS (same-id)**. Top-bar Continue is **enabled** when capability is `same-id` or `derive-only`; **disabled** + tooltip「暂不可用」 for `unknown`; **hidden** only if Gate were FAIL.
+- History list hints (「可继续」) stay **decoupled** from the top-bar Continue control.
+- Continue calls Host bridge `session/resume` → SDK `sdkSessionResume` → `agents.resume` (does **not** expand SDK stdout create). Same open-period `tabId` upgrades `replay→live` (AC-32). Old log prefix is not rewritten (AC-66).
+
+## Replay Diff (AD-CU-6)
+
+- Diff is available only when `meta.diffs` carries recoverable snapshots (`path` + `newText` + `oldText: string|null`). Patch-only (missing `oldText`) → Diff unavailable with explanation.
+- Both Diff sides open as virtual `dsh-diff` documents from the log — **never** current workspace files as before/after.
+- Incomplete / interrupted turns are marked on messages (`incomplete`) with notice「已停止/未完成」(AC-77).
+
 ## Dual channel
 
-- **SDK stdout** — JSON-RPC only (`initialize` / `session/prompt` / `shutdown`) plus server notifications (`session.event`, `session.status`, `subagent.*`). No `session/close` on stdout.
-- **Host bridge** — UDS/named-pipe NDJSON for `session/dispose`, approval/questions, and permission RPC. Bridge traffic never shares stdout with the SDK.
+- **SDK stdout** — JSON-RPC only (`initialize` / `session/prompt` / `shutdown`) plus server notifications (`session.event`, `session.status`, `subagent.*`). No `session/close` / `session/resume` on stdout.
+- **Host bridge** — UDS/named-pipe NDJSON for `session/dispose`, `session/read-log`, `session/resume`, approval/questions, and permission RPC. Bridge traffic never shares stdout with the SDK.
 
 The Extension does **not** reimplement agent-loop, tool execution, or session persistence (AC-15). Fail-closed approvals / questions live in `InteractionCoordinator` + `ide-bridge` terminal answerers — not in `packages/core/agent-loop`.
 

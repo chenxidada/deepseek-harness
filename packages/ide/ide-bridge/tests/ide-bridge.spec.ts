@@ -18,6 +18,7 @@ import {
   parseBridgeFrame,
   PERMISSION_PRESETS_SERVICE,
   SDK_SESSION_DISPOSE_SERVICE,
+  SDK_SESSION_RESUME_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   validateBridgeFrame,
@@ -156,6 +157,76 @@ describe('ide-bridge session/read-log (T-0a / AD-CU-2)', () => {
 
     await ctx.fiber.dispose()
     await host.close()
+  })
+})
+
+describe('ide-bridge session/resume (GAP-001 / Continue)', () => {
+  const dirs: string[] = []
+  let previousSock: string | undefined
+
+  afterEach(async () => {
+    while (dirs.length > 0) {
+      const dir = dirs.pop()!
+      await rm(dir, { recursive: true, force: true })
+    }
+    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
+  })
+
+  it('Host resume frame calls sdkSessionResume and returns ok', async () => {
+    previousSock = process.env[IDE_BRIDGE_SOCK_ENV]
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-resume-frame-'))
+    dirs.push(dir)
+    const path = join(dir, 'bridge.sock')
+    const resumed: string[] = []
+    const host = new IdeBridgeHostServer()
+    const responses: BridgeFrame[] = []
+    host.onFrame((frame) => {
+      if (frame.kind === 'hello') return
+      responses.push(frame)
+    })
+    await host.listen(path)
+
+    const ctx = new Context()
+    ctx.provide(SDK_SESSION_RESUME_SERVICE, {
+      resumeSession: async (sessionId: string) => {
+        resumed.push(sessionId)
+      },
+    })
+    process.env[IDE_BRIDGE_SOCK_ENV] = path
+    apply(ctx, {})
+    await waitFor(() => host.connectionCount() >= 1, 3_000)
+
+    const requestId = 'resume-1'
+    expect(host.broadcast({ kind: 'session/resume', id: requestId, sessionId: 'sess-a' })).toBe(1)
+    await waitFor(
+      () => responses.some(frame => frame.kind === 'session/resume/response' && frame.id === requestId),
+      3_000,
+    )
+    expect(resumed).toEqual(['sess-a'])
+    expect(responses).toContainEqual({ kind: 'session/resume/response', id: requestId, ok: true })
+
+    await ctx.fiber.dispose()
+    await host.close()
+  })
+
+  it('parses session/resume and continue-capability frames', () => {
+    expect(parseBridgeFrame('{"kind":"session/resume","id":"1","sessionId":"s"}')).toEqual({
+      kind: 'session/resume',
+      id: '1',
+      sessionId: 's',
+    })
+    expect(validateBridgeFrame({
+      kind: 'session/continue-capability/response',
+      id: '1',
+      ok: true,
+      capability: 'same-id',
+    })).toEqual({
+      kind: 'session/continue-capability/response',
+      id: '1',
+      ok: true,
+      capability: 'same-id',
+    })
   })
 })
 
