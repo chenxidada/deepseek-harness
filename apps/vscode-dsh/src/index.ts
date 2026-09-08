@@ -33,12 +33,29 @@ export {
 export {
   ExtensionIndex,
   EXTENSION_INDEX_STATE_KEY,
+  continueCapabilityListHint,
   type ExtensionIndexSnapshot,
   type OpenTabRecord,
   type OpenTabMode,
   type SessionIndexEntry,
+  type HistoryListRow,
   type WorkspaceStateLike,
 } from './extension-index.ts'
+export {
+  hydrateFromAuthoritativeLog,
+  foldMessages,
+  foldTimeline,
+  recoverableDiffsFromMeta,
+  type HydrationResult,
+  type FoldedMessage,
+  type FoldedTimelineRow,
+  type HydratorSessionEvent,
+} from './replay-hydrator.ts'
+export {
+  historyTreeItems,
+  listHistoryFromIndex,
+  type HistoryTreeItem,
+} from './history-view.ts'
 export {
   ChatPanelHost,
   FakeWebviewPort,

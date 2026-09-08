@@ -20,6 +20,11 @@ import {
   type TimelineTreeItem,
 } from './timeline-view.ts'
 import {
+  canRegisterHistoryView,
+  createHistoryView,
+  listHistoryFromIndex,
+} from './history-view.ts'
+import {
   DEFAULT_POST_HOC_DIFF_ONLY,
   openTimelineDiff,
   reviewWorkspaceDiffs,
@@ -37,7 +42,10 @@ import {
 import { redactSecrets } from './redact.ts'
 import type { ConversationRegistrySnapshot, ConversationTab } from './conversation-registry.ts'
 import type { TimelineDiffHunk, TimelineItem } from './timeline-store.ts'
-import type { WorkspaceStateLike } from './extension-index.ts'
+import {
+  ExtensionIndex,
+  type WorkspaceStateLike,
+} from './extension-index.ts'
 import {
   ChatPanelHost,
   canRegisterChatPanel,
@@ -123,6 +131,7 @@ let conversations: ConversationController | undefined
 let panelHost: ChatPanelHost | undefined
 let tabBarRefresh: (() => void) | undefined
 let timelineRefresh: (() => void) | undefined
+let historyRefresh: (() => void) | undefined
 let stopRegistryWatch: (() => void) | undefined
 let stopTimelineWatch: (() => void) | undefined
 let stopErrorWatch: (() => void) | undefined
@@ -157,6 +166,11 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     const timeline = createTimelineView(vscode, getActiveTimelineItems)
     timelineRefresh = () => timeline.refresh()
     context.subscriptions.push(timeline)
+  }
+  if (canRegisterHistoryView(vscode)) {
+    const history = createHistoryView(vscode, () => listHistoryFromIndex(resolveWorkspaceIndex()))
+    historyRefresh = () => history.refresh()
+    context.subscriptions.push(history)
   }
 
   // Chat panel Host is created eagerly so L2 hooks work before/without a Webview.
@@ -308,6 +322,48 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
 
   const deleteConversation = vscode.commands.registerCommand('dsh.deleteConversation', async (tabIdArg?: unknown) => {
     await runDeleteActive(vscode, typeof tabIdArg === 'string' ? tabIdArg : undefined)
+  })
+
+  const openHistory = vscode.commands.registerCommand('dsh.openHistory', async (sessionIdArg?: unknown) => {
+    let sessionId = typeof sessionIdArg === 'string' ? sessionIdArg : undefined
+    if (sessionId === undefined || sessionId === '') {
+      const rows = listHistoryFromIndex(resolveWorkspaceIndex())
+      if (rows.length === 0) {
+        await vscode.window.showInformationMessage('No history sessions in this workspace.')
+        return
+      }
+      const pick = await vscode.window.showQuickPick?.(
+        rows.map(row => ({
+          label: row.title,
+          description: row.continueHint || row.sessionId.slice(0, 8),
+          tabId: row.sessionId,
+        })),
+        { title: 'Open History Replay', placeHolder: 'Select a session' },
+      )
+      const chosen = Array.isArray(pick) ? pick[0] : pick
+      if (chosen === undefined) return
+      sessionId = chosen.tabId
+    }
+    const controller = requireConversations()
+    if (controller === undefined) {
+      await vscode.window.showErrorMessage(
+        'DeepSeek Harness Host is not connected. Connect Host before opening a history replay.',
+      )
+      return { outcome: 'host-not-ready' as const, sessionId }
+    }
+    const result = await controller.openFromHistory(sessionId)
+    historyRefresh?.()
+    tabBarRefresh?.()
+    if (result.outcome === 'host-not-ready') {
+      await vscode.window.showInformationMessage(
+        'Waiting for Host before replaying this session from the authoritative log.',
+      )
+    } else if (result.outcome === 'error') {
+      await vscode.window.showErrorMessage(`Failed to open history replay: ${result.error}`)
+    } else if (result.outcome === 'missing') {
+      await vscode.window.showErrorMessage('History session not found or deleted.')
+    }
+    return result
   })
 
   const promptActive = vscode.commands.registerCommand('dsh.promptActiveConversation', async (text?: unknown) => {
@@ -463,16 +519,80 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     }
   })
   const testGetIndex = vscode.commands.registerCommand('dsh.test.getIndex', () => {
-    return conversations?.index.read() ?? {
-      workspaceKey,
-      sessions: [],
-      openTabSet: [],
-      ui: { restoreUiLimit: 8 },
-    }
+    return resolveWorkspaceIndex().read()
   })
   const testOpenPanel = vscode.commands.registerCommand('dsh.test.openPanel', () => {
     panelHost?.pushFullState()
     return { ok: true, viewId: 'dsh.chat' }
+  })
+  const testOpenHistory = vscode.commands.registerCommand(
+    'dsh.test.openHistory',
+    async (sessionId?: unknown, opts?: unknown) => {
+      const controller = conversations
+      if (controller === undefined) {
+        return { outcome: 'host-not-ready' as const, sessionId: String(sessionId ?? '') }
+      }
+      if (typeof sessionId !== 'string' || sessionId === '') {
+        return { outcome: 'missing' as const, sessionId: '' }
+      }
+      const events = typeof opts === 'object' && opts !== null
+        && Array.isArray((opts as { events?: unknown }).events)
+        ? (opts as { events: unknown[] }).events
+        : undefined
+      return controller.openFromHistory(
+        sessionId,
+        events === undefined ? {} : { events: events as never },
+      )
+    },
+  )
+  const testListHistory = vscode.commands.registerCommand('dsh.test.listHistory', () => {
+    return listHistoryFromIndex(resolveWorkspaceIndex())
+  })
+  const testInjectAssistant = vscode.commands.registerCommand('dsh.test.injectAssistant', (opts?: unknown) => {
+    const controller = conversations
+    if (controller === undefined) return { ok: false as const, reason: 'no-host' }
+    if (typeof opts !== 'object' || opts === null) return { ok: false as const, reason: 'bad-args' }
+    const sessionId = (opts as { sessionId?: unknown }).sessionId
+    const text = (opts as { text?: unknown }).text
+    if (typeof sessionId !== 'string' || typeof text !== 'string') return { ok: false as const, reason: 'bad-args' }
+    controller.injectAssistantMessage(sessionId, text)
+    tabBarRefresh?.()
+    return { ok: true as const, unread: controller.registry.getBySessionId(sessionId)?.unread === true }
+  })
+  const testSwitchTab = vscode.commands.registerCommand('dsh.test.switchConversation', (tabId?: unknown) => {
+    const controller = conversations
+    if (controller === undefined || typeof tabId !== 'string') return { ok: false as const }
+    controller.switchConversation(tabId)
+    return { ok: true as const, activeTabId: controller.registry.getActive()?.tabId }
+  })
+  const testPending = vscode.commands.registerCommand('dsh.test.listPendingInteractions', () => {
+    return host?.interactions.listPending() ?? []
+  })
+  const testReveal = vscode.commands.registerCommand('dsh.test.reveal', (callId?: unknown) => {
+    const controller = conversations
+    const active = controller?.registry.getActive()
+    if (controller === undefined || active === undefined) return { kind: 'none' as const }
+    return {
+      sessionId: active.sessionId,
+      ...controller.revealTarget(active.sessionId, typeof callId === 'string' ? callId : undefined),
+    }
+  })
+  const deleteHistorySession = async (sessionId?: unknown) => {
+    const controller = conversations
+    if (controller === undefined || typeof sessionId !== 'string') {
+      return { outcome: 'host-not-ready' as const }
+    }
+    const result = await controller.deleteSession(sessionId, { confirmed: true })
+    historyRefresh?.()
+    return result
+  }
+  const deleteHistory = vscode.commands.registerCommand('dsh.deleteHistory', deleteHistorySession)
+  const testDeleteHistory = vscode.commands.registerCommand('dsh.test.deleteHistory', deleteHistorySession)
+  const testChangedFileCount = vscode.commands.registerCommand('dsh.test.changedFileCount', () => {
+    const controller = conversations
+    const active = controller?.registry.getActive()
+    if (controller === undefined || active === undefined) return { count: 0 }
+    return { count: controller.changedFileCount(active.sessionId) }
   })
 
   context.subscriptions.push(
@@ -482,6 +602,8 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     switchConversation,
     closeConversation,
     deleteConversation,
+    openHistory,
+    deleteHistory,
     promptActive,
     selectPermission,
     reviewDiffs,
@@ -492,6 +614,14 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     testPanelSnapshot,
     testGetIndex,
     testOpenPanel,
+    testOpenHistory,
+    testListHistory,
+    testInjectAssistant,
+    testSwitchTab,
+    testPending,
+    testReveal,
+    testDeleteHistory,
+    testChangedFileCount,
   )
 }
 
@@ -592,6 +722,17 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestDelete: async () => {
       await runDeleteActive(vscode)
     },
+    resolveReveal: (callId) => {
+      const controller = conversations
+      const active = controller?.registry.getActive()
+      if (controller === undefined || active === undefined) {
+        return { kind: 'none' as const, sessionId: '' }
+      }
+      return {
+        sessionId: active.sessionId,
+        ...controller.revealTarget(active.sessionId, callId),
+      }
+    },
   }
   Object.defineProperty(deps, 'interactions', {
     enumerable: true,
@@ -608,6 +749,7 @@ function bindConversations(controller: ConversationController): void {
   stopRegistryWatch = controller.registry.onChange(() => {
     tabBarRefresh?.()
     timelineRefresh?.()
+    historyRefresh?.()
     panelHost?.pushFullState()
   })
   stopTimelineWatch = controller.timeline.onChange(() => {
@@ -616,6 +758,7 @@ function bindConversations(controller: ConversationController): void {
   })
   tabBarRefresh?.()
   timelineRefresh?.()
+  historyRefresh?.()
   panelHost?.pushFullState()
 }
 
@@ -629,7 +772,18 @@ function unbindConversations(): void {
   conversations = undefined
   tabBarRefresh?.()
   timelineRefresh?.()
+  historyRefresh?.()
   panelHost?.pushFullState()
+}
+
+/**
+ * Workspace history / index source that stays available without a live Host
+ * binding (AC-63). Prefer the live controller index when bound; otherwise load
+ * from workspaceState.
+ */
+function resolveWorkspaceIndex(): ExtensionIndex {
+  if (conversations !== undefined) return conversations.index
+  return new ExtensionIndex(workspaceKey, workspaceState)
 }
 
 function requireConversations(): ConversationController | undefined {

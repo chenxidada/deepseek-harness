@@ -21,6 +21,23 @@ import {
   type WorkspaceStateLike,
 } from './extension-index.ts'
 import type { ChatPanelHost } from './chat-panel/chat-panel-host.ts'
+import {
+  hydrateFromAuthoritativeLog,
+  type HydratorSessionEvent,
+} from './replay-hydrator.ts'
+
+/** Outcome of opening a history session as replay (AC-30/64/65). */
+export type OpenHistoryResult =
+  | {
+    outcome: 'opened' | 'activated'
+    tabId: string
+    sessionId: string
+    mode: 'replay' | 'live'
+    messageCount: number
+  }
+  | { outcome: 'host-not-ready'; sessionId: string }
+  | { outcome: 'missing'; sessionId: string }
+  | { outcome: 'error'; sessionId: string; error: string }
 
 /** Outcome of a close attempt that may need running confirmation. */
 export type CloseConversationResult =
@@ -118,17 +135,149 @@ export class ConversationController {
    */
   newConversation(title?: string): ConversationTab {
     const tab = this.registry.create(title)
+    this.host.interactions.onActiveSessionChange?.(tab.sessionId)
     // Empty Tab: do not write openTabSet yet (AD-CU-3); persistOpenTabs filters.
     this.persistOpenTabs()
     return tab
   }
 
   /**
-   * Switch the active Tab without changing the DSH process (AC-7 / AC-18).
+   * Switch the active Tab without changing the DSH process (AC-7 / AC-18 / AC-58).
+   * Clears unread for the target (AC-57) and wakes approval queue soft-priority.
    * @param tabId - Tab to activate.
    */
   switchConversation(tabId: string): void {
     this.registry.switchTo(tabId)
+    const active = this.registry.getActive()
+    this.host.interactions.onActiveSessionChange?.(active?.sessionId)
+    this.panelHost?.pushFullState()
+  }
+
+  /**
+   * Open a workspace history session as a replay Tab (AC-30/64/65).
+   * Reuses an existing open Tab by sessionId; otherwise mints a new tabId.
+   * @param sessionId - session to open from the extension index / authority log.
+   * @param options - optional preloaded events (tests) bypassing bridge read.
+   */
+  async openFromHistory(
+    sessionId: string,
+    options: { events?: readonly HydratorSessionEvent[] } = {},
+  ): Promise<OpenHistoryResult> {
+    if (this.index.isDeleted(sessionId)) {
+      return { outcome: 'missing', sessionId }
+    }
+    const existing = this.registry.getBySessionId(sessionId)
+    if (existing !== undefined) {
+      this.switchConversation(existing.tabId)
+      return {
+        outcome: 'activated',
+        tabId: existing.tabId,
+        sessionId,
+        mode: existing.mode,
+        messageCount: this.messages.get(sessionId).length,
+      }
+    }
+
+    const indexRow = this.index.read().sessions.find(row => row.sessionId === sessionId && row.deleted !== true)
+    const title = indexRow?.title ?? indexRow?.firstUserPreview ?? `Replay ${sessionId.slice(0, 8)}`
+
+    let events: readonly HydratorSessionEvent[]
+    if (options.events !== undefined) {
+      events = options.events
+    } else if (this.host.status !== 'connected' || typeof this.host.readSessionLog !== 'function') {
+      return { outcome: 'host-not-ready', sessionId }
+    } else {
+      try {
+        events = await this.host.readSessionLog(sessionId) as HydratorSessionEvent[]
+      } catch (error) {
+        return {
+          outcome: 'error',
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+    }
+
+    const tab = this.registry.create(title, sessionId, 'replay')
+    this.host.interactions.onActiveSessionChange?.(tab.sessionId)
+    const hydrated = hydrateFromAuthoritativeLog(sessionId, events)
+    this.messages.replace(sessionId, hydrated.messages)
+    this.timeline.replace(sessionId, hydrated.timelineItems)
+    this.index.upsertSession({
+      sessionId,
+      title,
+      mtime: indexRow?.mtime ?? Date.now(),
+      ...indexRow?.continueCapability === undefined
+        ? {}
+        : { continueCapability: indexRow.continueCapability },
+      ...indexRow?.firstUserPreview === undefined
+        ? {}
+        : { firstUserPreview: indexRow.firstUserPreview },
+    })
+    this.persistOpenTabs()
+    this.panelHost?.pushFullState()
+    return {
+      outcome: 'opened',
+      tabId: tab.tabId,
+      sessionId,
+      mode: 'replay',
+      messageCount: hydrated.messages.length,
+    }
+  }
+
+  /**
+   * Inject a complete assistant message into an open session (L2 unread tests).
+   * Marks unread when the target Tab is not active (AC-19).
+   * @param sessionId - target session.
+   * @param text - assistant text.
+   */
+  injectAssistantMessage(sessionId: string, text: string): void {
+    const tab = this.registry.getBySessionId(sessionId)
+    if (tab === undefined) throw new Error(`unknown session: ${sessionId}`)
+    this.projectAssistantMessage(sessionId, text)
+    const active = this.registry.getActive()
+    if (active === undefined || active.sessionId !== sessionId) {
+      this.registry.setUnread(tab.tabId, true)
+    }
+  }
+
+  /**
+   * Locate a Timeline short-label target for scroll/reveal (AC-56 Should).
+   * Priority: tool-triggered user → that turn's assistant → none.
+   * @param sessionId - session to search.
+   * @param callId - optional tool call id that triggered the reveal.
+   */
+  revealTarget(
+    sessionId: string,
+    callId?: string,
+  ): { kind: 'user' | 'assistant' | 'none'; messageId?: string; label?: string } {
+    const messages = this.messages.get(sessionId)
+    if (callId !== undefined) {
+      const tools = this.timeline.itemsForSession(sessionId).filter(item => item.callId === callId)
+      if (tools.length > 0) {
+        const user = [...messages].reverse().find(m => m.role === 'user')
+        if (user !== undefined) return { kind: 'user', messageId: user.id, label: user.text.slice(0, 40) }
+        const assistant = [...messages].reverse().find(m => m.role === 'assistant')
+        if (assistant !== undefined) {
+          return { kind: 'assistant', messageId: assistant.id, label: assistant.text.slice(0, 40) }
+        }
+      }
+    }
+    const user = [...messages].reverse().find(m => m.role === 'user')
+    if (user !== undefined) return { kind: 'user', messageId: user.id, label: user.text.slice(0, 40) }
+    const assistant = [...messages].reverse().find(m => m.role === 'assistant')
+    if (assistant !== undefined) {
+      return { kind: 'assistant', messageId: assistant.id, label: assistant.text.slice(0, 40) }
+    }
+    return { kind: 'none' }
+  }
+
+  /**
+   * Count write-tool Diff hunks for the active turn summary (AC-16 Should).
+   * @param sessionId - session to summarize.
+   */
+  changedFileCount(sessionId: string): number {
+    return this.timeline.writeDiffsForSession(sessionId).length
   }
 
   /**
@@ -158,6 +307,7 @@ export class ConversationController {
     // Keep timeline/message projection in memory for phase-2 reopen; do NOT dispose.
     this.registry.close(tabId)
     this.persistOpenTabs()
+    this.host.interactions.onActiveSessionChange?.(this.registry.getActive()?.sessionId)
     this.panelHost?.pushFullState()
     return { outcome: 'closed', tabId: tab.tabId, sessionId: tab.sessionId, empty }
   }
@@ -399,7 +549,13 @@ export class ConversationController {
       ...turn === undefined ? {} : { turn },
     }
     this.messages.append(sessionId, message)
-    this.panelHost?.pushAppend(message)
+    const active = this.registry.getActive()
+    if (active !== undefined && active.sessionId === sessionId) {
+      this.panelHost?.pushAppend(message)
+    } else {
+      const tab = this.registry.getBySessionId(sessionId)
+      if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
+    }
   }
 
   private onSdkNotification(notification: HarnessNotification): void {

@@ -19,11 +19,13 @@ import {
   PERMISSION_PRESETS_SERVICE,
   SDK_SESSION_DISPOSE_SERVICE,
   SESSIONS_SERVICE,
+  SESSION_PERSISTENCE_SERVICE,
   type BridgeFrame,
   type IdeBridgeConnectionState,
   type IdeBridgePermissionPresets,
   type IdeBridgeSessions,
   type SdkSessionDisposeCapability,
+  type SessionPersistenceReadCapability,
 } from './types.ts'
 import { isApprovalOutcome, isAskUserQuestionAnswer } from './validate.ts'
 
@@ -33,12 +35,14 @@ export {
   PERMISSION_PRESETS_SERVICE,
   SDK_SESSION_DISPOSE_SERVICE,
   SESSIONS_SERVICE,
+  SESSION_PERSISTENCE_SERVICE,
   APPROVAL_OUTCOMES,
   type BridgeFrame,
   type IdeBridgeConnectionState,
   type IdeBridgePermissionPresets,
   type IdeBridgeSessions,
   type SdkSessionDisposeCapability,
+  type SessionPersistenceReadCapability,
   type ApprovalOutcome,
   type AskUserQuestionAnswer,
   type AskUserQuestionItem,
@@ -404,6 +408,10 @@ async function handleHostFrame(
     await handleDispose(ctx, client, frame)
     return
   }
+  if (frame.kind === 'session/read-log') {
+    await handleReadLog(ctx, client, frame)
+    return
+  }
   if (frame.kind === 'permission/select') {
     handlePermissionSelect(ctx, client, frame)
     return
@@ -438,6 +446,70 @@ async function handleDispose(
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     })
+  }
+}
+
+/**
+ * Cold-read one session log for ReplayHydrator (T-0a / AD-CU-2).
+ * Uses duck-typed `sessionPersistence` + optional interrupt closers from the
+ * same open/read path as `readColdSessionLog` (no SDK stdout).
+ */
+async function handleReadLog(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'session/read-log' }>,
+): Promise<void> {
+  const persistence = ctx.get(SESSION_PERSISTENCE_SERVICE) as SessionPersistenceReadCapability | undefined
+  if (persistence === undefined) {
+    client.send({
+      kind: 'session/read-log/response',
+      id: frame.id,
+      ok: false,
+      error: `${SESSION_PERSISTENCE_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const handle = await persistence.open(frame.sessionId, 'read')
+    let events: unknown[]
+    try {
+      events = [...await handle.read(0)]
+    } catch (error: unknown) {
+      try {
+        await handle.close()
+      } catch {
+        // Prefer the read failure as the actionable cause.
+      }
+      throw error
+    }
+    await handle.close()
+    // Prefer cold-balanced events when dsh-session interrupt closers are loadable.
+    const balanced = await applyInterruptClosers(events)
+    client.send({
+      kind: 'session/read-log/response',
+      id: frame.id,
+      ok: true,
+      events: balanced,
+    })
+  } catch (error) {
+    client.send({
+      kind: 'session/read-log/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+async function applyInterruptClosers(events: unknown[]): Promise<unknown[]> {
+  try {
+    const mod = await import('@deepseek-ai/dsh-session') as {
+      interruptedTurnClosers?: (events: unknown[]) => unknown[]
+    }
+    if (typeof mod.interruptedTurnClosers !== 'function') return events
+    return [...events, ...mod.interruptedTurnClosers(events)]
+  } catch {
+    return events
   }
 }
 

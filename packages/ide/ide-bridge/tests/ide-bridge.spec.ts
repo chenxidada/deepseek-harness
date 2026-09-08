@@ -19,6 +19,7 @@ import {
   PERMISSION_PRESETS_SERVICE,
   SDK_SESSION_DISPOSE_SERVICE,
   SESSIONS_SERVICE,
+  SESSION_PERSISTENCE_SERVICE,
   validateBridgeFrame,
   type BridgeFrame,
   type IdeBridgeConnectionState,
@@ -92,6 +93,68 @@ describe('ide-bridge Host socket round-trip (AC-18)', () => {
     await waitFor(() => hellos.includes('runtime'), 2_000)
     expect(host.connectionCount()).toBe(1)
     client.close()
+    await host.close()
+  })
+})
+
+describe('ide-bridge session/read-log (T-0a / AD-CU-2)', () => {
+  const dirs: string[] = []
+  let previousSock: string | undefined
+
+  afterEach(async () => {
+    while (dirs.length > 0) {
+      const dir = dirs.pop()!
+      await rm(dir, { recursive: true, force: true })
+    }
+    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
+  })
+
+  it('Host read-log frame returns cold events via sessionPersistence', async () => {
+    previousSock = process.env[IDE_BRIDGE_SOCK_ENV]
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-read-log-'))
+    dirs.push(dir)
+    const path = join(dir, 'bridge.sock')
+    const host = new IdeBridgeHostServer()
+    const responses: BridgeFrame[] = []
+    host.onFrame((frame) => {
+      if (frame.kind === 'hello') return
+      responses.push(frame)
+    })
+    await host.listen(path)
+
+    const ctx = new Context()
+    ctx.provide(SESSION_PERSISTENCE_SERVICE, {
+      open: async () => ({
+        async read() {
+          return [{ type: 'user/message', seq: 0, data: { role: 'user', content: [] } }]
+        },
+        async close() {},
+      }),
+    })
+    process.env[IDE_BRIDGE_SOCK_ENV] = path
+    apply(ctx, {})
+    await waitFor(() => host.connectionCount() >= 1, 3_000)
+
+    const requestId = 'read-1'
+    expect(host.broadcast({ kind: 'session/read-log', id: requestId, sessionId: 'sess-a' })).toBe(1)
+    await waitFor(
+      () => responses.some(frame => frame.kind === 'session/read-log/response' && frame.id === requestId),
+      3_000,
+    )
+    const response = responses.find(
+      frame => frame.kind === 'session/read-log/response' && frame.id === requestId,
+    )
+    expect(response).toMatchObject({
+      kind: 'session/read-log/response',
+      id: requestId,
+      ok: true,
+    })
+    if (response?.kind === 'session/read-log/response' && response.ok) {
+      expect(response.events[0]).toMatchObject({ type: 'user/message' })
+    }
+
+    await ctx.fiber.dispose()
     await host.close()
   })
 })

@@ -1,5 +1,6 @@
 /**
- * Host-side pending interaction coordinator: Tab association + fail-closed settle.
+ * Host-side pending interaction coordinator: Tab association, AD-CU-7 serial
+ * soft-priority queue, and fail-closed settle.
  * @module @deepseek-ai/dsh-vscode-dsh/interaction-coordinator
  */
 
@@ -37,24 +38,28 @@ export interface InteractionUi {
   /**
    * Present an approval and return a legal outcome.
    * @param request - Host approval request bound to a Tab when possible.
-   * @param signal - abort when Host fail-closes; UI must hide open QuickPick (GAP-006).
+   * @param signal - abort when Host fail-closes or demotes on Tab switch; UI must hide.
    */
   presentApproval(request: HostApprovalRequest, signal?: AbortSignal): Promise<ApprovalOutcome>
   /**
    * Present questions and return a legal answer, or throw to fail-closed.
    * @param request - Host questions request bound to a Tab when possible.
-   * @param signal - abort when Host fail-closes; UI must hide open QuickPick (GAP-006).
+   * @param signal - abort when Host fail-closes or demotes on Tab switch; UI must hide.
    */
   presentQuestions(request: HostQuestionsRequest, signal?: AbortSignal): Promise<AskUserQuestionAnswer>
 }
 
-/** One in-flight Host interaction wait (for AC-30 cancellation). */
+/** Queue / presentation state for one Host interaction (AD-CU-7). */
+export type InteractionPresentationState = 'pending' | 'presented' | 'resolved' | 'abort'
+
+/** One Host interaction wait (queued or presented). */
 export type PendingHostInteraction =
   | {
     kind: 'approval'
     id: string
     sessionId: string
     tabId?: string
+    state: InteractionPresentationState
     abort: AbortController
   }
   | {
@@ -62,17 +67,51 @@ export type PendingHostInteraction =
     id: string
     sessionId: string
     tabId?: string
+    state: InteractionPresentationState
     abort: AbortController
   }
 
+type ApprovalEntry = {
+  kind: 'approval'
+  id: string
+  sessionId: string
+  tabId?: string
+  state: InteractionPresentationState
+  abort: AbortController
+  demoted: boolean
+  settled: boolean
+  toolName: string
+  reason?: string
+  resolve: (outcome: ApprovalOutcome) => void
+}
+
+type QuestionsEntry = {
+  kind: 'questions'
+  id: string
+  sessionId: string
+  tabId?: string
+  state: InteractionPresentationState
+  abort: AbortController
+  demoted: boolean
+  settled: boolean
+  questions: AskUserQuestionItem[]
+  resolve: (answer: AskUserQuestionAnswer) => void
+  reject: (error: Error) => void
+}
+
+type QueueEntry = ApprovalEntry | QuestionsEntry
+
 /**
- * Routes bridge interaction frames to the correct Tab and UI, and settles
- * every waiter on Host shutdown / child death (AC-10 / AC-30).
+ * Routes bridge interaction frames to the correct Tab and UI with a global
+ * serial soft-priority presentation queue (AD-CU-7).
  */
 export class InteractionCoordinator {
-  private readonly pending = new Map<string, PendingHostInteraction>()
+  private readonly queue: QueueEntry[] = []
+  private presentedId: string | undefined
+  private pumping = false
   private ui: InteractionUi | undefined
   private registry: ConversationRegistry | undefined
+  private activeSessionId: string | undefined
   private lastError: string | undefined
   private readonly listeners = new Set<() => void>()
 
@@ -90,6 +129,36 @@ export class InteractionCoordinator {
    */
   setRegistry(registry: ConversationRegistry | undefined): void {
     this.registry = registry
+    this.activeSessionId = registry?.getActive()?.sessionId
+  }
+
+  /**
+   * Notify the coordinator that the active Tab changed (AC-58 / AD-CU-7).
+   * Unanswered presented UI demotes to pending (badge kept); target pending wakes.
+   * @param sessionId - newly active session, or `undefined` when no Tab.
+   */
+  onActiveSessionChange(sessionId: string | undefined): void {
+    const previousActive = this.activeSessionId
+    this.activeSessionId = sessionId
+    const presented = this.presentedEntry()
+    if (
+      presented !== undefined
+      && presented.state === 'presented'
+      && !presented.settled
+      && presented.sessionId !== sessionId
+    ) {
+      // Unanswered → close popup, back to pending (do not settle bridge response).
+      presented.demoted = true
+      presented.state = 'pending'
+      presented.abort.abort()
+      presented.abort = new AbortController()
+      this.presentedId = undefined
+      this.syncApprovalBadges()
+      this.emit()
+    } else if (previousActive !== sessionId) {
+      this.syncApprovalBadges()
+    }
+    void this.pump()
   }
 
   /**
@@ -113,11 +182,32 @@ export class InteractionCoordinator {
   }
 
   /**
-   * Snapshot of in-flight interaction ids (tests / status).
-   * @returns pending entries.
+   * Snapshot of in-flight interaction ids (tests / status / badges).
+   * @returns pending + presented entries (not resolved/abort).
    */
   listPending(): readonly PendingHostInteraction[] {
-    return [...this.pending.values()]
+    return this.queue
+      .filter(entry => entry.state === 'pending' || entry.state === 'presented')
+      .map(entry => ({
+        kind: entry.kind,
+        id: entry.id,
+        sessionId: entry.sessionId,
+        state: entry.state,
+        abort: entry.abort,
+        ...entry.tabId === undefined ? {} : { tabId: entry.tabId },
+      }))
+  }
+
+  /**
+   * Whether a session has pending or presented interactions (approval badge).
+   * @param sessionId - SDK session identity.
+   */
+  hasPendingForSession(sessionId: string): boolean {
+    return this.queue.some(
+      entry =>
+        entry.sessionId === sessionId
+        && (entry.state === 'pending' || entry.state === 'presented'),
+    )
   }
 
   /**
@@ -130,95 +220,68 @@ export class InteractionCoordinator {
   }
 
   /**
-   * Handle one approval request: bind Tab, present UI, return outcome (AC-16).
+   * Handle one approval request: enqueue, present serially, return outcome (AC-16 / AC-58).
    * @param frame - validated approval/request fields.
    * @returns legal ApprovalOutcome (never silent allow on UI failure).
    */
-  async handleApproval(frame: {
+  handleApproval(frame: {
     id: string
     sessionId: string
     toolName: string
     reason?: string
   }): Promise<ApprovalOutcome> {
-    const tabId = this.resolveTabId(frame.sessionId)
-    const abort = new AbortController()
-    this.pending.set(frame.id, {
-      kind: 'approval',
-      id: frame.id,
-      sessionId: frame.sessionId,
-      ...tabId === undefined ? {} : { tabId },
-      abort,
-    })
-    this.emit()
-    try {
-      if (this.ui === undefined) return 'unavailable'
-      if (abort.signal.aborted) return 'unavailable'
-      const request = {
+    return new Promise(resolve => {
+      const tabId = this.resolveTabId(frame.sessionId)
+      const entry: ApprovalEntry = {
+        kind: 'approval',
         id: frame.id,
         sessionId: frame.sessionId,
+        state: 'pending',
+        abort: new AbortController(),
+        demoted: false,
+        settled: false,
         toolName: frame.toolName,
-        ...frame.reason === undefined ? {} : { reason: frame.reason },
+        resolve,
         ...tabId === undefined ? {} : { tabId },
+        ...frame.reason === undefined ? {} : { reason: frame.reason },
       }
-      const aborted = new Promise<ApprovalOutcome>((resolve) => {
-        abort.signal.addEventListener('abort', () => resolve('unavailable'), { once: true })
-      })
-      return await Promise.race([this.ui.presentApproval(request, abort.signal), aborted])
-    } catch (error) {
-      this.lastError = error instanceof Error ? error.message : String(error)
-      return 'unavailable'
-    } finally {
-      this.pending.delete(frame.id)
+      this.enqueue(entry)
+      this.syncApprovalBadges()
       this.emit()
-    }
+      void this.pump()
+    })
   }
 
   /**
-   * Handle one user-questions request (AC-17).
+   * Handle one user-questions request (AC-17 / AC-58).
    * @param frame - validated user-questions/request fields.
    * @returns answer, or throws for fail-closed error framing.
    */
-  async handleQuestions(frame: {
+  handleQuestions(frame: {
     id: string
     sessionId: string
     questions: AskUserQuestionItem[]
   }): Promise<AskUserQuestionAnswer> {
-    const tabId = this.resolveTabId(frame.sessionId)
-    const abort = new AbortController()
-    this.pending.set(frame.id, {
-      kind: 'questions',
-      id: frame.id,
-      sessionId: frame.sessionId,
-      ...tabId === undefined ? {} : { tabId },
-      abort,
-    })
-    this.emit()
-    try {
-      if (this.ui === undefined) {
-        throw new Error('interaction UI is not available')
-      }
-      if (abort.signal.aborted) {
-        throw new Error('interaction cancelled by Host shutdown')
-      }
-      const request = {
+    return new Promise((resolve, reject) => {
+      const tabId = this.resolveTabId(frame.sessionId)
+      const entry: QuestionsEntry = {
+        kind: 'questions',
         id: frame.id,
         sessionId: frame.sessionId,
+        state: 'pending',
+        abort: new AbortController(),
+        demoted: false,
+        settled: false,
         questions: frame.questions,
+        resolve,
+        reject,
         ...tabId === undefined ? {} : { tabId },
       }
-      const aborted = new Promise<AskUserQuestionAnswer>((_resolve, reject) => {
-        abort.signal.addEventListener('abort', () => {
-          reject(new Error('interaction cancelled by Host shutdown'))
-        }, { once: true })
-      })
-      return await Promise.race([this.ui.presentQuestions(request, abort.signal), aborted])
-    } catch (error) {
-      this.lastError = error instanceof Error ? error.message : String(error)
-      throw error instanceof Error ? error : new Error(String(error))
-    } finally {
-      this.pending.delete(frame.id)
+      this.enqueue(entry)
+      this.syncApprovalBadges()
       this.emit()
-    }
+      void this.pump()
+    })
   }
 
   /**
@@ -227,10 +290,13 @@ export class InteractionCoordinator {
    */
   failClosedAll(reason: string): void {
     this.lastError = reason
-    for (const [id, entry] of this.pending) {
-      this.pending.delete(id)
-      entry.abort.abort()
+    const entries = [...this.queue]
+    this.queue.length = 0
+    this.presentedId = undefined
+    for (const entry of entries) {
+      this.settleAbort(entry, reason)
     }
+    this.syncApprovalBadges()
     this.emit()
   }
 
@@ -242,12 +308,208 @@ export class InteractionCoordinator {
    */
   failClosedSession(sessionId: string, reason: string): void {
     this.lastError = reason
-    for (const [id, entry] of this.pending) {
-      if (entry.sessionId !== sessionId) continue
-      this.pending.delete(id)
-      entry.abort.abort()
+    const doomed = this.queue.filter(entry => entry.sessionId === sessionId)
+    for (const entry of doomed) {
+      const index = this.queue.indexOf(entry)
+      if (index >= 0) this.queue.splice(index, 1)
+      if (this.presentedId === entry.id) this.presentedId = undefined
+      this.settleAbort(entry, reason)
     }
+    this.syncApprovalBadges()
     this.emit()
+    void this.pump()
+  }
+
+  private enqueue(entry: QueueEntry): void {
+    if (this.activeSessionId !== undefined && entry.sessionId === this.activeSessionId) {
+      // Soft priority: insert at front of waiting queue, same-Tab FIFO.
+      let insertAt = 0
+      while (insertAt < this.queue.length) {
+        const current = this.queue[insertAt]!
+        if (current.state === 'presented') {
+          insertAt += 1
+          continue
+        }
+        if (current.sessionId === entry.sessionId && current.state === 'pending') {
+          insertAt += 1
+          continue
+        }
+        break
+      }
+      this.queue.splice(insertAt, 0, entry)
+      return
+    }
+    this.queue.push(entry)
+  }
+
+  private presentedEntry(): QueueEntry | undefined {
+    if (this.presentedId === undefined) return undefined
+    return this.queue.find(entry => entry.id === this.presentedId)
+  }
+
+  private pickNext(): QueueEntry | undefined {
+    const pending = this.queue.filter(entry => entry.state === 'pending')
+    if (pending.length === 0) return undefined
+    if (this.activeSessionId !== undefined) {
+      const activeHead = pending.find(entry => entry.sessionId === this.activeSessionId)
+      if (activeHead !== undefined) return activeHead
+    }
+    return pending[0]
+  }
+
+  private async pump(): Promise<void> {
+    if (this.pumping) return
+    this.pumping = true
+    try {
+      while (this.presentedId === undefined) {
+        const next = this.pickNext()
+        if (next === undefined) return
+        await this.presentEntry(next)
+      }
+    } finally {
+      this.pumping = false
+      if (this.presentedId === undefined && this.queue.some(e => e.state === 'pending')) {
+        void this.pump()
+      }
+    }
+  }
+
+  private async presentEntry(entry: QueueEntry): Promise<void> {
+    entry.demoted = false
+    entry.state = 'presented'
+    this.presentedId = entry.id
+    this.syncApprovalBadges()
+    this.emit()
+
+    try {
+      if (this.ui === undefined) {
+        if (entry.kind === 'approval') {
+          this.finishApproval(entry, 'unavailable')
+        } else {
+          this.finishQuestionsError(entry, new Error('interaction UI is not available'))
+        }
+        return
+      }
+      if (entry.abort.signal.aborted) {
+        if (entry.demoted) return
+        if (entry.kind === 'approval') {
+          this.finishApproval(entry, 'unavailable')
+        } else {
+          this.finishQuestionsError(entry, new Error('interaction cancelled by Host shutdown'))
+        }
+        return
+      }
+
+      if (entry.kind === 'approval') {
+        const request: HostApprovalRequest = {
+          id: entry.id,
+          sessionId: entry.sessionId,
+          toolName: entry.toolName,
+          ...entry.reason === undefined ? {} : { reason: entry.reason },
+          ...entry.tabId === undefined ? {} : { tabId: entry.tabId },
+        }
+        const aborted = new Promise<ApprovalOutcome>(resolve => {
+          entry.abort.signal.addEventListener('abort', () => resolve('unavailable'), { once: true })
+        })
+        let outcome: ApprovalOutcome
+        try {
+          outcome = await Promise.race([
+            this.ui.presentApproval(request, entry.abort.signal),
+            aborted,
+          ])
+        } catch (error) {
+          if (entry.demoted) return
+          this.lastError = error instanceof Error ? error.message : String(error)
+          outcome = 'unavailable'
+        }
+        if (entry.demoted) return
+        this.finishApproval(entry, outcome)
+        return
+      }
+
+      const request: HostQuestionsRequest = {
+        id: entry.id,
+        sessionId: entry.sessionId,
+        questions: entry.questions,
+        ...entry.tabId === undefined ? {} : { tabId: entry.tabId },
+      }
+      const aborted = new Promise<AskUserQuestionAnswer>((_resolve, reject) => {
+        entry.abort.signal.addEventListener('abort', () => {
+          reject(new Error('interaction cancelled by Host shutdown'))
+        }, { once: true })
+      })
+      try {
+        const answer = await Promise.race([
+          this.ui.presentQuestions(request, entry.abort.signal),
+          aborted,
+        ])
+        if (entry.demoted) return
+        this.finishQuestions(entry, answer)
+      } catch (error) {
+        if (entry.demoted) return
+        const err = error instanceof Error ? error : new Error(String(error))
+        this.lastError = err.message
+        this.finishQuestionsError(entry, err)
+      }
+    } finally {
+      if (this.presentedId === entry.id) this.presentedId = undefined
+    }
+  }
+
+  private finishApproval(entry: ApprovalEntry, outcome: ApprovalOutcome): void {
+    if (entry.settled) return
+    entry.settled = true
+    entry.state = 'resolved'
+    this.removeEntry(entry.id)
+    entry.resolve(outcome)
+    this.syncApprovalBadges()
+    this.emit()
+  }
+
+  private finishQuestions(entry: QuestionsEntry, answer: AskUserQuestionAnswer): void {
+    if (entry.settled) return
+    entry.settled = true
+    entry.state = 'resolved'
+    this.removeEntry(entry.id)
+    entry.resolve(answer)
+    this.syncApprovalBadges()
+    this.emit()
+  }
+
+  private finishQuestionsError(entry: QuestionsEntry, error: Error): void {
+    if (entry.settled) return
+    entry.settled = true
+    entry.state = 'abort'
+    this.removeEntry(entry.id)
+    entry.reject(error)
+    this.syncApprovalBadges()
+    this.emit()
+  }
+
+  private settleAbort(entry: QueueEntry, reason: string): void {
+    if (entry.settled) return
+    entry.settled = true
+    entry.state = 'abort'
+    entry.abort.abort()
+    if (entry.kind === 'approval') {
+      entry.resolve('unavailable')
+    } else {
+      entry.reject(new Error(reason))
+    }
+  }
+
+  private removeEntry(id: string): void {
+    const index = this.queue.findIndex(entry => entry.id === id)
+    if (index >= 0) this.queue.splice(index, 1)
+    if (this.presentedId === id) this.presentedId = undefined
+  }
+
+  private syncApprovalBadges(): void {
+    const registry = this.registry
+    if (registry === undefined) return
+    for (const tab of registry.list()) {
+      registry.setApprovalBadge(tab.tabId, this.hasPendingForSession(tab.sessionId))
+    }
   }
 
   private emit(): void {

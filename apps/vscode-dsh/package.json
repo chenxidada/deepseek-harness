@@ -41,6 +41,7 @@
     "onCommand:dsh.reviewWorkspaceDiffs",
     "onCommand:dsh.openTimelineDiff",
     "onView:dsh.conversations",
+    "onView:dsh.history",
     "onView:dsh.timeline",
     "onView:dsh.chat"
   ],
@@ -87,6 +88,14 @@
         "title": "DeepSeek Harness: Open Timeline Diff"
       },
       {
+        "command": "dsh.openHistory",
+        "title": "DeepSeek Harness: Open History Replay"
+      },
+      {
+        "command": "dsh.deleteHistory",
+        "title": "DeepSeek Harness: Delete History Session"
+      },
+      {
         "command": "dsh.test.sendPrompt",
         "title": "DeepSeek Harness Test: Send Prompt"
       },
@@ -109,6 +118,38 @@
       {
         "command": "dsh.test.openPanel",
         "title": "DeepSeek Harness Test: Open Panel"
+      },
+      {
+        "command": "dsh.test.openHistory",
+        "title": "DeepSeek Harness Test: Open History"
+      },
+      {
+        "command": "dsh.test.listHistory",
+        "title": "DeepSeek Harness Test: List History"
+      },
+      {
+        "command": "dsh.test.injectAssistant",
+        "title": "DeepSeek Harness Test: Inject Assistant"
+      },
+      {
+        "command": "dsh.test.switchConversation",
+        "title": "DeepSeek Harness Test: Switch Conversation"
+      },
+      {
+        "command": "dsh.test.listPendingInteractions",
+        "title": "DeepSeek Harness Test: List Pending Interactions"
+      },
+      {
+        "command": "dsh.test.reveal",
+        "title": "DeepSeek Harness Test: Reveal"
+      },
+      {
+        "command": "dsh.test.deleteHistory",
+        "title": "DeepSeek Harness Test: Delete History"
+      },
+      {
+        "command": "dsh.test.changedFileCount",
+        "title": "DeepSeek Harness Test: Changed File Count"
       }
     ],
     "menus": {
@@ -121,6 +162,11 @@
         {
           "command": "dsh.closeConversation",
           "when": "view == dsh.conversations && viewItem =~ /dshConversation/",
+          "group": "inline"
+        },
+        {
+          "command": "dsh.deleteHistory",
+          "when": "view == dsh.history && viewItem == dshHistorySession",
           "group": "inline"
         }
       ]
@@ -144,6 +190,10 @@
         {
           "id": "dsh.conversations",
           "name": "Conversations"
+        },
+        {
+          "id": "dsh.history",
+          "name": "History"
         },
         {
           "id": "dsh.timeline",

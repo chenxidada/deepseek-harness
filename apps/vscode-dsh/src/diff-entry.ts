@@ -66,7 +66,8 @@ export function buildDiffOpenArgs(hunk: TimelineDiffHunk): DiffOpenArgs {
     leftScheme: 'dsh-diff',
     rightPath: hunk.path,
     title: `DeepSeek Harness: ${hunk.path}`,
-    oldText: hunk.oldText,
+    // Create (oldText null) → empty left document; never invent workspace before.
+    oldText: hunk.oldText ?? '',
     newText: hunk.newText,
   }
 }

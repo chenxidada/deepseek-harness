@@ -47,6 +47,16 @@ export interface ChatPanelHostDeps {
   acceptSend: (text: string) => Promise<{ messageId: string; sessionId: string; tabId: string }>
   /** Optional delete action requested from the panel. */
   requestDelete?: () => Promise<void>
+  /**
+   * Optional scroll/reveal resolver (AC-56).
+   * @param callId - optional tool call id.
+   */
+  resolveReveal?: (callId?: string) => {
+    kind: 'user' | 'assistant' | 'none'
+    messageId?: string
+    label?: string
+    sessionId: string
+  }
 }
 
 /**
@@ -214,6 +224,26 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/delete') {
       await this.deps.requestDelete?.()
+      return
+    }
+    if (message.type === 'scroll/reveal') {
+      const active = this.deps.registry.getActive()
+      if (active === undefined || this.deps.resolveReveal === undefined) {
+        this.post({
+          type: 'scroll/reveal',
+          sessionId: active?.sessionId ?? '',
+          kind: 'none',
+        })
+        return
+      }
+      const target = this.deps.resolveReveal(message.callId)
+      this.post({
+        type: 'scroll/reveal',
+        sessionId: target.sessionId,
+        kind: target.kind,
+        ...target.messageId === undefined ? {} : { messageId: target.messageId },
+        ...target.label === undefined ? {} : { label: target.label },
+      })
     }
   }
 

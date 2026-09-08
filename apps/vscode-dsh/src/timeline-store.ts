@@ -39,8 +39,11 @@ export interface TimelineItem {
 export interface TimelineDiffHunk {
   /** Workspace-relative or absolute path. */
   path: string
-  /** Pre-image text (may be empty string for new files). */
-  oldText: string
+  /**
+   * Pre-image text. `null` means create (no before); empty string is a valid
+   * before snapshot. Never coerce missing oldText to '' (AD-CU-6 / T-0a).
+   */
+  oldText: string | null
   /** Post-image text. */
   newText: string
 }
@@ -114,6 +117,22 @@ export class TimelineStore {
     const data = asRecord(event.data) ?? {}
     if (type === undefined) return
     this.applySessionEvent(sessionId, type, data)
+    this.emit()
+  }
+
+  /**
+   * Replace the full timeline for a session (ReplayHydrator one-shot bulk).
+   * Clears prior rows for that session id only (not descendants).
+   * @param sessionId - SDK session identity.
+   * @param next - complete projected rows (ids optional; assigned when missing).
+   */
+  replace(sessionId: string, next: readonly Omit<TimelineItem, 'id' | 'sessionId'>[]): void {
+    const list: TimelineItem[] = next.map(partial => ({
+      id: `tl-${this.serial++}`,
+      sessionId,
+      ...partial,
+    }))
+    this.items.set(sessionId, list)
     this.emit()
   }
 
@@ -359,9 +378,11 @@ function narrowDiffs(meta: unknown): TimelineDiffHunk[] {
     const record = entry as Record<string, unknown>
     const path = asString(record.path)
     if (path === undefined || path === '') continue
-    const oldText = typeof record.oldText === 'string' ? record.oldText : ''
-    const newText = typeof record.newText === 'string' ? record.newText : ''
-    out.push({ path, oldText, newText })
+    const newText = asString(record.newText)
+    if (newText === undefined) continue
+    // AD-CU-6 / T-0a: recoverable = oldText string|null; missing oldText → reject.
+    if (!(typeof record.oldText === 'string' || record.oldText === null)) continue
+    out.push({ path, oldText: record.oldText, newText })
   }
   return out
 }

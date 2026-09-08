@@ -14,6 +14,10 @@ export interface ConversationTreeItem {
   label: string
   description: string
   active: boolean
+  /** Inactive Tab unread dot (AC-19). */
+  unread?: boolean
+  /** Pending interaction badge (AC-20). */
+  approvalBadge?: boolean
   /** Override click command (empty-state Start Session). Default: switchConversation. */
   commandId?: string
 }
@@ -77,6 +81,8 @@ export function conversationTreeItems(snapshot: ConversationRegistrySnapshot): C
     label: tabBarLabel(tab),
     description: shortId(tab.sessionId),
     active: tab.tabId === snapshot.activeTabId,
+    unread: tab.unread,
+    approvalBadge: tab.approvalBadge,
   }))
 }
 
@@ -149,7 +155,9 @@ export function canRegisterConversationTabBar(vscode: unknown): vscode is Conver
 }
 
 function tabBarLabel(tab: ConversationTab): string {
-  return tab.title ?? `Conversation ${shortId(tab.sessionId)}`
+  const base = tab.title ?? `Conversation ${shortId(tab.sessionId)}`
+  const marks = `${tab.unread ? '●' : ''}${tab.approvalBadge ? '⚠' : ''}`
+  return marks === '' ? base : `${marks} ${base}`
 }
 
 function shortId(id: string): string {

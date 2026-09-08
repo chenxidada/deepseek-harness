@@ -25,6 +25,10 @@ export interface ConversationTab {
   status: ConversationTabStatus
   /** Projection mode: live (composer on) or replay (composer off). */
   mode: OpenTabMode
+  /** Inactive Tab received new messages (AC-19); cleared on activate+show (AC-57). */
+  unread: boolean
+  /** Session has pending/presented Host interactions (AC-20). */
+  approvalBadge: boolean
 }
 
 /** Immutable snapshot for Tab bar rendering and tests. */
@@ -65,6 +69,8 @@ export class ConversationRegistry {
       sessionId: resolvedSessionId,
       status: 'idle',
       mode,
+      unread: false,
+      approvalBadge: false,
       ...title === undefined ? {} : { title },
     }
     this.tabs.set(tabId, tab)
@@ -84,6 +90,9 @@ export class ConversationRegistry {
       throw new Error(`unknown conversation Tab: ${tabId}`)
     }
     this.activeTabId = tabId
+    // AC-57: activating a Tab clears its unread when the panel will show it.
+    const tab = this.tabs.get(tabId)
+    if (tab !== undefined) tab.unread = false
     this.emit()
   }
 
@@ -190,6 +199,32 @@ export class ConversationRegistry {
     const tab = this.tabs.get(tabId)
     if (tab === undefined) throw new Error(`unknown conversation Tab: ${tabId}`)
     tab.mode = mode
+    this.emit()
+  }
+
+  /**
+   * Mark or clear the unread dot for a Tab (AC-19 / AC-57).
+   * @param tabId - Tab to update.
+   * @param unread - whether the Tab has unread messages.
+   */
+  setUnread(tabId: string, unread: boolean): void {
+    const tab = this.tabs.get(tabId)
+    if (tab === undefined) throw new Error(`unknown conversation Tab: ${tabId}`)
+    if (tab.unread === unread) return
+    tab.unread = unread
+    this.emit()
+  }
+
+  /**
+   * Mark or clear the approval badge for a Tab (AC-20).
+   * @param tabId - Tab to update.
+   * @param approvalBadge - whether the Tab has pending interactions.
+   */
+  setApprovalBadge(tabId: string, approvalBadge: boolean): void {
+    const tab = this.tabs.get(tabId)
+    if (tab === undefined) throw new Error(`unknown conversation Tab: ${tabId}`)
+    if (tab.approvalBadge === approvalBadge) return
+    tab.approvalBadge = approvalBadge
     this.emit()
   }
 

@@ -79,12 +79,17 @@ export class IdeSessionHost {
   private credentials: NodeJS.ProcessEnv | undefined
   private disposeTimeoutMs = 5_000
   private permissionTimeoutMs = 5_000
+  private readLogTimeoutMs = 15_000
   private readonly pendingDispose = new Map<string, {
     resolve: () => void
     reject: (error: Error) => void
   }>()
   private readonly pendingPermission = new Map<string, {
     resolve: (value: PermissionRpcResult) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingReadLog = new Map<string, {
+    resolve: (events: unknown[]) => void
     reject: (error: Error) => void
   }>()
   private transportWatch: (() => void) | undefined
@@ -260,6 +265,41 @@ export class IdeSessionHost {
   }
 
   /**
+   * Cold-read one session log via Host bridge `session/read-log` (T-0a / AD-CU-2).
+   * @param sessionId - Tab-bound SDK session identity.
+   * @returns cold-balanced authoritative events for ReplayHydrator.
+   */
+  async readSessionLog(sessionId: string): Promise<unknown[]> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot read session log')
+    }
+    const id = randomUUID()
+    const response = new Promise<unknown[]>((resolve, reject) => {
+      this.pendingReadLog.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingReadLog.get(id)
+      if (pending === undefined) return
+      this.pendingReadLog.delete(id)
+      pending.reject(new Error(`session/read-log timed out after ${this.readLogTimeoutMs}ms`))
+    }, this.readLogTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'session/read-log', id, sessionId })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive session/read-log')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingReadLog.delete(id)
+    }
+  }
+
+  /**
    * Apply a permission-presets name for a session via Host bridge (AC-21 / AC-22).
    * @param sessionId - Tab-bound SDK session identity.
    * @param preset - preset table key owned by dsh-permission-presets.
@@ -339,6 +379,10 @@ export class IdeSessionHost {
       this.pendingPermission.delete(id)
       pending.reject(new Error(reason))
     }
+    for (const [id, pending] of this.pendingReadLog) {
+      this.pendingReadLog.delete(id)
+      pending.reject(new Error(reason))
+    }
     this.notifyError(this.errorMessage)
   }
 
@@ -366,6 +410,17 @@ export class IdeSessionHost {
       this.pendingDispose.delete(frame.id)
       if (frame.ok) {
         pending.resolve()
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'session/read-log/response') {
+      const pending = this.pendingReadLog.get(frame.id)
+      if (pending === undefined) return
+      this.pendingReadLog.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.events)
         return
       }
       pending.reject(new Error(frame.error))
@@ -464,6 +519,10 @@ export class IdeSessionHost {
     for (const [id, pending] of this.pendingPermission) {
       this.pendingPermission.delete(id)
       pending.reject(new Error(`${reason} during permission RPC`))
+    }
+    for (const [id, pending] of this.pendingReadLog) {
+      this.pendingReadLog.delete(id)
+      pending.reject(new Error(`${reason} during session/read-log`))
     }
     this.transportWatch?.()
     this.transportWatch = undefined

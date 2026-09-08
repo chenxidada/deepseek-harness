@@ -122,6 +122,19 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       if (typeof record.error !== 'string') return undefined
       return { kind, id: record.id, ok: false, error: record.error }
     }
+    case 'session/read-log': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
+      return { kind, id: record.id, sessionId: record.sessionId }
+    }
+    case 'session/read-log/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!Array.isArray(record.events)) return undefined
+        return { kind, id: record.id, ok: true, events: record.events }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
     case 'permission/select': {
       if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
       if (!isNonEmptyString(record.preset)) return undefined

@@ -24,6 +24,28 @@ export const PERMISSION_PRESETS_SERVICE = 'permissionPresets'
 /** Cordis service key for the session store (consumed via `ctx.get`). */
 export const SESSIONS_SERVICE = 'sessions'
 
+/**
+ * Cordis service key for durable session persistence (`ctx.sessionPersistence`).
+ * Used by Host `session/read-log` cold reads (T-0a / AD-CU-2).
+ */
+export const SESSION_PERSISTENCE_SERVICE = 'sessionPersistence'
+
+/** Duck-typed persistence open/read surface for cold log reads. */
+export interface SessionPersistenceReadCapability {
+  /**
+   * Open a stored session handle.
+   * @param sessionId - stored session identity.
+   * @param mode - must be `'read'` for cold hydrate.
+   */
+  open(
+    sessionId: string,
+    mode: 'read',
+  ): Promise<{
+    read(from: number): Promise<readonly unknown[]>
+    close(): Promise<void>
+  }>
+}
+
 /** Live connection state exposed to the runtime and tests. */
 export interface IdeBridgeConnectionState {
   /** Whether the runtime currently holds an open Host socket. */
@@ -112,6 +134,15 @@ export type BridgeFrame =
   | { kind: 'session/dispose'; id: string; sessionId: string }
   | { kind: 'session/dispose/response'; id: string; ok: true }
   | { kind: 'session/dispose/response'; id: string; ok: false; error: string }
+  | { kind: 'session/read-log'; id: string; sessionId: string }
+  | {
+    kind: 'session/read-log/response'
+    id: string
+    ok: true
+    /** Cold-balanced authoritative events (JSON-serializable SessionEvent[]). */
+    events: unknown[]
+  }
+  | { kind: 'session/read-log/response'; id: string; ok: false; error: string }
   | { kind: 'permission/select'; id: string; sessionId: string; preset: string }
   | { kind: 'permission/select/response'; id: string; ok: true; preset: string }
   | { kind: 'permission/select/response'; id: string; ok: false; error: string }

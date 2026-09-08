@@ -59,12 +59,20 @@ export type HostToWebviewMessage =
     type: 'ui/reject-send'
     reason: RejectSendReason
   }
+  | {
+    type: 'scroll/reveal'
+    sessionId: string
+    messageId?: string
+    kind: 'user' | 'assistant' | 'none'
+    label?: string
+  }
 
-/** Webview → Host frames (Phase 1 subset). */
+/** Webview → Host frames (Phase 1 subset + reveal). */
 export type WebviewToHostMessage =
   | { type: 'ready' }
   | { type: 'composer/send'; text: string }
   | { type: 'action/delete' }
+  | { type: 'scroll/reveal'; callId?: string }
 
 /**
  * Narrow an unknown postMessage payload to a Webview→Host frame.
@@ -80,6 +88,13 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'composer/send') {
     if (typeof record.text !== 'string') return undefined
     return { type: 'composer/send', text: record.text }
+  }
+  if (type === 'scroll/reveal') {
+    if (record.callId !== undefined && typeof record.callId !== 'string') return undefined
+    return {
+      type: 'scroll/reveal',
+      ...typeof record.callId === 'string' ? { callId: record.callId } : {},
+    }
   }
   return undefined
 }

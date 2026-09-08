@@ -32,6 +32,39 @@ export interface SessionIndexEntry {
   deleted?: boolean
 }
 
+/** One history list row for TreeView / L2 hooks (AD-CU-8 list column). */
+export interface HistoryListRow {
+  sessionId: string
+  title: string
+  mtime: number
+  continueCapability: 'same-id' | 'derive-only' | 'unknown'
+  /** List hint text; empty when capability is unknown (no「可继续」). */
+  continueHint: string
+  firstUserPreview?: string
+}
+
+/**
+ * Map AD-CU-8 continueCapability to history-list hint (Continue product is phase-3).
+ * @param capability - stored capability or unknown.
+ * @returns display hint, or empty string when no list implication.
+ */
+export function continueCapabilityListHint(
+  capability: 'same-id' | 'derive-only' | 'unknown',
+): string {
+  switch (capability) {
+    case 'same-id':
+      return '可继续'
+    case 'derive-only':
+      return '可继续（将开新会话）'
+    case 'unknown':
+      return ''
+    default: {
+      const _exhaustive: never = capability
+      return _exhaustive
+    }
+  }
+}
+
 /** Durable index snapshot written to workspaceState. */
 export interface ExtensionIndexSnapshot {
   workspaceKey: string
@@ -151,6 +184,25 @@ export class ExtensionIndex {
    */
   isDeleted(sessionId: string): boolean {
     return this.snapshot.sessions.some(row => row.sessionId === sessionId && row.deleted === true)
+  }
+
+  /**
+   * History list rows for the current workspace (AC-28/29/63).
+   * Excludes deleted entries; never includes other workspaces (index is workspace-scoped).
+   * @returns title / mtime / capability hint rows sorted by mtime desc.
+   */
+  listHistorySessions(): HistoryListRow[] {
+    return this.snapshot.sessions
+      .filter(row => row.deleted !== true)
+      .map(row => ({
+        sessionId: row.sessionId,
+        title: row.title,
+        mtime: row.mtime,
+        continueCapability: row.continueCapability ?? 'unknown',
+        continueHint: continueCapabilityListHint(row.continueCapability ?? 'unknown'),
+        ...row.firstUserPreview === undefined ? {} : { firstUserPreview: row.firstUserPreview },
+      }))
+      .sort((a, b) => b.mtime - a.mtime)
   }
 
   /**
