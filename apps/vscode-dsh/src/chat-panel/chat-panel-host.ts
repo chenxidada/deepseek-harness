@@ -1,0 +1,277 @@
+/**
+ * Conversation panel Host: pushes protocol frames and gates composer/send (AD-CU-1).
+ * Works with a real WebviewView or an L3 fake Webview port.
+ * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/chat-panel-host
+ */
+
+import type { ChatMessage, MessageStore } from '../message-store.ts'
+import type { ConversationRegistry } from '../conversation-registry.ts'
+import type { ExtensionIndex } from '../extension-index.ts'
+import type { InteractionCoordinator } from '../interaction-coordinator.ts'
+import {
+  parseWebviewToHostMessage,
+  type HostToWebviewMessage,
+  type PanelMode,
+  type PanelStatus,
+  type RejectSendReason,
+  type WebviewToHostMessage,
+} from './protocol.ts'
+
+/** Duck-typed Webview message port (real Webview or L3 fake). */
+export interface WebviewMessagePort {
+  postMessage(message: unknown): void
+  onDidReceiveMessage(listener: (message: unknown) => void): { dispose(): void }
+}
+
+/** Result of a Host-gated send attempt. */
+export type SendGateResult =
+  | { ok: true; messageId: string; sessionId: string; tabId: string }
+  | { ok: false; reason: RejectSendReason }
+
+/** Dependencies the panel Host needs from the Extension / controller. */
+export interface ChatPanelHostDeps {
+  /** Live Tab registry. */
+  registry: ConversationRegistry
+  /** Message projection store. */
+  messages: MessageStore
+  /** Optional index (for activeSessionId reads in tests). */
+  index?: ExtensionIndex
+  /** Pending interaction coordinator for waiting-interaction status. */
+  interactions?: InteractionCoordinator | undefined
+  /** Whether the IdeSessionHost is connected. */
+  isHostReady: () => boolean
+  /**
+   * Accept a non-empty live send into the existing prompt path.
+   * @param text - trimmed user text.
+   */
+  acceptSend: (text: string) => Promise<{ messageId: string; sessionId: string; tabId: string }>
+  /** Optional delete action requested from the panel. */
+  requestDelete?: () => Promise<void>
+}
+
+/**
+ * Owns Host↔Webview protocol push and inbound composer/send handling.
+ */
+export class ChatPanelHost {
+  private port: WebviewMessagePort | undefined
+  private stopPort: (() => void) | undefined
+  private readonly outbound: HostToWebviewMessage[] = []
+
+  /**
+   * @param deps - registry / store / send gate callbacks.
+   */
+  constructor(private readonly deps: ChatPanelHostDeps) {}
+
+  /**
+   * Attach a Webview (or fake) port. Replaces any previous port.
+   * @param port - message port.
+   */
+  attach(port: WebviewMessagePort): void {
+    this.stopPort?.()
+    this.port = port
+    const sub = port.onDidReceiveMessage(raw => {
+      const message = parseWebviewToHostMessage(raw)
+      if (message === undefined) return
+      void this.onWebviewMessage(message)
+    })
+    this.stopPort = () => {
+      sub.dispose()
+    }
+    this.pushFullState()
+  }
+
+  /** Detach the current port without disposing Host state. */
+  detach(): void {
+    this.stopPort?.()
+    this.stopPort = undefined
+    this.port = undefined
+  }
+
+  /**
+   * Outbound frames captured for L2/L3 assertions (also posted when a port is attached).
+   * @returns copy of the outbound log.
+   */
+  getOutboundLog(): readonly HostToWebviewMessage[] {
+    return [...this.outbound]
+  }
+
+  /** Clear the outbound log (tests). */
+  clearOutboundLog(): void {
+    this.outbound.length = 0
+  }
+
+  /**
+   * Push panel/state + messages/replace + status for the active Tab (or empty).
+   * Empty / waiting-host always includes messages/replace([]) so attached Webviews
+   * clear residual bubbles (AC-2 / AC-24).
+   */
+  pushFullState(): void {
+    const active = this.deps.registry.getActive()
+    if (active === undefined) {
+      const mode: PanelMode = this.deps.isHostReady() ? 'empty' : 'waiting-host'
+      this.post({ type: 'panel/state', mode })
+      // Clear message list on empty chrome — Host projection may still hold closed-Tab content.
+      this.post({ type: 'messages/replace', sessionId: '', messages: [] })
+      this.post({ type: 'status/set', status: this.deps.isHostReady() ? 'idle' : 'disconnected' })
+      return
+    }
+    const mode: PanelMode = active.mode === 'replay' ? 'replay' : 'live'
+    this.post({
+      type: 'panel/state',
+      mode,
+      sessionId: active.sessionId,
+      tabId: active.tabId,
+      ...active.title === undefined ? {} : { title: active.title },
+    })
+    this.post({
+      type: 'messages/replace',
+      sessionId: active.sessionId,
+      messages: this.deps.messages.get(active.sessionId),
+    })
+    this.post({
+      type: 'status/set',
+      sessionId: active.sessionId,
+      status: this.resolveStatus(active.sessionId, active.status),
+    })
+  }
+
+  /**
+   * Push a single complete message append for the active session (live turn).
+   * @param message - complete chat message.
+   */
+  pushAppend(message: ChatMessage): void {
+    const active = this.deps.registry.getActive()
+    if (active === undefined || active.sessionId !== message.sessionId) return
+    this.post({ type: 'messages/append', sessionId: message.sessionId, message })
+  }
+
+  /**
+   * Refresh status/set for the active Tab (running / waiting / idle).
+   */
+  pushStatus(): void {
+    const active = this.deps.registry.getActive()
+    if (active === undefined) {
+      this.post({
+        type: 'status/set',
+        status: this.deps.isHostReady() ? 'idle' : 'disconnected',
+      })
+      return
+    }
+    this.post({
+      type: 'status/set',
+      sessionId: active.sessionId,
+      status: this.resolveStatus(active.sessionId, active.status),
+    })
+  }
+
+  /**
+   * Host-gated send used by Webview composer/send and L2 `dsh.test.sendPrompt`.
+   * @param text - raw composer text.
+   * @returns accepted prompt ids or a reject reason (also posts ui/reject-send).
+   */
+  async sendPrompt(text: string): Promise<SendGateResult> {
+    const trimmed = text.trim()
+    if (trimmed === '') {
+      return this.reject('empty')
+    }
+    if (!this.deps.isHostReady()) {
+      return this.reject('no-host')
+    }
+    const active = this.deps.registry.getActive()
+    if (active === undefined) {
+      return this.reject('no-active')
+    }
+    if (active.mode === 'replay') {
+      return this.reject('replay')
+    }
+    if (active.status === 'disconnected') {
+      return this.reject('disconnected')
+    }
+    try {
+      const result = await this.deps.acceptSend(trimmed)
+      return { ok: true, ...result }
+    } catch {
+      return this.reject('disconnected')
+    }
+  }
+
+  /**
+   * Handle an inbound Webview frame (also usable from L3 fakes without attach).
+   * @param message - typed Webview→Host frame.
+   */
+  async handleWebviewMessage(message: WebviewToHostMessage): Promise<void> {
+    await this.onWebviewMessage(message)
+  }
+
+  private async onWebviewMessage(message: WebviewToHostMessage): Promise<void> {
+    if (message.type === 'ready') {
+      this.pushFullState()
+      return
+    }
+    if (message.type === 'composer/send') {
+      await this.sendPrompt(message.text)
+      return
+    }
+    if (message.type === 'action/delete') {
+      await this.deps.requestDelete?.()
+    }
+  }
+
+  private reject(reason: RejectSendReason): SendGateResult {
+    this.post({ type: 'ui/reject-send', reason })
+    return { ok: false, reason }
+  }
+
+  private resolveStatus(
+    sessionId: string,
+    tabStatus: 'idle' | 'running' | 'error' | 'disconnected',
+  ): PanelStatus {
+    if (!this.deps.isHostReady()) return 'disconnected'
+    const pending = this.deps.interactions?.listPending() ?? []
+    if (pending.some(item => item.sessionId === sessionId)) return 'waiting-interaction'
+    if (tabStatus === 'running') return 'generating'
+    if (tabStatus === 'disconnected') return 'disconnected'
+    return 'idle'
+  }
+
+  private post(message: HostToWebviewMessage): void {
+    this.outbound.push(message)
+    this.port?.postMessage(message)
+  }
+}
+
+/**
+ * In-memory fake Webview for L3 protocol tests (no HTML/CSP).
+ */
+export class FakeWebviewPort implements WebviewMessagePort {
+  readonly receivedFromHost: HostToWebviewMessage[] = []
+  private readonly listeners = new Set<(message: unknown) => void>()
+
+  /**
+   * @param message - Host→Webview frame.
+   */
+  postMessage(message: unknown): void {
+    this.receivedFromHost.push(message as HostToWebviewMessage)
+  }
+
+  /**
+   * @param listener - Host inbound handler.
+   * @returns disposer.
+   */
+  onDidReceiveMessage(listener: (message: unknown) => void): { dispose(): void } {
+    this.listeners.add(listener)
+    return {
+      dispose: () => {
+        this.listeners.delete(listener)
+      },
+    }
+  }
+
+  /**
+   * Simulate Webview → Host postMessage.
+   * @param message - Webview frame.
+   */
+  emitFromWebview(message: unknown): void {
+    for (const listener of this.listeners) listener(message)
+  }
+}

@@ -13,13 +13,46 @@ export {
   type ConversationTabStatus,
   type ConversationRegistrySnapshot,
 } from './conversation-registry.ts'
-export { ConversationController } from './conversation-controller.ts'
+export {
+  ConversationController,
+  type CloseConversationOptions,
+  type CloseConversationResult,
+  type DeleteConversationOptions,
+  type DeleteConversationResult,
+} from './conversation-controller.ts'
 export {
   TimelineStore,
   type TimelineItem,
   type TimelineItemKind,
   type TimelineDiffHunk,
 } from './timeline-store.ts'
+export {
+  MessageStore,
+  type ChatMessage,
+} from './message-store.ts'
+export {
+  ExtensionIndex,
+  EXTENSION_INDEX_STATE_KEY,
+  type ExtensionIndexSnapshot,
+  type OpenTabRecord,
+  type OpenTabMode,
+  type SessionIndexEntry,
+  type WorkspaceStateLike,
+} from './extension-index.ts'
+export {
+  ChatPanelHost,
+  FakeWebviewPort,
+  CHAT_PANEL_VIEW_ID,
+  buildThinChatHtml,
+  canRegisterChatPanel,
+  registerChatPanelProvider,
+  parseWebviewToHostMessage,
+  type HostToWebviewMessage,
+  type WebviewToHostMessage,
+  type PanelMode,
+  type RejectSendReason,
+  type SendGateResult,
+} from './chat-panel/index.ts'
 export {
   timelineTreeItems,
   type TimelineTreeItem,
@@ -41,6 +74,8 @@ export {
 export {
   createVscodeInteractionUi,
   pickPermissionPreset,
+  confirmStopAndClose,
+  confirmDeleteConversation,
   type InteractionWindow,
   type InteractionQuickPickItem,
 } from './interaction-ui.ts'
@@ -52,6 +87,8 @@ export {
   getActiveTimelineItems,
   getTimelineTreeItems,
   getWriteDiffEntries,
+  getConversationController,
+  getChatPanelHost,
 } from './extension.ts'
 export {
   conversationTreeItems,

@@ -189,8 +189,8 @@ describe('GAP-008: free-text questions use InputBox', () => {
   })
 })
 
-describe('GAP-009: closeConversation fail-closes session Host UI', () => {
-  it('aborts only the closed session pending interactions before dispose', async () => {
+describe('GAP-009: closeConversation fail-closes session Host UI without dispose', () => {
+  it('aborts only the closed session pending interactions and does not dispose', async () => {
     const order: string[] = []
     const coordinator = new InteractionCoordinator()
     coordinator.setUi({
@@ -203,6 +203,7 @@ describe('GAP-009: closeConversation fail-closes session Host UI', () => {
       },
     })
     const host = {
+      status: 'connected',
       interactions: coordinator,
       setConversationRegistry() {},
       onNotification() {
@@ -234,7 +235,7 @@ describe('GAP-009: closeConversation fail-closes session Host UI', () => {
     expect(coordinator.getLastError()).toContain('conversation Tab closed')
     expect(coordinator.listPending().some(item => item.sessionId === drop.sessionId)).toBe(false)
     expect(coordinator.listPending().some(item => item.sessionId === keep.sessionId)).toBe(true)
-    expect(order).toEqual([`dispose:${drop.sessionId}`])
+    expect(order).toEqual([])
     expect(controller.registry.get(drop.tabId)).toBeUndefined()
 
     coordinator.failClosedAll('cleanup')

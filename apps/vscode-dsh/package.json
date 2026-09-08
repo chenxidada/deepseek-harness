@@ -36,11 +36,13 @@
     "onCommand:dsh.newConversation",
     "onCommand:dsh.switchConversation",
     "onCommand:dsh.closeConversation",
+    "onCommand:dsh.deleteConversation",
     "onCommand:dsh.selectPermissionPreset",
     "onCommand:dsh.reviewWorkspaceDiffs",
     "onCommand:dsh.openTimelineDiff",
     "onView:dsh.conversations",
-    "onView:dsh.timeline"
+    "onView:dsh.timeline",
+    "onView:dsh.chat"
   ],
   "contributes": {
     "commands": [
@@ -65,6 +67,10 @@
         "title": "DeepSeek Harness: Close Conversation Tab"
       },
       {
+        "command": "dsh.deleteConversation",
+        "title": "DeepSeek Harness: Delete Conversation"
+      },
+      {
         "command": "dsh.promptActiveConversation",
         "title": "DeepSeek Harness: Prompt Active Conversation"
       },
@@ -79,8 +85,46 @@
       {
         "command": "dsh.openTimelineDiff",
         "title": "DeepSeek Harness: Open Timeline Diff"
+      },
+      {
+        "command": "dsh.test.sendPrompt",
+        "title": "DeepSeek Harness Test: Send Prompt"
+      },
+      {
+        "command": "dsh.test.closeConversation",
+        "title": "DeepSeek Harness Test: Close Conversation"
+      },
+      {
+        "command": "dsh.test.deleteConversation",
+        "title": "DeepSeek Harness Test: Delete Conversation"
+      },
+      {
+        "command": "dsh.test.panelSnapshot",
+        "title": "DeepSeek Harness Test: Panel Snapshot"
+      },
+      {
+        "command": "dsh.test.getIndex",
+        "title": "DeepSeek Harness Test: Get Index"
+      },
+      {
+        "command": "dsh.test.openPanel",
+        "title": "DeepSeek Harness Test: Open Panel"
       }
     ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "dsh.deleteConversation",
+          "when": "view == dsh.conversations && viewItem =~ /dshConversation/",
+          "group": "inline"
+        },
+        {
+          "command": "dsh.closeConversation",
+          "when": "view == dsh.conversations && viewItem =~ /dshConversation/",
+          "group": "inline"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -92,6 +136,11 @@
     },
     "views": {
       "dsh": [
+        {
+          "id": "dsh.chat",
+          "name": "Conversation",
+          "type": "webview"
+        },
         {
           "id": "dsh.conversations",
           "name": "Conversations"

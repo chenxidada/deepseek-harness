@@ -111,6 +111,7 @@ export function createConversationTabBar(
         return item
       }
       item.description = element.active ? `${element.description} · active` : element.description
+      // contextValue enables Delete Conversation menu entry (AC-62).
       item.contextValue = element.active ? 'dshConversationActive' : 'dshConversation'
       // Click / select → switchConversation with this Tab id (GAP-004); QuickPick remains for the bare command.
       item.command = {

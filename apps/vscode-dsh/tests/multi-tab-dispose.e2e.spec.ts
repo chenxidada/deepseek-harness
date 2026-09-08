@@ -1,6 +1,6 @@
 /**
- * E2E: close Tab → Host session/dispose → runtime ack (AC-8 / Q-3 / AC-33).
- * Real IdeSessionHost + fake SDK runtime that speaks both SDK stdio and ide-bridge.
+ * E2E: close Tab unloads UI without dispose; remaining Tab still prompts (AD-CU-3).
+ * Real IdeSessionHost + fake SDK runtime.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -13,7 +13,7 @@ import { IdeSessionHost } from '../src/session-host.ts'
 
 const fakeSdkRuntime = fileURLToPath(new URL('./fixtures/fake-sdk-runtime.mjs', import.meta.url))
 
-describe('close Tab dispose e2e (AC-8)', () => {
+describe('close Tab recoverable e2e (AD-CU-3)', () => {
   const dirs: string[] = []
 
   afterEach(async () => {
@@ -22,7 +22,7 @@ describe('close Tab dispose e2e (AC-8)', () => {
     }
   })
 
-  it('disposes the closed Tab session over the Host bridge without stdout session/close', async () => {
+  it('closes without dispose and keeps the other Tab promptable', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-dispose-'))
     dirs.push(dir)
     const host = new IdeSessionHost()
@@ -40,6 +40,13 @@ describe('close Tab dispose e2e (AC-8)', () => {
     })
     await waitFor(() => host.bridgeConnected(), 3_000)
 
+    const disposed: string[] = []
+    const originalDispose = host.disposeSession.bind(host)
+    host.disposeSession = async (sessionId: string) => {
+      disposed.push(sessionId)
+      return originalDispose(sessionId)
+    }
+
     const controller = new ConversationController(host)
     const keep = controller.newConversation('keep')
     const drop = controller.newConversation('drop')
@@ -50,8 +57,8 @@ describe('close Tab dispose e2e (AC-8)', () => {
     expect(controller.snapshot().tabs).toHaveLength(1)
     expect(controller.registry.getActive()?.tabId).toBe(keep.tabId)
     expect(controller.registry.getBySessionId(drop.sessionId)).toBeUndefined()
+    expect(disposed).toEqual([])
 
-    // Remaining Tab still prompts on its own sessionId.
     controller.switchConversation(keep.tabId)
     const result = await controller.promptActive('still alive')
     expect(result.sessionId).toBe(keep.sessionId)

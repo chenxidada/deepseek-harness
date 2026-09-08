@@ -1,10 +1,11 @@
 /**
- * Extension-owned multi-conversation Tab registry (AD-5).
+ * Extension-owned multi-conversation Tab registry (AD-5 / AD-CU-5).
  * Session persistence and agent-loop remain in the DSH subprocess (AC-15).
  * @module @deepseek-ai/dsh-vscode-dsh/conversation-registry
  */
 
 import { randomUUID } from 'node:crypto'
+import type { OpenTabMode } from './extension-index.ts'
 
 /** Lifecycle status projected onto a conversation Tab. */
 export type ConversationTabStatus = 'idle' | 'running' | 'error' | 'disconnected'
@@ -14,7 +15,7 @@ export type ConversationTabStatus = 'idle' | 'running' | 'error' | 'disconnected
  * Authority for Tab chrome lives in the Extension; session authority stays in DSH.
  */
 export interface ConversationTab {
-  /** Stable Tab identity in the Extension UI. */
+  /** Stable Tab identity in the Extension UI (destroyed on close). */
   tabId: string
   /** SDK `sessionId` (UUID minted on create). */
   sessionId: string
@@ -22,6 +23,8 @@ export interface ConversationTab {
   title?: string
   /** Local projection of Tab readiness (not the SDK agent status authority). */
   status: ConversationTabStatus
+  /** Projection mode: live (composer on) or replay (composer off). */
+  mode: OpenTabMode
 }
 
 /** Immutable snapshot for Tab bar rendering and tests. */
@@ -34,7 +37,7 @@ export interface ConversationRegistrySnapshot {
 
 /**
  * Window-scoped registry: mint Tabs, switch the active pointer, close Tabs.
- * Closing returns the removed Tab so the Host can dispose its `sessionId` (Q-3).
+ * Closing returns the removed Tab; dispose is a separate delete path (AD-CU-3).
  */
 export class ConversationRegistry {
   private readonly tabs = new Map<string, ConversationTab>()
@@ -44,16 +47,24 @@ export class ConversationRegistry {
 
   /**
    * Create a new Tab with a fresh UUID `sessionId` and make it active (AC-6, AC-9).
+   * Enforces one open view per sessionId (AC-59).
    * @param title - optional initial title.
+   * @param sessionId - optional existing session id (history reopen); defaults to a new UUID.
+   * @param mode - initial mode (default `live` for new Tabs).
    * @returns the created Tab.
+   * @throws when `sessionId` already has an open Tab.
    */
-  create(title?: string): ConversationTab {
+  create(title?: string, sessionId?: string, mode: OpenTabMode = 'live'): ConversationTab {
+    const resolvedSessionId = sessionId ?? randomUUID()
+    if (this.getBySessionId(resolvedSessionId) !== undefined) {
+      throw new Error(`session already has an open Tab: ${resolvedSessionId}`)
+    }
     const tabId = randomUUID()
-    const sessionId = randomUUID()
     const tab: ConversationTab = {
       tabId,
-      sessionId,
+      sessionId: resolvedSessionId,
       status: 'idle',
+      mode,
       ...title === undefined ? {} : { title },
     }
     this.tabs.set(tabId, tab)
@@ -77,7 +88,7 @@ export class ConversationRegistry {
   }
 
   /**
-   * Remove a Tab and return it for Host dispose. Activates a neighbor when needed.
+   * Remove a Tab from the open set (UI unload). Does not dispose the session.
    * @param tabId - Tab to close.
    * @returns the removed Tab, or `undefined` when unknown.
    */
@@ -124,7 +135,7 @@ export class ConversationRegistry {
   }
 
   /**
-   * Find the Tab bound to an SDK session id.
+   * Find the Tab bound to an SDK session id (AC-59 single-open index).
    * @param sessionId - SDK session identity.
    * @returns a copy of the Tab, or `undefined`.
    */
@@ -167,6 +178,18 @@ export class ConversationRegistry {
     const tab = this.tabs.get(tabId)
     if (tab === undefined) throw new Error(`unknown conversation Tab: ${tabId}`)
     tab.status = status
+    this.emit()
+  }
+
+  /**
+   * Update Tab projection mode (live ↔ replay).
+   * @param tabId - Tab to update.
+   * @param mode - new mode.
+   */
+  setMode(tabId: string, mode: OpenTabMode): void {
+    const tab = this.tabs.get(tabId)
+    if (tab === undefined) throw new Error(`unknown conversation Tab: ${tabId}`)
+    tab.mode = mode
     this.emit()
   }
 

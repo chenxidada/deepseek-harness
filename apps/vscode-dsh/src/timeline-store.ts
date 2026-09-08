@@ -229,10 +229,11 @@ export class TimelineStore {
     if (type === 'assistant/message') {
       const message = asRecord(data.message)
       const text = firstAssistantText(message)
+      // AD-CU-6 / AC-14: short label only — never push assistant long body into Timeline.
       this.push(sessionId, {
         kind: 'assistant',
-        label: text === undefined || text === '' ? 'assistant' : truncate(text, 80),
-        ...text === undefined ? {} : { description: text },
+        label: text === undefined || text === '' ? 'assistant' : truncate(text, 40),
+        description: 'assistant turn',
         depth,
       })
       return

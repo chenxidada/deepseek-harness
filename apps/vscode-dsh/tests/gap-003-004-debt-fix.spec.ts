@@ -1,5 +1,5 @@
 /**
- * Debt-fix coverage for GAP-003 (dispose-before-registry-close) and
+ * Debt-fix coverage for GAP-003 (dispose-before-registry-close on **delete**) and
  * GAP-004 (TreeView click → switchConversation).
  */
 
@@ -12,13 +12,16 @@ import {
 import { ConversationRegistry } from '../src/conversation-registry.ts'
 import type { IdeSessionHost } from '../src/session-host.ts'
 
-describe('GAP-003: dispose before registry.close', () => {
+describe('GAP-003: dispose before registry.close (delete path)', () => {
   it('keeps the Tab in the registry while disposeSession is in-flight', async () => {
     let sawTabDuringDispose = false
     let controller!: ConversationController
     let dropTabId = ''
     const host = {
+      status: 'connected',
       interactions: { failClosedSession() {} },
+      setConversationRegistry() {},
+      onNotification() { return () => {} },
       async disposeSession(_sessionId: string): Promise<void> {
         sawTabDuringDispose = controller.registry.get(dropTabId) !== undefined
         await new Promise(resolve => setTimeout(resolve, 5))
@@ -29,15 +32,18 @@ describe('GAP-003: dispose before registry.close', () => {
     const drop = controller.newConversation('drop')
     dropTabId = drop.tabId
 
-    await controller.closeConversation(drop.tabId)
+    await controller.deleteConversation(drop.tabId, { confirmed: true })
 
     expect(sawTabDuringDispose).toBe(true)
     expect(controller.registry.get(drop.tabId)).toBeUndefined()
   })
 
-  it('retains the Tab when disposeSession fails so close can be retried', async () => {
+  it('retains the Tab when disposeSession fails so delete can be retried', async () => {
     const host = {
+      status: 'connected',
       interactions: { failClosedSession() {} },
+      setConversationRegistry() {},
+      onNotification() { return () => {} },
       async disposeSession(): Promise<void> {
         throw new Error('bridge dispose failed')
       },
@@ -46,20 +52,24 @@ describe('GAP-003: dispose before registry.close', () => {
     const keep = controller.newConversation('keep')
     const drop = controller.newConversation('drop')
 
-    await expect(controller.closeConversation(drop.tabId)).rejects.toThrow('bridge dispose failed')
+    await expect(controller.deleteConversation(drop.tabId, { confirmed: true }))
+      .rejects.toThrow('bridge dispose failed')
     expect(controller.registry.get(drop.tabId)?.sessionId).toBe(drop.sessionId)
     expect(controller.snapshot().tabs).toHaveLength(2)
     expect(controller.registry.get(keep.tabId)?.tabId).toBe(keep.tabId)
   })
 
-  it('calls disposeSession before registry.close on the success path', async () => {
+  it('calls disposeSession before registry.close on the delete success path', async () => {
     const order: string[] = []
     const host = {
+      status: 'connected',
       interactions: {
         failClosedSession(sessionId: string) {
           order.push(`failClosed:${sessionId}`)
         },
       },
+      setConversationRegistry() {},
+      onNotification() { return () => {} },
       async disposeSession(sessionId: string): Promise<void> {
         order.push(`dispose:${sessionId}`)
       },
@@ -72,7 +82,7 @@ describe('GAP-003: dispose before registry.close', () => {
       return originalClose(tabId)
     }
 
-    await controller.closeConversation(drop.tabId)
+    await controller.deleteConversation(drop.tabId, { confirmed: true })
 
     expect(order).toEqual([
       `failClosed:${drop.sessionId}`,
@@ -80,7 +90,26 @@ describe('GAP-003: dispose before registry.close', () => {
       `close:${drop.tabId}`,
     ])
   })
+
+  it('closeConversation does not call disposeSession (AD-CU-3)', async () => {
+    const disposed: string[] = []
+    const host = {
+      status: 'connected',
+      interactions: { failClosedSession() {} },
+      setConversationRegistry() {},
+      onNotification() { return () => {} },
+      async disposeSession(sessionId: string): Promise<void> {
+        disposed.push(sessionId)
+      },
+    } as unknown as IdeSessionHost
+    const controller = new ConversationController(host)
+    const drop = controller.newConversation('drop')
+    await controller.closeConversation(drop.tabId)
+    expect(disposed).toEqual([])
+    expect(controller.registry.get(drop.tabId)).toBeUndefined()
+  })
 })
+
 describe('GAP-004: TreeView item command wires switchConversation', () => {
   it('sets TreeItem.command to dsh.switchConversation with the Tab id', () => {
     const captured: { command?: { command: string; arguments?: unknown[] } }[] = []

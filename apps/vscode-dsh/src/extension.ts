@@ -5,6 +5,8 @@
  */
 
 import { ConversationController } from './conversation-controller.ts'
+import { ConversationRegistry } from './conversation-registry.ts'
+import { MessageStore } from './message-store.ts'
 import {
   canRegisterConversationTabBar,
   conversationTreeItems,
@@ -24,10 +26,24 @@ import {
   type DiffVsCodeLike,
 } from './diff-entry.ts'
 import { IdeSessionHost } from './session-host.ts'
-import { createVscodeInteractionUi, pickPermissionPreset, type InteractionWindow, type InteractionQuickPick } from './interaction-ui.ts'
+import {
+  confirmDeleteConversation,
+  confirmStopAndClose,
+  createVscodeInteractionUi,
+  pickPermissionPreset,
+  type InteractionWindow,
+  type InteractionQuickPick,
+} from './interaction-ui.ts'
 import { redactSecrets } from './redact.ts'
 import type { ConversationRegistrySnapshot, ConversationTab } from './conversation-registry.ts'
 import type { TimelineDiffHunk, TimelineItem } from './timeline-store.ts'
+import type { WorkspaceStateLike } from './extension-index.ts'
+import {
+  ChatPanelHost,
+  canRegisterChatPanel,
+  registerChatPanelProvider,
+  type ChatPanelHostDeps,
+} from './chat-panel/index.ts'
 import { createRequire } from 'node:module'
 
 export type { ConversationTreeItem, TimelineTreeItem }
@@ -45,7 +61,8 @@ interface QuickPickItemLike {
 interface VsCodeLike {
   window: {
     showErrorMessage(message: string): Promise<unknown>
-    showInformationMessage(message: string): Promise<unknown>
+    showInformationMessage(message: string, ...items: string[]): Promise<unknown>
+    showWarningMessage?(message: string, ...items: string[]): Promise<unknown>
     showQuickPick?(
       items: QuickPickItemLike[],
       options?: { placeHolder?: string; title?: string; canPickMany?: boolean },
@@ -57,6 +74,11 @@ interface VsCodeLike {
     }): Promise<string | undefined>
     createQuickPick?(): InteractionQuickPick
     createTreeView?(viewId: string, options: unknown): { dispose(): void }
+    registerWebviewViewProvider?(
+      viewId: string,
+      provider: unknown,
+      options?: unknown,
+    ): { dispose(): void }
   }
   workspace: {
     workspaceFolders?: readonly { uri: { fsPath: string } }[]
@@ -89,19 +111,23 @@ interface Disposable {
   dispose(): void
 }
 
-/** Extension context subset. */
+/** Extension context subset (includes workspaceState for AD-CU-4). */
 interface ExtensionContextLike {
   subscriptions: Disposable[]
   extensionPath: string
+  workspaceState?: WorkspaceStateLike
 }
 
 let host: IdeSessionHost | undefined
 let conversations: ConversationController | undefined
+let panelHost: ChatPanelHost | undefined
 let tabBarRefresh: (() => void) | undefined
 let timelineRefresh: (() => void) | undefined
 let stopRegistryWatch: (() => void) | undefined
 let stopTimelineWatch: (() => void) | undefined
 let stopErrorWatch: (() => void) | undefined
+let workspaceState: WorkspaceStateLike | undefined
+let workspaceKey = ''
 
 /**
  * Resolve the vscode module when the Extension Host activates without an
@@ -113,12 +139,15 @@ function loadVscodeApi(): VsCodeLike {
 }
 
 /**
- * Activate the Extension: register window host + multi-Tab + timeline + Diff commands.
+ * Activate the Extension: register window host + multi-Tab + timeline + chat panel.
  * @param context - VS Code extension context.
  * @param vscodeArg - optional vscode module (injected for testability).
  */
 export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike): void {
   const vscode = vscodeArg ?? loadVscodeApi()
+  workspaceState = context.workspaceState
+  workspaceKey = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''
+
   if (canRegisterConversationTabBar(vscode)) {
     const tabBar = createConversationTabBar(vscode, getConversationSnapshot)
     tabBarRefresh = () => tabBar.refresh()
@@ -128,6 +157,12 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     const timeline = createTimelineView(vscode, getActiveTimelineItems)
     timelineRefresh = () => timeline.refresh()
     context.subscriptions.push(timeline)
+  }
+
+  // Chat panel Host is created eagerly so L2 hooks work before/without a Webview.
+  panelHost = createPanelHost(vscode)
+  if (canRegisterChatPanel(vscode)) {
+    context.subscriptions.push(registerChatPanelProvider(vscode, panelHost))
   }
 
   const start = vscode.commands.registerCommand('dsh.startSession', async () => {
@@ -144,15 +179,12 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     if (vscode.window.showQuickPick !== undefined) {
       next.setInteractionUi(createVscodeInteractionUi(vscode.window as InteractionWindow))
     }
-    // GAP-005 / AC-30: surface asynchronous transport/child death to the user.
     stopErrorWatch?.()
     stopErrorWatch = next.onError((message) => {
       void vscode.window.showErrorMessage(`DeepSeek Harness session error: ${message}`)
     })
     host = next
     try {
-      // scrubbedParentEnv strips KEY|PASSWORD|SECRET|TOKEN names; reinject
-      // credential-shaped parent env so the ide child can reach the model.
       const credentials: NodeJS.ProcessEnv = {}
       for (const [key, value] of Object.entries(process.env)) {
         if (value !== undefined && /KEY|PASSWORD|SECRET|TOKEN/i.test(key)) {
@@ -163,8 +195,9 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         cwd: folder,
         ...Object.keys(credentials).length === 0 ? {} : { credentials },
       })
-      bindConversations(new ConversationController(next))
+      bindConversations(new ConversationController(next, workspaceState, folder))
       conversations!.newConversation('New conversation')
+      panelHost?.pushFullState()
       await vscode.window.showInformationMessage('DeepSeek Harness IDE session connected.')
     } catch (error) {
       stopErrorWatch?.()
@@ -186,6 +219,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       return
     }
     await current.shutdown()
+    panelHost?.pushFullState()
     await vscode.window.showInformationMessage('DeepSeek Harness IDE session stopped.')
   })
 
@@ -196,6 +230,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       return
     }
     const tab = controller.newConversation('New conversation')
+    panelHost?.pushFullState()
     await vscode.window.showInformationMessage(`Created conversation Tab ${shortId(tab.sessionId)}.`)
   })
 
@@ -205,11 +240,11 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before switching conversations.')
       return
     }
-    // TreeView item.command passes tabId (GAP-004); bare command uses QuickPick.
     if (typeof tabIdArg === 'string' && tabIdArg !== '') {
       try {
         controller.switchConversation(tabIdArg)
         timelineRefresh?.()
+        panelHost?.pushFullState()
         const tab = controller.registry.get(tabIdArg)
         await vscode.window.showInformationMessage(
           `Switched to ${tab === undefined ? shortId(tabIdArg) : tabTitle(tab)}.`,
@@ -236,30 +271,43 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     if (picked === undefined || Array.isArray(picked)) return
     controller.switchConversation(picked.tabId)
     timelineRefresh?.()
+    panelHost?.pushFullState()
     await vscode.window.showInformationMessage(`Switched to ${picked.label}.`)
   })
 
-  const closeConversation = vscode.commands.registerCommand('dsh.closeConversation', async () => {
+  const closeConversation = vscode.commands.registerCommand('dsh.closeConversation', async (tabIdArg?: unknown) => {
     const controller = requireConversations()
     if (controller === undefined) {
       await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before closing a conversation.')
       return
     }
-    const active = controller.registry.getActive()
-    if (active === undefined) {
+    const tabId = typeof tabIdArg === 'string' && tabIdArg !== ''
+      ? tabIdArg
+      : controller.registry.getActive()?.tabId
+    if (tabId === undefined) {
       await vscode.window.showInformationMessage('No conversation Tab to close.')
       return
     }
     try {
-      await controller.closeConversation(active.tabId)
+      const result = await runCloseTab(vscode, controller, tabId)
       timelineRefresh?.()
-      await vscode.window.showInformationMessage(
-        `Closed conversation and ended session ${shortId(active.sessionId)}.`,
-      )
+      panelHost?.pushFullState()
+      if (result.outcome === 'cancelled') return
+      if (result.outcome === 'closed') {
+        await vscode.window.showInformationMessage(
+          result.empty
+            ? `Closed empty conversation Tab ${shortId(result.sessionId)}.`
+            : `Closed conversation Tab ${shortId(result.sessionId)} (session kept for recovery).`,
+        )
+      }
     } catch (error) {
       const message = redactSecrets(error instanceof Error ? error.message : String(error))
       await vscode.window.showErrorMessage(`Failed to close conversation: ${message}`)
     }
+  })
+
+  const deleteConversation = vscode.commands.registerCommand('dsh.deleteConversation', async (tabIdArg?: unknown) => {
+    await runDeleteActive(vscode, typeof tabIdArg === 'string' ? tabIdArg : undefined)
   })
 
   const promptActive = vscode.commands.registerCommand('dsh.promptActiveConversation', async (text?: unknown) => {
@@ -275,6 +323,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     }
     try {
       const result = await controller.promptActive(body)
+      panelHost?.pushFullState()
       await vscode.window.showInformationMessage(
         `Prompted session ${shortId(result.sessionId)} (message ${shortId(result.messageId)}).`,
       )
@@ -313,7 +362,6 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   })
 
   const reviewDiffs = vscode.commands.registerCommand('dsh.reviewWorkspaceDiffs', async () => {
-    // AC-24: post-hoc only — this command never gates tool execution.
     void DEFAULT_POST_HOC_DIFF_ONLY
     const controller = requireConversations()
     if (controller === undefined) {
@@ -384,16 +432,66 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     await openTimelineDiff(vscode as DiffVsCodeLike, hunk)
   })
 
+  // --- L2 Host test hooks (test-only; do not change product semantics) ---
+  const testSendPrompt = vscode.commands.registerCommand('dsh.test.sendPrompt', async (text?: unknown) => {
+    if (panelHost === undefined) return { ok: false, reason: 'no-host' as const }
+    return panelHost.sendPrompt(typeof text === 'string' ? text : '')
+  })
+  const testClose = vscode.commands.registerCommand('dsh.test.closeConversation', async (opts?: unknown) => {
+    const controller = conversations
+    if (controller === undefined) return { outcome: 'missing' as const }
+    const active = controller.registry.getActive()
+    if (active === undefined) return { outcome: 'missing' as const }
+    const confirmStopClose = typeof opts === 'object' && opts !== null
+      && (opts as { confirmStopClose?: boolean }).confirmStopClose === true
+    return controller.closeConversation(active.tabId, { confirmStopClose })
+  })
+  const testDelete = vscode.commands.registerCommand('dsh.test.deleteConversation', async (opts?: unknown) => {
+    const controller = conversations
+    if (controller === undefined) return { outcome: 'host-not-ready' as const }
+    const active = controller.registry.getActive()
+    if (active === undefined) return { outcome: 'missing' as const }
+    const confirmed = typeof opts === 'object' && opts !== null
+      && (opts as { confirmed?: boolean }).confirmed === true
+    return controller.deleteConversation(active.tabId, { confirmed })
+  })
+  const testPanelSnapshot = vscode.commands.registerCommand('dsh.test.panelSnapshot', () => {
+    return conversations?.panelSnapshot() ?? {
+      mode: host?.status === 'connected' ? 'empty' : 'waiting-host',
+      messages: [],
+      index: { workspaceKey, sessions: [], openTabSet: [], ui: { restoreUiLimit: 8 } },
+    }
+  })
+  const testGetIndex = vscode.commands.registerCommand('dsh.test.getIndex', () => {
+    return conversations?.index.read() ?? {
+      workspaceKey,
+      sessions: [],
+      openTabSet: [],
+      ui: { restoreUiLimit: 8 },
+    }
+  })
+  const testOpenPanel = vscode.commands.registerCommand('dsh.test.openPanel', () => {
+    panelHost?.pushFullState()
+    return { ok: true, viewId: 'dsh.chat' }
+  })
+
   context.subscriptions.push(
     start,
     stop,
     newConversation,
     switchConversation,
     closeConversation,
+    deleteConversation,
     promptActive,
     selectPermission,
     reviewDiffs,
     openDiff,
+    testSendPrompt,
+    testClose,
+    testDelete,
+    testPanelSnapshot,
+    testGetIndex,
+    testOpenPanel,
   )
 }
 
@@ -406,6 +504,7 @@ export async function deactivate(): Promise<void> {
   stopErrorWatch?.()
   stopErrorWatch = undefined
   unbindConversations()
+  panelHost?.detach()
   if (current !== undefined) await current.shutdown()
 }
 
@@ -458,19 +557,66 @@ export function getWriteDiffEntries(): TimelineDiffHunk[] {
   return controller.timeline.writeDiffsForSessionTree(active.sessionId)
 }
 
+/**
+ * Active ConversationController for L2 harness tests (undefined when disconnected).
+ * @returns controller or undefined.
+ */
+export function getConversationController(): ConversationController | undefined {
+  return conversations
+}
+
+/**
+ * Conversation panel Host for L2/L3 harness tests.
+ * @returns panel Host or undefined before activate.
+ */
+export function getChatPanelHost(): ChatPanelHost | undefined {
+  return panelHost
+}
+
+function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
+  const emptyRegistry = new ConversationRegistry()
+  const emptyMessages = new MessageStore()
+  const deps: ChatPanelHostDeps = {
+    get registry() {
+      return conversations?.registry ?? emptyRegistry
+    },
+    get messages() {
+      return conversations?.messages ?? emptyMessages
+    },
+    isHostReady: () => host?.status === 'connected',
+    acceptSend: async (text) => {
+      const controller = requireConversations()
+      if (controller === undefined) throw new Error('no-host')
+      return controller.promptActive(text)
+    },
+    requestDelete: async () => {
+      await runDeleteActive(vscode)
+    },
+  }
+  Object.defineProperty(deps, 'interactions', {
+    enumerable: true,
+    get: () => host?.interactions,
+  })
+  return new ChatPanelHost(deps)
+}
+
 function bindConversations(controller: ConversationController): void {
   stopRegistryWatch?.()
   stopTimelineWatch?.()
   conversations = controller
+  controller.setPanelHost(panelHost)
   stopRegistryWatch = controller.registry.onChange(() => {
     tabBarRefresh?.()
     timelineRefresh?.()
+    panelHost?.pushFullState()
   })
   stopTimelineWatch = controller.timeline.onChange(() => {
     timelineRefresh?.()
+    panelHost?.pushStatus()
   })
   tabBarRefresh?.()
   timelineRefresh?.()
+  panelHost?.pushFullState()
 }
 
 function unbindConversations(): void {
@@ -478,10 +624,12 @@ function unbindConversations(): void {
   stopRegistryWatch = undefined
   stopTimelineWatch?.()
   stopTimelineWatch = undefined
+  conversations?.setPanelHost(undefined)
   conversations?.clearLocal()
   conversations = undefined
   tabBarRefresh?.()
   timelineRefresh?.()
+  panelHost?.pushFullState()
 }
 
 function requireConversations(): ConversationController | undefined {
@@ -489,6 +637,66 @@ function requireConversations(): ConversationController | undefined {
     return undefined
   }
   return conversations
+}
+
+async function runCloseTab(
+  vscode: VsCodeLike,
+  controller: ConversationController,
+  tabId: string,
+): Promise<Awaited<ReturnType<ConversationController['closeConversation']>>> {
+  let result = await controller.closeConversation(tabId)
+  if (result.outcome === 'needs-confirm-running') {
+    const choice = await confirmStopAndClose(vscode.window as InteractionWindow)
+    if (choice === 'cancel') return { outcome: 'cancelled' }
+    result = await controller.closeConversation(tabId, { confirmStopClose: true })
+  }
+  return result
+}
+
+async function runDeleteActive(vscode: VsCodeLike, tabIdArg?: string): Promise<void> {
+  const controller = requireConversations()
+  if (controller === undefined) {
+    await vscode.window.showErrorMessage(
+      'Host is not ready. Start a DeepSeek Harness IDE session before deleting a conversation.',
+    )
+    return
+  }
+  const tabId = tabIdArg !== undefined && tabIdArg !== ''
+    ? tabIdArg
+    : controller.registry.getActive()?.tabId
+  if (tabId === undefined) {
+    await vscode.window.showInformationMessage('No conversation Tab to delete.')
+    return
+  }
+  const pending = await controller.deleteConversation(tabId)
+  if (pending.outcome === 'host-not-ready') {
+    await vscode.window.showErrorMessage('Host is not ready; cannot delete conversation.')
+    return
+  }
+  if (pending.outcome === 'missing') {
+    await vscode.window.showInformationMessage('No conversation Tab to delete.')
+    return
+  }
+  if (pending.outcome === 'needs-confirm') {
+    const choice = await confirmDeleteConversation(
+      vscode.window as InteractionWindow,
+      pending.running,
+    )
+    if (choice === 'cancel') return
+    try {
+      const deleted = await controller.deleteConversation(tabId, { confirmed: true })
+      timelineRefresh?.()
+      panelHost?.pushFullState()
+      if (deleted.outcome === 'deleted') {
+        await vscode.window.showInformationMessage(
+          `Deleted conversation ${shortId(deleted.sessionId)}.`,
+        )
+      }
+    } catch (error) {
+      const message = redactSecrets(error instanceof Error ? error.message : String(error))
+      await vscode.window.showErrorMessage(`Failed to delete conversation: ${message}`)
+    }
+  }
 }
 
 function tabTitle(tab: ConversationTab): string {

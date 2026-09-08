@@ -39,6 +39,12 @@ describe('ConversationRegistry', () => {
     expect(registry.get(tab.tabId)?.title).toBe('from-prompt')
   })
 
+  it('rejects a second open Tab for the same sessionId (AC-59)', () => {
+    const registry = new ConversationRegistry()
+    const a = registry.create('One')
+    expect(() => registry.create('Dup', a.sessionId)).toThrow(/already has an open Tab/)
+  })
+
   it('projects Tab bar rows with active marker', () => {
     const registry = new ConversationRegistry()
     const a = registry.create('One')

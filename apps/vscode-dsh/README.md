@@ -6,15 +6,20 @@ VS Code Extension host for `dsh --profile ide`.
 
 Listens on a Host bridge socket, spawns `dsh --profile ide` with `DSH_IDE_BRIDGE_SOCK`, completes SDK `initialize` before reporting connected, and shuts down the child on deactivate. Secrets are redacted from error UI copy.
 
-One DSH process serves the window (AD-1). Multiple conversation Tabs each bind a distinct SDK `sessionId`. Switching Tabs retargets prompts and filters the Timeline; closing a Tab ends that session by default.
+One DSH process serves the window (AD-1). Multiple conversation Tabs each bind a distinct SDK `sessionId`. Switching Tabs retargets prompts and filters the Timeline / Conversation panel.
 
-SDK `session.event` / `session.status` / subagent notifications are projected into a Timeline TreeView. Write/edit tool results that carry `meta.diffs` expose a **post-hoc** Diff entry (`vscode.diff`); mid-run per-file confirmation is not the default (AD-7).
+The **Conversation** Webview is the live reading and input surface. It is intentionally thin: it follows Host `panel/state` / `messages/*` / `status/set` and never owns mode or send decisions. Illegal sends are rejected by the Host via `ui/reject-send`. The **Timeline** TreeView keeps short turn/step/tool/status/subagent labels and Diff entry points — it does **not** show assistant long text (that belongs in the Conversation panel).
+
+SDK `session.event` / `session.status` / subagent notifications are projected into Timeline and MessageStore. Write/edit tool results that carry `meta.diffs` expose a **post-hoc** Diff entry (`vscode.diff`); mid-run per-file confirmation is not the default (AD-7).
 
 ## Library
 
 - `IdeSessionHost` — Node-testable lifecycle owner (prompt + bridge `session/dispose` + notification fan-out)
-- `ConversationRegistry` / `ConversationController` — Tab ↔ `sessionId` binding + timeline projection
-- `TimelineStore` — pure session-scoped turn / step / tool / assistant / Diff projection
+- `ConversationRegistry` / `ConversationController` — Tab ↔ `sessionId` binding; recoverable close vs delete
+- `MessageStore` — per-session chat projection for the Conversation panel (not an authority DB)
+- `ExtensionIndex` — immediate `workspaceState` writes for `openTabSet` / `activeSessionId` (metadata only)
+- `ChatPanelHost` — Host↔Webview protocol + send gate
+- `TimelineStore` — pure session-scoped turn / step / tool / short assistant label / Diff projection
 - `buildIdeChildEnv` — scrub-then-reinject child environment
 - `redactSecrets` — AC-32 log hygiene
 
@@ -26,22 +31,47 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 | `dsh.stopSession` | Shut down the session host |
 | `dsh.newConversation` | Add a Tab with a fresh `sessionId` |
 | `dsh.switchConversation` | Switch the active Tab (TreeView click or QuickPick) |
-| `dsh.closeConversation` | Close the active Tab and dispose its session |
+| `dsh.closeConversation` | Close (unload) the active Tab — **does not** dispose the session |
+| `dsh.deleteConversation` | Explicitly delete: confirm → `session/dispose` + clear index |
 | `dsh.promptActiveConversation` | Prompt the active Tab's `sessionId` (tests / scripting) |
 | `dsh.selectPermissionPreset` | Pick a permission-presets name for the active Tab |
 | `dsh.reviewWorkspaceDiffs` | Open post-hoc Diff for write/edit paths on the active Tab |
 | `dsh.openTimelineDiff` | Open Diff from a Timeline write row (AC-25) |
 
+### L2 test hooks (scripting / Extension Host harness)
+
+| Command | Action |
+|---|---|
+| `dsh.test.sendPrompt` | Host-gated send (same gate as Webview `composer/send`) |
+| `dsh.test.closeConversation` | Recoverable close; pass `{ confirmStopClose: true }` for running |
+| `dsh.test.deleteConversation` | Delete path; pass `{ confirmed: true }` after confirm |
+| `dsh.test.panelSnapshot` | Read panel mode / messages / index |
+| `dsh.test.getIndex` | Read persisted ExtensionIndex snapshot |
+| `dsh.test.openPanel` | Push panel state (smoke open) |
+
 ## Views
 
 | View id | Contents |
 |---|---|
+| `dsh.chat` | Conversation panel (live messages + composer) |
 | `dsh.conversations` | Conversation Tab bar |
-| `dsh.timeline` | Active Tab timeline (turn / step / tool / assistant; subagent nesting) |
+| `dsh.timeline` | Active Tab timeline (short labels; Diff entry) — **not** the chat transcript |
 
-## Default close policy (Q-3)
+## Panel vs Timeline
 
-Closing a conversation Tab **ends that session**: the Extension sends a Host-bridge `session/dispose` frame; the runtime calls server-owned `AgentHandle.dispose()` and clears the SDK session Map. Recoverable / keep-alive close is not the default in this version.
+| Surface | Responsibility |
+|---|---|
+| Conversation panel (`dsh.chat`) | Full user / assistant message text; live composer; waiting-interaction / generating status |
+| Timeline (`dsh.timeline`) | Compact turn/step/tool/status/subagent labels; tool Diff entry — no assistant long body |
+
+## Close vs delete policy (AD-CU-3)
+
+- **Close Tab** unloads UI and destroys `tabId`, but **does not** call bridge `session/dispose`. Authority stays recoverable. Empty Tabs never enter persisted `openTabSet`.
+- **Delete Conversation** requires confirmation (and Stop & Delete when running). Only then does the Extension send `session/dispose`, clear MessageStore/Timeline for that session, and tombstone the index. Parent delete does not cascade to child session authority.
+- Running close prompts **Stop and Close** / **Cancel**; cancel leaves the Tab open.
+- Host not ready → delete is disabled / errors (no index-only fake delete).
+
+`openTabSet` / `activeSessionId` are written to `workspaceState` on every change (not only on deactivate).
 
 ## Dual channel
 

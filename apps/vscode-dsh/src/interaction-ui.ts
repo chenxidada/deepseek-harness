@@ -53,7 +53,8 @@ export interface InteractionWindow {
     placeHolder?: string
   }): Promise<string | undefined>
   showErrorMessage(message: string): Promise<unknown>
-  showInformationMessage?(message: string): Promise<unknown>
+  showInformationMessage?(message: string, ...items: string[]): Promise<unknown>
+  showWarningMessage?(message: string, ...items: string[]): Promise<unknown>
 }
 
 /** Default approval choices mapped to {@link ApprovalOutcome}. */
@@ -266,6 +267,51 @@ async function promptFreeText(
       signal.addEventListener('abort', () => resolve(undefined), { once: true })
     }),
   ])
+}
+
+/**
+ * Confirm Stop & Close for a running Tab (AC-25).
+ * @param window - duck-typed vscode.window.
+ * @returns `stop-close` or `cancel`.
+ */
+export async function confirmStopAndClose(
+  window: InteractionWindow,
+): Promise<'stop-close' | 'cancel'> {
+  const stop = 'Stop and Close'
+  const cancel = 'Cancel'
+  const picked = window.showWarningMessage === undefined
+    ? await window.showInformationMessage?.(
+      'This conversation is still running. Stop it and close the Tab?',
+      stop,
+      cancel,
+    )
+    : await window.showWarningMessage(
+      'This conversation is still running. Stop it and close the Tab?',
+      stop,
+      cancel,
+    )
+  return picked === stop ? 'stop-close' : 'cancel'
+}
+
+/**
+ * Confirm explicit conversation delete (AC-26 / AC-72).
+ * @param window - duck-typed vscode.window.
+ * @param running - whether the Tab is currently running.
+ * @returns `confirm` or `cancel`.
+ */
+export async function confirmDeleteConversation(
+  window: InteractionWindow,
+  running: boolean,
+): Promise<'confirm' | 'cancel'> {
+  const action = running ? 'Stop and Delete' : 'Delete'
+  const cancel = 'Cancel'
+  const message = running
+    ? 'Stop the running conversation and permanently delete it? This cannot be undone.'
+    : 'Permanently delete this conversation? This cannot be undone.'
+  const picked = window.showWarningMessage === undefined
+    ? await window.showInformationMessage?.(message, action, cancel)
+    : await window.showWarningMessage(message, action, cancel)
+  return picked === action ? 'confirm' : 'cancel'
 }
 
 function shortId(id: string): string {

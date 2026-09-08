@@ -74,6 +74,7 @@ export class InteractionCoordinator {
   private ui: InteractionUi | undefined
   private registry: ConversationRegistry | undefined
   private lastError: string | undefined
+  private readonly listeners = new Set<() => void>()
 
   /**
    * Install the UI presenter (Extension QuickPick panels or test doubles).
@@ -89,6 +90,18 @@ export class InteractionCoordinator {
    */
   setRegistry(registry: ConversationRegistry | undefined): void {
     this.registry = registry
+  }
+
+  /**
+   * Subscribe to pending interaction mutations (panel waiting-interaction status).
+   * @param listener - called after pending set/clear.
+   * @returns disposer.
+   */
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
   }
 
   /**
@@ -136,6 +149,7 @@ export class InteractionCoordinator {
       ...tabId === undefined ? {} : { tabId },
       abort,
     })
+    this.emit()
     try {
       if (this.ui === undefined) return 'unavailable'
       if (abort.signal.aborted) return 'unavailable'
@@ -155,6 +169,7 @@ export class InteractionCoordinator {
       return 'unavailable'
     } finally {
       this.pending.delete(frame.id)
+      this.emit()
     }
   }
 
@@ -177,6 +192,7 @@ export class InteractionCoordinator {
       ...tabId === undefined ? {} : { tabId },
       abort,
     })
+    this.emit()
     try {
       if (this.ui === undefined) {
         throw new Error('interaction UI is not available')
@@ -201,6 +217,7 @@ export class InteractionCoordinator {
       throw error instanceof Error ? error : new Error(String(error))
     } finally {
       this.pending.delete(frame.id)
+      this.emit()
     }
   }
 
@@ -214,6 +231,7 @@ export class InteractionCoordinator {
       this.pending.delete(id)
       entry.abort.abort()
     }
+    this.emit()
   }
 
   /**
@@ -229,5 +247,10 @@ export class InteractionCoordinator {
       this.pending.delete(id)
       entry.abort.abort()
     }
+    this.emit()
+  }
+
+  private emit(): void {
+    for (const listener of this.listeners) listener()
   }
 }
