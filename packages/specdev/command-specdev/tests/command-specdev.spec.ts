@@ -233,6 +233,62 @@ describe('@deepseek-ai/dsh-command-specdev', () => {
     expect(test.ctx.specdev.readStatus('defer-demo', { cwd: workspace }).human_gates.hg1).toBe('pending')
   })
 
+  it('AC-33: /confirm-gate phase-entry defer passes phaseEntry + later target', async () => {
+    const workspace = tempDir('cmd-specdev-phase-entry-')
+    const slugDir = join(workspace, '.specdev', 'specs', 'pe')
+    mkdirSync(slugDir, { recursive: true })
+    writeFileSync(join(workspace, '.specdev', 'active-workflow'), 'pe\n')
+    writeFileSync(join(slugDir, 'phase-plan.md'), `# Plan
+
+\`\`\`json
+{
+  "phases": [
+    { "id": "phase-1-p0-core", "name": "P1", "dependencies": [], "acceptance_criteria": [] },
+    { "id": "phase-2-commands", "name": "P2", "dependencies": ["phase-1-p0-core"], "acceptance_criteria": [] },
+    { "id": "phase-5-wiki", "name": "P5", "dependencies": ["phase-2-commands"], "acceptance_criteria": [] }
+  ]
+}
+\`\`\`
+`)
+    writeFileSync(join(slugDir, 'tech-debt-registry.md'), `# Tech Debt
+
+## 活跃债务
+
+| ID | 源Phase | 模块 | 文件:函数:行号 | 当前行为 | 预期行为 | 类型 | 标签 | 依赖它的模块 | 目标Phase | 阻塞 | 来源 | 注册日期 |
+|----|:------:|------|---------------|---------|---------|------|------|-------------|:--------:|:---:|------|---------|
+| STUB-A | phase-1 | m | f:a | cur | exp | 空实现 | module:m, type:stub | x | phase-2-commands | 🔴阻塞 | impl | 2026-09-08 |
+
+## 已解决
+
+| ID | 源Phase | 描述 | 解决Phase | 解决日期 | 验证方式 |
+|----|:------:|------|:--------:|---------|---------|
+`)
+    writeStatusFixture(join(slugDir, 'current-status.json'), {
+      ...createInitialStatus('pe'),
+      human_gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' },
+      current_stage: 'phase-implementation',
+      current_phase: 'phase-2-commands',
+      phases: {
+        'phase-1-p0-core': { implementer: 'completed', reviewer: 'completed', verifier: 'completed' },
+        'phase-2-commands': { implementer: 'pending', reviewer: 'pending', verifier: 'pending' },
+      },
+    })
+
+    const test = await harness(workspace)
+    expect(test.ctx.specdev.listPhaseEntryDebt('phase-2-commands', { cwd: workspace }).map(i => i.id))
+      .toEqual(['STUB-A'])
+
+    const result = await run(
+      test,
+      '/confirm-gate phase-entry defer STUB-A to phase-5-wiki',
+    )
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('decision=defer')
+    expect(result.text).toContain('items=STUB-A')
+    expect(result.text).toContain('deferredTarget=phase-5-wiki')
+    expect(test.ctx.specdev.listPhaseEntryDebt('phase-2-commands', { cwd: workspace })).toEqual([])
+  })
+
   it('SF-2: /bugfix and /brief persist pipeline_mode on durable status + snapshot', async () => {
     const workspace = tempDir('cmd-specdev-pipeline-')
     const test = await harness(workspace)
@@ -283,25 +339,106 @@ describe('@deepseek-ai/dsh-command-specdev', () => {
     expect(result.text).toContain(`pendingGate: ${snap?.pendingGate}`)
   })
 
-  it('registers /wiki and /implement stubs', async () => {
-    const workspace = tempDir('cmd-specdev-stubs-')
+  it('AC-17: /implement after HG-2 ensures branch and dispatches explorer', async () => {
+    const workspace = tempDir('cmd-specdev-implement-')
+    // Fixture project git repo (not harness) — git helpers operate here.
+    const { execFileSync } = await import('node:child_process')
+    execFileSync('git', ['init', '-b', 'main'], { cwd: workspace, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: workspace, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: workspace, stdio: 'ignore' })
+    writeFileSync(join(workspace, 'README.md'), '# w\n')
+    execFileSync('git', ['add', 'README.md'], { cwd: workspace, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'i'], { cwd: workspace, stdio: 'ignore' })
+
+    const test = await harness(workspace)
+    await run(test, '/feature impl loop')
+    const slug = 'impl-loop'
+    const slugDir = join(workspace, '.specdev', 'specs', slug)
+    writeFileSync(join(slugDir, 'phase-plan.md'), `# Plan
+
+\`\`\`json
+{
+  "phases": [
+    { "id": "phase-1-p0-core", "name": "P1", "dependencies": [], "acceptance_criteria": [] }
+  ]
+}
+\`\`\`
+`)
+    writeStatusFixture(join(slugDir, 'current-status.json'), {
+      ...createInitialStatus(slug, 'feature', { initiating_command: 'feature', pipeline_mode: 'feature' }),
+      human_gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' },
+      current_stage: 'phase-implementation',
+      current_phase: 'phase-1-p0-core',
+      phases: {
+        'phase-1-p0-core': { implementer: 'pending', reviewer: 'pending', verifier: 'pending' },
+      },
+    })
+    const impl = await run(test, '/implement')
+    expect(impl.kind).toBe('success')
+    expect(impl.text).not.toContain('@STUB(phase-4-phase-runtime)')
+    expect(impl.text).toContain('code-explorer')
+    expect(impl.text).toContain('impl-phase-1-p0-core')
+    expect(impl.text).toMatch(/followup=true/)
+  })
+
+  it('registers /wiki stub only (STUB-002 remains Phase 5)', async () => {
+    const workspace = tempDir('cmd-specdev-wiki-stub-')
     const test = await harness(workspace)
     const wiki = await run(test, '/wiki')
     expect(wiki.kind).toBe('error')
     expect(wiki.text).toContain('@STUB(phase-5-wiki-hardening)')
+  })
 
-    await run(test, '/feature impl stub')
-    const slug = 'impl-stub'
+  it('VP-4: /implement blocks on Phase Entry Gate with 🔴 debt', async () => {
+    const workspace = tempDir('cmd-specdev-entry-')
+    const { execFileSync } = await import('node:child_process')
+    execFileSync('git', ['init', '-b', 'main'], { cwd: workspace, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: workspace, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: workspace, stdio: 'ignore' })
+    writeFileSync(join(workspace, 'README.md'), '# w\n')
+    execFileSync('git', ['add', 'README.md'], { cwd: workspace, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'i'], { cwd: workspace, stdio: 'ignore' })
+
+    const test = await harness(workspace)
+    await run(test, '/feature entry gate')
+    const slug = 'entry-gate'
     const slugDir = join(workspace, '.specdev', 'specs', slug)
-    // Force HG-2 passed so implement reaches the Phase-4 stub (not precondition).
+    writeFileSync(join(slugDir, 'phase-plan.md'), `# Plan
+
+\`\`\`json
+{
+  "phases": [
+    { "id": "phase-1-p0-core", "name": "P1", "dependencies": [], "acceptance_criteria": [] },
+    { "id": "phase-2-commands", "name": "P2", "dependencies": ["phase-1-p0-core"], "acceptance_criteria": [] }
+  ]
+}
+\`\`\`
+`)
+    writeFileSync(join(slugDir, 'tech-debt-registry.md'), `# Debt
+
+## 活跃债务
+
+| ID | 源Phase | 模块 | 文件:函数:行号 | 当前行为 | 预期行为 | 类型 | 标签 | 依赖它的模块 | 目标Phase | 阻塞 | 来源 | 注册日期 |
+|----|:------:|------|---------------|---------|---------|------|------|-------------|:--------:|:---:|------|---------|
+| STUB-X | phase-1-p0-core | m | f:x | cur | exp | 空实现 | module:m, type:stub | x | phase-2-commands | 🔴阻塞 | impl | 2026-09-08 |
+
+## 已解决
+
+| ID | 源Phase | 描述 | 解决Phase | 解决日期 | 验证方式 |
+|----|:------:|------|:--------:|---------|---------|
+`)
     writeStatusFixture(join(slugDir, 'current-status.json'), {
-      ...createInitialStatus(slug),
+      ...createInitialStatus(slug, 'feature', { initiating_command: 'feature', pipeline_mode: 'feature' }),
       human_gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' },
       current_stage: 'phase-implementation',
-      current_phase: 'phase-1-runtime-contract',
+      current_phase: 'phase-2-commands',
+      phases: {
+        'phase-2-commands': { implementer: 'pending', reviewer: 'pending', verifier: 'pending' },
+      },
     })
     const impl = await run(test, '/implement')
     expect(impl.kind).toBe('error')
-    expect(impl.text).toContain('@STUB(phase-4-phase-runtime)')
+    expect(impl.text).toContain('Phase Entry Gate')
+    expect(impl.text).toContain('STUB-X')
   })
 })

@@ -62,7 +62,11 @@ describe('SpecDev advance VP-5', () => {
   it('guidanceForRole mirrors pipeline-advance Human Gate pauses', () => {
     expect(guidanceForRole('requirement-analyst')).toContain('Human Gate 1')
     expect(guidanceForRole('implementer')).toContain('reviewer-correctness')
+    expect(guidanceForRole('implementer')).toContain('mergePhaseReviews')
+    expect(guidanceForRole('implementer')).toContain('bumpLoopCount')
     expect(guidanceForRole('verifier')).toContain('Human Gate 3')
+    expect(guidanceForRole('verifier')).toContain('completePhaseGit')
+    expect(guidanceForRole('verifier')).toContain('phaseId')
   })
 
   it('VP-5: mock role subagent running→idle emits specdev/advance on parent', async () => {

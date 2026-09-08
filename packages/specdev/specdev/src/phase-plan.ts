@@ -83,6 +83,37 @@ export function firstReadyPhaseId(dag: PhasePlanDag): string | null {
 }
 
 /**
+ * Next phase that becomes ready after `completedPhaseIds` are done (AC-31 / AC-42).
+ * A phase is ready when every dependency is in the completed set and the phase
+ * itself is not completed.
+ * @param dag - parsed DAG.
+ * @param completedPhaseIds - phases already finished (HG-3 passed).
+ */
+export function nextReadyPhaseId(
+  dag: PhasePlanDag,
+  completedPhaseIds: ReadonlySet<string> | readonly string[],
+): string | null {
+  const done = completedPhaseIds instanceof Set
+    ? completedPhaseIds
+    : new Set(completedPhaseIds)
+  for (const phase of dag.phases) {
+    if (done.has(phase.id)) continue
+    if (phase.dependencies.every(dep => done.has(dep))) return phase.id
+  }
+  return null
+}
+
+/**
+ * Whether `phaseId` exists in the DAG (AC-42).
+ * @param dag - parsed DAG.
+ * @param phaseId - candidate id.
+ */
+export function isDagPhaseId(dag: PhasePlanDag, phaseId: string): boolean {
+  const id = phaseId.trim()
+  return dag.phases.some(phase => phase.id === id)
+}
+
+/**
  * Read and parse \`phase-plan.md\` under a slug directory.
  * @param slugDir - \`.specdev/specs/<slug>\`.
  */

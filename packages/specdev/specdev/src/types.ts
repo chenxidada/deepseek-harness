@@ -144,9 +144,16 @@ export interface ConfirmGateRequest {
   readonly gate: SpecdevGateId
   readonly decision: SpecdevGateDecision | string
   readonly note?: string
+  /**
+   * Fallback defer target when `phaseEntry[].deferredTargetPhase` is omitted.
+   * Must differ from durable `current_phase` (AC-33).
+   */
+  readonly deferredTargetPhase?: string
   readonly phaseEntry?: readonly {
     readonly itemIds: readonly string[]
     readonly disposition: 'resolve' | 'defer' | 'cancel'
+    /** Per-item defer target — must differ from current phase (AC-33). */
+    readonly deferredTargetPhase?: string
   }[]
 }
 

@@ -37,6 +37,9 @@ const active = ctx.specdev.active({ cwd: workspaceRoot })
 const snap = ctx.specdev.snapshot(session, { cwd: workspaceRoot })
 const result = await ctx.specdev.confirmGate(session, { gate: 'hg1', decision: 'pass' }, { cwd: workspaceRoot })
 await ctx.specdev.ensureLayout({ slug: 'my-feature', command: 'feature', workspaceRoot })
+ctx.specdev.ensurePhaseBranch(phaseId, { cwd: workspaceRoot })
+await ctx.specdev.dispatchRole(parent, { role: 'implementer', slug, phaseId })
+ctx.specdev.completePhaseGit({ phaseId, files: ['src/a.ts'] }, { cwd: workspaceRoot })
 ```
 
 ### Workspace root (Q-1)
@@ -90,7 +93,8 @@ Independent of model request tokens: SpecDev status lives in workspace files and
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- **Slash commands / Orchestrator presets** — not registered here; later SpecDev packages own `/feature`…`/wiki` and role `agent.cordis.yml` assets.
-- **Gate waterfall / advance listeners** — `specdev-gate` and `specdev-advance` packages are deferred; Phase 1 freezes the runtime contract only.
-- **phase-entry debt disposition** — `confirmGate` accepts the gate id and timestamps; structured debt disposition payloads land with Phase Entry Gate work.
+- **Slash commands / Orchestrator presets** — not registered here; `command-specdev` / `specdev-presets` own `/feature`…`/wiki` and role assets.
+- **Gate waterfall / advance listeners** — shipped in `specdev-gate` / `specdev-advance` (Phase 3).
+- **Wiki body** — `/wiki` remains `@STUB(phase-5-wiki-hardening)`.
 - **Snapshot schema v2** — `SpecdevSnapshot` may include optional `pipelineMode` / `initiatingCommand` (from durable `pipeline_mode` / `initiating_command`). Fold accepts both v1 (without those fields) and v2 payloads.
+- **Phase runtime (Phase 4)** — `ensurePhaseBranch` / `completePhaseGit` / `mergePhaseReviews` / `prepareRerun` / tech-debt Entry Gate helpers; `dispatchRole` wakes children via `createUserMessage` + `followup`.

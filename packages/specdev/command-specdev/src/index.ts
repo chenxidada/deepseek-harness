@@ -10,7 +10,11 @@ import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands
 import {
   artifactNonEmpty,
   attachOrchestratorMetadata,
+  firstReadyPhaseId,
   interpretGateReply,
+  isDagPhaseId,
+  readPhasePlanDag,
+  requiresPhaseEntryGate,
   type SpecdevGateId,
   type SpecdevRole,
   type SpecdevSnapshot,
@@ -186,8 +190,10 @@ async function runPlan(ctx: Context, invocation: CommandInvocation): Promise<Com
 }
 
 /**
- * `/implement` — registered but full loop is Phase 4.
- * @STUB(phase-4-phase-runtime)
+ * `/implement` — start the current-phase runtime loop (AC-17 / STUB-001):
+ * Phase Entry Gate → ensurePhaseBranch → dispatch code-explorer (or implementer
+ * when exploration already exists). Orchestrator continues via advance + helpers
+ * (three-review merge / verifier / confirmGate(hg3) + completePhaseGit).
  */
 async function runImplement(ctx: Context, invocation: CommandInvocation): Promise<CommandResult> {
   const cwd = workspaceCwd(invocation)
@@ -202,14 +208,88 @@ async function runImplement(ctx: Context, invocation: CommandInvocation): Promis
       text: 'Refused: /implement requires HG-2 passed and a current_phase. Complete /plan + confirmGate(hg2) first.',
     }
   }
-  // @STUB(phase-4-phase-runtime) — full explorer→git→implement→3-review→verify loop lands in Phase 4.
+  const phaseId = status.current_phase
+  if (phaseId === null || phaseId.trim().length === 0) {
+    return {
+      kind: 'error',
+      text: 'Refused: /implement requires current_phase (DAG phases[].id). Pass HG-2 so SpecDev can select the first ready phase.',
+    }
+  }
+
+  const slugDir = join(active.layoutRoot, 'specs', active.slug)
+  let dag
+  try {
+    dag = readPhasePlanDag(slugDir)
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { kind: 'error', text: `Refused: cannot read phase-plan DAG (${message}).` }
+  }
+  if (!isDagPhaseId(dag, phaseId)) {
+    return {
+      kind: 'error',
+      text: `Refused: current_phase=${phaseId} is not a DAG phases[].id (AC-42).`,
+    }
+  }
+
+  // Phase Entry Gate (AC-33): Phase 2+ with blocking inherited debt must disposition first.
+  const firstReady = firstReadyPhaseId(dag)
+  if (requiresPhaseEntryGate(phaseId, firstReady)) {
+    const blocking = ctx.specdev.listPhaseEntryDebt(phaseId, { cwd })
+    if (blocking.length > 0) {
+      const table = ctx.specdev.presentPhaseEntryDebt(phaseId, { cwd })
+      return {
+        kind: 'error',
+        text: [
+          `Phase Entry Gate: blocking inherited debt for \`${phaseId}\` must be dispositioned before implementer (AC-33).`,
+          table,
+          'Call confirmGate({ gate:\'phase-entry\', decision:\'resolve\'|\'defer\'|\'cancel\', phaseEntry:[…] }) then re-run /implement.',
+        ].join('\n'),
+      }
+    }
+  }
+
+  attachOrchestratorMetadata(invocation.agent, active.slug)
+
+  let branchInfo: { branch: string; created: boolean; stayed: boolean }
+  try {
+    branchInfo = ctx.specdev.ensurePhaseBranch(phaseId, { cwd })
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      kind: 'error',
+      text: `ensurePhaseBranch failed: ${message}. Create a git repo under the workspace root (fixture project) and retry.`,
+    }
+  }
+
+  const phaseDir = join(slugDir, 'phases', phaseId)
+  const explorationReady = artifactNonEmpty(phaseDir, 'repo-exploration.md')
+  const pipelineMode = status.pipeline_mode ?? status.initiating_command ?? 'feature'
+  const brief = pipelineMode === 'brief'
+
+  const nextRole = explorationReady ? 'implementer' : 'code-explorer'
+  const dispatched = await ctx.specdev.dispatchRole(invocation.agent, {
+    role: nextRole,
+    slug: active.slug,
+    phaseId,
+  })
+
+  const reviewHint = brief
+    ? 'Brief mode: after implementer, dispatch single `reviewer` (not three-perspective).'
+    : 'Feature mode: after implementer, dispatch reviewer-correctness|design|connectivity in parallel, then ctx.specdev.mergePhaseReviews.'
+
   return {
-    kind: 'error',
+    kind: 'success',
     text: [
-      'SpecDev /implement is registered but the phase runtime loop is not implemented yet.',
-      '@STUB(phase-4-phase-runtime)',
-      `Active slug=${active.slug} phase=${status.current_phase ?? '(none)'}.`,
-      'See tech-debt-registry STUB-001.',
+      `SpecDev /implement for \`${active.slug}\` phase=\`${phaseId}\`.`,
+      `Branch: ${branchInfo.branch} (created=${String(branchInfo.created)} stayed=${String(branchInfo.stayed)}).`,
+      `Dispatched \`${nextRole}\` (preset \`${dispatched.presetId}\`) childSession=${dispatched.childSessionId}`
+        + ` followup=${String(dispatched.followupSent)} mounted=${String(dispatched.mounted)}.`,
+      explorationReady
+        ? 'repo-exploration.md present — started at implementer.'
+        : 'Started at code-explorer → then implementer (gate requires impl-<phase> branch).',
+      reviewHint,
+      'On review PASS/SHOULD-FIX → verifier; MUST-FIX → re-dispatch implementer (loop_count+1, max 2).',
+      'Stop at HG-3: confirmGate(hg3) then ctx.specdev.completePhaseGit({ phaseId, files }) with an explicit file list (never git add -A).',
     ].join('\n'),
   }
 }
@@ -250,11 +330,16 @@ async function runConfirmGate(ctx: Context, invocation: CommandInvocation): Prom
     }
   }
   const gateRaw = parts[0]
-  const decisionRaw = parts.slice(1).join(' ')
   if (gateRaw !== 'hg1' && gateRaw !== 'hg2' && gateRaw !== 'hg3' && gateRaw !== 'phase-entry') {
     return { kind: 'error', text: `Unknown gate "${gateRaw}". Expected hg1|hg2|hg3|phase-entry.` }
   }
   const gate: SpecdevGateId = gateRaw
+
+  if (gate === 'phase-entry') {
+    return runPhaseEntryConfirmGate(ctx, invocation, parts.slice(1))
+  }
+
+  const decisionRaw = parts.slice(1).join(' ')
   const interpreted = interpretGateReply(decisionRaw)
   if (interpreted === 'ambiguous') {
     return {
@@ -284,6 +369,108 @@ async function runConfirmGate(ctx: Context, invocation: CommandInvocation): Prom
     text: snap === undefined
       ? `Gate ${gate} decision=${decision} recorded.`
       : `Gate ${gate} decision=${decision}. pendingGate=${snap.pendingGate ?? '(none)'} stage=${snap.stage} phase=${snap.phase ?? '(none)'}`,
+  }
+}
+
+/**
+ * Phase Entry Gate slash form (AC-33):
+ * `/confirm-gate phase-entry <resolve|defer|cancel|pass|推迟> [ID[,ID…]] [to <laterPhaseId>]`
+ */
+async function runPhaseEntryConfirmGate(
+  ctx: Context,
+  invocation: CommandInvocation,
+  tokens: readonly string[],
+): Promise<CommandResult> {
+  if (tokens.length === 0) {
+    return {
+      kind: 'error',
+      text: 'Usage: /confirm-gate phase-entry <resolve|defer|cancel|pass|推迟> [STUB-A,STUB-B] [to <laterPhaseId>]',
+    }
+  }
+  const decisionToken = tokens[0]
+  if (decisionToken === undefined) {
+    return {
+      kind: 'error',
+      text: 'Usage: /confirm-gate phase-entry <resolve|defer|cancel|pass|推迟> [STUB-A,STUB-B] [to <laterPhaseId>]',
+    }
+  }
+  let decision: 'resolve' | 'defer' | 'cancel' | 'pass'
+  if (decisionToken === 'resolve' || decisionToken === 'cancel' || decisionToken === 'pass') {
+    decision = decisionToken
+  } else if (decisionToken === 'defer' || decisionToken === '推迟') {
+    decision = 'defer'
+  } else {
+    const interpreted = interpretGateReply(decisionToken)
+    if (interpreted === 'defer') decision = 'defer'
+    else if (interpreted === 'pass') decision = 'pass'
+    else if (interpreted === 'reject') decision = 'cancel'
+    else {
+      return {
+        kind: 'error',
+        text: [
+          'Ambiguous phase-entry decision (AC-26).',
+          'Use resolve | defer | cancel | pass | 推迟.',
+          `Received: ${JSON.stringify(decisionToken)}`,
+        ].join('\n'),
+      }
+    }
+  }
+
+  let deferredTargetPhase: string | undefined
+  const idTokens: string[] = []
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i]
+    if (token === undefined) continue
+    if (token === 'to') {
+      const target = tokens[i + 1]
+      if (target === undefined || target.trim().length === 0) {
+        return { kind: 'error', text: 'phase-entry defer "to" requires a later phase id' }
+      }
+      deferredTargetPhase = target.trim()
+      break
+    }
+    idTokens.push(token)
+  }
+  const itemIds = idTokens
+    .flatMap(part => part.split(','))
+    .map(id => id.trim())
+    .filter(id => id.length > 0)
+
+  const phaseEntry = itemIds.length === 0
+    ? undefined
+    : [{
+      itemIds,
+      disposition: decision === 'pass' ? 'resolve' as const : decision,
+      ...deferredTargetPhase === undefined ? {} : { deferredTargetPhase },
+    }]
+
+  const result = await ctx.specdev.confirmGate(
+    invocation.agent.session,
+    {
+      gate: 'phase-entry',
+      decision,
+      note: tokens.join(' '),
+      ...phaseEntry === undefined ? {} : { phaseEntry },
+      ...deferredTargetPhase === undefined || phaseEntry !== undefined
+        ? {}
+        : { deferredTargetPhase },
+    },
+    { cwd: workspaceCwd(invocation) },
+  )
+  if (!result.ok) {
+    return {
+      kind: 'error',
+      text: `confirmGate failed (${result.code ?? 'unknown'}): ${result.message ?? 'no message'}`,
+    }
+  }
+  const snap = result.snapshot
+  const idsNote = itemIds.length > 0 ? ` items=${itemIds.join(',')}` : ''
+  const targetNote = deferredTargetPhase === undefined ? '' : ` deferredTarget=${deferredTargetPhase}`
+  return {
+    kind: 'success',
+    text: snap === undefined
+      ? `Gate phase-entry decision=${decision}${idsNote}${targetNote} recorded.`
+      : `Gate phase-entry decision=${decision}${idsNote}${targetNote}. pendingGate=${snap.pendingGate ?? '(none)'} stage=${snap.stage} phase=${snap.phase ?? '(none)'}`,
   }
 }
 

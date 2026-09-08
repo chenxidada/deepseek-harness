@@ -1,7 +1,7 @@
 /**
  * Programmatic SpecDev role dispatch: child agent lineage, metadata (AC-24),
- * and `specdev/dispatch` emission. Used by command-specdev (`/feature`, `/plan`)
- * and available as a host helper for Orchestrator tooling.
+ * `specdev/dispatch` emission, and child wake via \`createUserMessage\` +
+ * \`agent.followup\` (GAP-002 / AC-23).
  *
  * @module @deepseek-ai/dsh-specdev/dispatch
  */
@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto'
 import { Context } from '@deepseek-ai/cordis'
 import { Inbox, type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { attachSpecdevMetadata, parseSpecdevRole } from './metadata.ts'
 import type {
@@ -30,6 +31,11 @@ export interface DispatchSpecdevRoleRequest {
   readonly phaseId?: string
   /** Optional stable child session id (tests). */
   readonly childSessionId?: string
+  /**
+   * Task prompt delivered via followup after create (GAP-002).
+   * When omitted, a role-default prompt is used. Pass `null` to skip wake.
+   */
+  readonly prompt?: string | null
 }
 
 /** Result of a SpecDev role dispatch. */
@@ -41,6 +47,8 @@ export interface DispatchSpecdevRoleResult {
   readonly mounted: boolean
   /** True when the child was created via the agent factory (vs register fallback). */
   readonly factoryCreated: boolean
+  /** True when a followup user message was delivered to wake the child. */
+  readonly followupSent: boolean
 }
 
 /**
@@ -49,6 +57,44 @@ export interface DispatchSpecdevRoleResult {
  */
 export function rolePresetId(role: string): string {
   return role.startsWith('specdev-') ? role : `specdev-${role}`
+}
+
+/**
+ * Default wake prompt for a SpecDev role (GAP-002).
+ * @param role - SpecDev role.
+ * @param ctx - slug / optional phaseId.
+ */
+export function defaultRolePrompt(
+  role: SpecdevRole,
+  ctx: { readonly slug: string; readonly phaseId?: string },
+): string {
+  const phase = ctx.phaseId === undefined ? '' : ` Current phaseId=\`${ctx.phaseId}\`.`
+  switch (role) {
+    case 'requirement-analyst':
+      return `SpecDev: write requirements.md (EARS ACs) for workflow \`${ctx.slug}\`. Stop for HG-1.`
+    case 'plan-generator':
+      return `SpecDev: write design.md + phase-plan.md (DAG JSON) for \`${ctx.slug}\`. Stop for HG-2.`
+    case 'code-explorer':
+      return `SpecDev: write phases/<phase>/repo-exploration.md for \`${ctx.slug}\`.${phase} Read-only.`
+    case 'implementer':
+      return `SpecDev: implement the current phase for \`${ctx.slug}\` on branch impl-<phase-id>.${phase} Write implementation.md. No git commit.`
+    case 'reviewer-correctness':
+      return `SpecDev: review correctness for \`${ctx.slug}\`.${phase} Write review-correctness.md.`
+    case 'reviewer-design':
+      return `SpecDev: review design consistency for \`${ctx.slug}\`.${phase} Write review-design.md.`
+    case 'reviewer-connectivity':
+      return `SpecDev: review integration connectivity for \`${ctx.slug}\`.${phase} Write review-connectivity.md.`
+    case 'reviewer':
+      return `SpecDev: single-perspective review for \`${ctx.slug}\` (brief).${phase} Write review.md.`
+    case 'verifier':
+      return `SpecDev: independently verify the phase for \`${ctx.slug}\`.${phase} Write verification.md.`
+    case 'wiki':
+      return `SpecDev: update docs/wiki/ for \`${ctx.slug}\`.${phase}`
+    case 'orchestrator':
+      return `SpecDev: orchestrate workflow \`${ctx.slug}\`.${phase}`
+    default:
+      return `SpecDev role \`${role}\` for workflow \`${ctx.slug}\`.${phase}`
+  }
 }
 
 /**
@@ -94,10 +140,11 @@ export function emitSpecdevDispatch(
  * 2. Fallback: create a lineage session + register a lightweight agent (hosts/tests without agent-loop)
  * 3. `attachSpecdevMetadata` on the child
  * 4. Emit `specdev/dispatch` on the parent session
+ * 5. Wake the child with `createUserMessage` + `agent.followup` (GAP-002) unless `prompt: null`
  *
  * @param ctx - host context (`agents`, optional `agentPresets`, optional `specdev` for snapshot).
  * @param parent - Orchestrator / calling agent.
- * @param request - role / slug / optional phaseId.
+ * @param request - role / slug / optional phaseId / prompt.
  */
 export async function dispatchSpecdevRole(
   ctx: Context,
@@ -178,12 +225,31 @@ export async function dispatchSpecdevRole(
     ...request.phaseId === undefined ? {} : { phaseId: request.phaseId },
   })
 
+  let followupSent = false
+  if (request.prompt !== null) {
+    const text = request.prompt === undefined
+      ? defaultRolePrompt(role, {
+        slug,
+        ...request.phaseId === undefined ? {} : { phaseId: request.phaseId },
+      })
+      : request.prompt
+    if (text.trim().length > 0) {
+      const message = createUserMessage({
+        content: [{ type: 'text', text }],
+        source: { kind: 'user' },
+      })
+      agent.followup(message)
+      followupSent = true
+    }
+  }
+
   return {
     childSessionId: String(agent.session.id),
     agent,
     presetId,
     mounted,
     factoryCreated,
+    followupSent,
   }
 }
 

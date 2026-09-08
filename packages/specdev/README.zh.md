@@ -30,7 +30,7 @@ SpecDev 组把 Spec 驱动开发带进 harness：在用户工作区落地持久 
 | [`command-specdev`](command-specdev/README.zh.md) | 斜杠命令 `/feature`…`/wiki`、`/confirm-gate`、`/status` | （commands 注册表） |
 | [`specdev-presets`](specdev-presets/README.zh.md) | Orchestrator + 角色 presets；发布 `presetRoot` | `ctx.specdevPresets` |
 
-Phase 4+ 兄弟能力：phase-runtime git 辅助与 wiki 加固会填实命令桩。
+Phase 4+ 兄弟能力：wiki 加固（STUB-002）。phase-runtime 的 git/review/debt 辅助现已挂在 `ctx.specdev`。
 
 -----
 
@@ -48,6 +48,6 @@ Phase 4+ 兄弟能力：phase-runtime git 辅助与 wiki 加固会填实命令�
 <details>
 <summary>维护者工作上下文 — 点击展开</summary>
 
-Phase 1 交付 `@deepseek-ai/dsh-specdev` 与 sdk-app 挂载。Phase 2 增加 `command-specdev` 与 `specdev-presets`（含 sdk `agent-presets` roots）。Phase 3 交付 `specdev-gate` 与 `specdev-advance`。
+Phase 1 交付 `@deepseek-ai/dsh-specdev` 与 sdk-app 挂载。Phase 2 增加 `command-specdev` 与 `specdev-presets`（含 sdk `agent-presets` roots）。Phase 3 交付 `specdev-gate` 与 `specdev-advance`。Phase 4 在 `ctx.specdev` 上补齐 `/implement` + git/review/debt/re-run；`/wiki` 仍属 Phase 5。
 
 </details>

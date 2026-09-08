@@ -88,5 +88,5 @@ Independent of the model cache; advance events do not rewrite conversation prefi
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- **No auto followup after dispatch** — GAP-002: creating a role child still does not prompt it; advance only guides the Orchestrator after completion.
+- **Dispatch followup** — GAP-002 closed in Phase 4: `dispatchSpecdevRole` wakes children with `createUserMessage` + `agent.followup` (pass `prompt: null` to skip).
 - **Fallback agents** — lightweight `dispatchSpecdevRole` fallback agents that never leave `idle` will not emit advance via the status path; prefer real agent-loop children or call `emitAdvanceForAgent` explicitly in tests.

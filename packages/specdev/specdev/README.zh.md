@@ -37,6 +37,9 @@ const active = ctx.specdev.active({ cwd: workspaceRoot })
 const snap = ctx.specdev.snapshot(session, { cwd: workspaceRoot })
 const result = await ctx.specdev.confirmGate(session, { gate: 'hg1', decision: 'pass' }, { cwd: workspaceRoot })
 await ctx.specdev.ensureLayout({ slug: 'my-feature', command: 'feature', workspaceRoot })
+ctx.specdev.ensurePhaseBranch(phaseId, { cwd: workspaceRoot })
+await ctx.specdev.dispatchRole(parent, { role: 'implementer', slug, phaseId })
+ctx.specdev.completePhaseGit({ phaseId, files: ['src/a.ts'] }, { cwd: workspaceRoot })
 ```
 
 ### 工作区根（Q-1）
@@ -90,7 +93,8 @@ await ctx.specdev.ensureLayout({ slug: 'my-feature', command: 'feature', workspa
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- **斜杠命令 / Orchestrator 预设** — 不在本包注册；后续 SpecDev 包负责 `/feature`…`/wiki` 与角色 `agent.cordis.yml` 资产。
-- **Gate waterfall / advance 监听** — `specdev-gate` 与 `specdev-advance` 包延后；Phase 1 仅冻结运行时契约。
-- **phase-entry 债务处置** — `confirmGate` 接受该 gate id 并更新时间戳；结构化债务处置载荷随 Phase Entry Gate 工作落地。
+- **斜杠命令 / Orchestrator 预设** — 不在本包注册；由 `command-specdev` / `specdev-presets` 负责 `/feature`…`/wiki` 与角色资产。
+- **Gate waterfall / advance 监听** — 已在 `specdev-gate` / `specdev-advance`（Phase 3）交付。
+- **Wiki 实体** — `/wiki` 仍为 `@STUB(phase-5-wiki-hardening)`。
 - **Snapshot schema v2** — `SpecdevSnapshot` 可含可选 `pipelineMode` / `initiatingCommand`（来自 durable `pipeline_mode` / `initiating_command`）。fold 同时接受无这些字段的 v1 与带字段的 v2 载荷。
+- **Phase runtime（Phase 4）** — `ensurePhaseBranch` / `completePhaseGit` / `mergePhaseReviews` / `prepareRerun` / tech-debt Entry Gate；`dispatchRole` 通过 `createUserMessage` + `followup` 唤醒子 Agent。

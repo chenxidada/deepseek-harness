@@ -39,7 +39,8 @@ Mount with `specdev` and `commands` (sdk-app inserts this automatically):
 | `/plan` | Architecture path; refuses if HG-1 not passed or requirements empty |
 | `/status` | Human report matching `snapshot()` |
 | `/confirm-gate <gate> <pass\|确认\|通过\|…>` | Sole NLP→API path sharing `confirmGate` |
-| `/implement` / `/wiki` | Registered; bodies stubbed to later phases |
+| `/implement` | Phase runtime loop: Entry Gate → `ensurePhaseBranch` → explorer/implementer dispatch + followup |
+| `/wiki` | Registered; body stubbed to Phase 5 |
 
 -----
 
@@ -89,6 +90,5 @@ Independent of the model cache; command bookkeeping does not rewrite conversatio
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- **`/implement` loop incomplete** — returns `@STUB(phase-4-phase-runtime)` after HG-2 checks; full explorer→review→verify is Phase 4.
 - **`/wiki` body incomplete** — returns `@STUB(phase-5-wiki-hardening)`; wiki dispatch is Phase 5.
-- **Role subagent spawn** — commands emit Orchestrator guidance; programmatic `agents.create` wiring may deepen later.
+- **HG-3 git** — Orchestrator must call `ctx.specdev.completePhaseGit({ phaseId, files })` after `confirmGate(hg3)` with an explicit file list (never `git add -A`).

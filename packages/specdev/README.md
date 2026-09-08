@@ -30,7 +30,7 @@ The SpecDev group brings Spec-driven development into the harness: a durable `.s
 | [`command-specdev`](command-specdev/README.md) | Slash commands `/feature`…`/wiki`, `/confirm-gate`, `/status` | (commands registry) |
 | [`specdev-presets`](specdev-presets/README.md) | Orchestrator + role presets; publishes `presetRoot` | `ctx.specdevPresets` |
 
-Phase 4+ siblings: phase-runtime git helpers and wiki hardening deepen command stubs.
+Phase 4+ siblings: wiki hardening (STUB-002). Phase-runtime git/review/debt helpers now live on `ctx.specdev`.
 
 -----
 
@@ -48,6 +48,6 @@ Phase 4+ siblings: phase-runtime git helpers and wiki hardening deepen command s
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-Phase 1 shipped `@deepseek-ai/dsh-specdev` plus the sdk-app mount. Phase 2 adds `command-specdev` and `specdev-presets` (with sdk `agent-presets` roots). Phase 3 ships `specdev-gate` and `specdev-advance`.
+Phase 1 shipped `@deepseek-ai/dsh-specdev` plus the sdk-app mount. Phase 2 adds `command-specdev` and `specdev-presets` (with sdk `agent-presets` roots). Phase 3 ships `specdev-gate` and `specdev-advance`. Phase 4 closes `/implement` + git/review/debt/re-run helpers on `ctx.specdev`; `/wiki` remains Phase 5.
 
 </details>

@@ -33,29 +33,32 @@ export function guidanceForRole(role: SpecdevRole): string {
       return [
         '💻 implementer completed → phases/<phase>/implementation.md',
         'Next: dispatch reviewer-correctness, reviewer-design, and reviewer-connectivity in parallel,',
-        'then merge into review.md. On MUST-FIX, re-dispatch implementer (loop_count+1, max 2).',
+        'then call ctx.specdev.mergePhaseReviews(session, phaseId) to write review.md.',
+        'On MUST-FIX, call ctx.specdev.bumpLoopCount() then re-dispatch implementer (max 2).',
       ].join('\n')
 
     case 'reviewer-correctness':
-      return '🔍 reviewer-correctness (1/3) completed. Wait for reviewer-design + reviewer-connectivity, then merge review.md.'
+      return '🔍 reviewer-correctness (1/3) completed. Wait for reviewer-design + reviewer-connectivity, then ctx.specdev.mergePhaseReviews.'
 
     case 'reviewer-design':
-      return '🔍 reviewer-design completed. Check whether all three review reports are ready, then merge.'
+      return '🔍 reviewer-design completed. Check whether all three review reports are ready, then ctx.specdev.mergePhaseReviews.'
 
     case 'reviewer-connectivity':
-      return '🔍 reviewer-connectivity completed. Check whether all three review reports are ready, then merge.'
+      return '🔍 reviewer-connectivity completed. Check whether all three review reports are ready, then ctx.specdev.mergePhaseReviews.'
 
     case 'reviewer':
       return [
         '🔍 reviewer completed → review.md',
-        'PASS / SHOULD-FIX → dispatch verifier. MUST-FIX → dispatch implementer (loop_count+1).',
+        'PASS / SHOULD-FIX → dispatch verifier. MUST-FIX → ctx.specdev.bumpLoopCount() then dispatch implementer.',
       ].join('\n')
 
     case 'verifier':
       return [
         '✅ verifier completed → verification.md',
         '⏸️ Human Gate 3 — present verification to the user.',
+        'Record the completed phaseId NOW (confirmGate will advance current_phase).',
         'Wait for an explicit Phase pass, then confirmGate({ gate: "hg3", decision: "pass" }).',
+        'After confirmGate, call ctx.specdev.completePhaseGit({ phaseId: <recorded>, files }) with an explicit file list.',
         'Do not auto-merge git or flip hg3 in JSON by hand.',
       ].join('\n')
 

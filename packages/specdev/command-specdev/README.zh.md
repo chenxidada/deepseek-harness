@@ -39,7 +39,8 @@ kind: "package-reference"
 | `/plan` | 架构路径；HG-1 未过或 requirements 为空时拒绝 |
 | `/status` | 与 `snapshot()` 一致的人类可读报告 |
 | `/confirm-gate <gate> <pass\|确认\|通过\|…>` | 唯一 NLP→API 路径，共享 `confirmGate` |
-| `/implement` / `/wiki` | 已注册；实体延后到后续 Phase |
+| `/implement` | Phase 运行时闭环：Entry Gate → `ensurePhaseBranch` → explorer/implementer 调度 + followup |
+| `/wiki` | 已注册；实体延后到 Phase 5 |
 
 -----
 
@@ -89,6 +90,5 @@ kind: "package-reference"
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- **`/implement` 闭环未完成** — HG-2 校验后返回 `@STUB(phase-4-phase-runtime)`；完整 explorer→review→verify 属 Phase 4。
 - **`/wiki` 实体未完成** — 返回 `@STUB(phase-5-wiki-hardening)`；wiki 调度属 Phase 5。
-- **角色子 Agent 派生** — 命令输出 Orchestrator 指引；程序化 `agents.create` 可在后续加深。
+- **HG-3 git** — Orchestrator 须在 `confirmGate(hg3)` 之后调用 `ctx.specdev.completePhaseGit({ phaseId, files })`，文件列表必须显式（禁止 `git add -A`）。

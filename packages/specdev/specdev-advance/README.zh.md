@@ -88,5 +88,5 @@ session.append('specdev/advance', {
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- **dispatch 后无自动 followup** — GAP-002：创建角色子 Agent 仍不会自动投递提示；advance 只在完成后引导 Orchestrator。
+- **Dispatch followup** — Phase 4 已关闭 GAP-002：`dispatchSpecdevRole` 用 `createUserMessage` + `agent.followup` 唤醒子 Agent（传 `prompt: null` 可跳过）。
 - **Fallback Agent** — 永不离开 `idle` 的轻量 `dispatchSpecdevRole` fallback 不会经 status 路径发出 advance；测试中请使用真实 agent-loop 子 Agent 或显式调用 `emitAdvanceForAgent`。
