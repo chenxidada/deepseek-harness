@@ -26,9 +26,17 @@
       config:
         maxTokensAsSuccess: !!js "process.env.DSH_MAX_TOKENS_AS_SUCCESS === undefined ? true : JSON.parse(process.env.DSH_MAX_TOKENS_AS_SUCCESS)"
 
-    # SpecDev runtime (Phase 1) + commands / presets (Phase 2).
+    # SpecDev runtime (Phase 1) + gate/advance (Phase 3) + commands / presets (Phase 2).
     - id: specdev
       name: '@deepseek-ai/dsh-specdev'
+
+    - id: specdev-gate
+      name: '@deepseek-ai/dsh-specdev-gate'
+      inject: [specdev, tools, sessionProjections]
+
+    - id: specdev-advance
+      name: '@deepseek-ai/dsh-specdev-advance'
+      inject: [specdev, agents]
 
     - id: specdev-presets
       name: '@deepseek-ai/dsh-specdev-presets'

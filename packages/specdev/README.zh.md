@@ -9,7 +9,7 @@ kind: "package-group"
 
 ## 概述
 
-SpecDev 组把 Spec 驱动开发带进 harness：在用户工作区落地持久 `.specdev` 布局，通过 `ctx.specdev.confirmGate` 确认 Human Gate，用会话事件与 `specdev/status` 投影服务桥接，并在后续 Phase 提供斜杠命令、失败即关的流水线门禁、推进钩子与角色 agent 预设。默认 **sdk** 配置挂载 SpecDev 运行时，并禁用原生 `dsh-plan-mode`，避免 Spec `/plan` 与 plan-mode 冲突。
+SpecDev 组把 Spec 驱动开发带进 harness：在用户工作区落地持久 `.specdev` 布局，通过 `ctx.specdev.confirmGate` 确认 Human Gate，用会话事件与 `specdev/status` 投影服务桥接，并提供斜杠命令、失败关闭的流水线门禁、推进钩子与角色 agent 预设。默认 **sdk** 配置挂载 SpecDev 运行时，并禁用原生 `dsh-plan-mode`，避免 Spec `/plan` 与 plan-mode 冲突。
 
 ## 目录
 
@@ -25,10 +25,12 @@ SpecDev 组把 Spec 驱动开发带进 harness：在用户工作区落地持久 
 | 包 | 职责 | ctx 键 |
 |---|---|---|
 | [`specdev`](specdev/README.zh.md) | 工作区根、状态 I/O、`confirmGate`、事件、`specdev/status` 投影 | `ctx.specdev` |
+| [`specdev-gate`](specdev-gate/README.zh.md) | 失败关闭式 pipeline-gate（`pre-step` / `pre-execute` / `guard`） | （listeners） |
+| [`specdev-advance`](specdev-advance/README.zh.md) | 角色完成 → `specdev/advance` 引导 | （listeners） |
 | [`command-specdev`](command-specdev/README.zh.md) | 斜杠命令 `/feature`…`/wiki`、`/confirm-gate`、`/status` | （commands 注册表） |
 | [`specdev-presets`](specdev-presets/README.zh.md) | Orchestrator + 角色 presets；发布 `presetRoot` | `ctx.specdevPresets` |
 
-计划中的兄弟包（后续 Phase）：`specdev-gate`、`specdev-advance`。
+Phase 4+ 兄弟能力：phase-runtime git 辅助与 wiki 加固会填实命令桩。
 
 -----
 
@@ -46,6 +48,6 @@ SpecDev 组把 Spec 驱动开发带进 harness：在用户工作区落地持久 
 <details>
 <summary>维护者工作上下文 — 点击展开</summary>
 
-Phase 1 仅交付 `@deepseek-ai/dsh-specdev` 与 sdk-app 挂载。命令 / gate / advance / presets 包在后续 Phase 落地，不得以空壳组合插入。
+Phase 1 交付 `@deepseek-ai/dsh-specdev` 与 sdk-app 挂载。Phase 2 增加 `command-specdev` 与 `specdev-presets`（含 sdk `agent-presets` roots）。Phase 3 交付 `specdev-gate` 与 `specdev-advance`。
 
 </details>

@@ -82,12 +82,20 @@ const SNAPSHOT_EVENT_TYPES = new Set([
 
 /**
  * Extract the whole post-change snapshot from a SpecDev event, when present.
+ *
+ * For `specdev/advance`, `snapshot: null` means guidance-only and must **not**
+ * clear an existing projection (AC-28): forged file HG must never become
+ * authoritative via an advance fold side-effect.
+ *
  * @param event - committed session event.
  */
 function snapshotFromEvent(event: SessionEvent): SpecdevSnapshot | null | undefined {
   if (!SNAPSHOT_EVENT_TYPES.has(event.type)) return undefined
   const data = event.data as { snapshot?: SpecdevSnapshot | null }
   if (!('snapshot' in data)) return undefined
+  if (event.type === 'specdev/advance' && (data.snapshot === null || data.snapshot === undefined)) {
+    return undefined
+  }
   return data.snapshot ?? null
 }
 

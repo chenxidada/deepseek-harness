@@ -25,10 +25,12 @@ The SpecDev group brings Spec-driven development into the harness: a durable `.s
 | Package | Role | ctx key |
 |---|---|---|
 | [`specdev`](specdev/README.md) | Workspace root, status I/O, `confirmGate`, events, `specdev/status` projection | `ctx.specdev` |
+| [`specdev-gate`](specdev-gate/README.md) | Fail-closed pipeline-gate (`pre-step` / `pre-execute` / `guard`) | (listeners) |
+| [`specdev-advance`](specdev-advance/README.md) | Role completion → `specdev/advance` guidance | (listeners) |
 | [`command-specdev`](command-specdev/README.md) | Slash commands `/feature`…`/wiki`, `/confirm-gate`, `/status` | (commands registry) |
 | [`specdev-presets`](specdev-presets/README.md) | Orchestrator + role presets; publishes `presetRoot` | `ctx.specdevPresets` |
 
-Planned siblings (later phases): `specdev-gate`, `specdev-advance`.
+Phase 4+ siblings: phase-runtime git helpers and wiki hardening deepen command stubs.
 
 -----
 
@@ -46,6 +48,6 @@ Planned siblings (later phases): `specdev-gate`, `specdev-advance`.
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-Phase 1 shipped `@deepseek-ai/dsh-specdev` plus the sdk-app mount. Phase 2 adds `command-specdev` and `specdev-presets` (with sdk `agent-presets` roots). Gate / advance packages arrive in later phases.
+Phase 1 shipped `@deepseek-ai/dsh-specdev` plus the sdk-app mount. Phase 2 adds `command-specdev` and `specdev-presets` (with sdk `agent-presets` roots). Phase 3 ships `specdev-gate` and `specdev-advance`.
 
 </details>
