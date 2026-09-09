@@ -59,10 +59,13 @@ import {
   type StartReason,
 } from './auto-start-orchestrator.ts'
 import {
-  AutoReadyLatchSeam,
   ConnectionUiController,
   type ConnectionUiState,
 } from './connection-ui.ts'
+import {
+  AutoReadyCoordinator,
+  type AutoReadyRestoreOptions,
+} from './auto-ready-coordinator.ts'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 
@@ -162,9 +165,11 @@ let workspaceState: WorkspaceStateLike | undefined
 let workspaceKey = ''
 let orchestrator: AutoStartOrchestrator | undefined
 let connectionUi: ConnectionUiController | undefined
-let autoReadyLatch: AutoReadyLatchSeam | undefined
+let autoReady: AutoReadyCoordinator | undefined
 let conversationView: WebviewViewLike | undefined
 let conversationVisible = false
+/** Cached vscode workspace accessor for AutoReady workspace-index predicate. */
+let vscodeWorkspaceFolders: (() => readonly { uri: { fsPath: string } }[] | undefined) | undefined
 /** L2 override for credential presence (`undefined` = scan env). */
 let credentialPresenceOverride: boolean | undefined
 /** Suppress unexpected-disconnect handling during intentional user Stop. */
@@ -196,7 +201,14 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   hostCreateCount = 0
   conversationView = undefined
   conversationVisible = false
-  autoReadyLatch = new AutoReadyLatchSeam()
+  vscodeWorkspaceFolders = () => vscode.workspace.workspaceFolders
+  autoReady = new AutoReadyCoordinator({
+    getController: () => conversations,
+    hasWorkspaceIndex: () => (vscodeWorkspaceFolders?.()?.length ?? 0) > 0,
+    afterApply: () => {
+      panelHost?.pushFullState()
+    },
+  })
 
   if (canRegisterConversationTabBar(vscode)) {
     const tabBar = createConversationTabBar(vscode, getConversationSnapshot)
@@ -229,7 +241,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   stopOrchestratorWatch?.()
   stopOrchestratorWatch = orchestrator.onChange(snap => {
     connectionUi?.projectOrchestrator(snap)
-    autoReadyLatch?.onHostReadyChanged(snap.state === 'started')
+    autoReady?.onHostReadyChanged(snap.state === 'started')
   })
 
   if (canRegisterChatPanel(vscode)) {
@@ -276,7 +288,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     stopStatusWatch?.()
     stopStatusWatch = undefined
     unbindConversations()
-    autoReadyLatch?.onHostReadyChanged(false)
+    autoReady?.onHostReadyChanged(false)
     if (current === undefined) {
       userStopping = false
       await vscode.window.showInformationMessage('No DeepSeek Harness IDE session is running.')
@@ -295,7 +307,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before creating a conversation.')
       return
     }
-    const tab = controller.newConversation('New conversation')
+    const tab = controller.newConversationOrReuseEmpty('New conversation')
     panelHost?.pushFullState()
     await vscode.window.showInformationMessage(`Created conversation Tab ${shortId(tab.sessionId)}.`)
   })
@@ -775,10 +787,16 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
           ok: true as const,
           visible: conversationVisible,
           latch: {
-            conversationViewVisible: autoReadyLatch?.conversationViewVisible ?? false,
-            visibilityEpoch: autoReadyLatch?.visibilityEpoch ?? 0,
+            conversationViewVisible: autoReady?.conversationViewVisible ?? false,
+            visibilityEpoch: autoReady?.visibilityEpoch ?? 0,
           },
         }
+      }),
+      vscode.commands.registerCommand('dsh.test.triggerAutoReady', async (opts?: unknown) => {
+        const options = parseAutoReadyOptions(opts)
+        const result = await autoReady?.triggerAutoReady(options)
+        panelHost?.pushFullState()
+        return result ?? { applied: false as const, reason: 'no-controller' as const }
       }),
       vscode.commands.registerCommand('dsh.test.requestStart', async (reason?: unknown) => {
         const r = typeof reason === 'string' ? reason as StartReason : 'manual-retry'
@@ -838,8 +856,9 @@ export async function deactivate(): Promise<void> {
   connectionUi?.dispose()
   connectionUi = undefined
   orchestrator = undefined
-  autoReadyLatch = undefined
+  autoReady = undefined
   conversationView = undefined
+  vscodeWorkspaceFolders = undefined
   panelHost?.detach()
   if (current !== undefined) await current.shutdown()
   userStopping = false
@@ -1191,11 +1210,7 @@ function createStartHostPort(vscode: VsCodeLike): StartHostPort {
           ...Object.keys(credentials).length === 0 ? {} : { credentials },
         })
         bindConversations(new ConversationController(next, workspaceState, cwd))
-        // Phase-1 keeps restore-on-start temporarily; AutoReady (phase-2) will own New when visible.
-        const restored = await conversations!.restoreOpenTabSet()
-        if (restored.outcome === 'empty') {
-          conversations!.newConversation('New conversation')
-        }
+        // AutoReady owns restore/New when Conversation is visible (AD-CR-3 / DEBT-001).
         panelHost?.pushFullState()
       } catch (error) {
         stopErrorWatch?.()
@@ -1213,13 +1228,13 @@ function createStartHostPort(vscode: VsCodeLike): StartHostPort {
 }
 
 /**
- * Conversation visibility → auto-start + AutoReady latch (AD-CR-2).
+ * Conversation visibility → auto-start + AutoReady latch (AD-CR-2/3).
  * @param visible - WebviewView.visible.
  */
 function handleConversationVisibility(visible: boolean): void {
   conversationVisible = visible
   connectionUi?.setConversationVisible(visible)
-  autoReadyLatch?.onVisibilityChanged(visible)
+  autoReady?.onVisibilityChanged(visible)
   if (visible) {
     void orchestrator?.request('conversation-view-visible')
   }
@@ -1255,7 +1270,7 @@ async function revealConversationPanel(
     // Mark visible for routing; production onDidChangeVisibility will also fire.
     conversationVisible = true
     connectionUi?.setConversationVisible(true)
-    autoReadyLatch?.onVisibilityChanged(true)
+    autoReady?.onVisibilityChanged(true)
   }
   if (requestActivityBar) {
     await orchestrator?.request('activity-bar')
@@ -1299,4 +1314,20 @@ function parseEventsBySession(
     return map
   }
   return undefined
+}
+
+/**
+ * Parse AutoReady L2 options (`eventsBySession` / markUnread / autoContinue).
+ * @param opts - raw `dsh.test.triggerAutoReady` argument.
+ */
+function parseAutoReadyOptions(opts: unknown): AutoReadyRestoreOptions {
+  if (typeof opts !== 'object' || opts === null) return {}
+  const eventsBySession = parseEventsBySession(opts)
+  const markUnread = (opts as { markUnread?: unknown }).markUnread
+  const autoContinue = (opts as { autoContinue?: unknown }).autoContinue
+  return {
+    ...eventsBySession === undefined ? {} : { eventsBySession },
+    ...typeof markUnread === 'boolean' ? { markUnread } : {},
+    ...typeof autoContinue === 'boolean' ? { autoContinue } : {},
+  }
 }

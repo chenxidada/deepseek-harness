@@ -189,38 +189,3 @@ export class ConnectionUiController {
     bar.show()
   }
 }
-
-/**
- * Visibility latch seam for AutoReady (phase-2 fills restore/New).
- * Phase-1 only tracks visibility/hostReady — must not New on activate-only (AC-1a).
- *
- * @STUB(phase-2-auto-ready-surface) restore/New orchestration deferred
- */
-export class AutoReadyLatchSeam {
-  conversationViewVisible = false
-  hostReady = false
-  readyAppliedForVisibilityEpoch = false
-  visibilityEpoch = 0
-
-  /**
-   * Production visibility entry (also used by `dsh.test.fireConversationVisibility`).
-   * @param visible - Conversation view visibility.
-   */
-  onVisibilityChanged(visible: boolean): void {
-    if (this.conversationViewVisible && !visible) {
-      this.visibilityEpoch += 1
-      this.readyAppliedForVisibilityEpoch = false
-    }
-    this.conversationViewVisible = visible
-    // @STUB(phase-2-auto-ready-surface): apply restore/New when visible && hostReady
-  }
-
-  /**
-   * Host readiness change (started / stopped).
-   * @param ready - IdeSessionHost connected.
-   */
-  onHostReadyChanged(ready: boolean): void {
-    this.hostReady = ready
-    // @STUB(phase-2-auto-ready-surface): apply restore/New when visible && hostReady
-  }
-}

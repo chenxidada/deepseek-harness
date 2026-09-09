@@ -3,7 +3,7 @@
   "description": "点开即可聊：自动建连/恢复/新建 + 可用级 Chat UI 底盘 + 对话界面新建会话按钮",
   "created": "2026-09-08T08:58:25Z",
   "current_stage": "phase-implementation",
-  "current_phase": "phase-2-auto-ready-surface",
+  "current_phase": "phase-3-chat-ui-chassis",
   "loop_count": 0,
   "human_gates": {
     "hg1": "passed",
@@ -19,16 +19,19 @@
       "hg3": "passed"
     },
     "phase-2-auto-ready-surface": {
-      "implementer": "pending",
-      "reviewer": "pending",
-      "verifier": "pending"
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed",
+      "code_explorer": "completed",
+      "hg3": "passed"
     },
     "phase-3-chat-ui-chassis": {
       "implementer": "pending",
       "reviewer": "pending",
-      "verifier": "pending"
+      "verifier": "pending",
+      "code_explorer": "pending"
     }
   },
-  "last_update": "2026-09-08T12:06:24Z",
-  "notes": "phase-1 HG-3 passed & merged. Awaiting Phase Entry Gate debt decision before phase-2/3."
+  "last_update": "2026-09-09T01:51:03Z",
+  "notes": "phase-2 HG-3 passed. Serial → phase-3. Entry: no debts target phase-3; DEBT-003→phase-4."
 }

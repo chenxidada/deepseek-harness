@@ -12,7 +12,12 @@ export {
   type StartReason,
 } from './auto-start-orchestrator.ts'
 export {
-  AutoReadyLatchSeam,
+  AutoReadyCoordinator,
+  type AutoReadyApplyResult,
+  type AutoReadyDeps,
+  type AutoReadyRestoreOptions,
+} from './auto-ready-coordinator.ts'
+export {
   ConnectionUiController,
   type ConnectionUiPhase,
   type ConnectionUiState,

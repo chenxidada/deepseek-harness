@@ -15,7 +15,9 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 ## Library
 
 - `IdeSessionHost` — Node-testable lifecycle owner (prompt + bridge `session/dispose` / `session/read-log` / `session/resume` + notification fan-out)
-- `ConversationRegistry` / `ConversationController` — Tab ↔ `sessionId` binding; recoverable close vs delete; **restart restore** + **Continue**
+- `AutoStartOrchestrator` — start-reason FSM (no Start on activate)
+- `AutoReadyCoordinator` — Conversation visible ∧ Host ready → restore / New (decoupled from Start)
+- `ConversationRegistry` / `ConversationController` — Tab ↔ `sessionId` binding; recoverable close vs delete; **restart restore** + **Continue**; `newConversationOrReuseEmpty`
 - `MessageStore` — per-session chat projection for the Conversation panel (not an authority DB)
 - `ExtensionIndex` — immediate `workspaceState` writes for `openTabSet` / `activeSessionId` (metadata only)
 - `ReplayHydrator` / `restore-planner` — authoritative-log hydrate; empty-Tab strip; active-first UI cap N
@@ -29,9 +31,9 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 
 | Command | Action |
 |---|---|
-| `dsh.startSession` | Start / reuse the window session host (via AutoStartOrchestrator) and **restore** persisted non-empty `openTabSet` (else open a blank Tab) |
+| `dsh.startSession` | Start / reuse the window session host (via AutoStartOrchestrator). **Does not** restore Tabs or New — AutoReady does that when Conversation is visible |
 | `dsh.stopSession` | Shut down the session host (user Stop → orchestrator idle) |
-| `dsh.newConversation` | Add a Tab with a fresh `sessionId` (auto-starts Host if needed) |
+| `dsh.newConversation` | Add a Tab with a fresh `sessionId`, or **reuse the active empty Tab** (AD-CR-6); auto-starts Host if needed |
 | `dsh.switchConversation` | Switch the active Tab (TreeView click or QuickPick) — **does not** full auto-start |
 | `dsh.closeConversation` | Close (unload) the active Tab — **does not** dispose the session |
 | `dsh.deleteConversation` | Explicitly delete: confirm → `session/dispose` + clear index. Offline → **「Host 连接后可删除」** (no fake delete, no auto-start) |
@@ -60,6 +62,18 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 
 `onStartupFinished` / `activate` **only registers** commands, views, status bar, and the orchestrator — it does **not** Start (AC-1a).
 
+### Auto-ready timing (AD-CR-3 / AC-3/4/6)
+
+AutoReady runs only when **Conversation is visible ∧ Host is ready**:
+
+1. Non-empty persisted `openTabSet` → restore as `mode=replay` (active-first; **no** auto Continue; unread suppressed).
+2. Empty set / **no workspace folder** → `newConversationOrReuseEmpty` → live (empty Tab **not** written to `openTabSet` until first successful prompt enqueue).
+3. Repeated visibility / trigger while the **active** Tab is still empty → reuse that Tab (never globally steal another empty Tab).
+
+Hidden Start (`dsh.startSession` / command-send while Conversation hidden) leaves **zero** Tabs until Conversation becomes visible.
+
+**Activity-bar production signal (AC-1b):** there is no separate VS Code “activity bar container opened” event. Production relies on Conversation `onDidChangeVisibility` after reveal (status-bar click / `dsh.showPanel` / first view focus). L2 keeps `dsh.test.openActivityBar` as the explicit reveal+`activity-bar` request hook.
+
 Settings prefix for credentials / extension config deep link: `@ext:deepseek-ai.dsh-vscode-dsh`.
 
 ### L2 test hooks (scripting / Extension Host harness)
@@ -81,7 +95,8 @@ Registered **only** when `VSCODE_DSH_TEST=1` or when `activate` receives an inje
 | `dsh.test.getStartState` | Orchestrator snapshot (`idle`/`starting`/`disconnected`/…) |
 | `dsh.test.simulateStartupOnly` | AC-1a reverse: activate-only metrics (no Start) |
 | `dsh.test.setCredentialPresence` | Simulate credential presence for AC-2 |
-| `dsh.test.fireConversationVisibility` | Drive production visibility latch entry |
+| `dsh.test.fireConversationVisibility` | Drive production visibility → AutoReady entry |
+| `dsh.test.triggerAutoReady` | Force AutoReady apply when visible + Host ready (optional `eventsBySession`) |
 | `dsh.test.openActivityBar` | AC-1b: reveal Conversation + `activity-bar` start reason |
 | `dsh.test.requestStart` | Direct orchestrator `request(reason)` |
 | `dsh.test.hostCreateCount` | Host construct count (AC-5) |
@@ -113,10 +128,11 @@ Registered **only** when `VSCODE_DSH_TEST=1` or when `activate` receives an inje
 
 ## Restart restore (AD-CU-3/4/10)
 
-- On `dsh.startSession`, the Extension reads persisted `openTabSet`, **strips empty Tabs** (no messages / never sent), writes the sanitized set back immediately, and hydrates a UI subset of size **N** (`ui.restoreUiLimit`, default **8**).
+- When Conversation becomes visible and Host is ready, AutoReady reads persisted `openTabSet`, **strips empty Tabs** (no messages / never sent), writes the sanitized set back immediately, and hydrates a UI subset of size **N** (`ui.restoreUiLimit`, default **8**).
+- Start alone (`dsh.startSession` while Conversation hidden) does **not** restore or New.
 - The last **active** session is always forced into the UI set and focused (AC-34). Remaining index rows stay in `openTabSet` (AC-70); use `dsh.restoreMoreTabs` / `action/restore-more` for 「查看更多 / 全部恢复」.
-- Restored Tabs are always `mode=replay` (even if `liveIntent` was stored). No automatic Continue / prompt.
-- Host not ready → `waiting-host`; when Host connects, restore hydrates automatically (AC-69).
+- Restored Tabs are always `mode=replay` (even if `liveIntent` was stored). No automatic Continue / prompt. AutoReady suppresses unread.
+- Host not ready → `waiting-host`; when Host connects, restore hydrates automatically (AC-69). No workspace folder → AutoReady skips restore and opens a live empty Tab (AC-4b).
 
 ## Continue this session (AD-CU-8 / T-0b same-id)
 

@@ -23,16 +23,15 @@
 
 | ID | 源Phase | 模块 | 文件:函数:行号 | 当前行为 | 预期行为 | 类型 | 标签 | 依赖它的模块 | 目标Phase | 阻塞 | 来源 | 注册日期 |
 |----|:------:|------|---------------|---------|---------|------|------|-------------|:--------:|:---:|------|---------|
-| STUB-001 | phase-1-auto-start-orchestrator | connection-ui / auto-ready | `apps/vscode-dsh/src/connection-ui.ts:AutoReadyLatchSeam.onVisibilityChanged` / `onHostReadyChanged` | 仅更新 latch 字段（visible/hostReady/epoch）；**不** restore / **不** New | Conversation 可见 ∧ Host 就绪时执行一轮 restore 或 New→live（AD-CR-3） | 流程骨架 | module:auto-ready, type:stub, concern:visibility-latch | extension visibility wiring; phase-2 coordinator | phase-2-auto-ready-surface | 🟡非阻塞 | implementation.md | 2026-09-08 |
-| DEBT-001 | phase-1-auto-start-orchestrator | extension | `apps/vscode-dsh/src/extension.ts:createStartHostPort.start` | Start 成功后仍立即 `restoreOpenTabSet` + 可能 `newConversation`（绑在 Start 上） | Start 与自动就绪解耦：仅 Conversation 可见时由 AutoReady 执行 restore/New（AC-1a / AD-CR-3） | 已知缺陷 | module:auto-start, type:debt, concern:restore-on-start | AutoReadyCoordinator | phase-2-auto-ready-surface | 🟡非阻塞 | implementation.md | 2026-09-08 |
-| DEBT-002 | phase-1-auto-start-orchestrator | extension / activity-bar | `apps/vscode-dsh/src/extension.ts:onActivityBarOpened`（生产接线缺口） | L2 用 `dsh.test.openActivityBar`；生产缺少可靠「活动栏打开」独立事件接线 | 生产路径也应在点开活动栏时 reveal Conversation + request（AC-1b） | 已知缺陷 | module:auto-start, type:debt, concern:activity-bar-signal | AutoStart triggers | phase-2-auto-ready-surface 或后续补强 | 🟡非阻塞 | review.md Should-Fix #1 | 2026-09-08 |
 | DEBT-003 | phase-1-auto-start-orchestrator | chat-panel | `apps/vscode-dsh/src/chat-panel` Webview `action/continue` | Continue 动作不经 `ensureHostForSend`；命令路径会 auto-start | Webview Continue 与发送类命令一致：未连先 Start | 已知缺陷 | module:chat-panel, type:debt, concern:continue-autostart | continue / send path | phase-4-new-conversation-chrome | 🟡非阻塞 | review.md Should-Fix #4 | 2026-09-08 |
 
 ## 已解决
 
 | ID | 源Phase | 描述 | 解决Phase | 解决日期 | 验证方式 |
 |----|:------:|------|:--------:|---------|---------|
-| — | — | — | — | — | — |
+| STUB-001 | phase-1-auto-start-orchestrator | `AutoReadyLatchSeam` 仅 latch；已替换为 `AutoReadyCoordinator`（`auto-ready-coordinator.ts`），可见∧就绪时 restore/New | phase-2-auto-ready-surface | 2026-09-08 | L2 `phase2-auto-ready.spec.ts` AC-3/4/6/7；无 `@STUB(phase-2)` 残留 |
+| DEBT-001 | phase-1-auto-start-orchestrator | Start 成功路径已删除 `restoreOpenTabSet`/`newConversation`；就绪面由 AutoReady 在 Conversation 可见时执行 | phase-2-auto-ready-surface | 2026-09-08 | L2 AC-7：hidden `requestStart` → tabs=0；可见后 New/restore |
+| DEBT-002 | phase-1-auto-start-orchestrator | 生产活动栏无独立事件；README 声明等价于 Conversation `onDidChangeVisibility`（reveal / status-bar / showPanel）；L2 保留 `openActivityBar` | phase-2-auto-ready-surface | 2026-09-08 | README Auto-ready timing 节；既有 phase1 AC-1b L2 |
 
 ---
 

@@ -203,6 +203,22 @@ export class ConversationController {
   }
 
   /**
+   * New or reuse **active empty** Tab only (AD-CR-6 / AC-6).
+   * Never globally steals an inactive empty Tab via findEmptyLive.
+   * @param title - title used when creating a new Tab.
+   * @returns the focused empty Tab (existing active empty, or newly created).
+   */
+  newConversationOrReuseEmpty(title?: string): ConversationTab {
+    const active = this.registry.getActive()
+    if (active !== undefined && !this.messages.hasContent(active.sessionId)) {
+      this.host.interactions.onActiveSessionChange?.(active.sessionId)
+      this.panelHost?.pushFullState()
+      return active
+    }
+    return this.newConversation(title ?? 'New conversation')
+  }
+
+  /**
    * Switch the active Tab without changing the DSH process (AC-7 / AC-18 / AC-58).
    * Clears unread for the target (AC-57) and wakes approval queue soft-priority.
    * @param tabId - Tab to activate.
@@ -289,10 +305,15 @@ export class ConversationController {
    * Restore persisted non-empty openTabSet after Host reconnect / restart (AC-33/34/69/70).
    * Always hydrates as `mode=replay`. Empty Tabs are stripped and written back immediately.
    * Transient `readSessionLog` failures keep the row in the index (deferred), never empty-strip.
-   * @param options - optional event map for L2 tests (bypasses bridge read).
+   * AutoReady passes `markUnread: false` / `autoContinue: false` (AC-3); Continue is never invoked here.
+   * @param options - optional event map for L2 tests; unread/Continue flags for AutoReady API.
    */
   async restoreOpenTabSet(options: {
     eventsBySession?: ReadonlyMap<string, readonly HydratorSessionEvent[]>
+    /** When false (AutoReady), leave unread cleared; restore never marks unread today. */
+    markUnread?: boolean
+    /** When false (AutoReady), skip Continue; restore never auto-Continues. */
+    autoContinue?: boolean
   } = {}): Promise<RestoreOpenTabsResult> {
     if (this.restoreInFlight !== undefined) {
       return this.restoreInFlight
@@ -307,7 +328,12 @@ export class ConversationController {
 
   private async restoreOpenTabSetBody(options: {
     eventsBySession?: ReadonlyMap<string, readonly HydratorSessionEvent[]>
+    markUnread?: boolean
+    autoContinue?: boolean
   }): Promise<RestoreOpenTabsResult> {
+    // AutoReady contract: never mark unread / never Continue from restore.
+    void options.markUnread
+    void options.autoContinue
     if (options.eventsBySession !== undefined) {
       for (const [sessionId, events] of options.eventsBySession) {
         this.eventOverrides.set(sessionId, events)
