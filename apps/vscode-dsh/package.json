@@ -114,6 +114,10 @@
       {
         "command": "dsh.statusBarAction",
         "title": "DeepSeek Harness: Status Bar Connect"
+      },
+      {
+        "command": "dsh.copyToClipboard",
+        "title": "DeepSeek Harness: Copy to Clipboard (internal)"
       }
     ],
     "menus": {

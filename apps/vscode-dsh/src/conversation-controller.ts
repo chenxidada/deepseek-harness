@@ -33,6 +33,7 @@ import {
   type ContinueCapability,
   type ContinueChrome,
 } from './continue-capability.ts'
+import { EMPTY_LIVE_TITLE } from './conversation-titles.ts'
 
 /** Outcome of opening a history session as replay (AC-30/64/65). */
 export type OpenHistoryResult =
@@ -215,7 +216,7 @@ export class ConversationController {
       this.panelHost?.pushFullState()
       return active
     }
-    return this.newConversation(title ?? 'New conversation')
+    return this.newConversation(title ?? EMPTY_LIVE_TITLE)
   }
 
   /**

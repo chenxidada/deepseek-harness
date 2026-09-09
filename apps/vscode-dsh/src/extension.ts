@@ -46,6 +46,7 @@ import {
   ExtensionIndex,
   type WorkspaceStateLike,
 } from './extension-index.ts'
+import { EMPTY_LIVE_TITLE } from './conversation-titles.ts'
 import {
   ChatPanelHost,
   canRegisterChatPanel,
@@ -110,6 +111,10 @@ interface VsCodeLike {
       hide(): void
       dispose(): void
     }
+    /** Active color theme (AC-8a). */
+    activeColorTheme?: { kind: number }
+    /** Theme-change subscription (AC-8a). */
+    onDidChangeActiveColorTheme?(listener: (theme: { kind: number }) => void): { dispose(): void }
   }
   workspace: {
     workspaceFolders?: readonly { uri: { fsPath: string } }[]
@@ -121,6 +126,11 @@ interface VsCodeLike {
   commands: {
     registerCommand(command: string, callback: (...args: unknown[]) => unknown): { dispose(): void }
     executeCommand?(command: string, ...args: unknown[]): Promise<unknown>
+  }
+  env?: {
+    clipboard?: {
+      writeText(value: string): Promise<void> | void
+    }
   }
   TreeItem?: new (label: string, collapsibleState?: number) => {
     label: string
@@ -136,6 +146,7 @@ interface VsCodeLike {
   }
   Uri?: DiffVsCodeLike['Uri']
   StatusBarAlignment?: { Left: number; Right: number }
+  ColorThemeKind?: { Light: number; Dark: number; HighContrast: number; HighContrastLight: number }
 }
 
 /** Disposable registration handle. */
@@ -248,12 +259,20 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     context.subscriptions.push(registerChatPanelProvider(vscode, panelHost, {
       onViewResolved(view) {
         conversationView = view
+        pushActiveTheme(vscode)
       },
       onVisibilityChanged(visible) {
         handleConversationVisibility(visible)
       },
     }))
   }
+
+  if (typeof vscode.window.onDidChangeActiveColorTheme === 'function') {
+    context.subscriptions.push(vscode.window.onDidChangeActiveColorTheme(() => {
+      pushActiveTheme(vscode)
+    }))
+  }
+  pushActiveTheme(vscode)
 
   const showPanel = vscode.commands.registerCommand('dsh.showPanel', async () => {
     await revealConversationPanel(vscode)
@@ -273,6 +292,24 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     )
     return { ok: true as const }
   })
+
+  /** Internal clipboard write for fenced-code Copy (AC-17); not a menu primary entry. */
+  const copyToClipboard = vscode.commands.registerCommand(
+    'dsh.copyToClipboard',
+    async (text?: unknown) => {
+      if (typeof text !== 'string') {
+        return { ok: false as const, reason: 'invalid-text' as const }
+      }
+      const clipboard = vscode.env?.clipboard
+      if (clipboard === undefined || typeof clipboard.writeText !== 'function') {
+        await vscode.window.showErrorMessage('Clipboard is unavailable in this host.')
+        return { ok: false as const, reason: 'no-clipboard' as const }
+      }
+      await clipboard.writeText(text)
+      await vscode.window.showInformationMessage('Copied to clipboard')
+      return { ok: true as const }
+    },
+  )
 
   const start = vscode.commands.registerCommand('dsh.startSession', async () => {
     await orchestrator!.request('command-start')
@@ -307,7 +344,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before creating a conversation.')
       return
     }
-    const tab = controller.newConversationOrReuseEmpty('New conversation')
+    const tab = controller.newConversationOrReuseEmpty(EMPTY_LIVE_TITLE)
     panelHost?.pushFullState()
     await vscode.window.showInformationMessage(`Created conversation Tab ${shortId(tab.sessionId)}.`)
   })
@@ -820,6 +857,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     showPanel,
     statusBarAction,
     openSettings,
+    copyToClipboard,
     start,
     stop,
     newConversation,
@@ -929,6 +967,27 @@ export function getChatPanelHost(): ChatPanelHost | undefined {
   return panelHost
 }
 
+/**
+ * Map VS Code ColorTheme.kind to a stable label for Webview class refresh (AC-8a).
+ * @param vscode - duck-typed vscode module.
+ */
+function pushActiveTheme(vscode: VsCodeLike): void {
+  const kind = vscode.window.activeColorTheme?.kind
+  const kinds = vscode.ColorThemeKind
+  let label = 'dark'
+  if (kind !== undefined && kinds !== undefined) {
+    if (kind === kinds.Light || kind === kinds.HighContrastLight) label = 'light'
+    else if (kind === kinds.HighContrast) label = 'high-contrast'
+    else label = 'dark'
+  } else if (typeof kind === 'number') {
+    // VS Code enum: Light=1, Dark=2, HighContrast=3, HighContrastLight=4
+    if (kind === 1 || kind === 4) label = 'light'
+    else if (kind === 3) label = 'high-contrast'
+    else label = 'dark'
+  }
+  panelHost?.pushThemeKind(label)
+}
+
 function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
   const emptyRegistry = new ConversationRegistry()
   const emptyMessages = new MessageStore()
@@ -966,6 +1025,9 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
         'workbench.action.openSettings',
         '@ext:deepseek-ai.dsh-vscode-dsh',
       )
+    },
+    requestCopyCode: async (text) => {
+      await vscode.commands.executeCommand?.('dsh.copyToClipboard', text)
     },
     resolveContinueChrome: () => conversations?.continueChromeForTab(),
     resolveDeferredRestoreCount: () => conversations?.panelSnapshot().deferredRestoreCount ?? 0,

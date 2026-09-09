@@ -4,6 +4,8 @@
  * @module @deepseek-ai/dsh-vscode-dsh/extension-index
  */
 
+import { isEmptyLiveTitle } from './conversation-titles.ts'
+
 /** Tab mode projected into the open-tab index / panel. */
 export type OpenTabMode = 'live' | 'replay'
 
@@ -187,13 +189,13 @@ export class ExtensionIndex {
   }
 
   /**
-   * History list rows for the current workspace (AC-28/29/63).
-   * Excludes deleted entries; never includes other workspaces (index is workspace-scoped).
+   * History list rows for the current workspace (AC-28/29/63 / AC-19a).
+   * Excludes deleted entries and empty-Tab placeholders; never includes other workspaces.
    * @returns title / mtime / capability hint rows sorted by mtime desc.
    */
   listHistorySessions(): HistoryListRow[] {
     return this.snapshot.sessions
-      .filter(row => row.deleted !== true)
+      .filter(row => row.deleted !== true && isHistoryEligibleSession(row))
       .map(row => ({
         sessionId: row.sessionId,
         title: row.title,
@@ -251,4 +253,14 @@ function cloneSnapshot(snapshot: ExtensionIndexSnapshot): ExtensionIndexSnapshot
     ...snapshot.activeSessionId === undefined ? {} : { activeSessionId: snapshot.activeSessionId },
     ui: { ...snapshot.ui },
   }
+}
+
+/**
+ * History eligibility: exclude empty-Tab placeholders (AC-19a).
+ * Rows with firstUserPreview always qualify; title-only rows qualify unless they look empty-live.
+ * @param row - session index entry.
+ */
+export function isHistoryEligibleSession(row: Pick<SessionIndexEntry, 'title' | 'firstUserPreview'>): boolean {
+  if (row.firstUserPreview !== undefined && row.firstUserPreview.trim() !== '') return true
+  return !isEmptyLiveTitle(row.title)
 }

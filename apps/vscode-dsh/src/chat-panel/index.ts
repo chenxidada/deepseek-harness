@@ -29,3 +29,8 @@ export {
   type RejectSendReason,
   type WebviewToHostMessage,
 } from './protocol.ts'
+export {
+  resolveComposerKeydown,
+  type ComposerKeyAction,
+  type ComposerKeydownInput,
+} from './composer-keydown.ts'

@@ -6,6 +6,7 @@
 
 import type { ConversationController } from './conversation-controller.ts'
 import type { HydratorSessionEvent } from './replay-hydrator.ts'
+import { EMPTY_LIVE_TITLE } from './conversation-titles.ts'
 
 /** Options forwarded into restore during AutoReady apply. */
 export type AutoReadyRestoreOptions = {
@@ -128,7 +129,7 @@ export class AutoReadyCoordinator {
     this.readyAppliedForVisibilityEpoch = true
 
     if (!this.deps.hasWorkspaceIndex()) {
-      controller.newConversationOrReuseEmpty('New conversation')
+      controller.newConversationOrReuseEmpty(EMPTY_LIVE_TITLE)
       this.suppressUnreadForAutoReady(controller)
       this.deps.afterApply?.()
       return { applied: true, path: 'new' }
@@ -146,7 +147,7 @@ export class AutoReadyCoordinator {
     void options.markUnread
 
     if (restored.outcome === 'empty') {
-      controller.newConversationOrReuseEmpty('New conversation')
+      controller.newConversationOrReuseEmpty(EMPTY_LIVE_TITLE)
       this.suppressUnreadForAutoReady(controller)
       this.deps.afterApply?.()
       return { applied: true, path: 'new', outcome: restored.outcome }
@@ -171,7 +172,7 @@ export class AutoReadyCoordinator {
     const active = controller.registry.getActive()
     const emptyActive = active !== undefined && !controller.messages.hasContent(active.sessionId)
     if (tabs.length === 0 || emptyActive) {
-      controller.newConversationOrReuseEmpty('New conversation')
+      controller.newConversationOrReuseEmpty(EMPTY_LIVE_TITLE)
       this.suppressUnreadForAutoReady(controller)
       this.deps.afterApply?.()
     }

@@ -1,8 +1,9 @@
 /**
- * Conversation Tab bar projection for VS Code TreeView (AC-9).
+ * Conversation Tab bar projection for VS Code TreeView (AC-9 / AC-19).
  * @module @deepseek-ai/dsh-vscode-dsh/conversation-tab-bar
  */
 
+import { EMPTY_LIVE_TITLE } from './conversation-titles.ts'
 import {
   type ConversationRegistrySnapshot,
   type ConversationTab,
@@ -18,7 +19,7 @@ export interface ConversationTreeItem {
   unread?: boolean
   /** Pending interaction badge (AC-20). */
   approvalBadge?: boolean
-  /** Override click command (empty-state Start Session). Default: switchConversation. */
+  /** Override click command. Default: switchConversation. */
   commandId?: string
 }
 
@@ -63,18 +64,14 @@ export interface ConversationTabBarVsCode {
 
 /**
  * Build TreeItem-like rows for a conversation Tab bar view.
+ * Empty registry → no command-title stack (AC-19); empty live titles use {@link EMPTY_LIVE_TITLE}.
  * @param snapshot - registry snapshot.
- * @returns ordered Tab bar items (or a Start Session placeholder when empty).
+ * @returns ordered Tab bar items (empty array when no Tabs).
  */
 export function conversationTreeItems(snapshot: ConversationRegistrySnapshot): ConversationTreeItem[] {
   if (snapshot.tabs.length === 0) {
-    return [{
-      tabId: '',
-      label: 'Start IDE Session…',
-      description: 'Click here, or use the Command Palette',
-      active: false,
-      commandId: 'dsh.startSession',
-    }]
+    // AC-19: do not pile Start Session / Command Palette titles in the empty state.
+    return []
   }
   return snapshot.tabs.map(tab => ({
     tabId: tab.tabId,
@@ -107,15 +104,6 @@ export function createConversationTabBar(
     },
     getTreeItem(element: ConversationTreeItem): TreeItemLike {
       const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None)
-      if (element.commandId === 'dsh.startSession') {
-        item.description = element.description
-        item.contextValue = 'dshConversationStart'
-        item.command = {
-          command: 'dsh.startSession',
-          title: 'Start IDE Session',
-        }
-        return item
-      }
       item.description = element.active ? `${element.description} · active` : element.description
       // contextValue enables Delete Conversation menu entry (AC-62).
       item.contextValue = element.active ? 'dshConversationActive' : 'dshConversation'
@@ -155,9 +143,16 @@ export function canRegisterConversationTabBar(vscode: unknown): vscode is Conver
 }
 
 function tabBarLabel(tab: ConversationTab): string {
-  const base = tab.title ?? `Conversation ${shortId(tab.sessionId)}`
+  const base = displayTitle(tab)
   const marks = `${tab.unread ? '●' : ''}${tab.approvalBadge ? '⚠' : ''}`
   return marks === '' ? base : `${marks} ${base}`
+}
+
+function displayTitle(tab: ConversationTab): string {
+  if (tab.title === undefined || tab.title.trim() === '' || tab.title === 'New conversation') {
+    return EMPTY_LIVE_TITLE
+  }
+  return tab.title
 }
 
 function shortId(id: string): string {

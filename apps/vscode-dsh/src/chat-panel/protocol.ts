@@ -87,6 +87,11 @@ export type HostToWebviewMessage =
     kind: 'user' | 'assistant' | 'none'
     label?: string
   }
+  | {
+    /** Optional theme class broadcast (AC-8a); native `--vscode-*` remains primary. */
+    type: 'ui/theme'
+    themeKind: string
+  }
 
 /** Webview → Host frames (Phase 1–3). */
 export type WebviewToHostMessage =
@@ -97,6 +102,7 @@ export type WebviewToHostMessage =
   | { type: 'action/restore-more'; all?: boolean }
   | { type: 'action/retry-connect' }
   | { type: 'action/open-settings' }
+  | { type: 'action/copy-code'; text: string }
   | { type: 'scroll/reveal'; callId?: string }
 
 /**
@@ -122,6 +128,10 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'composer/send') {
     if (typeof record.text !== 'string') return undefined
     return { type: 'composer/send', text: record.text }
+  }
+  if (type === 'action/copy-code') {
+    if (typeof record.text !== 'string') return undefined
+    return { type: 'action/copy-code', text: record.text }
   }
   if (type === 'scroll/reveal') {
     if (record.callId !== undefined && typeof record.callId !== 'string') return undefined

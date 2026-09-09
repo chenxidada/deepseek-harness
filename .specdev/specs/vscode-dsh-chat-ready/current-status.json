@@ -3,7 +3,7 @@
   "description": "点开即可聊：自动建连/恢复/新建 + 可用级 Chat UI 底盘 + 对话界面新建会话按钮",
   "created": "2026-09-08T08:58:25Z",
   "current_stage": "phase-implementation",
-  "current_phase": "phase-3-chat-ui-chassis",
+  "current_phase": "phase-4-new-conversation-chrome",
   "loop_count": 0,
   "human_gates": {
     "hg1": "passed",
@@ -26,12 +26,19 @@
       "hg3": "passed"
     },
     "phase-3-chat-ui-chassis": {
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed",
+      "code_explorer": "completed",
+      "hg3": "passed"
+    },
+    "phase-4-new-conversation-chrome": {
       "implementer": "pending",
       "reviewer": "pending",
       "verifier": "pending",
       "code_explorer": "pending"
     }
   },
-  "last_update": "2026-09-09T01:51:03Z",
-  "notes": "phase-2 HG-3 passed. Serial → phase-3. Entry: no debts target phase-3; DEBT-003→phase-4."
+  "last_update": "2026-09-09T03:33:17Z",
+  "notes": "phase-3 HG-3 passed. Serial → phase-4. Entry Gate: DEBT-003 (Continue auto-start) targets phase-4."
 }

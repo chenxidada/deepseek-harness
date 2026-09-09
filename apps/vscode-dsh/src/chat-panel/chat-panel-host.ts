@@ -75,6 +75,11 @@ export interface ChatPanelHostDeps {
   requestRetryConnect?: () => Promise<void>
   /** Optional settings deep-link (missing credentials). */
   requestOpenSettings?: () => Promise<void>
+  /**
+   * Optional code-copy path (AC-17) → `dsh.copyToClipboard`.
+   * @param text - fenced code body to write.
+   */
+  requestCopyCode?: (text: string) => Promise<void>
 }
 
 /**
@@ -231,6 +236,15 @@ export class ChatPanelHost {
   }
 
   /**
+   * Broadcast theme kind class for Webview belt-and-suspenders refresh (AC-8a).
+   * Does not push CSS variable tables — native `--vscode-*` remains primary (AD-CR-7).
+   * @param themeKind - VS Code ColorTheme.kind label (e.g. light / dark / high-contrast).
+   */
+  pushThemeKind(themeKind: string): void {
+    this.post({ type: 'ui/theme', themeKind })
+  }
+
+  /**
    * Refresh status/set for the active Tab (running / waiting / idle).
    */
   pushStatus(): void {
@@ -315,6 +329,10 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/open-settings') {
       await this.deps.requestOpenSettings?.()
+      return
+    }
+    if (message.type === 'action/copy-code') {
+      await this.deps.requestCopyCode?.(message.text)
       return
     }
     if (message.type === 'scroll/reveal') {

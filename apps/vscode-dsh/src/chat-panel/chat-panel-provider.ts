@@ -1,9 +1,11 @@
 /**
- * Thin Conversation WebviewView provider (AD-CU-1).
+ * Thin Conversation WebviewView provider (AD-CU-1 / AD-CR-7).
  * Client follows panel/state only; Host owns send gate via ui/reject-send.
+ * Presentation chassis: theme tokens, bubbles, composer, safe Markdown.
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/chat-panel-provider
  */
 
+import { safeMarkdownBrowserSource } from '../markdown/safe-markdown.ts'
 import type { ChatPanelHost } from './chat-panel-host.ts'
 
 /** Duck-typed Webview used by the provider. */
@@ -123,7 +125,8 @@ export function registerChatPanelProvider(
 }
 
 /**
- * Minimal HTML/JS: render Host frames; never decide mode/session locally.
+ * Chat UI chassis HTML/JS: theme tokens, bubbles, fixed composer, safe MD (AD-CR-7).
+ * Never decides mode/session locally — Host authority only (AC-25).
  * @param cspSource - optional webview CSP source.
  * @returns HTML document string.
  */
@@ -131,43 +134,211 @@ export function buildThinChatHtml(cspSource?: string): string {
   const csp = cspSource === undefined
     ? ''
     : `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource} 'unsafe-inline';">`
+  const mdSource = safeMarkdownBrowserSource()
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   ${csp}
   <style>
-    body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); margin: 0; padding: 8px; }
-    #banner, #status { font-size: 12px; opacity: 0.85; margin-bottom: 6px; }
+    :root {
+      --dsh-bubble-user-bg: var(--vscode-editor-inactiveSelectionBackground);
+      --dsh-bubble-assistant-bg: var(--vscode-editor-selectionHighlightBackground, var(--vscode-editor-inactiveSelectionBackground));
+      --dsh-composer-bg: var(--vscode-sideBar-background, var(--vscode-editor-background));
+      --dsh-send-bg: var(--vscode-button-background);
+      --dsh-send-fg: var(--vscode-button-foreground);
+      --dsh-send-hover: var(--vscode-button-hoverBackground);
+      --dsh-border: var(--vscode-panel-border, var(--vscode-widget-border));
+      --dsh-status-fg: var(--vscode-descriptionForeground, var(--vscode-foreground));
+      --dsh-code-bg: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+    }
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      color: var(--vscode-foreground);
+      background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+      padding: 0;
+      min-height: 100vh;
+    }
+    body.theme-dark { color-scheme: dark; }
+    body.theme-light { color-scheme: light; }
+    body.theme-high-contrast { color-scheme: dark; }
+    #layout {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      height: 100%;
+    }
+    #top {
+      flex-shrink: 0;
+      padding: 8px 10px 0;
+    }
+    #banner, #status {
+      font-size: 12px;
+      color: var(--dsh-status-fg);
+      margin-bottom: 6px;
+    }
+    #status.is-generating {
+      color: var(--vscode-textLink-foreground);
+      font-weight: 600;
+      opacity: 1;
+    }
+    #status:empty { display: none; }
     #chrome { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
     #chrome button[hidden] { display: none !important; }
     #connectionActions { display: flex; gap: 6px; margin-bottom: 8px; }
     #connectionActions button[hidden] { display: none !important; }
-    #messages { display: flex; flex-direction: column; gap: 8px; min-height: 120px; }
-    .msg { white-space: pre-wrap; padding: 6px 8px; border-radius: 4px; background: var(--vscode-editor-inactiveSelectionBackground); }
-    .msg.user { border-left: 3px solid var(--vscode-focusBorder); }
-    .msg.assistant { border-left: 3px solid var(--vscode-textLink-foreground); }
-    #composer { display: flex; gap: 6px; margin-top: 8px; }
-    #input { flex: 1; min-height: 48px; }
-    #reject { color: var(--vscode-errorForeground); font-size: 12px; min-height: 1em; }
+    #messages {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 8px 10px 12px;
+    }
+    .msg.bubble {
+      white-space: normal;
+      padding: 8px 10px;
+      border-radius: 8px;
+      max-width: 96%;
+      line-height: 1.45;
+      border: 1px solid transparent;
+    }
+    .msg.bubble.user {
+      align-self: flex-end;
+      background: var(--dsh-bubble-user-bg);
+      border-left: 3px solid var(--vscode-focusBorder);
+      border-color: var(--vscode-focusBorder);
+    }
+    .msg.bubble.assistant {
+      align-self: flex-start;
+      background: var(--dsh-bubble-assistant-bg);
+      border-left: 3px solid var(--vscode-textLink-foreground);
+      border-color: var(--vscode-textLink-foreground);
+    }
+    .msg.bubble.notice {
+      align-self: center;
+      opacity: 0.9;
+      background: var(--vscode-inputValidation-warningBackground, var(--dsh-bubble-user-bg));
+      border-left: 3px solid var(--vscode-inputValidation-warningBorder, var(--vscode-editorWarning-foreground));
+    }
+    .md-h { margin: 0.35em 0; font-size: 1.05em; }
+    .md-list { margin: 0.35em 0; padding-left: 1.4em; }
+    .md-p, .md-plain { margin: 0.25em 0; white-space: pre-wrap; }
+    .code-block {
+      position: relative;
+      margin: 0.5em 0;
+      background: var(--dsh-code-bg);
+      border: 1px solid var(--dsh-border);
+      border-radius: 6px;
+      overflow: auto;
+    }
+    .code-block .copy-code {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      font-size: 11px;
+      padding: 2px 6px;
+      cursor: pointer;
+      background: var(--vscode-button-secondaryBackground, var(--dsh-send-bg));
+      color: var(--vscode-button-secondaryForeground, var(--dsh-send-fg));
+      border: 1px solid var(--dsh-border);
+      border-radius: 4px;
+    }
+    .md-pre {
+      margin: 0;
+      padding: 10px 12px;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: var(--vscode-editor-font-size, 12px);
+      white-space: pre;
+      overflow: auto;
+    }
+    #reject {
+      color: var(--vscode-errorForeground);
+      font-size: 12px;
+      min-height: 1em;
+      padding: 0 10px;
+      flex-shrink: 0;
+    }
+    #composer {
+      flex-shrink: 0;
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+      padding: 8px 10px 10px;
+      border-top: 1px solid var(--dsh-border);
+      background: var(--dsh-composer-bg);
+      position: sticky;
+      bottom: 0;
+    }
+    #input {
+      flex: 1;
+      min-height: 52px;
+      max-height: 160px;
+      resize: vertical;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      color: var(--vscode-input-foreground);
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--dsh-border));
+      border-radius: 6px;
+      padding: 8px;
+      box-sizing: border-box;
+    }
+    #send {
+      flex-shrink: 0;
+      min-width: 64px;
+      min-height: 32px;
+      padding: 6px 14px;
+      cursor: pointer;
+      font-weight: 600;
+      border-radius: 6px;
+      border: 1px solid var(--vscode-button-border, transparent);
+      background: var(--dsh-send-bg);
+      color: var(--dsh-send-fg);
+    }
+    #send:hover:not(:disabled) { background: var(--dsh-send-hover); }
+    #send:disabled, #input:disabled { opacity: 0.55; cursor: not-allowed; }
+    button {
+      font-family: var(--vscode-font-family);
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-button-background);
+      border: 1px solid var(--vscode-button-border, transparent);
+      border-radius: 4px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
   </style>
 </head>
-<body>
-  <div id="banner"></div>
-  <div id="connectionActions">
-    <button id="retryConnectBtn" type="button" hidden>Retry</button>
-    <button id="openSettingsBtn" type="button" hidden>Open settings</button>
-  </div>
-  <div id="chrome">
-    <button id="continueBtn" type="button" hidden>Continue</button>
-    <button id="restoreMoreBtn" type="button" hidden>查看更多</button>
-  </div>
-  <div id="status"></div>
-  <div id="messages"></div>
-  <div id="reject"></div>
-  <div id="composer">
-    <textarea id="input" placeholder="Message…"></textarea>
-    <button id="send" type="button">Send</button>
+<body class="dsh-chat-chassis" data-testid="chat-chassis">
+  <div id="layout">
+    <div id="top">
+      <div id="banner"></div>
+      <div id="connectionActions">
+        <button id="retryConnectBtn" type="button" hidden>Retry</button>
+        <button id="openSettingsBtn" type="button" hidden>Open settings</button>
+      </div>
+      <div id="chrome">
+        <button id="continueBtn" type="button" hidden>Continue</button>
+        <button id="restoreMoreBtn" type="button" hidden>查看更多</button>
+      </div>
+      <div id="status" role="status" aria-live="polite"></div>
+    </div>
+    <div id="messages" data-testid="messages"></div>
+    <div id="reject"></div>
+    <div id="composer" data-testid="composer">
+      <textarea id="input" placeholder="Message…" aria-label="Message"></textarea>
+      <button id="send" type="button" data-testid="send">Send</button>
+    </div>
   </div>
   <script>
     const vscode = acquireVsCodeApi();
@@ -183,32 +354,61 @@ export function buildThinChatHtml(cspSource?: string): string {
     const restoreMoreBtn = document.getElementById('restoreMoreBtn');
     const retryConnectBtn = document.getElementById('retryConnectBtn');
     const openSettingsBtn = document.getElementById('openSettingsBtn');
-
+    ${mdSource}
+    function resolveComposerKeydown(input) {
+      if (input.isComposing === true) return 'none';
+      if (input.key !== 'Enter') return 'none';
+      if (input.shiftKey) return 'newline';
+      if (String(input.text || '').trim() === '') return 'none';
+      return 'send';
+    }
+    function wireCopyButtons(root) {
+      root.querySelectorAll('button.copy-code[data-copy-code]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var encoded = btn.getAttribute('data-copy-code') || '';
+          var text = '';
+          try { text = decodeURIComponent(encoded); } catch (e) { text = encoded; }
+          vscode.postMessage({ type: 'action/copy-code', text: text });
+        });
+      });
+    }
+    function renderBubble(msg) {
+      var div = document.createElement('div');
+      div.className = 'msg bubble ' + msg.role;
+      div.setAttribute('data-role', msg.role);
+      var rendered = renderSafeMarkdown(msg.text || '');
+      div.innerHTML = rendered.html;
+      wireCopyButtons(div);
+      return div;
+    }
     function renderMessages(list) {
       messagesEl.innerHTML = '';
-      for (const msg of list) {
-        const div = document.createElement('div');
-        div.className = 'msg ' + msg.role;
-        div.textContent = msg.text;
-        messagesEl.appendChild(div);
+      for (var i = 0; i < list.length; i++) {
+        messagesEl.appendChild(renderBubble(list[i]));
       }
     }
     function appendMessage(msg) {
-      const div = document.createElement('div');
-      div.className = 'msg ' + msg.role;
-      div.textContent = msg.text;
-      messagesEl.appendChild(div);
+      messagesEl.appendChild(renderBubble(msg));
     }
     function syncComposer() {
-      const live = mode === 'live';
+      var live = mode === 'live';
       inputEl.disabled = !live;
       sendEl.disabled = !live;
     }
+    function applyThemeKind(kind) {
+      var k = String(kind || '').toLowerCase();
+      document.body.classList.remove('theme-light', 'theme-dark', 'theme-high-contrast');
+      if (k.indexOf('high') !== -1 || k === '3' || k === '4') {
+        document.body.classList.add('theme-high-contrast');
+      } else if (k.indexOf('light') !== -1 || k === '1') {
+        document.body.classList.add('theme-light');
+      } else {
+        document.body.classList.add('theme-dark');
+      }
+    }
     function syncConnection(msg) {
-      const phase = msg.connectionPhase || 'idle';
-      const connecting = phase === 'connecting' || phase === 'disconnected-retrying';
-      const failed = phase === 'failed' || phase === 'disconnected-manual';
-      retryConnectBtn.hidden = !(failed || connecting === false && phase === 'disconnected-manual');
+      var phase = msg.connectionPhase || 'idle';
+      var failed = phase === 'failed' || phase === 'disconnected-manual';
       if (phase === 'failed' || phase === 'disconnected-manual') {
         retryConnectBtn.hidden = false;
       } else {
@@ -222,7 +422,7 @@ export function buildThinChatHtml(cspSource?: string): string {
       }
     }
     function syncChrome(msg) {
-      const cont = msg.continue;
+      var cont = msg.continue;
       if (!cont || cont.visibility === 'hidden') {
         continueBtn.hidden = true;
         continueBtn.disabled = true;
@@ -233,7 +433,7 @@ export function buildThinChatHtml(cspSource?: string): string {
         if (cont.tooltip) continueBtn.title = cont.tooltip;
         else continueBtn.removeAttribute('title');
       }
-      const deferredRestoreCount = typeof msg.deferredRestoreCount === 'number'
+      var deferredRestoreCount = typeof msg.deferredRestoreCount === 'number'
         ? msg.deferredRestoreCount : 0;
       if (deferredRestoreCount > 0) {
         restoreMoreBtn.hidden = false;
@@ -244,8 +444,15 @@ export function buildThinChatHtml(cspSource?: string): string {
       }
       syncConnection(msg);
     }
-    window.addEventListener('message', (event) => {
-      const msg = event.data;
+    function sendComposer() {
+      rejectEl.textContent = '';
+      var text = inputEl.value;
+      if (String(text).trim() === '') return;
+      vscode.postMessage({ type: 'composer/send', text: text });
+      inputEl.value = '';
+    }
+    window.addEventListener('message', function(event) {
+      var msg = event.data;
       if (!msg || typeof msg.type !== 'string') return;
       if (msg.type === 'panel/state') {
         mode = msg.mode;
@@ -254,7 +461,6 @@ export function buildThinChatHtml(cspSource?: string): string {
           : mode === 'empty' ? 'No active conversation'
           : mode === 'replay' ? 'Replay (read-only)'
           : (msg.title || 'Conversation');
-        // Belt-and-suspenders: empty chrome must not retain prior bubbles (AC-2 / AC-24).
         if (mode === 'empty' || mode === 'waiting-host') {
           renderMessages([]);
         }
@@ -263,7 +469,6 @@ export function buildThinChatHtml(cspSource?: string): string {
         return;
       }
       if (msg.type === 'messages/replace') {
-        // Empty clear frames use sessionId ''; accept them even when prior live sessionId is set.
         if (msg.sessionId !== '' && sessionId !== undefined && msg.sessionId !== sessionId) return;
         renderMessages(msg.messages || []);
         return;
@@ -274,10 +479,19 @@ export function buildThinChatHtml(cspSource?: string): string {
         return;
       }
       if (msg.type === 'status/set') {
-        statusEl.textContent = msg.status === 'generating' ? 'Generating…'
-          : msg.status === 'waiting-interaction' ? 'Waiting for interaction…'
-          : msg.status === 'disconnected' ? 'Disconnected'
-          : '';
+        if (msg.status === 'generating') {
+          statusEl.textContent = 'Generating…';
+          statusEl.classList.add('is-generating');
+        } else if (msg.status === 'waiting-interaction') {
+          statusEl.textContent = 'Waiting for interaction…';
+          statusEl.classList.remove('is-generating');
+        } else if (msg.status === 'disconnected') {
+          statusEl.textContent = 'Disconnected';
+          statusEl.classList.remove('is-generating');
+        } else {
+          statusEl.textContent = '';
+          statusEl.classList.remove('is-generating');
+        }
         return;
       }
       if (msg.type === 'ui/banner') {
@@ -288,23 +502,38 @@ export function buildThinChatHtml(cspSource?: string): string {
         rejectEl.textContent = 'Send rejected: ' + msg.reason;
         return;
       }
+      if (msg.type === 'ui/theme') {
+        applyThemeKind(msg.themeKind);
+        return;
+      }
     });
-    continueBtn.addEventListener('click', () => {
+    continueBtn.addEventListener('click', function() {
       vscode.postMessage({ type: 'action/continue' });
     });
-    restoreMoreBtn.addEventListener('click', () => {
+    restoreMoreBtn.addEventListener('click', function() {
       vscode.postMessage({ type: 'action/restore-more' });
     });
-    retryConnectBtn.addEventListener('click', () => {
+    retryConnectBtn.addEventListener('click', function() {
       vscode.postMessage({ type: 'action/retry-connect' });
     });
-    openSettingsBtn.addEventListener('click', () => {
+    openSettingsBtn.addEventListener('click', function() {
       vscode.postMessage({ type: 'action/open-settings' });
     });
-    sendEl.addEventListener('click', () => {
-      rejectEl.textContent = '';
-      vscode.postMessage({ type: 'composer/send', text: inputEl.value });
-      inputEl.value = '';
+    sendEl.addEventListener('click', function() {
+      sendComposer();
+    });
+    inputEl.addEventListener('keydown', function(event) {
+      var action = resolveComposerKeydown({
+        key: event.key,
+        shiftKey: event.shiftKey === true,
+        isComposing: event.isComposing === true,
+        text: inputEl.value,
+      });
+      if (action === 'send') {
+        event.preventDefault();
+        sendComposer();
+      }
+      // Shift+Enter → newline (default); do not post composer/send
     });
     vscode.postMessage({ type: 'ready' });
   </script>
