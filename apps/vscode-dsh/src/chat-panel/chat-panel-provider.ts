@@ -192,8 +192,41 @@ export function buildThinChatHtml(cspSource?: string): string {
       opacity: 1;
     }
     #status:empty { display: none; }
-    #chrome { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+    #chrome { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
     #chrome button[hidden] { display: none !important; }
+    #newConversationBtn { flex: 0 0 auto; font-weight: 600; }
+    #chromeOverflow {
+      position: relative;
+      flex: 0 0 auto;
+    }
+    #chromeOverflow > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--vscode-button-border, transparent);
+      background: var(--vscode-button-secondaryBackground, var(--dsh-send-bg));
+      color: var(--vscode-button-secondaryForeground, var(--dsh-send-fg));
+      user-select: none;
+    }
+    #chromeOverflow > summary::-webkit-details-marker { display: none; }
+    #chromeOverflowMenu {
+      position: absolute;
+      z-index: 2;
+      top: 100%;
+      left: 0;
+      margin-top: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 9em;
+      padding: 6px;
+      background: var(--vscode-menu-background, var(--vscode-editor-background));
+      border: 1px solid var(--dsh-border);
+      border-radius: 4px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    }
+    #chromeOverflowMenu button { width: 100%; text-align: left; }
     #connectionActions { display: flex; gap: 6px; margin-bottom: 8px; }
     #connectionActions button[hidden] { display: none !important; }
     #messages {
@@ -327,9 +360,16 @@ export function buildThinChatHtml(cspSource?: string): string {
         <button id="retryConnectBtn" type="button" hidden>Retry</button>
         <button id="openSettingsBtn" type="button" hidden>Open settings</button>
       </div>
-      <div id="chrome">
+      <div id="chrome" data-testid="chrome">
+        <button id="newConversationBtn" type="button" data-testid="new-conversation">新建会话</button>
         <button id="continueBtn" type="button" hidden>Continue</button>
         <button id="restoreMoreBtn" type="button" hidden>查看更多</button>
+        <details id="chromeOverflow" class="chrome-overflow" hidden>
+          <summary aria-label="更多">⋯</summary>
+          <div id="chromeOverflowMenu">
+            <button id="newConversationOverflowBtn" type="button">新建会话</button>
+          </div>
+        </details>
       </div>
       <div id="status" role="status" aria-live="polite"></div>
     </div>
@@ -352,8 +392,12 @@ export function buildThinChatHtml(cspSource?: string): string {
     const sendEl = document.getElementById('send');
     const continueBtn = document.getElementById('continueBtn');
     const restoreMoreBtn = document.getElementById('restoreMoreBtn');
+    const newConversationBtn = document.getElementById('newConversationBtn');
+    const newConversationOverflowBtn = document.getElementById('newConversationOverflowBtn');
+    const chromeOverflow = document.getElementById('chromeOverflow');
     const retryConnectBtn = document.getElementById('retryConnectBtn');
     const openSettingsBtn = document.getElementById('openSettingsBtn');
+    let connectionPhase = 'idle';
     ${mdSource}
     function resolveComposerKeydown(input) {
       if (input.isComposing === true) return 'none';
@@ -391,7 +435,8 @@ export function buildThinChatHtml(cspSource?: string): string {
       messagesEl.appendChild(renderBubble(msg));
     }
     function syncComposer() {
-      var live = mode === 'live';
+      // AC-22: connecting is never sendable live (Host also gates via ui/reject-send).
+      var live = mode === 'live' && connectionPhase !== 'connecting';
       inputEl.disabled = !live;
       sendEl.disabled = !live;
     }
@@ -408,6 +453,7 @@ export function buildThinChatHtml(cspSource?: string): string {
     }
     function syncConnection(msg) {
       var phase = msg.connectionPhase || 'idle';
+      connectionPhase = phase;
       var failed = phase === 'failed' || phase === 'disconnected-manual';
       if (phase === 'failed' || phase === 'disconnected-manual') {
         retryConnectBtn.hidden = false;
@@ -416,10 +462,22 @@ export function buildThinChatHtml(cspSource?: string): string {
       }
       openSettingsBtn.hidden = !msg.settingsDeepLinkAvailable;
       if (phase === 'connecting') {
-        bannerEl.textContent = msg.connectionMessage || 'Connecting to Host…';
+        bannerEl.textContent = msg.connectionMessage || '正在连接到 Host…';
       } else if (failed && msg.connectionMessage) {
         bannerEl.textContent = msg.connectionMessage;
       }
+    }
+    function syncNewConversationChrome(msg) {
+      var chrome = msg.chrome && msg.chrome.newConversation;
+      var visibility = chrome && chrome.visibility ? chrome.visibility : 'enabled';
+      var hidden = visibility === 'hidden';
+      var disabled = visibility === 'disabled';
+      newConversationBtn.hidden = hidden;
+      newConversationBtn.disabled = disabled;
+      newConversationOverflowBtn.hidden = hidden;
+      newConversationOverflowBtn.disabled = disabled;
+      // Narrow overflow: expand + first item is also「新建会话」(AC-15).
+      chromeOverflow.hidden = false;
     }
     function syncChrome(msg) {
       var cont = msg.continue;
@@ -442,7 +500,13 @@ export function buildThinChatHtml(cspSource?: string): string {
         restoreMoreBtn.hidden = true;
         restoreMoreBtn.textContent = '查看更多';
       }
+      syncNewConversationChrome(msg);
       syncConnection(msg);
+      syncComposer();
+    }
+    function postNewConversation() {
+      vscode.postMessage({ type: 'action/new-conversation' });
+      if (chromeOverflow && chromeOverflow.open) chromeOverflow.open = false;
     }
     function sendComposer() {
       rejectEl.textContent = '';
@@ -457,14 +521,16 @@ export function buildThinChatHtml(cspSource?: string): string {
       if (msg.type === 'panel/state') {
         mode = msg.mode;
         sessionId = msg.sessionId;
-        bannerEl.textContent = mode === 'waiting-host' ? 'Waiting for Host…'
+        connectionPhase = msg.connectionPhase || connectionPhase || 'idle';
+        bannerEl.textContent = connectionPhase === 'connecting'
+          ? (msg.connectionMessage || '正在连接到 Host…')
+          : mode === 'waiting-host' ? 'Waiting for Host…'
           : mode === 'empty' ? 'No active conversation'
           : mode === 'replay' ? 'Replay (read-only)'
           : (msg.title || 'Conversation');
-        if (mode === 'empty' || mode === 'waiting-host') {
+        if (mode === 'empty' || (mode === 'waiting-host' && connectionPhase !== 'connecting')) {
           renderMessages([]);
         }
-        syncComposer();
         syncChrome(msg);
         return;
       }
@@ -509,6 +575,12 @@ export function buildThinChatHtml(cspSource?: string): string {
     });
     continueBtn.addEventListener('click', function() {
       vscode.postMessage({ type: 'action/continue' });
+    });
+    newConversationBtn.addEventListener('click', function() {
+      postNewConversation();
+    });
+    newConversationOverflowBtn.addEventListener('click', function() {
+      postNewConversation();
     });
     restoreMoreBtn.addEventListener('click', function() {
       vscode.postMessage({ type: 'action/restore-more' });

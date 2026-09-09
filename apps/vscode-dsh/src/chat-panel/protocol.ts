@@ -49,6 +49,14 @@ export type HostToWebviewMessage =
       capability?: 'same-id' | 'derive-only' | 'unknown'
       tooltip?: string
     }
+    /**
+     * Top-bar「新建会话」chrome (AD-CR-8); omitted → Webview treats as always enabled.
+     */
+    chrome?: {
+      newConversation?: {
+        visibility: 'hidden' | 'disabled' | 'enabled'
+      }
+    }
     /** Remaining deferred restore Tabs (「查看更多」). */
     deferredRestoreCount?: number
     /** Auto-start / connection projection (phase-1 seam). */
@@ -93,12 +101,13 @@ export type HostToWebviewMessage =
     themeKind: string
   }
 
-/** Webview → Host frames (Phase 1–3). */
+/** Webview → Host frames (Phase 1–4). */
 export type WebviewToHostMessage =
   | { type: 'ready' }
   | { type: 'composer/send'; text: string }
   | { type: 'action/delete' }
   | { type: 'action/continue' }
+  | { type: 'action/new-conversation' }
   | { type: 'action/restore-more'; all?: boolean }
   | { type: 'action/retry-connect' }
   | { type: 'action/open-settings' }
@@ -117,6 +126,7 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'ready') return { type: 'ready' }
   if (type === 'action/delete') return { type: 'action/delete' }
   if (type === 'action/continue') return { type: 'action/continue' }
+  if (type === 'action/new-conversation') return { type: 'action/new-conversation' }
   if (type === 'action/retry-connect') return { type: 'action/retry-connect' }
   if (type === 'action/open-settings') return { type: 'action/open-settings' }
   if (type === 'action/restore-more') {

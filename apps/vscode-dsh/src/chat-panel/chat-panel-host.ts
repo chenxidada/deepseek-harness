@@ -51,6 +51,8 @@ export interface ChatPanelHostDeps {
   requestDelete?: () => Promise<void>
   /** Optional Continue action (AD-CU-8). */
   requestContinue?: () => Promise<void>
+  /** Optional「新建会话」action (AD-CR-8); Host owns Start→New/reuse→reveal. */
+  requestNewConversation?: () => Promise<void>
   /** Optional 「查看更多」 restore. */
   requestRestoreMore?: (all?: boolean) => Promise<void>
   /** Optional Continue chrome resolver for panel/state. */
@@ -107,7 +109,7 @@ export class ChatPanelHost {
     this.connectionMessage = state.message
     this.settingsDeepLinkAvailable = state.settingsDeepLinkAvailable
     if (state.phase === 'connecting') {
-      this.pushBanner(state.message ?? 'Connecting to Host…', 'connecting')
+      this.pushBanner(state.message ?? '正在连接到 Host…', 'connecting')
     } else if (state.phase === 'failed' || state.phase === 'disconnected-manual'
       || state.phase === 'disconnected-retrying') {
       this.pushBanner(state.message ?? 'Host connection issue', state.phase)
@@ -174,21 +176,38 @@ export class ChatPanelHost {
       ...this.connectionMessage === undefined ? {} : { connectionMessage: this.connectionMessage },
       settingsDeepLinkAvailable: this.settingsDeepLinkAvailable,
     }
+    // Chrome「新建会话」is the product primary entry (AD-CR-8 / AC-15): always enabled.
+    const newConversationChrome = {
+      chrome: { newConversation: { visibility: 'enabled' as const } },
+    }
     if (active === undefined) {
-      const mode: PanelMode = this.deps.isHostReady() ? 'empty' : 'waiting-host'
+      const mode: PanelMode = this.connectionPhase === 'connecting' || !this.deps.isHostReady()
+        ? 'waiting-host'
+        : 'empty'
       this.post({
         type: 'panel/state',
         mode,
         continue: { visibility: 'hidden' },
+        ...newConversationChrome,
         deferredRestoreCount: this.deps.resolveDeferredRestoreCount?.() ?? 0,
         ...connectionFields,
       })
       // Clear message list on empty chrome — Host projection may still hold closed-Tab content.
       this.post({ type: 'messages/replace', sessionId: '', messages: [] })
-      this.post({ type: 'status/set', status: this.deps.isHostReady() ? 'idle' : 'disconnected' })
+      this.post({
+        type: 'status/set',
+        status: this.connectionPhase === 'connecting' || !this.deps.isHostReady()
+          ? 'disconnected'
+          : 'idle',
+      })
       return
     }
-    const mode: PanelMode = active.mode === 'replay' ? 'replay' : 'live'
+    // AC-22 / R1: while Start is in flight, never project sendable `live`.
+    const mode: PanelMode = this.connectionPhase === 'connecting'
+      ? 'waiting-host'
+      : active.mode === 'replay'
+        ? 'replay'
+        : 'live'
     const continueChrome = this.deps.resolveContinueChrome?.()
     this.post({
       type: 'panel/state',
@@ -197,6 +216,7 @@ export class ChatPanelHost {
       tabId: active.tabId,
       ...active.title === undefined ? {} : { title: active.title },
       ...continueChrome === undefined ? {} : { continue: continueChrome },
+      ...newConversationChrome,
       deferredRestoreCount: this.deps.resolveDeferredRestoreCount?.() ?? 0,
       ...connectionFields,
     })
@@ -208,7 +228,9 @@ export class ChatPanelHost {
     this.post({
       type: 'status/set',
       sessionId: active.sessionId,
-      status: this.resolveStatus(active.sessionId, active.status),
+      status: this.connectionPhase === 'connecting'
+        ? 'disconnected'
+        : this.resolveStatus(active.sessionId, active.status),
     })
   }
 
@@ -317,6 +339,10 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/continue') {
       await this.deps.requestContinue?.()
+      return
+    }
+    if (message.type === 'action/new-conversation') {
+      await this.deps.requestNewConversation?.()
       return
     }
     if (message.type === 'action/restore-more') {

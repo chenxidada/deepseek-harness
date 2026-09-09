@@ -7,6 +7,9 @@
 
 ## 活跃债务
 
+<!-- phase-4-entry-debt-decision -->
+> Phase Entry Gate (phase-4): 用户选择 **a) 本 Phase 优先解决** DEBT-003（Continue 对齐 ensureHostForSend / 未连先 Start）。2026-09-09 — **已在本 Phase 关闭**（见「已解决」）。
+
 <!--
   ID 格式：STUB-xxx（桩代码）/ GAP-xxx（功能缺失）/ DEBT-xxx（其他技术债）
   状态：🔴 阻塞 / 🟡 非阻塞
@@ -23,12 +26,13 @@
 
 | ID | 源Phase | 模块 | 文件:函数:行号 | 当前行为 | 预期行为 | 类型 | 标签 | 依赖它的模块 | 目标Phase | 阻塞 | 来源 | 注册日期 |
 |----|:------:|------|---------------|---------|---------|------|------|-------------|:--------:|:---:|------|---------|
-| DEBT-003 | phase-1-auto-start-orchestrator | chat-panel | `apps/vscode-dsh/src/chat-panel` Webview `action/continue` | Continue 动作不经 `ensureHostForSend`；命令路径会 auto-start | Webview Continue 与发送类命令一致：未连先 Start | 已知缺陷 | module:chat-panel, type:debt, concern:continue-autostart | continue / send path | phase-4-new-conversation-chrome | 🟡非阻塞 | review.md Should-Fix #4 | 2026-09-08 |
+| （无） | — | — | — | — | — | — | — | — | — | — | — | — |
 
 ## 已解决
 
 | ID | 源Phase | 描述 | 解决Phase | 解决日期 | 验证方式 |
 |----|:------:|------|:--------:|---------|---------|
+| DEBT-003 | phase-1-auto-start-orchestrator | Webview `action/continue` → `createPanelHost.requestContinue` 现先 `ensureHostForSend` 再 `continueConversation`（与 `dsh.continueConversation` 对齐） | phase-4-new-conversation-chrome | 2026-09-09 | L2 `phase4-new-conversation-chrome.spec.ts` DEBT-003：离线 Continue → connecting → connected + `IdeSessionHost.start` |
 | STUB-001 | phase-1-auto-start-orchestrator | `AutoReadyLatchSeam` 仅 latch；已替换为 `AutoReadyCoordinator`（`auto-ready-coordinator.ts`），可见∧就绪时 restore/New | phase-2-auto-ready-surface | 2026-09-08 | L2 `phase2-auto-ready.spec.ts` AC-3/4/6/7；无 `@STUB(phase-2)` 残留 |
 | DEBT-001 | phase-1-auto-start-orchestrator | Start 成功路径已删除 `restoreOpenTabSet`/`newConversation`；就绪面由 AutoReady 在 Conversation 可见时执行 | phase-2-auto-ready-surface | 2026-09-08 | L2 AC-7：hidden `requestStart` → tabs=0；可见后 New/restore |
 | DEBT-002 | phase-1-auto-start-orchestrator | 生产活动栏无独立事件；README 声明等价于 Conversation `onDidChangeVisibility`（reveal / status-bar / showPanel）；L2 保留 `openActivityBar` | phase-2-auto-ready-surface | 2026-09-08 | README Auto-ready timing 节；既有 phase1 AC-1b L2 |

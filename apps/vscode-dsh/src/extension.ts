@@ -338,15 +338,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   })
 
   const newConversation = vscode.commands.registerCommand('dsh.newConversation', async () => {
-    await ensureHostForSend(vscode)
-    const controller = requireConversations()
-    if (controller === undefined) {
-      await vscode.window.showErrorMessage('Start a DeepSeek Harness IDE session before creating a conversation.')
-      return
-    }
-    const tab = controller.newConversationOrReuseEmpty(EMPTY_LIVE_TITLE)
-    panelHost?.pushFullState()
-    await vscode.window.showInformationMessage(`Created conversation Tab ${shortId(tab.sessionId)}.`)
+    await runNewConversationFromCommand(vscode)
   })
 
   const switchConversation = vscode.commands.registerCommand('dsh.switchConversation', async (tabIdArg?: unknown) => {
@@ -1008,9 +1000,15 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       await runDeleteActive(vscode)
     },
     requestContinue: async () => {
+      // DEBT-003: Webview Continue must auto-start like dsh.continueConversation.
+      await ensureHostForSend(vscode)
       const controller = conversations
       if (controller === undefined) return
       await controller.continueConversation()
+      panelHost?.pushFullState()
+    },
+    requestNewConversation: async () => {
+      await runNewConversationFromPanel(vscode)
     },
     requestRestoreMore: async (all) => {
       const controller = conversations
@@ -1346,6 +1344,48 @@ async function revealConversationPanel(
 async function ensureHostForSend(_vscode: VsCodeLike): Promise<void> {
   if (host?.status === 'connected') return
   await orchestrator?.request('command-send')
+}
+
+/**
+ * Shared New path used by `dsh.newConversation` and Webview `action/new-conversation` (AD-CR-8).
+ * Offline → Start via {@link ensureHostForSend}; then reuse/create + reveal Conversation.
+ * @param vscode - duck-typed vscode.
+ * @param opts - `announce` shows the command-palette toast (panel path stays silent).
+ * @returns created/reused Tab, or undefined when Host/controller unavailable.
+ */
+async function runNewConversationShared(
+  vscode: VsCodeLike,
+  opts?: { announce?: boolean },
+): Promise<{ sessionId: string; tabId: string } | undefined> {
+  await ensureHostForSend(vscode)
+  const controller = requireConversations()
+  if (controller === undefined) {
+    if (opts?.announce === true) {
+      await vscode.window.showErrorMessage(
+        'Start a DeepSeek Harness IDE session before creating a conversation.',
+      )
+    }
+    return undefined
+  }
+  const tab = controller.newConversationOrReuseEmpty(EMPTY_LIVE_TITLE)
+  panelHost?.pushFullState()
+  await revealConversationPanel(vscode, false)
+  if (opts?.announce === true) {
+    await vscode.window.showInformationMessage(
+      `Created conversation Tab ${shortId(tab.sessionId)}.`,
+    )
+  }
+  return { sessionId: tab.sessionId, tabId: tab.tabId }
+}
+
+/** Command-palette New (toast on success / failure). */
+async function runNewConversationFromCommand(vscode: VsCodeLike): Promise<void> {
+  await runNewConversationShared(vscode, { announce: true })
+}
+
+/** Webview chrome New (no toast; same Start→New/reuse→reveal path). */
+async function runNewConversationFromPanel(vscode: VsCodeLike): Promise<void> {
+  await runNewConversationShared(vscode, { announce: false })
 }
 
 /**

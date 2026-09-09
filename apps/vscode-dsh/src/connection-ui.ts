@@ -139,7 +139,7 @@ export class ConnectionUiController {
     }
     const settingsDeepLinkAvailable = snap.errorKind === 'missing-credentials'
     const message = phase === 'connecting'
-      ? 'Connecting to Host…'
+      ? '正在连接到 Host…'
       : phase === 'connected'
         ? undefined
         : phase === 'idle'

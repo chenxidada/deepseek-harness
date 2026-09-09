@@ -53,7 +53,7 @@ SDK `session.event` / `session.status` / subagent notifications are projected in
 | Class | Commands | Auto Start? |
 |---|---|:---:|
 | **Start** | `dsh.startSession` | ✅ (`command-start`) |
-| **Send / New** | `dsh.newConversation`, `dsh.promptActiveConversation`, `dsh.continueConversation` | ✅ (`command-send`) |
+| **Send / New** | `dsh.newConversation`, `dsh.promptActiveConversation`, `dsh.continueConversation`; Webview `action/new-conversation` / `action/continue` | ✅ (`command-send`) |
 | **Query / browse** | `dsh.openHistory`, `dsh.switchConversation`, History/Conversations refresh | ❌ |
 | **Delete** | `dsh.deleteConversation`, `dsh.deleteHistory` | ❌ — offline shows「Host 连接后可删除」; never fake-deletes authority |
 | **Panel / settings** | `dsh.showPanel`, `dsh.openExtensionSettings` | ❌ (show details / settings only) |
@@ -133,6 +133,13 @@ Registered **only** when `VSCODE_DSH_TEST=1` or when `activate` receives an inje
 - The last **active** session is always forced into the UI set and focused (AC-34). Remaining index rows stay in `openTabSet` (AC-70); use `dsh.restoreMoreTabs` / `action/restore-more` for 「查看更多 / 全部恢复」.
 - Restored Tabs are always `mode=replay` (even if `liveIntent` was stored). No automatic Continue / prompt. AutoReady suppresses unread.
 - Host not ready → `waiting-host`; when Host connects, restore hydrates automatically (AC-69). No workspace folder → AutoReady skips restore and opens a live empty Tab (AC-4b).
+
+## Conversation chrome —「新建会话」(AD-CR-8)
+
+- Top-bar **「新建会话」** is the **product primary** entry (always labeled; narrow sidebar may wrap or use overflow「⋯」where「新建会话」is the first menu item).
+- Click → Webview `action/new-conversation` → same Host path as `dsh.newConversation`: offline **Start first** (`ensureHostForSend` / `command-send`), wait banner「正在连接到 Host…」(composer **not** sendable `live`), then `newConversationOrReuseEmpty` + reveal Conversation.
+- Keyboard `contributes.keybindings` are **optional** and must **not** replace or weaken the chrome button (AC-34 Should; this package does not ship keybindings).
+- Webview `action/continue` also auto-starts Host when offline (same send-class path as `dsh.continueConversation`).
 
 ## Continue this session (AD-CU-8 / T-0b same-id)
 
