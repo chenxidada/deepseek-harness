@@ -111,12 +111,17 @@ describe('phase-4 new-conversation chrome L2/L3', () => {
     ).toBe(true)
   })
 
-  it('AC-21: package.json has no Must keybindings gate; protocol parses action/new-conversation', async () => {
+  it('AC-21/AC-34: keybindings bind dsh.newConversation; protocol parses action/new-conversation; chrome button remains', async () => {
     const pkg = await import('../package.json', { with: { type: 'json' } })
-    expect(pkg.default.contributes.keybindings).toBeUndefined()
+    const bindings = pkg.default.contributes.keybindings
+    expect(Array.isArray(bindings)).toBe(true)
+    expect(bindings!.some((b: { command?: string }) => b.command === 'dsh.newConversation')).toBe(true)
     expect(parseWebviewToHostMessage({ type: 'action/new-conversation' })).toEqual({
       type: 'action/new-conversation',
     })
+    const html = buildThinChatHtml()
+    expect(html).toContain('id="newConversationBtn"')
+    expect(html).toMatch(/id="newConversationBtn"[^>]*>[\s]*新建会话/)
   })
 
   it('AC-22: disconnected action/new-conversation → connecting wait (not sendable live) → live', async () => {

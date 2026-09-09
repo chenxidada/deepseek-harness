@@ -9,13 +9,26 @@
   prior-feature: vscode-dsh-conversation-ui (behavior delivered; productization deferred)
   created: 2026-09-08
   revised: 2026-09-08 R2 — VP coverage + AC↔VP traceability matrix
+  revised: 2026-09-09 R3 — post-HG-2 amendment: phase-5/6; Should banned;
+    AC-28..32/AC-34 → Must; AC-33 Out of Scope
 -->
+
+## 修订说明（R3 · 2026-09-09）
+
+**post-HG-2 方案修订（用户选项 A，已批准）：**
+
+1. DAG 追加 `phase-5-should-polish`（依赖 phase-4）与 `phase-6-feature-regression`（依赖 phase-5）。
+2. 政策：禁止再用 Should/Could 作为可跳过优先级（constitution §5.1；见 `should-ac-retrospective.md`）。条目要么 **Must**，要么 **Out of Scope**。
+3. **升格为 Must：** AC-28、AC-29、AC-30、AC-31、AC-32、AC-34 → 由 phase-5 强制交付。
+4. **砍掉：** AC-33（底盘抛光动画）→ Out of Scope。
+5. AC-18 仍表示 phase-3 不以缺表/链为失败；Feature 收口以 phase-5 AC-28 Must 为准。
+6. VP-CR-13 / VP-CR-14 优先级由 should → **must**；新增 VP-CR-R* 供 phase-6。细节以各 Phase `spec.md` 为准；本文件主体 AD-CR 未改架构，仅收口门禁。
 
 ## 范围覆盖
 
-本设计覆盖整个 feature `vscode-dsh-chat-ready`：在已交付的 `vscode-dsh-conversation-ui`（极薄对话面板、可恢复留存、历史回放、Continue、Subagent）之上，交付「点开即可聊」——**自动建连**、**自动就绪**、**可用级 Chat UI 底盘**、顶栏常驻「新建会话」。
+本设计覆盖整个 feature `vscode-dsh-chat-ready`：在已交付的 `vscode-dsh-conversation-ui`（极薄对话面板、可恢复留存、历史回放、Continue、Subagent）之上，交付「点开即可聊」——**自动建连**、**自动就绪**、**可用级 Chat UI 底盘**、顶栏常驻「新建会话」，以及 **phase-5 升格抛光**与 **phase-6 全量回归**。
 
-对应 `requirements.md` AC-1…AC-34（含 Should AC-28…AC-34）。**不**覆盖 Cursor 全量、token 打字机、工具富卡片、改 agent-loop、双通道权威重做、多窗口协调、Remote 专项等 Out 项。
+对应 `requirements.md` AC-1…AC-34；其中 AC-28…32、AC-34 经 R3 **升格为 Must**；AC-33 **Out of Scope**。**不**覆盖 Cursor 全量、token 打字机、工具富卡片、改 agent-loop、双通道权威重做、多窗口协调、Remote 专项等 Out 项。
 
 Phase 拆分见 `phase-plan.md`。各 Phase 细规与逐条验证策略见 `phases/<phase-id>/spec.md`。
 
@@ -285,9 +298,9 @@ Webview **仍不**裁定可否发送；等待 Start 期间 `mode` 保持 `waitin
 
 **替代方案：** 换第二套 React/Webview 框架 — 范围过大，本 Feature 拒绝。Markdown 在 Host 预渲染 HTML — 增加 XSS 面与协议膨胀，次选。
 
-#### AD-CR-8：顶栏新建 = 产品主入口；键盘 = Should
+#### AD-CR-8：顶栏新建 = 产品主入口；键盘 = Must 辅入口（R3）
 
-**决策：** chrome 常驻「新建会话」；窄栏可进溢出菜单但须一次点击或「展开+首项」可达（D-21）。点击 → `action/new-conversation` → Host：未连则 `request('command-send')` 并展示 connecting 等待态，成功后再 `newConversationOrReuseEmpty` + reveal 面板。`dsh.newConversation` 等价。`keybindings` 仅 Should（AC-34），不得替代按钮。
+**决策：** chrome 常驻「新建会话」；窄栏可进溢出菜单但须一次点击或「展开+首项」可达（D-21）。点击 → `action/new-conversation` → Host：未连则 `request('command-send')` 并展示 connecting 等待态，成功后再 `newConversationOrReuseEmpty` + reveal 面板。`dsh.newConversation` 等价。`keybindings` 为 **Must 辅入口**（AC-34，R3），不得替代或削弱按钮。
 
 **理由：** D-1 / D-16 / D-26。
 
@@ -356,7 +369,7 @@ history-view.ts              # 过滤空 Tab
 chat-panel/protocol.ts       # 协议增量
 chat-panel/chat-panel-host.ts
 chat-panel/chat-panel-provider.ts  # HTML/CSS/MD/底栏/顶栏按钮
-package.json                 # 新命令；可选 Should keybindings
+package.json                 # 新命令；Must keybindings（AC-34，phase-5）
 README.md                    # 命令矩阵、设置前缀、验证钩子
 tests/                       # phase1–4 L1/L2/L3 规格测试
 ```
@@ -475,12 +488,13 @@ async onVisibilityOrHostChanged(): Promise<void> {
 
 ```
 phase-1-auto-start-orchestrator
-  ├→ phase-2-auto-ready-surface          （可与 phase-4 并行收尾）
+  ├→ phase-2-auto-ready-surface
   └→ phase-3-chat-ui-chassis ──→ phase-4-new-conversation-chrome
-         （phase-4 仅依赖 phase-1 + phase-3；不阻塞于 phase-2）
+                                      └→ phase-5-should-polish
+                                           └→ phase-6-feature-regression
 ```
 
-phase-2 与 phase-3 可在 phase-1 HG-3 通过后**并行**；phase-4 在 phase-1+phase-3 就绪后即可启动，**不**等待 phase-2。
+phase-2 与 phase-3 可在 phase-1 HG-3 通过后**并行**；phase-4 在 phase-1+phase-3 就绪后即可启动，**不**等待 phase-2。phase-5/6 为 R3 追加（phase-1…4 已合入后执行）。
 
 ## 外部依赖
 
@@ -509,11 +523,11 @@ phase-2 与 phase-3 可在 phase-1 HG-3 通过后**并行**；phase-4 在 phase-
 | Start 与就绪耦合 vs 解耦 | **解耦**（可见才就绪） |
 | 第二套 UI 框架 vs 原地升级 | **原地升级** |
 | 删除离线自动建连 vs 提示 | **提示/降级** |
-| 键盘主入口 vs 顶栏按钮 | **顶栏按钮**；键盘 Should |
+| 键盘主入口 vs 顶栏按钮 | **顶栏按钮**主入口；键盘辅入口仍为 **Must**（AC-34，R3） |
 
 ## 验收标准验证方案
 
-**覆盖率要求（强制）：** 每条 `[Must]` / `[Should]` AC **至少**被一个 `VP-CR-*` 行覆盖（或在「委托/豁免」列显式声明理由）；每个 `VP-CR-*` **必须**列出所覆盖的 AC 编号。`[Could]`（AC-33）与「非验收条件」（AC-18）可不设独立 VP，但须在矩阵中标注。本表为 **design 权威 traceability**；各 `phases/*/spec.md` 负责把 VP 落到具体测试命令/夹具，**不得**再从零推导覆盖面，也 **不得**用「凭据式」场景描述替代 AC 编号。
+**覆盖率要求（强制）：** 每条 Must AC **至少**被一个 `VP-CR-*` 行覆盖（或在「委托/豁免」列显式声明理由）；每个 `VP-CR-*` **必须**列出所覆盖的 AC 编号。AC-33（Out of Scope）与 AC-18（phase-3 负向豁免）须在矩阵中标注。R3 起 **禁止** Should/Could 可跳过门禁。本表为 **design 权威 traceability**；各 `phases/*/spec.md` 负责把 VP 落到具体测试命令/夹具，**不得**再从零推导覆盖面，也 **不得**用「凭据式」场景描述替代 AC 编号。
 
 ### VP 场景表（含显式 AC）
 
@@ -547,10 +561,18 @@ phase-2 与 phase-3 可在 phase-1 HG-3 通过后**并行**；phase-4 在 phase-
 | VP-CR-11a | L2 | AC-20 | 点击 History 非空行 | 打开/激活回放；不叠副本 | must |
 | VP-CR-12 | 静态+L3 | AC-25, AC-26 | Webview 无 mode 权威；diff 无 agent-loop | AD-CU-1 保持；无核心 loop 改动 | must |
 | VP-CR-12a | 回归 L2 | AC-27 | 关 Tab 可恢复 / 回放 / Continue / Subagent 抽测 | 前序 Must 语义仍成立 | must |
-| VP-CR-13 | 静态/可选 L2 | AC-34 | 若实现 keybindings：绑定命令 ≡ `dsh.newConversation` | 行为等价；不替代顶栏按钮 | should |
-| VP-CR-14 | 可选 L3 | AC-28, AC-29, AC-30, AC-31, AC-32 | 若实现对应 Should：表格/Continue 说明/改动入口/语言标签/未读增强 | 符合各自 Should；失败不升 Must | should |
-| — | — | AC-18 | **豁免**：明确「表格/链接预览非 Must」 | 缺省不构成失败；无需正向 VP | n/a |
-| — | — | AC-33 | **豁免**：Could 抛光 | 不做 Must 门禁 | n/a |
+| VP-CR-13 | 静态+L2 | AC-34 | `contributes.keybindings` 绑定 ≡ `dsh.newConversation`（含 ensureHost） | 行为等价；不替代/削弱顶栏按钮 | must |
+| VP-CR-14a | L3 | AC-28 | 表 **或** 链可读呈现；失败夹具 | 可读呈现或安全纯文本回退 | must |
+| VP-CR-14b | L2/L3 | AC-29 | Continue 灰态多 reason | 控件旁短原因可区分 | must |
+| VP-CR-14c | L2/L3 | AC-30 | 有/无文件改动回合 | 「改了 N 个文件」入口；无改动不伪造 | must |
+| VP-CR-14d | L3 | AC-31 | fence 有/无语言 | 有则标签匹配；无则不编造 | must |
+| VP-CR-14e | L2/L3 | AC-32 | 未读指示 vs 基线；激活清除 | 更易发现；清除语义不变 | must |
+| VP-CR-R1 | 回归 | AC-R1 | 统一回归矩阵 phase-1…5 | 全绿 | must |
+| VP-CR-R2 | 回归 | AC-R2 | phase-1…4 smoke 复跑 | 仍通过 | must |
+| VP-CR-R3 | 静态 | AC-R3 | tech-debt 活跃表 | 空或仅 Out-of-Scope | must |
+| VP-CR-R4 | 静态 | AC-R4 | feature-delivery-summary | 已更新 | must |
+| — | — | AC-18 | **豁免（phase-3）**：缺表/链不构成 phase-3 失败 | Feature 收口见 AC-28 / VP-CR-14a | n/a |
+| — | — | AC-33 | **Out of Scope** | 不做 | n/a |
 
 ### AC → VP Traceability 矩阵
 
@@ -595,15 +617,19 @@ phase-2 与 phase-3 可在 phase-1 HG-3 通过后**并行**；phase-4 在 phase-
 | AC-25 | Must | VP-CR-12 | 各 Phase 静态门禁 |
 | AC-26 | Must | VP-CR-12 | 各 Phase 静态门禁 |
 | AC-27 | Must | VP-CR-12a | phase-4 收口抽测 + 各 Phase 回归 |
-| AC-28 | Should | VP-CR-14 | phase-3（余力） |
-| AC-29 | Should | VP-CR-14 | phase-3（余力） |
-| AC-30 | Should | VP-CR-14 | phase-3（余力） |
-| AC-31 | Should | VP-CR-14 | phase-3（余力） |
-| AC-32 | Should | VP-CR-14 | phase-3（余力） |
-| AC-33 | Could | 豁免 | — |
-| AC-34 | Should | VP-CR-13 | phase-4 |
+| AC-28 | Must（R3） | VP-CR-14a | phase-5-should-polish |
+| AC-29 | Must（R3） | VP-CR-14b | phase-5-should-polish |
+| AC-30 | Must（R3） | VP-CR-14c | phase-5-should-polish |
+| AC-31 | Must（R3） | VP-CR-14d | phase-5-should-polish |
+| AC-32 | Must（R3） | VP-CR-14e | phase-5-should-polish |
+| AC-33 | Out of Scope | 豁免 | — |
+| AC-34 | Must（R3） | VP-CR-13 | phase-5-should-polish |
+| AC-R1 | Must | VP-CR-R1 | phase-6-feature-regression |
+| AC-R2 | Must | VP-CR-R2 | phase-6-feature-regression |
+| AC-R3 | Must | VP-CR-R3 | phase-6-feature-regression |
+| AC-R4 | Must | VP-CR-R4 | phase-6-feature-regression |
 
-**覆盖核对：** Must AC-1…AC-27（除 AC-18 负向豁免）均有 ≥1 条 VP；Should AC-28…32、AC-34 有 VP-CR-14/13；Could AC-33 豁免。phase spec 的验证策略表应以本矩阵 VP id 为行键，补充命令/夹具细节即可。
+**覆盖核对：** Must AC-1…AC-27（除 AC-18 负向豁免）均有 ≥1 条 VP；R3 起 AC-28…32、AC-34 为 Must（VP-CR-14a…e / 13）；AC-R1…R4 有 VP-CR-R*；AC-33 Out of Scope。phase spec 的验证策略表应以本矩阵 VP id 为行键，补充命令/夹具细节即可。
 
 ## 设计修订记录
 
@@ -612,6 +638,7 @@ phase-2 与 phase-3 可在 phase-1 HG-3 通过后**并行**；phase-4 在 phase-
 | R1 | 2026-09-08 | Orchestrator 状态；AD-CR-6/7/9/10；phase-4 依赖；骨架 | 增加 `disconnected` 显式迁移；空 Tab 仅活动复用；AD-CR-9 对齐 AC-73；test 钩子门闩+真实可见性；phase-4 仅依 phase-1+3；主题优先原生变量；状态栏路由 | HG-2 | 设计评审 P0/P1/P2 |
 | R2 | 2026-09-08 | 验收标准验证方案 | 覆盖率强制规则；VP 表扩至显式 AC；完整 AC→VP→Phase 矩阵 | HG-2 | 验证覆盖评审 |
 | R2b | 2026-09-08 | （非设计主体） | 终审残留项写入各 phase spec 收口备注 | HG-2 | 终审非阻塞清单 |
+| R3 | 2026-09-09 | phase DAG；Should 门禁；VP-CR-13/14；AC 矩阵 | 追加 phase-5/6；AC-28…32/34→Must；AC-33 Out；禁止 Should；VP 升格 + VP-CR-R* | 用户（选项 A） | Should 复盘 + post-HG-2 修订 |
 
 ## Phase 1 实施第一步（强制）
 
@@ -619,4 +646,4 @@ phase-2 与 phase-3 可在 phase-1 HG-3 通过后**并行**；phase-4 在 phase-
 
 ## 建议的下一步
 
-进入 HG-2：用户确认本设计与 `phase-plan.md` 后，按 DAG 启动 `phase-1-auto-start-orchestrator`（先 code-explorer，再 impl 分支）。
+phase-1…4 已合入。按 R3 DAG 启动 `phase-5-should-polish`（先 code-explorer，再 `impl-phase-5-should-polish`），完成后进入 `phase-6-feature-regression`。

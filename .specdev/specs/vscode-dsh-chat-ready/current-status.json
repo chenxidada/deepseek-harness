@@ -3,7 +3,7 @@
   "description": "点开即可聊：自动建连/恢复/新建 + 可用级 Chat UI 底盘 + 对话界面新建会话按钮",
   "created": "2026-09-08T08:58:25Z",
   "current_stage": "phase-implementation",
-  "current_phase": "phase-5-should-polish",
+  "current_phase": "phase-6-feature-regression",
   "loop_count": 0,
   "human_gates": {
     "hg1": "passed",
@@ -40,10 +40,11 @@
       "hg3": "passed"
     },
     "phase-5-should-polish": {
-      "implementer": "pending",
-      "reviewer": "pending",
-      "verifier": "pending",
-      "code_explorer": "pending"
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed",
+      "code_explorer": "completed",
+      "hg3": "passed"
     },
     "phase-6-feature-regression": {
       "implementer": "pending",
@@ -52,6 +53,6 @@
       "code_explorer": "pending"
     }
   },
-  "last_update": "2026-09-09T04:05:42Z",
-  "notes": "phase-4 HG-3 passed. User A: former Should ACs as Must in phase-5; phase-6 full regression. Policy: no more Should (do or cut)."
+  "last_update": "2026-09-09T06:29:07Z",
+  "notes": "phase-5 HG-3 passed. Serial → phase-6 feature regression. Entry: no active debts."
 }

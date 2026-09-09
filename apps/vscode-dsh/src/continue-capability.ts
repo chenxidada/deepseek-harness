@@ -35,14 +35,32 @@ export interface ContinueCapabilityProbeInput {
 /** Top-bar Continue chrome mapped from capability + Gate (AD-CU-8). */
 export type ContinueChromeVisibility = 'hidden' | 'disabled' | 'enabled'
 
+/** Distinguishable Continue grey-state reasons (AC-29). */
+export type ContinueDisabledReason =
+  | 'capability-unavailable'
+  | 'already-live'
+  | 'host-not-ready'
+
+/** Optional context for {@link continueChromeFor} reason mapping (AC-29). */
+export interface ContinueChromeOptions {
+  /** Active Tab mode; live → already-live when Continue would otherwise show. */
+  readonly mode?: 'live' | 'replay'
+  /** Whether IdeSessionHost is connected. */
+  readonly hostReady?: boolean
+}
+
 /** Top-bar Continue presentation for panel/state. */
 export interface ContinueChrome {
   /** Whether the Continue control is shown / clickable. */
   visibility: ContinueChromeVisibility
   /** Capability token (omit when hidden for FAIL). */
   capability?: ContinueCapability
-  /** Tooltip when disabled (「暂不可用」). */
+  /** Tooltip when disabled. */
   tooltip?: string
+  /** Stable reason token when disabled (AC-29). */
+  reason?: ContinueDisabledReason
+  /** Short adjacent copy when disabled (AC-29); must distinguish scenarios. */
+  reasonText?: string
 }
 
 /**
@@ -63,22 +81,40 @@ export function probeContinueCapability(input: ContinueCapabilityProbeInput): Co
  * List hints stay decoupled — this only drives the top bar.
  * @param gateVerdict - T-0b Gate.
  * @param capability - probe result for the active session.
- * @returns chrome visibility / tooltip.
+ * @param options - optional mode / host readiness for AC-29 reasons.
+ * @returns chrome visibility / tooltip / reason.
  */
 export function continueChromeFor(
   gateVerdict: ContinueGateVerdict,
   capability: ContinueCapability,
+  options?: ContinueChromeOptions,
 ): ContinueChrome {
   if (gateVerdict === 'FAIL') {
     return { visibility: 'hidden' }
   }
+  if (options?.mode === 'live') {
+    return disabledChrome('already-live', '已是 live', capability)
+  }
+  if (options?.hostReady === false) {
+    return disabledChrome('host-not-ready', 'Host 未就绪', capability)
+  }
   if (capability === 'same-id' || capability === 'derive-only') {
     return { visibility: 'enabled', capability }
   }
+  return disabledChrome('capability-unavailable', '能力不可用', 'unknown')
+}
+
+function disabledChrome(
+  reason: ContinueDisabledReason,
+  reasonText: string,
+  capability: ContinueCapability,
+): ContinueChrome {
   return {
     visibility: 'disabled',
-    capability: 'unknown',
-    tooltip: '暂不可用',
+    capability,
+    reason,
+    reasonText,
+    tooltip: reasonText,
   }
 }
 

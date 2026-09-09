@@ -9,6 +9,9 @@ import {
   type ConversationTab,
 } from './conversation-registry.ts'
 
+/** Enhanced unread mark vs phase-3 baseline `●` (AC-32 size/contrast). */
+export const UNREAD_INDICATOR = '⬤'
+
 /** Minimal TreeItem-like node for the conversation Tab bar. */
 export interface ConversationTreeItem {
   tabId: string
@@ -144,7 +147,7 @@ export function canRegisterConversationTabBar(vscode: unknown): vscode is Conver
 
 function tabBarLabel(tab: ConversationTab): string {
   const base = displayTitle(tab)
-  const marks = `${tab.unread ? '●' : ''}${tab.approvalBadge ? '⚠' : ''}`
+  const marks = `${tab.unread ? UNREAD_INDICATOR : ''}${tab.approvalBadge ? '⚠' : ''}`
   return marks === '' ? base : `${marks} ${base}`
 }
 

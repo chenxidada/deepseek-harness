@@ -1,6 +1,7 @@
 /**
- * Safe Markdown subset for Conversation bubbles (AC-16 / AC-16a).
- * Escapes HTML by default; headings / lists / fenced code only; no scripts or external loads.
+ * Safe Markdown subset for Conversation bubbles (AC-16 / AC-16a / AC-28 / AC-31).
+ * Escapes HTML by default; headings / lists / fenced code / GFM tables / links;
+ * no scripts or untrusted external resource loads.
  * @module @deepseek-ai/dsh-vscode-dsh/markdown/safe-markdown
  */
 
@@ -32,11 +33,23 @@ export function escapeHtml(text: string): string {
 export function renderSafeMarkdown(source: string): SafeMarkdownResult {
   try {
     if (typeof source !== 'string') {
-      return plainFallback(String(source))
+      return plainFallback(coerceText(source))
     }
     return { html: renderMarkdownSubset(source), mode: 'markdown' }
   } catch {
-    return plainFallback(typeof source === 'string' ? source : String(source))
+    return plainFallback(typeof source === 'string' ? source : coerceText(source))
+  }
+}
+
+/**
+ * Coerce unknown input to text without throwing on null-prototype objects.
+ * @param value - raw input.
+ */
+function coerceText(value: unknown): string {
+  try {
+    return String(value)
+  } catch {
+    return ''
   }
 }
 
@@ -90,12 +103,21 @@ function renderMarkdownSubset(source: string): string {
       i += 1
       continue
     }
+    if (isTableHeaderRow(line) && i + 1 < lines.length && isTableSeparatorRow(lines[i + 1]!)) {
+      const tableLines: string[] = []
+      while (i < lines.length && isTableRow(lines[i]!)) {
+        tableLines.push(lines[i]!)
+        i += 1
+      }
+      parts.push(renderTable(tableLines))
+      continue
+    }
     if (/^\s*([-*]|\d+\.)\s+/.test(line)) {
       const items: string[] = []
       const ordered = /^\s*\d+\./.test(line)
       while (i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i]!)) {
         const item = lines[i]!.replace(/^\s*([-*]|\d+\.)\s+/, '')
-        items.push(`<li>${escapeHtml(item)}</li>`)
+        items.push(`<li>${renderInline(item)}</li>`)
         i += 1
       }
       const tag = ordered ? 'ol' : 'ul'
@@ -114,11 +136,12 @@ function renderMarkdownSubset(source: string): string {
       && !/^```/.test(lines[i]!)
       && !/^#{1,6}\s+/.test(lines[i]!)
       && !/^\s*([-*]|\d+\.)\s+/.test(lines[i]!)
+      && !(isTableHeaderRow(lines[i]!) && i + 1 < lines.length && isTableSeparatorRow(lines[i + 1]!))
     ) {
       para.push(lines[i]!)
       i += 1
     }
-    parts.push(`<p class="md-p">${escapeHtml(para.join('\n'))}</p>`)
+    parts.push(`<p class="md-p">${renderInline(para.join('\n'))}</p>`)
   }
   return parts.join('') || `<div class="md-plain">${escapeHtml(source)}</div>`
 }
@@ -126,12 +149,83 @@ function renderMarkdownSubset(source: string): string {
 function renderCodeBlock(code: string, lang: string): string {
   const encoded = encodeURIComponent(code)
   const langAttr = lang === '' ? '' : ` data-lang="${escapeHtml(lang)}"`
+  const langLabel = lang === ''
+    ? ''
+    : `<span class="code-lang" data-testid="code-lang">${escapeHtml(lang)}</span>`
   return (
     `<div class="code-block"${langAttr}>`
+    + langLabel
     + `<button type="button" class="copy-code" data-copy-code="${escapeHtml(encoded)}">Copy</button>`
     + `<pre class="md-pre"><code class="md-code">${escapeHtml(code)}</code></pre>`
     + `</div>`
   )
+}
+
+/**
+ * Inline Markdown: safe `[label](http(s):url)` only; everything else escaped (AC-28).
+ * @param text - paragraph or cell text.
+ */
+function renderInline(text: string): string {
+  const linkRe = /\[([^\]]+)\]\(([^)\s]+)\)/g
+  let out = ''
+  let last = 0
+  let match: RegExpExecArray | null
+  while ((match = linkRe.exec(text)) !== null) {
+    out += escapeHtml(text.slice(last, match.index))
+    const label = match[1]!
+    const url = match[2]!
+    if (isSafeHttpUrl(url)) {
+      out += `<a class="md-link" href="${escapeHtml(url)}" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+    } else {
+      // Reject javascript:/data:/etc. — readable plain text only.
+      out += escapeHtml(match[0]!)
+    }
+    last = match.index + match[0]!.length
+  }
+  out += escapeHtml(text.slice(last))
+  return out
+}
+
+function isSafeHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url) && !/[\s<>"']/.test(url) && !/^https?:\/\/javascript:/i.test(url)
+}
+
+function isTableRow(line: string): boolean {
+  const trimmed = line.trim()
+  return trimmed.startsWith('|') && trimmed.includes('|', 1)
+}
+
+function isTableHeaderRow(line: string): boolean {
+  return isTableRow(line)
+}
+
+function isTableSeparatorRow(line: string): boolean {
+  const trimmed = line.trim()
+  if (!trimmed.startsWith('|')) return false
+  const cells = splitTableCells(trimmed)
+  if (cells.length === 0) return false
+  return cells.every(cell => /^:?-{3,}:?$/.test(cell.trim()))
+}
+
+function splitTableCells(line: string): string[] {
+  let body = line.trim()
+  if (body.startsWith('|')) body = body.slice(1)
+  if (body.endsWith('|')) body = body.slice(0, -1)
+  return body.split('|').map(c => c.trim())
+}
+
+function renderTable(tableLines: string[]): string {
+  if (tableLines.length < 2) {
+    return `<p class="md-p">${renderInline(tableLines.join('\n'))}</p>`
+  }
+  const header = splitTableCells(tableLines[0]!)
+  const rows = tableLines.slice(2).map(splitTableCells)
+  const th = header.map(c => `<th>${renderInline(c)}</th>`).join('')
+  const body = rows.map(row => {
+    const cells = header.map((_, idx) => `<td>${renderInline(row[idx] ?? '')}</td>`).join('')
+    return `<tr>${cells}</tr>`
+  }).join('')
+  return `<table class="md-table"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`
 }
 
 /**
@@ -151,10 +245,70 @@ function escapeHtml(text) {
 }
 function renderSafeMarkdown(source) {
   try {
+    if (typeof source !== 'string') {
+      return { html: '<div class="md-plain">' + escapeHtml(String(source)) + '</div>', mode: 'plain' };
+    }
     return { html: renderMarkdownSubset(String(source)), mode: 'markdown' };
   } catch (e) {
     return { html: '<div class="md-plain">' + escapeHtml(String(source)) + '</div>', mode: 'plain' };
   }
+}
+function isSafeHttpUrl(url) {
+  return /^https?:\\/\\//i.test(url) && !/[\\s<>"']/.test(url) && !/^https?:\\/\\/javascript:/i.test(url);
+}
+function renderInline(text) {
+  var linkRe = /\\[([^\\]]+)\\]\\(([^)\\s]+)\\)/g;
+  var out = '';
+  var last = 0;
+  var match;
+  while ((match = linkRe.exec(text)) !== null) {
+    out += escapeHtml(text.slice(last, match.index));
+    var label = match[1];
+    var url = match[2];
+    if (isSafeHttpUrl(url)) {
+      out += '<a class="md-link" href="' + escapeHtml(url) + '" rel="noopener noreferrer">' + escapeHtml(label) + '</a>';
+    } else {
+      out += escapeHtml(match[0]);
+    }
+    last = match.index + match[0].length;
+  }
+  out += escapeHtml(text.slice(last));
+  return out;
+}
+function isTableRow(line) {
+  var trimmed = line.trim();
+  return trimmed.charAt(0) === '|' && trimmed.indexOf('|', 1) !== -1;
+}
+function isTableSeparatorRow(line) {
+  var trimmed = line.trim();
+  if (trimmed.charAt(0) !== '|') return false;
+  var cells = splitTableCells(trimmed);
+  if (cells.length === 0) return false;
+  for (var i = 0; i < cells.length; i++) {
+    if (!/^:?-{3,}:?$/.test(cells[i].trim())) return false;
+  }
+  return true;
+}
+function splitTableCells(line) {
+  var body = line.trim();
+  if (body.charAt(0) === '|') body = body.slice(1);
+  if (body.charAt(body.length - 1) === '|') body = body.slice(0, -1);
+  return body.split('|').map(function(c) { return c.trim(); });
+}
+function renderTable(tableLines) {
+  if (tableLines.length < 2) {
+    return '<p class="md-p">' + renderInline(tableLines.join('\\n')) + '</p>';
+  }
+  var header = splitTableCells(tableLines[0]);
+  var rows = tableLines.slice(2).map(splitTableCells);
+  var th = header.map(function(c) { return '<th>' + renderInline(c) + '</th>'; }).join('');
+  var body = rows.map(function(row) {
+    var cells = header.map(function(_, idx) {
+      return '<td>' + renderInline(row[idx] || '') + '</td>';
+    }).join('');
+    return '<tr>' + cells + '</tr>';
+  }).join('');
+  return '<table class="md-table"><thead><tr>' + th + '</tr></thead><tbody>' + body + '</tbody></table>';
 }
 function renderMarkdownSubset(source) {
   var parts = [];
@@ -182,12 +336,21 @@ function renderMarkdownSubset(source) {
       i += 1;
       continue;
     }
+    if (isTableRow(line) && i + 1 < lines.length && isTableSeparatorRow(lines[i + 1])) {
+      var tableLines = [];
+      while (i < lines.length && isTableRow(lines[i])) {
+        tableLines.push(lines[i]);
+        i += 1;
+      }
+      parts.push(renderTable(tableLines));
+      continue;
+    }
     if (/^\\s*([-*]|\\d+\\.)\\s+/.test(line)) {
       var items = [];
       var ordered = /^\\s*\\d+\\./.test(line);
       while (i < lines.length && /^\\s*([-*]|\\d+\\.)\\s+/.test(lines[i])) {
         var item = lines[i].replace(/^\\s*([-*]|\\d+\\.)\\s+/, '');
-        items.push('<li>' + escapeHtml(item) + '</li>');
+        items.push('<li>' + renderInline(item) + '</li>');
         i += 1;
       }
       var tag = ordered ? 'ol' : 'ul';
@@ -202,18 +365,21 @@ function renderMarkdownSubset(source) {
       && !/^\`\`\`/.test(lines[i])
       && !/^#{1,6}\\s+/.test(lines[i])
       && !/^\\s*([-*]|\\d+\\.)\\s+/.test(lines[i])
+      && !(isTableRow(lines[i]) && i + 1 < lines.length && isTableSeparatorRow(lines[i + 1]))
     ) {
       para.push(lines[i]);
       i += 1;
     }
-    parts.push('<p class="md-p">' + escapeHtml(para.join('\\n')) + '</p>');
+    parts.push('<p class="md-p">' + renderInline(para.join('\\n')) + '</p>');
   }
   return parts.join('') || ('<div class="md-plain">' + escapeHtml(source) + '</div>');
 }
 function renderCodeBlock(code, lang) {
   var encoded = encodeURIComponent(code);
   var langAttr = lang ? ' data-lang="' + escapeHtml(lang) + '"' : '';
+  var langLabel = lang ? '<span class="code-lang" data-testid="code-lang">' + escapeHtml(lang) + '</span>' : '';
   return '<div class="code-block"' + langAttr + '>'
+    + langLabel
     + '<button type="button" class="copy-code" data-copy-code="' + escapeHtml(encoded) + '">Copy</button>'
     + '<pre class="md-pre"><code class="md-code">' + escapeHtml(code) + '</code></pre>'
     + '</div>';

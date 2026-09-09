@@ -609,14 +609,18 @@ export class ConversationController {
    */
   continueChromeForTab(tabId?: string): ContinueChrome {
     if (T0B_GATE_VERDICT === 'FAIL') return { visibility: 'hidden' }
+    const hostReady = this.host.status === 'connected'
     const tab = tabId === undefined ? this.registry.getActive() : this.registry.get(tabId)
-    if (tab === undefined || tab.mode !== 'replay') {
-      return continueChromeFor(T0B_GATE_VERDICT, 'unknown')
+    if (tab === undefined) {
+      return continueChromeFor(T0B_GATE_VERDICT, 'unknown', { hostReady })
+    }
+    if (tab.mode !== 'replay') {
+      return continueChromeFor(T0B_GATE_VERDICT, 'unknown', { mode: 'live', hostReady })
     }
     const row = this.index.read().sessions.find(s => s.sessionId === tab.sessionId)
     const capability = row?.continueCapability
       ?? this.resolveContinueCapability(tab.sessionId, this.messages.hasContent(tab.sessionId))
-    return continueChromeFor(T0B_GATE_VERDICT, capability)
+    return continueChromeFor(T0B_GATE_VERDICT, capability, { mode: 'replay', hostReady })
   }
 
   /**
@@ -681,11 +685,19 @@ export class ConversationController {
   }
 
   /**
-   * Count write-tool Diff hunks for the active turn summary (AC-16 Should).
+   * Count write-tool Diff hunks for the session (session-wide helper).
    * @param sessionId - session to summarize.
    */
   changedFileCount(sessionId: string): number {
     return this.timeline.writeDiffsForSession(sessionId).length
+  }
+
+  /**
+   * Unique files changed in the latest turn (AC-30).
+   * @param sessionId - session to summarize.
+   */
+  changedFileCountForLatestTurn(sessionId: string): number {
+    return this.timeline.changedFileCountForLatestTurn(sessionId)
   }
 
   /**
@@ -1007,6 +1019,34 @@ export class ConversationController {
       role: 'assistant',
       kind: 'text',
       text,
+      ...turn === undefined ? {} : { turn },
+    }
+    this.messages.append(sessionId, message)
+    const active = this.registry.getActive()
+    if (active !== undefined && active.sessionId === sessionId) {
+      this.panelHost?.pushAppend(message)
+    } else {
+      const tab = this.registry.getBySessionId(sessionId)
+      if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
+    }
+    this.maybeAppendDiffSummary(sessionId, turn)
+  }
+
+  /**
+   * Append 「本回合改了 N 个文件」 when the latest turn has countable diffs (AC-30).
+   * Never forges an entry when N=0.
+   * @param sessionId - session that just received an assistant turn.
+   * @param turn - optional turn index from the assistant event.
+   */
+  private maybeAppendDiffSummary(sessionId: string, turn?: number): void {
+    const n = this.timeline.changedFileCountForLatestTurn(sessionId)
+    if (n <= 0) return
+    const message: ChatMessage = {
+      id: randomUUID(),
+      sessionId,
+      role: 'notice',
+      kind: 'diff-summary',
+      text: `本回合改了 ${n} 个文件`,
       ...turn === undefined ? {} : { turn },
     }
     this.messages.append(sessionId, message)

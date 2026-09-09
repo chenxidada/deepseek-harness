@@ -48,6 +48,10 @@ export type HostToWebviewMessage =
       visibility: 'hidden' | 'disabled' | 'enabled'
       capability?: 'same-id' | 'derive-only' | 'unknown'
       tooltip?: string
+      /** AC-29 distinguishable grey-state reason. */
+      reason?: 'capability-unavailable' | 'already-live' | 'host-not-ready'
+      /** Short adjacent copy for the Continue control (AC-29). */
+      reasonText?: string
     }
     /**
      * Top-bar「新建会话」chrome (AD-CR-8); omitted → Webview treats as always enabled.
@@ -112,6 +116,7 @@ export type WebviewToHostMessage =
   | { type: 'action/retry-connect' }
   | { type: 'action/open-settings' }
   | { type: 'action/copy-code'; text: string }
+  | { type: 'action/open-workspace-diffs' }
   | { type: 'scroll/reveal'; callId?: string }
 
 /**
@@ -142,6 +147,9 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'action/copy-code') {
     if (typeof record.text !== 'string') return undefined
     return { type: 'action/copy-code', text: record.text }
+  }
+  if (type === 'action/open-workspace-diffs') {
+    return { type: 'action/open-workspace-diffs' }
   }
   if (type === 'scroll/reveal') {
     if (record.callId !== undefined && typeof record.callId !== 'string') return undefined

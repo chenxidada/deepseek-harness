@@ -472,7 +472,8 @@ describe('VP-3-continue: same-id Continue (AC-32/66/68 / AD-CU-8 / GAP-001)', ()
     expect(continueChromeFor('same-id', 'same-id').visibility).toBe('enabled')
     expect(continueChromeFor('same-id', 'unknown')).toMatchObject({
       visibility: 'disabled',
-      tooltip: '暂不可用',
+      tooltip: '能力不可用',
+      reason: 'capability-unavailable',
     })
     expect(continueChromeFor('FAIL', 'same-id').visibility).toBe('hidden')
   })

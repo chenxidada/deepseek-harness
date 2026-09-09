@@ -1027,6 +1027,9 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestCopyCode: async (text) => {
       await vscode.commands.executeCommand?.('dsh.copyToClipboard', text)
     },
+    requestOpenWorkspaceDiffs: async () => {
+      await vscode.commands.executeCommand?.('dsh.reviewWorkspaceDiffs')
+    },
     resolveContinueChrome: () => conversations?.continueChromeForTab(),
     resolveDeferredRestoreCount: () => conversations?.panelSnapshot().deferredRestoreCount ?? 0,
     resolveReveal: (callId) => {

@@ -173,6 +173,40 @@ export class TimelineStore {
   }
 
   /**
+   * Unique file paths with diffs after the latest `turn/start` (AC-30 本回合).
+   * When no turn/start exists, uses all session diffs (single-turn sessions).
+   * @param sessionId - SDK session identity.
+   */
+  changedFilesForLatestTurn(sessionId: string): string[] {
+    const items = this.items.get(sessionId) ?? []
+    let startIdx = 0
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const item = items[i]!
+      if (item.kind === 'turn' && item.label.includes('start')) {
+        startIdx = i
+        break
+      }
+    }
+    const hunks = collectDiffs(items.slice(startIdx))
+    const paths: string[] = []
+    const seen = new Set<string>()
+    for (const hunk of hunks) {
+      if (seen.has(hunk.path)) continue
+      seen.add(hunk.path)
+      paths.push(hunk.path)
+    }
+    return paths
+  }
+
+  /**
+   * Count of unique files changed in the latest turn (AC-30).
+   * @param sessionId - SDK session identity.
+   */
+  changedFileCountForLatestTurn(sessionId: string): number {
+    return this.changedFilesForLatestTurn(sessionId).length
+  }
+
+  /**
    * Whether `sessionId` is the root or a discovered descendant.
    * @param sessionId - candidate session.
    * @param rootSessionId - Tab root.

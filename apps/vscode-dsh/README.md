@@ -138,12 +138,12 @@ Registered **only** when `VSCODE_DSH_TEST=1` or when `activate` receives an inje
 
 - Top-bar **「新建会话」** is the **product primary** entry (always labeled; narrow sidebar may wrap or use overflow「⋯」where「新建会话」is the first menu item).
 - Click → Webview `action/new-conversation` → same Host path as `dsh.newConversation`: offline **Start first** (`ensureHostForSend` / `command-send`), wait banner「正在连接到 Host…」(composer **not** sendable `live`), then `newConversationOrReuseEmpty` + reveal Conversation.
-- Keyboard `contributes.keybindings` are **optional** and must **not** replace or weaken the chrome button (AC-34 Should; this package does not ship keybindings).
+- Keyboard `contributes.keybindings` bind **`ctrl+shift+alt+n`** / mac **`cmd+shift+alt+n`** to `dsh.newConversation` (same ensureHost / Start-first path as the chrome button). Users may override or disable the chord in VS Code Keyboard Shortcuts. Keybindings are a **Must secondary** entry and must **not** replace or weaken the top-bar「新建会话」button (AC-34).
 - Webview `action/continue` also auto-starts Host when offline (same send-class path as `dsh.continueConversation`).
 
 ## Continue this session (AD-CU-8 / T-0b same-id)
 
-- T-0b Gate is **PASS (same-id)**. Top-bar Continue is **enabled** when capability is `same-id` or `derive-only`; **disabled** + tooltip「暂不可用」 for `unknown`; **hidden** only if Gate were FAIL.
+- T-0b Gate is **PASS (same-id)**. Top-bar Continue is **enabled** when capability is `same-id` or `derive-only`; **disabled** with a short adjacent reason for `already-live` / `Host 未就绪` / `能力不可用` (AC-29); **hidden** only if Gate were FAIL.
 - History list hints (「可继续」) stay **decoupled** from the top-bar Continue control.
 - Continue calls Host bridge `session/resume` → SDK `sdkSessionResume` → `agents.resume` (does **not** expand SDK stdout create). Same open-period `tabId` upgrades `replay→live` (AC-32). Old log prefix is not rewritten (AC-66).
 

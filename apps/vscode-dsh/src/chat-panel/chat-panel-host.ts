@@ -60,6 +60,8 @@ export interface ChatPanelHostDeps {
     visibility: 'hidden' | 'disabled' | 'enabled'
     capability?: 'same-id' | 'derive-only' | 'unknown'
     tooltip?: string
+    reason?: 'capability-unavailable' | 'already-live' | 'host-not-ready'
+    reasonText?: string
   } | undefined
   /** Optional deferred restore count for 「查看更多」. */
   resolveDeferredRestoreCount?: () => number
@@ -82,6 +84,11 @@ export interface ChatPanelHostDeps {
    * @param text - fenced code body to write.
    */
   requestCopyCode?: (text: string) => Promise<void>
+  /**
+   * Optional Timeline/Diff review path for 「本回合改了 N 个文件」(AC-30).
+   * Typically `dsh.reviewWorkspaceDiffs`.
+   */
+  requestOpenWorkspaceDiffs?: () => Promise<void>
 }
 
 /**
@@ -359,6 +366,10 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/copy-code') {
       await this.deps.requestCopyCode?.(message.text)
+      return
+    }
+    if (message.type === 'action/open-workspace-diffs') {
+      await this.deps.requestOpenWorkspaceDiffs?.()
       return
     }
     if (message.type === 'scroll/reveal') {

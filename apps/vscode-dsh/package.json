@@ -168,7 +168,15 @@
           "name": "Timeline"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "dsh.newConversation",
+        "key": "ctrl+shift+alt+n",
+        "mac": "cmd+shift+alt+n",
+        "when": "true"
+      }
+    ]
   },
   "license": "MIT",
   "dependencies": {

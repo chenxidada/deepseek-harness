@@ -275,6 +275,18 @@ export function buildThinChatHtml(cspSource?: string): string {
       border-radius: 6px;
       overflow: auto;
     }
+    .code-block .code-lang {
+      display: inline-block;
+      margin: 6px 8px 0;
+      padding: 1px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--vscode-descriptionForeground, var(--dsh-status-fg));
+      border: 1px solid var(--dsh-border);
+      border-radius: 4px;
+      background: var(--vscode-badge-background, transparent);
+    }
     .code-block .copy-code {
       position: absolute;
       top: 4px;
@@ -286,6 +298,43 @@ export function buildThinChatHtml(cspSource?: string): string {
       color: var(--vscode-button-secondaryForeground, var(--dsh-send-fg));
       border: 1px solid var(--dsh-border);
       border-radius: 4px;
+    }
+    .md-table {
+      border-collapse: collapse;
+      margin: 0.4em 0;
+      font-size: 0.95em;
+      max-width: 100%;
+    }
+    .md-table th, .md-table td {
+      border: 1px solid var(--dsh-border);
+      padding: 4px 8px;
+      text-align: left;
+    }
+    .md-table th {
+      background: var(--vscode-editor-inactiveSelectionBackground, transparent);
+      font-weight: 600;
+    }
+    a.md-link {
+      color: var(--vscode-textLink-foreground);
+      text-decoration: underline;
+      word-break: break-all;
+    }
+    .continue-reason {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground, var(--dsh-status-fg));
+      margin-left: 2px;
+    }
+    .diff-summary-entry {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      padding: 4px 10px;
+      cursor: pointer;
+      border-radius: 4px;
+      border: 1px solid var(--dsh-border);
+      background: var(--vscode-button-secondaryBackground, var(--dsh-send-bg));
+      color: var(--vscode-button-secondaryForeground, var(--dsh-send-fg));
     }
     .md-pre {
       margin: 0;
@@ -363,6 +412,7 @@ export function buildThinChatHtml(cspSource?: string): string {
       <div id="chrome" data-testid="chrome">
         <button id="newConversationBtn" type="button" data-testid="new-conversation">新建会话</button>
         <button id="continueBtn" type="button" hidden>Continue</button>
+        <span id="continueReason" class="continue-reason" hidden data-testid="continue-reason"></span>
         <button id="restoreMoreBtn" type="button" hidden>查看更多</button>
         <details id="chromeOverflow" class="chrome-overflow" hidden>
           <summary aria-label="更多">⋯</summary>
@@ -391,6 +441,7 @@ export function buildThinChatHtml(cspSource?: string): string {
     const inputEl = document.getElementById('input');
     const sendEl = document.getElementById('send');
     const continueBtn = document.getElementById('continueBtn');
+    const continueReason = document.getElementById('continueReason');
     const restoreMoreBtn = document.getElementById('restoreMoreBtn');
     const newConversationBtn = document.getElementById('newConversationBtn');
     const newConversationOverflowBtn = document.getElementById('newConversationOverflowBtn');
@@ -420,6 +471,19 @@ export function buildThinChatHtml(cspSource?: string): string {
       var div = document.createElement('div');
       div.className = 'msg bubble ' + msg.role;
       div.setAttribute('data-role', msg.role);
+      if (msg.kind === 'diff-summary') {
+        div.setAttribute('data-kind', 'diff-summary');
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'diff-summary-entry';
+        btn.setAttribute('data-testid', 'diff-summary-entry');
+        btn.textContent = msg.text || '';
+        btn.addEventListener('click', function() {
+          vscode.postMessage({ type: 'action/open-workspace-diffs' });
+        });
+        div.appendChild(btn);
+        return div;
+      }
       var rendered = renderSafeMarkdown(msg.text || '');
       div.innerHTML = rendered.html;
       wireCopyButtons(div);
@@ -485,11 +549,20 @@ export function buildThinChatHtml(cspSource?: string): string {
         continueBtn.hidden = true;
         continueBtn.disabled = true;
         continueBtn.removeAttribute('title');
+        continueReason.hidden = true;
+        continueReason.textContent = '';
       } else {
         continueBtn.hidden = false;
         continueBtn.disabled = cont.visibility === 'disabled';
         if (cont.tooltip) continueBtn.title = cont.tooltip;
         else continueBtn.removeAttribute('title');
+        if (cont.visibility === 'disabled' && cont.reasonText) {
+          continueReason.hidden = false;
+          continueReason.textContent = cont.reasonText;
+        } else {
+          continueReason.hidden = true;
+          continueReason.textContent = '';
+        }
       }
       var deferredRestoreCount = typeof msg.deferredRestoreCount === 'number'
         ? msg.deferredRestoreCount : 0;
