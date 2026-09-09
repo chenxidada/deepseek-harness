@@ -2,13 +2,13 @@
   "slug": "vscode-dsh-chat-ready",
   "description": "点开即可聊：自动建连/恢复/新建 + 可用级 Chat UI 底盘 + 对话界面新建会话按钮",
   "created": "2026-09-08T08:58:25Z",
-  "current_stage": "phase-implementation",
+  "current_stage": "feature-complete",
   "current_phase": "phase-6-feature-regression",
   "loop_count": 0,
   "human_gates": {
     "hg1": "passed",
     "hg2": "passed",
-    "hg3": "pending"
+    "hg3": "passed"
   },
   "phases": {
     "phase-1-auto-start-orchestrator": {
@@ -47,12 +47,13 @@
       "hg3": "passed"
     },
     "phase-6-feature-regression": {
-      "implementer": "pending",
-      "reviewer": "pending",
-      "verifier": "pending",
-      "code_explorer": "pending"
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed",
+      "code_explorer": "completed",
+      "hg3": "passed"
     }
   },
-  "last_update": "2026-09-09T06:29:07Z",
-  "notes": "phase-5 HG-3 passed. Serial → phase-6 feature regression. Entry: no active debts."
+  "last_update": "2026-09-09T06:49:44Z",
+  "notes": "Feature vscode-dsh-chat-ready complete. Phase-6 HG-3 passed. Wiki pipeline next."
 }
