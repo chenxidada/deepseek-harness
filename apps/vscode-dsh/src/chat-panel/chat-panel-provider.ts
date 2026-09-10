@@ -336,6 +336,24 @@ export function buildThinChatHtml(cspSource?: string): string {
       background: var(--vscode-button-secondaryBackground, var(--dsh-send-bg));
       color: var(--vscode-button-secondaryForeground, var(--dsh-send-fg));
     }
+    .ref-card {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      padding: 2px 8px;
+      margin: 0 2px;
+      cursor: pointer;
+      border-radius: 4px;
+      border: 1px solid var(--dsh-border);
+      background: var(--vscode-badge-background, var(--dsh-send-bg));
+      color: var(--vscode-badge-foreground, var(--dsh-send-fg));
+      font-family: var(--vscode-editor-font-family, monospace);
+      vertical-align: baseline;
+    }
+    .ref-card:hover {
+      outline: 1px solid var(--vscode-focusBorder, var(--dsh-border));
+    }
     .md-pre {
       margin: 0;
       padding: 10px 12px;
@@ -467,6 +485,41 @@ export function buildThinChatHtml(cspSource?: string): string {
         });
       });
     }
+    function wireRefCards(root) {
+      root.querySelectorAll('button.ref-card[data-ref-path]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var path = btn.getAttribute('data-ref-path') || '';
+          if (!path) return;
+          vscode.postMessage({ type: 'action/open-reference', path: path });
+        });
+      });
+    }
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+    function renderUserTextWithRefCards(text) {
+      var source = String(text || '');
+      var re = /(?:^|[\s])(@(?:"([^"]+)"|([^\s"]+)))/g;
+      var html = '';
+      var last = 0;
+      var match;
+      while ((match = re.exec(source)) !== null) {
+        var token = match[1];
+        var path = match[2] || match[3] || '';
+        var tokenStart = match.index + (match[0].length - token.length);
+        html += escapeHtml(source.slice(last, tokenStart));
+        html += '<button type="button" class="ref-card" data-testid="ref-card" data-ref-path="'
+          + escapeHtml(path) + '" title="' + escapeHtml(path) + '">'
+          + escapeHtml(token) + '</button>';
+        last = tokenStart + token.length;
+      }
+      html += escapeHtml(source.slice(last));
+      return html;
+    }
     function renderBubble(msg) {
       var div = document.createElement('div');
       div.className = 'msg bubble ' + msg.role;
@@ -482,6 +535,12 @@ export function buildThinChatHtml(cspSource?: string): string {
           vscode.postMessage({ type: 'action/open-workspace-diffs' });
         });
         div.appendChild(btn);
+        return div;
+      }
+      if (msg.role === 'user') {
+        div.setAttribute('data-kind', 'user-refs');
+        div.innerHTML = renderUserTextWithRefCards(msg.text || '');
+        wireRefCards(div);
         return div;
       }
       var rendered = renderSafeMarkdown(msg.text || '');
@@ -637,8 +696,26 @@ export function buildThinChatHtml(cspSource?: string): string {
         bannerEl.textContent = msg.text || '';
         return;
       }
+      if (msg.type === 'composer/prefill') {
+        inputEl.value = typeof msg.text === 'string' ? msg.text : '';
+        if (!inputEl.disabled) {
+          try { inputEl.focus(); } catch (e) {}
+        }
+        return;
+      }
       if (msg.type === 'ui/reject-send') {
-        rejectEl.textContent = 'Send rejected: ' + msg.reason;
+        var reasonCopy = {
+          empty: '消息为空',
+          replay: '回放会话为只读，请切换到实时对话',
+          'no-host': 'Host 未连接',
+          disconnected: '会话已断开',
+          'no-active': '没有活动会话',
+          'not-found': '引用路径不存在',
+          'outside-workspace': '引用路径不在工作区内',
+          'ambiguous-root': '引用路径在多个工作区根下歧义',
+          unknown: '无法发送',
+        };
+        rejectEl.textContent = 'Send rejected: ' + (reasonCopy[msg.reason] || msg.reason);
         return;
       }
       if (msg.type === 'ui/theme') {

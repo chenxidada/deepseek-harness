@@ -16,6 +16,9 @@ export type RejectSendReason =
   | 'no-host'
   | 'disconnected'
   | 'no-active'
+  | 'not-found'
+  | 'outside-workspace'
+  | 'ambiguous-root'
   | 'unknown'
 
 /** Panel run status pushed via status/set. */
@@ -93,6 +96,11 @@ export type HostToWebviewMessage =
     reason: RejectSendReason
   }
   | {
+    /** Prefill Conversation composer with pointer text (AC-1); Host→Webview. */
+    type: 'composer/prefill'
+    text: string
+  }
+  | {
     type: 'scroll/reveal'
     sessionId: string
     messageId?: string
@@ -117,6 +125,7 @@ export type WebviewToHostMessage =
   | { type: 'action/open-settings' }
   | { type: 'action/copy-code'; text: string }
   | { type: 'action/open-workspace-diffs' }
+  | { type: 'action/open-reference'; path: string }
   | { type: 'scroll/reveal'; callId?: string }
 
 /**
@@ -150,6 +159,10 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   }
   if (type === 'action/open-workspace-diffs') {
     return { type: 'action/open-workspace-diffs' }
+  }
+  if (type === 'action/open-reference') {
+    if (typeof record.path !== 'string') return undefined
+    return { type: 'action/open-reference', path: record.path }
   }
   if (type === 'scroll/reveal') {
     if (record.callId !== undefined && typeof record.callId !== 'string') return undefined

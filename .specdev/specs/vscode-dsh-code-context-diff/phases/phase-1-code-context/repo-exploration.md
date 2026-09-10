@@ -1,148 +1,169 @@
 # Repository Exploration Report — phase-1-code-context
 
-> Research question (HG-2 design validation): when a user hands focus/selection file content (e.g. lines 3–40 of a file) to the model, how does DSH actually get that content into the LLM request?
+> Fresh exploration (2026-09-09). Prior residual reports live under `.archive/` and were **not** used as source. Findings below are from live tree under `apps/vscode-dsh`, `packages/bundle/ide`, `packages/context/file-reference*`, `packages/fs/tool-fs`.
 
 ## 1. Task Context
 
-Validate AD-CCD-11 (方案 A: rewrite authoritative user body before `composer/send` → SDK) against the live DSH core / SDK / vscode-dsh / request-context reality. Determine whether selection/@path content today is (1) inline text in the user message, (2) path+range only with core re-reading disk, or (3) a structured attachment/context protocol. Phase-1 will implement selection ask + `@path` injection on the Host; this report is the evidence base for that choice.
+Phase `phase-1-code-context` delivers the **R3.1a pointer model** for code references in vscode-dsh: dirty-document auto-save before selection/right-click prefill of official `@path` / `@"path with spaces"` plus natural-language line range (no selection body / `languageId`); Host send-gate that extracts and validates `@` tokens without reading file contents into the prompt; ide bundle pre-mount of `file-reference-local` so assembled system prompt carries `FILE_REFERENCE_PROMPT` (AC-3b); L2 stub proof that every deduped valid reference path is covered by at least one `read` whose args map to that path before the turn’s final `assistant/message` (AC-3a); reference-card metadata + replay-Tab routing to live. **Out of scope:** ChangeList UI (phase-2), attribution Spike (phase-0 done), agent-loop edits, old AD-CCD-11 body injection.
 
 ## 2. Repository Overview
 
-- **Language / packaging**: TypeScript ESM monorepo (`pnpm` workspaces), Cordis plugin compositions.
-- **Relevant groups**: `packages/core/` (session + agent-loop), `packages/llm/` (ContentBlock / UserMessage), `packages/sdk/` (JSON-RPC `session/prompt`), `packages/context/` (request-context plugins), `packages/attachment/` (image-only durable attachments), `apps/vscode-dsh/` (VS Code Extension Host + Webview composer), `packages/bundle/{base,sdk-app,ide,web-app}/` (profile patches).
-- **vscode-dsh runtime**: Extension Host spawns `dsh --profile ide` (base + sdk-app + ide-bridge). Stdout = SDK JSON-RPC; Host approvals use `DSH_IDE_BRIDGE_SOCK`.
+| Aspect | Reality |
+|--------|---------|
+| Language / runtime | TypeScript (ESM), VS Code Extension Host |
+| App surface | `apps/vscode-dsh` — Conversation Webview + Host gate + ide spawn |
+| Package manager | pnpm workspace (`workspace:^`) |
+| Ide runtime | `dsh --profile ide` = `dsh-base` + `dsh-sdk-app` + `dsh-ide` (`packages/bundle/ide`) |
+| Tools / FS | `dsh-base` mounts `@deepseek-ai/dsh-tool-fs` (`read` / `write` / `edit`) |
+| File-reference seam | `packages/context/file-reference` (grammar + `FILE_REFERENCE_PROMPT`); local provider `packages/context/file-reference-local` |
+| Tests | Vitest L2 under `apps/vscode-dsh/tests/`; package REAL-composition elsewhere |
+
+**Directory snapshot (relevant):**
+
+```
+apps/vscode-dsh/src/
+  chat-panel/     # protocol, host gate, webview HTML/JS
+  extension.ts    # commands, ensureHostForSend, panel wiring
+  conversation-controller.ts / conversation-registry.ts / message-store.ts
+  session-host.ts # spawn --profile ide
+  # code-context/  ← ABSENT (to be created this Phase)
+
+packages/bundle/ide/cordis.patch.yml   # only ide-bridge today
+packages/context/file-reference{,-local}/
+packages/fs/tool-fs/src/read.ts        # tool name `read`, arg `file_path`
+```
 
 ## 3. Most Relevant Areas
 
 | Path | Why | Source |
-|------|-----|--------|
-| `apps/vscode-dsh/src/chat-panel/protocol.ts` | Webview→Host `composer/send` carries **only** `{ text: string }` | 👁 |
-| `apps/vscode-dsh/src/chat-panel/chat-panel-host.ts` | `sendPrompt(text)` gates empty/replay/disconnected then `acceptSend(trimmed)` | 👁 |
-| `apps/vscode-dsh/src/extension.ts` | `acceptSend` → `controller.promptActive(text)` | 👁 |
-| `apps/vscode-dsh/src/conversation-controller.ts` | `promptTab` builds `[{ type: 'text', text }]` and calls Host SDK `prompt` | 👁 |
-| `apps/vscode-dsh/src/session-host.ts` | `prompt(sessionId, contentBlocks)` → SDK client | 👁 |
-| `packages/sdk/protocol/src/types.ts` | `SessionPromptParams.contentBlocks: SdkPromptContentBlock[]` — text / durable blocks / **encoded images only** | 👁 |
-| `packages/sdk/server/src/server.ts` | `durablePromptContent` + `createUserMessage` + `agent.followup` | 👁 |
-| `packages/llm/llm/src/types.ts` | `ContentBlockMap`: `text` \| `reasoning` \| `image` \| `tool-call` \| `tool-result` — **no file/selection block** | 👁 |
-| `packages/core/agent-loop/src/agent.ts` | `followup` → inbox → `preStep` logs `user/message` → `deriveMessages()` → LLM `messages` | 👁 |
-| `packages/core/session/src/surface.ts` | `deriveEventMessage('user/message')` returns `event.data` **verbatim** | 👁 |
-| `packages/context/file-reference/` | Official `@path` grammar + discovery; **never reads file contents** | 👁 |
-| `packages/context/file-reference-local/` | Installs `FILE_REFERENCE_PROMPT`: model must `read` tool | 👁 |
-| `packages/context/session-reference/` | **Contrast**: structured session snapshot injection at `agent/pre-step` | 👁 |
-| `packages/attachment/attachment/` | Durable attachments = **raster images only** | 👁 |
-| `packages/bundle/web-app/cordis.patch.yml` | Mounts `file-reference-local` + `session-reference` (web only) | 👁 |
-| `packages/bundle/base/cordis.patch.yml` | Mounts `attachment-local` + `agent-instructions`; **no** file-reference | 👁 |
-| `packages/bundle/ide/` | ide profile = base + sdk-app + ide-bridge; **no** file-reference mount | 👁 |
-| `packages/client/ui-reference/` | Web `@` picker inserts `formatFileMention(...)` as **ordinary prompt text** | 👁 |
+|------|-----|:------:|
+| `apps/vscode-dsh/src/chat-panel/chat-panel-host.ts` | `sendPrompt` / `acceptSend` gate; replay reject; `ui/reject-send` / `ui/banner` | 👁 |
+| `apps/vscode-dsh/src/chat-panel/protocol.ts` | `composer/send` = `{ text }` only; `RejectSendReason` has no at-path reasons yet | 👁 |
+| `apps/vscode-dsh/src/chat-panel/chat-panel-provider.ts` | Composer `#input`; bubble render; **no** Host→Webview prefill frame; no reference-card UI | 👁 |
+| `apps/vscode-dsh/src/conversation-controller.ts` | `promptActive` / `promptTab` → SDK `[{ type: 'text', text }]`; `newConversationOrReuseEmpty`; live/replay | 👁 |
+| `apps/vscode-dsh/src/conversation-registry.ts` | `mode: 'live' \| 'replay'`; send blocked when replay | 👁 |
+| `apps/vscode-dsh/src/extension.ts` | Command registry / `ensureHostForSend`; **no** `dsh.askAboutSelection`; `VsCodeLike` lacks editor/selection APIs | 👁 |
+| `apps/vscode-dsh/package.json` | contributes: no ask-selection command; no `editor/context` menu | 👁 |
+| `apps/vscode-dsh/src/message-store.ts` | `ChatMessage.kind`: `text` \| `subagent` \| `diff-summary` \| `notice` — no reference-card kind yet | 👁 |
+| `apps/vscode-dsh/src/session-host.ts` | Spawns `profile: 'ide'` | 👁 |
+| `packages/bundle/ide/cordis.patch.yml` | Inserts only `ide-bridge` — **no** `file-reference-local` | 👁 |
+| `packages/bundle/ide/package.json` | Depends only on `dsh-ide-bridge` | 👁 |
+| `packages/bundle/web-app/cordis.patch.yml` | Reference mount pattern: `file-reference-local` insert | 👁 |
+| `packages/bundle/base/cordis.patch.yml` | `tool-fs` present → ide inherits `read` | 👁 |
+| `packages/context/file-reference/src/grammar.ts` | `activeAtToken`, `formatFileMention` (quoted spaces) | 👁 |
+| `packages/context/file-reference/src/index.ts` | Stable `FILE_REFERENCE_PROMPT` constant | 👁 |
+| `packages/context/file-reference-local/src/index.ts` | Registers `context:file-reference` **only if** `tools.get('read')` exists | 👁 |
+| `packages/fs/tool-fs/src/read.ts` | Schema: **`file_path`** (required), `offset`, `limit` — not `path`/`file`/`target` | 👁 |
+| `apps/vscode-dsh/src/code-context/*` | Spec target modules — **directory does not exist** | 👁 |
 
 ## 4. Key Entry Points / Call Paths
 
-### Path A — vscode-dsh today (plain text only) ✅ CONFIRMED
+### Path A — Composer send today (must extend for AC-3)
 
 ```
-Webview composer
-  postMessage({ type: 'composer/send', text })
-       │
-       ▼
-ChatPanelHost.sendPrompt(text)          # apps/vscode-dsh/.../chat-panel-host.ts
-  gate: empty | no-host | no-active | replay | disconnected
-  acceptSend(trimmed)
-       │
-       ▼
-ConversationController.promptActive/promptTab
-  blocks = [{ type: 'text', text }]     # conversation-controller.ts ~832
-  host.prompt(sessionId, blocks)
-       │
-       ▼
-IdeSessionHost → HarnessClient.prompt   # session-host.ts
-       │
-       ▼
-SDK JSON-RPC session/prompt
-  SessionPromptParams { sessionId, contentBlocks }
-       │
-       ▼
-HarnessSdkJsonRpcServer.prompt          # packages/sdk/server/src/server.ts
-  durablePromptContent(ctx, blocks)     # images → attachment store; text passthrough
-  createUserMessage({ content, source: { kind: 'user' } })
-  agent.followup(message)
-       │
-       ▼
-AgentLoop: inbox → agent/pre-step → session.append('user/message', …, surfaceOp: 'append')
-  step(): buildRequest(..., session.deriveMessages(), ...)
-  LLM GenerateOptions.messages = surface-derived Message[] (user content verbatim)
+Webview #input Enter
+  → postMessage { type: 'composer/send', text }
+  → ChatPanelHost.handleWebviewMessage
+  → ChatPanelHost.sendPrompt(text)
+       gates: empty | no-host | no-active | replay | disconnected
+       ★ NO @path extract / resolve yet
+  → deps.acceptSend(trimmed)   [extension.ts → controller.promptActive]
+  → ConversationController.promptTab
+  → host.prompt(sessionId, [{ type: 'text', text }])   // pointer-only if gate preserves text
+  → MessageStore project user bubble (full text as-is)
 ```
 
-### Path B — official Web `@file` mention (path text → model `read`) ✅ CONFIRMED
+### Path B — Selection ask (to build; AC-1/2/12)
 
 ```
-Web composer @ trigger
-  activeAtToken / fileReferences.list / formatFileMention
-  inserts "@src/foo.ts" into draft text
-       │
-       ▼
-session.prompt([{ type: 'text', text: '... @src/foo.ts ...' }])
-       │
-       ▼
-Same Path A logging + LLM request
-  Authority log contains the @path STRING, not file bytes
-  System prompt may include FILE_REFERENCE_PROMPT (if file-reference-local mounted)
-  Model must call tools.read to load contents
+Command dsh.askAboutSelection  OR  editor/context menu (same handler)
+  → read active editor selection / document
+  → if empty → notice (AC-2); return
+  → if isDirty → document.save(); fail → warn, no prefill (AD-CCD-12)
+  → formatOfficialAtPath(relPath) + natural-language line range
+       (spaces → formatFileMention / @"…")
+  → storeSelectionMeta({ path, startLine, endLine })  // local only
+  → ensure live Tab (if active.mode === 'replay' → do not send to replay;
+       activate/reuse live via newConversationOrReuseEmpty / switch)
+  → Host→Webview composer prefill frame  ★ does not exist yet
 ```
 
-**✅ CONFIRMED**: Selecting an `@file` candidate **never** reads or attaches file contents (`packages/context/file-reference/README.md` Known Limitations: "No file-content reference object").
-
-### Path C — structured context that *does* inject content (sessions only) ✅ CONFIRMED
+### Path C — AC-3b ide mount + AC-3a coverage
 
 ```
-Host embeds @[label](dsh-session:<id>) in user text
-       │
-       ▼
-session-reference agent/pre-step listener
-  parse mentions → prepare() reads other session surfaces
-  inserts second user-role message "## Referenced sessions …"
-  durable log = rewritten mention text + snapshot message
-```
+IdeSessionHost.start → spawn dsh --profile ide
+  → stacks dsh-base (tool-fs → tools.register('read')) + dsh-ide patch
+  → ★ today: no file-reference-local
+  → after AD-CCD-13 insert:
+       LocalFileReferenceService installPrompt
+       → systemPrompt.section('context:file-reference', FILE_REFERENCE_PROMPT)
+         when tools.get('read') !== undefined
 
-This is **not** a file/selection channel. It proves the *pattern* of core-side context injection exists for **cross-session** references only, and only when `dsh-session-reference` is mounted (web-app; **not** ide/vscode-dsh by default).
+L2 AC-3a:
+  extractAtPaths(userText) → dedupe normalize → assert each covered by
+  tool/call name≈read with args.file_path covering path
+  before last assistant/message in turn (N-2)
+```
 
 ## 5. Likely Impact Surface
 
-| Area | Change for Phase-1 | Risk |
-|------|--------------------|------|
-| `apps/vscode-dsh` Host send gate | Expand selection / `@path` into **injected text** before `promptActive` | 🟡 MEDIUM — must keep reject-send semantics; do not invent SDK fields |
-| `chat-panel/protocol.ts` | May keep `composer/send.text` as sole wire field; optional UI metadata separate from authority body | 🟢 LOW if metadata stays Extension-local |
-| MessageStore / Webview bubble | Foldable citation UI vs full injected body (AC-4) | 🟡 MEDIUM — UI can hide; authority text must still contain content |
-| `packages/core/**`, agent-loop | **Must not change** (design + phase spec) | 🟢 LOW if Phase-1 stays Host-side |
-| SDK protocol | No new content-block type needed for 方案 A | 🟢 LOW |
-| `file-reference` seam | Optional later for autocomplete (OOS Phase-1); ide profile does not mount it today | 🟢 LOW |
+| Area | Change type | Risk |
+|------|-------------|:----:|
+| **New** `apps/vscode-dsh/src/code-context/selection-ask.ts` | Dirty-save + prefill orchestration | Medium |
+| **New** `apps/vscode-dsh/src/code-context/at-path.ts` | Full-message `@` extract + workspace resolve (`not-found` / `outside-workspace` / `ambiguous-root`) | High (multi-root + spaces) |
+| **New** `apps/vscode-dsh/src/code-context/selection-meta.ts` | Extension-local line meta for card open | Low |
+| **New** `apps/vscode-dsh/src/code-context/ref-read-coverage.ts` | Pure covering-path predicate (P1-1 / AD-CCD-14) | Medium |
+| `chat-panel/protocol.ts` + host + provider | Extend `RejectSendReason`; add prefill + optional open-ref frames; wire gate before `acceptSend` | High |
+| `extension.ts` + `package.json` | Register `dsh.askAboutSelection`; `editor/context`; widen `VsCodeLike` for editor/save | Medium |
+| `message-store.ts` / bubble render | Reference-card recognition (AC-4); no file body in authoritative text | Medium |
+| `packages/bundle/ide/cordis.patch.yml` + `package.json` | Insert + depend on `dsh-file-reference-local` (mirror web-app) | Medium (idle cost; must document) |
+| `apps/vscode-dsh/tests/*` | L2: dirty save, spaces path, multi-ref coverage, replay→live, no body injection | High |
+| `apps/vscode-dsh/package.json` dependencies | Likely add `@deepseek-ai/dsh-file-reference` for grammar reuse (or mirror) | Low |
+
+**Must not touch:** `packages/core/agent-loop`, phase-2 change-list modules, forcing body injection.
 
 ## 6. Existing Constraints / Conventions
 
-1. **Model-visible ⟺ logged** (root AGENTS.md): anything in the LLM request must reconstruct from the session log. Inline injection into `user/message` content satisfies this; Host-only metadata that never enters `contentBlocks` does **not**.
-2. **`session/prompt` is verbatim**: protocol JSDoc — "prompt content blocks, sent verbatim as the user message" (`packages/sdk/protocol/src/types.ts`).
-3. **Surface projection is pass-through**: `deriveEventMessage` for `user/message` returns `event.data` unchanged; framing belongs in content (`packages/core/session/src/surface.ts`).
-4. **Content blocks today**: text + image (attachment ref) + reasoning/tool blocks. No `file`, `selection`, or `code_context` block in `ContentBlockMap`.
-5. **Attachments = images only**: `dsh-attachment` README — "generic files, audio, and video are not supported yet."
-6. **`@file` product contract (Web)**: mention = path string; content via `read` tool; guidance via `FILE_REFERENCE_PROMPT`.
-7. **vscode-dsh composer protocol**: string-only send; no selection/attachment fields on `composer/send`.
-8. **ide profile** does not mount `file-reference-local` or `session-reference` (unlike web-app).
+1. **Host owns decisions** — Webview is thin; illegal sends → `ui/reject-send`; notices → `ui/banner` (AD-CU-1 pattern).
+2. **Composer protocol is text-only** — `composer/send: { text }`; `promptTab` builds `SdkPromptContentBlock[]` with `{ type: 'text', text }` only — aligns with AD-CCD-11 (no file ContentBlock).
+3. **Replay Tabs reject send** — `active.mode === 'replay'` → reason `'replay'`; AC-1 must prefill a **live** Tab instead.
+4. **Empty live Tab reuse** — `newConversationOrReuseEmpty` only reuses **active** empty Tab (AD-CR-6); do not steal inactive empties.
+5. **Official `@` grammar** — reuse/mirror `activeAtToken` / `formatFileMention` from `@deepseek-ai/dsh-file-reference/grammar`; quoted form mandatory for whitespace paths.
+6. **No full-sentence extractor in grammar package** — only cursor-local `activeAtToken`; Host must implement scan-all-tokens equivalent (design: “复用或镜像”).
+7. **Ide inherits `read` via dsh-base `tool-fs`** — AC-3b / P2-3 precondition satisfied at composition level ✅.
+8. **file-reference-local prompt is conditional** — section text is `''` when `read` missing; with base stack it should populate.
+9. **AD-CCD-15** — accept whole-file `read`; document in implementation README/comments; do not regress to inline selection body.
+10. **Package REAL-composition** — product-visible plugins need Loader-backed tests (`packages/AGENTS.md`); ide mount should assert assembled prompt contains `FILE_REFERENCE_PROMPT`.
+11. **vscode-dsh deps today** — only ide-bridge / sdk-client / subprocess; adding `dsh-file-reference` is a deliberate dependency decision vs copy-mirror.
 
 ## 7. Risks / Unknowns
 
-| Item | Confidence | Note |
-|------|------------|------|
-| vscode-dsh has **no** selection / `@path` implementation yet | ✅ CONFIRMED | No `code-context/`, no `askAboutSelection`, no `@` parsing in Extension |
-| Core does **not** auto-expand `@path` to file bytes for ide | ✅ CONFIRMED | file-reference never reads contents; ide doesn't mount the provider |
-| AD-CCD-11 方案 A matches the only Host-side way to guarantee content reaches the model without a tool round-trip | ✅ CONFIRMED | Same as sending a longer text prompt |
-| Whether future core will add a file-content ContentBlock / attachment kind | ❓ UNKNOWN | Explicitly deferred in attachment + file-reference limitations |
-| Exact markdown/fence format Host should use when rewriting body | ⚠️ HYPOTHESIS | Design allows "collapsible code block or equivalent"; not fixed by core |
-| If someone mounts file-reference-local onto ide later, `@path`-only text becomes "model should read" semantics — **conflicts** with Phase-1 AC-3 "authority log must contain file content" unless Host still expands | ⚠️ HYPOTHESIS | Product choice: expand anyway (方案 A) vs rely on tool |
+| Item | Confidence | Notes |
+|------|:----------:|-------|
+| Ide profile already registers `read` via base `tool-fs` | ✅ CONFIRMED | `packages/bundle/base/cordis.patch.yml` insert `tool-fs`; ide README: tools owned by base/sdk-app |
+| Ide does **not** mount `file-reference-local` today | ✅ CONFIRMED | `packages/bundle/ide/cordis.patch.yml` only `ide-bridge` |
+| `read` tool arg field is `file_path` (snake_case) | ✅ CONFIRMED | `packages/fs/tool-fs/src/read.ts` schema + `parseReadArgs` |
+| Design AD-CCD-14 examples list `path`/`file`/`target` — **must map to `file_path`** and back-write AD if needed (P2-A) | ✅ CONFIRMED gap vs design wording | Implementer must document extraction rule |
+| No `composer/prefill` (or equivalent) Host→Webview message | ✅ CONFIRMED | protocol + provider only clear input on send |
+| `VsCodeLike` lacks `window.activeTextEditor` / `TextDocument.isDirty` / `save` | ✅ CONFIRMED | Must extend duck type + L2 fakes |
+| `RejectSendReason` lacks not-found / outside-workspace / ambiguous-root | ✅ CONFIRMED | Extend union + Webview copy |
+| Grammar has no `extractAtPaths(fullText)` | ✅ CONFIRMED | New scan logic required |
+| Idle CPU/memory cost of mounting file-reference-local (WorkspaceFileSearch indexing) | ⚠️ HYPOTHESIS | Spec requires observation in implementation.md (P2-2), no hard threshold |
+| Multi-root resolve using active editor folder first | ⚠️ HYPOTHESIS | Design rule clear; VS Code API wiring not yet in extension |
+| Best L2 stub strategy (Host-side coverage fn vs full llm-replay session) | ⚠️ HYPOTHESIS | Design allows hybrid; at least one path through real session event types |
+| Whether vscode-dsh should depend on `dsh-file-reference` package vs mirror grammar | ❓ UNKNOWN | Prefer workspace dep for single grammar source |
+| Exact Chinese natural-language line-range copy (`的 N-M 行`) localization | ❓ UNKNOWN | Spec examples use Chinese; confirm product copy |
 
 ## 8. Uncertain / Unverified
 
-- Exact DeepSeek provider serialization of multi-block user messages with images (not needed for Phase-1 text injection).
-- Whether any experimental / private package adds a file attachment block outside `ContentBlockMap` (no hits in public `packages/` for `file_context` / `CodeContext` / selection prompt blocks).
-- ACP / webhook prompt paths: same `createUserMessage` + text blocks; not re-audited end-to-end for this report (orthogonal to vscode-dsh).
+- **`WorkspaceFileSearch` background cost** under ide spawn — not measured in this exploration; required as Phase deliverable observation, not assumed cheap.
+- **Session log shape for tool args in vscode-dsh L2** — spike/continue tests show Host mocking patterns; exact `tool/call` argument recovery path for AC-3a through ide-bridge was not end-to-end exercised here. Do not assume a particular JSON field name beyond tool-fs schema until a fixture reads a real/logged call.
+- **Webview reference-card click → open at meta lines** — no existing open-file-from-bubble protocol; behavior must be designed within Host (not by parsing natural-language line range from message text).
+- **`dsh.promptActiveConversation`** — exists for raw text prompt; not a substitute for selection prefill UX.
+- Functions **not** verified as product-ready for this Phase (signatures exist elsewhere but Host does not call them):
+  - `formatFileMention` / `activeAtToken` — ✅ read bodies; Host unused
+  - `LocalFileReferenceService.list` — discovery OOS for Phase UI; mount only for prompt
+  - Coverage helpers — **do not exist** yet
 
 ## 9. Stub Detection & Registry Cross-Validation
 
@@ -150,90 +171,46 @@ This is **not** a file/selection channel. It proves the *pattern* of core-side c
 
 | Registry ID | 文件:函数 | Registry 状态 | 代码实际状态 | 判定 |
 |-------------|-----------|:--:|------------|:--:|
-| — | — | 空表 | tech-debt-registry 活跃债务为空 | ✅ 匹配 |
+| GAP-CCD-010 | `packages/fs/tool-fs/src/write.ts:presentationMeta` | create / identical overwrite → `meta.diffs: []` | `value.before === null ? [] : computeHunkDiffs(...)` | ✅ 匹配 |
+| GAP-CCD-011 | `packages/fs/tool-str-replace-editor/src/index.ts` | only `presentCall` diffs; no `presentationMeta` | No `presentationMeta` in package source | ✅ 匹配 |
+| DEBT-CCD-001 | design appendix / SnapshotStore | meta hunk ≠ full-file blob | Design-level; no phase-1 SnapshotStore product code | ✅ 匹配（文档债） |
+
+All three target **`phase-2-change-list-display`**, blocking = 🟡 non-blocking. **None block phase-1.**
+
+### Phase-1 surface stubs
+
+| Location | Finding |
+|----------|---------|
+| `apps/vscode-dsh/src/code-context/` | **Absent** — expected greenfield, not an unregistered stub |
+| Send path | Real gate + prompt; missing at-path logic = **feature gap**, not a fake stub |
+| Ide patch | Missing `file-reference-local` = **planned insert**, not a stub |
 
 ### Stub Detection Summary
 
-- ✅ Confirmed stubs: 0（registry 空）
-- ⚠️ Registry mismatch: 0
-- 🔴 Unregistered stubs: 0（本调研范围内未发现阻塞性空壳；**缺失的是功能**而非桩：vscode-dsh 尚无 code-context 模块）
-
-**Gap (not a stub)**: Phase-1 expected modules `apps/vscode-dsh/src/code-context/selection-ask.ts` and `at-path.ts` **do not exist yet** — greenfield Host work, not incomplete stubs.
+- ✅ Confirmed stubs / gaps matching registry: **3** (all phase-2 targets)
+- ⚠️ Registry mismatch: **0**
+- 🔴 Unregistered stubs on phase-1 primary path: **0**
+- Note: do not treat missing `code-context/` as STUB — it is greenfield scope for this Phase
 
 ## 10. Recommended Next Reads
 
-1. ⭐ MUST READ — `packages/sdk/protocol/src/types.ts` (`SessionPromptParams`, `SdkPromptContentBlock`)
-2. ⭐ MUST READ — `apps/vscode-dsh/src/conversation-controller.ts` (`promptTab`)
-3. ⭐ MUST READ — `apps/vscode-dsh/src/chat-panel/chat-panel-host.ts` (`sendPrompt`)
-4. ⭐ MUST READ — `packages/context/file-reference/README.md` (path-only `@file` contract)
-5. 🔷 SHOULD READ — `packages/sdk/server/src/server.ts` (`prompt`, `durablePromptContent`)
-6. 🔷 SHOULD READ — `packages/core/agent-loop/src/agent.ts` (`followup`, `preStep`, `buildRequest`)
-7. 🔷 SHOULD READ — `packages/core/session/src/surface.ts` (`deriveEventMessage`)
-8. 🔷 SHOULD READ — `packages/llm/llm/src/types.ts` (`ContentBlockMap`)
-9. 🔹 OPTIONAL — `packages/context/session-reference/README.md` (contrast: structured injection that *does* exist)
-10. 🔹 OPTIONAL — `packages/attachment/attachment/README.md` (image-only attachment channel)
-11. 🔹 OPTIONAL — `.specdev/specs/vscode-dsh-code-context-diff/design.md` AD-CCD-11
+1. ⭐ MUST READ — `packages/fs/tool-fs/src/read.ts` (confirm `file_path` for AD-CCD-14 / P2-A backfill)
+2. ⭐ MUST READ — `packages/context/file-reference/src/grammar.ts` + `index.ts` (`FILE_REFERENCE_PROMPT`, `formatFileMention`)
+3. ⭐ MUST READ — `packages/context/file-reference-local/src/index.ts` (prompt install gated on `read`)
+4. ⭐ MUST READ — `apps/vscode-dsh/src/chat-panel/{protocol,chat-panel-host,chat-panel-provider}.ts`
+5. ⭐ MUST READ — `apps/vscode-dsh/src/conversation-controller.ts` (`promptTab`, `newConversationOrReuseEmpty`)
+6. ⭐ MUST READ — `.specdev/specs/vscode-dsh-code-context-diff/design.md` AD-CCD-11…15
+7. 🔷 SHOULD READ — `packages/bundle/web-app/cordis.patch.yml` (canonical `file-reference-local` insert) + `packages/bundle/ide/cordis.patch.yml`
+8. 🔷 SHOULD READ — `apps/vscode-dsh/src/extension.ts` (`ensureHostForSend`, command registration pattern, `VsCodeLike`)
+9. 🔷 SHOULD READ — `apps/vscode-dsh/tests/panel-l2-l3-protocol.spec.ts` + `phase3-chat-ui-chassis.spec.ts` (send / replay reject patterns)
+10. 🔹 OPTIONAL — `packages/test-support/llm-replay/README.md` (if pursuing REAL session AC-3a fixtures)
+11. 🔹 OPTIONAL — `packages/client/ui-reference/` (Web `@` UX reference only; vscode-dsh does not share this UI)
 
----
+### Implementer entry checklist (P2-A / P2-3)
 
-## Product verdict (research deliverable)
-
-### 1. 结论（一句话）
-
-**当前 DSH 核心对「选区/文件上下文」没有专用进模通道：权威路径是「客户端把最终字符串（或 text ContentBlock）原样写入 `user/message`」；官方 `@file` 只塞路径文本、靠模型 `read`；不存在可被核心消费的 user/file attachment 或选区结构化字段。**
-
-三选一映射：
-
-| 选项 | 现状 |
-|------|------|
-| 1. 具体正文内联 | ✅ **唯一能保证内容立刻进模型的路径**（Host/客户端负责拼进 text） |
-| 2. 仅索引/路径，核心再读盘 | ❌ **核心不读**；官方 `@file` 是「路径进正文 + 模型工具读」 |
-| 3. 结构化附件/上下文协议 | ❌ **无文件/选区通道**；仅有 **图片** attachment，以及 **跨会话** session-reference（非文件） |
-
-### 2. 证据链
-
-**客户端/扩展交给 SDK/核心的是什么**
-
-- vscode-dsh: `composer/send` → `text: string` only (`protocol.ts`).
-- `ConversationController.promptTab`: `SdkPromptContentBlock[] = [{ type: 'text', text }]`.
-- SDK wire: `session/prompt` `{ sessionId, contentBlocks }` — text or image (encoded → durable ref).
-
-**核心如何记入权威会话日志**
-
-- `HarnessSdkJsonRpcServer.prompt` → `createUserMessage({ content, source: { kind: 'user' } })` → `agent.followup`.
-- Loop appends `user/message` with `surfaceOp: 'append'`.
-- Content is whatever was in `contentBlocks` after image admission (text unchanged).
-
-**最终如何进入 LLM request**
-
-- `Agent.step` → `buildRequest(..., this.session.deriveMessages(), ...)`.
-- `deriveEventMessage('user/message')` returns the logged `UserMessage` verbatim into `GenerateOptions.messages`.
-- System prompt / tools assembled separately; they do **not** expand `@path` into file bodies.
-
-**是否存在「只给 path，核心再 read」的官方路径**
-
-- **No** for automatic core injection of file bytes.
-- **Yes** as a *model-tool* path: `@path` text + `FILE_REFERENCE_PROMPT` + `read` tool (web profile with `file-reference-local`). That is **not** Host→core automatic read, and **ide/vscode-dsh does not mount** that provider today.
-
-### 3. 对 vscode-dsh-code-context-diff / AD-CCD-11 的含义
-
-- **方案 A（改写权威 user 正文）与现状一致，且对「保证模型立刻看到选区/文件内容」是必须的 Host 侧策略**：核心不会替你读盘或展开 `@path`；若不改写正文，权威日志与模型都只有路径字符串（甚至 vscode-dsh 今天连 `@` 解析都没有）。
-- **方案 B（依赖 user/input attachment）当前不可用**：attachment 仅图像；无 file/selection ContentBlock；SDK/协议无对应字段。若未来核心增加正式文件附件协议，才可迁移。
-- **最近似的「结构化通道」入口（不可直接复用）**：
-  - Images: `SdkEncodedImageBlock` / `ctx.attachments.saveImages` → `type: 'image'`.
-  - Sessions: `dsh-session-reference` prepare at `agent/pre-step` (web-mounted).
-  - `@file` discovery API: `ctx.fileReferences.list` / Remote `fileReferences/list` — **discovery only**.
-
-### 4. 明确「没有」的东西
-
-- ❌ User/file/selection **attachment** protocol consumed by core for prompts
-- ❌ `ContentBlock` type for file path, line range, or code selection
-- ❌ Core automatic expansion of `@path` / selection metadata into file bytes
-- ❌ vscode-dsh `composer/send` fields beyond `text`
-- ❌ vscode-dsh selection ask / `@path` modules (greenfield)
-- ❌ `file-reference-local` / `session-reference` on **ide** profile (web-app only among shipped profiles checked)
-- ❌ Core reading editor focus/selection from VS Code (Extension owns that IO)
-
----
-
-*Exploration mode: architecture-design / HG-2 validation for phase-1-code-context. code2prompt unavailable; manual path-focused exploration.*
+- [x] P2-3: ide default agent has `read` via base `tool-fs` — **CONFIRMED**
+- [x] P2-A: read args schema primary field = **`file_path`** — **CONFIRMED**; update AD-CCD-14 wording when implementing coverage helper
+- [ ] Add ide `file-reference-local` mount + package dependency
+- [ ] Implement Host at-path gate **without** pre-send content read
+- [ ] Add composer prefill protocol + selection command/menu
+- [ ] Record idle CPU/mem observation + AD-CCD-15 accept note in implementation.md

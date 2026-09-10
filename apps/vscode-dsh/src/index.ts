@@ -130,3 +130,20 @@ export {
   conversationTreeItems,
   type ConversationTreeItem,
 } from './conversation-tab-bar.ts'
+export {
+  extractAtPaths,
+  extractAtPathTokens,
+  formatOfficialAtPath,
+  validateComposerAtPaths,
+  resolveAtPathInWorkspace,
+  assertEveryRefReadBeforeFinalAnswer,
+  pathsFromReadToolArgs,
+  planReferenceOpen,
+  SelectionMetaStore,
+  askAboutSelection,
+  buildPointerText,
+  type AtPathResolve,
+  type AtPathRejectReason,
+  type CoverageLogEvent,
+  type ReferenceOpenPlan,
+} from './code-context/index.ts'

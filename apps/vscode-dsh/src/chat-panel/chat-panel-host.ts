@@ -9,6 +9,7 @@ import type { ConversationRegistry } from '../conversation-registry.ts'
 import type { ExtensionIndex } from '../extension-index.ts'
 import type { InteractionCoordinator } from '../interaction-coordinator.ts'
 import type { ConnectionUiState } from '../connection-ui.ts'
+import { validateComposerAtPaths, type ResolveAtPathOptions } from '../code-context/at-path.ts'
 import {
   parseWebviewToHostMessage,
   type ConnectionPhase,
@@ -89,6 +90,16 @@ export interface ChatPanelHostDeps {
    * Typically `dsh.reviewWorkspaceDiffs`.
    */
   requestOpenWorkspaceDiffs?: () => Promise<void>
+  /**
+   * Workspace roots for `@path` send-gate resolve (AD-CCD-11).
+   * When omitted, `@` tokens are rejected as not-found.
+   */
+  getAtPathResolveOptions?: () => ResolveAtPathOptions
+  /**
+   * Open a reference card path using extension-local selection meta (AC-4).
+   * @param path - workspace-relative path from the card.
+   */
+  requestOpenReference?: (path: string) => Promise<void>
 }
 
 /**
@@ -101,6 +112,8 @@ export class ChatPanelHost {
   private connectionPhase: ConnectionPhase = 'idle'
   private connectionMessage: string | undefined
   private settingsDeepLinkAvailable = false
+  /** Latest composer/prefill text waiting for a Webview attach (cold-start). */
+  private pendingPrefill: string | undefined
 
   /**
    * @param deps - registry / store / send gate callbacks.
@@ -135,6 +148,7 @@ export class ChatPanelHost {
 
   /**
    * Attach a Webview (or fake) port. Replaces any previous port.
+   * Replays the latest buffered `composer/prefill` after full state (AC-1 cold-start).
    * @param port - message port.
    */
   attach(port: WebviewMessagePort): void {
@@ -149,6 +163,11 @@ export class ChatPanelHost {
       sub.dispose()
     }
     this.pushFullState()
+    if (this.pendingPrefill !== undefined) {
+      const text = this.pendingPrefill
+      this.pendingPrefill = undefined
+      this.post({ type: 'composer/prefill', text })
+    }
   }
 
   /** Detach the current port without disposing Host state. */
@@ -293,7 +312,23 @@ export class ChatPanelHost {
   }
 
   /**
+   * Prefill the Conversation composer (selection ask / L2 hooks). AC-1.
+   * When no Webview port is attached yet, buffers the latest text and replays
+   * it on the next `attach()` so cold-start selection ask is not lost.
+   * @param text - pointer text (no file body).
+   */
+  prefillComposer(text: string): void {
+    if (this.port === undefined) {
+      this.pendingPrefill = text
+      return
+    }
+    this.pendingPrefill = undefined
+    this.post({ type: 'composer/prefill', text })
+  }
+
+  /**
    * Host-gated send used by Webview composer/send and L2 `dsh.test.sendPrompt`.
+   * Validates `@path` tokens without reading file contents into the prompt (AC-3).
    * @param text - raw composer text.
    * @returns accepted prompt ids or a reject reason (also posts ui/reject-send).
    */
@@ -315,7 +350,14 @@ export class ChatPanelHost {
     if (active.status === 'disconnected') {
       return this.reject('disconnected')
     }
+    const atPathOptions = this.deps.getAtPathResolveOptions?.() ?? { workspaceFolders: [] }
+    const atPath = validateComposerAtPaths(trimmed, atPathOptions)
+    if (!atPath.ok) {
+      this.pushBanner(atPathRejectBanner(atPath.reason, atPath.raw), 'at-path')
+      return this.reject(atPath.reason)
+    }
     try {
+      // Pointer-only: acceptSend receives the original trimmed text (no body splice).
       const result = await this.deps.acceptSend(trimmed)
       return { ok: true, ...result }
     } catch {
@@ -372,6 +414,10 @@ export class ChatPanelHost {
       await this.deps.requestOpenWorkspaceDiffs?.()
       return
     }
+    if (message.type === 'action/open-reference') {
+      await this.deps.requestOpenReference?.(message.path)
+      return
+    }
     if (message.type === 'scroll/reveal') {
       const active = this.deps.registry.getActive()
       if (active === undefined || this.deps.resolveReveal === undefined) {
@@ -414,6 +460,15 @@ export class ChatPanelHost {
     this.outbound.push(message)
     this.port?.postMessage(message)
   }
+}
+
+function atPathRejectBanner(
+  reason: 'not-found' | 'outside-workspace' | 'ambiguous-root',
+  raw: string,
+): string {
+  if (reason === 'not-found') return `找不到引用路径：${raw}`
+  if (reason === 'outside-workspace') return `引用路径不在工作区内：${raw}`
+  return `引用路径在多个工作区根下歧义：${raw}`
 }
 
 /**

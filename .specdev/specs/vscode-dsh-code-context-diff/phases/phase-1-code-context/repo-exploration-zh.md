@@ -1,112 +1,169 @@
 # 代码库探索报告 — phase-1-code-context
 
-> 调研问题（HG-2 方案校验）：当用户把 focus/选区文件内容（例如某文件第 3–40 行）交给模型时，DSH 后端实际如何进入模型请求？
+> 全新探索（2026-09-09）。旧残稿已在 `.archive/`，**未**作为依据。以下结论来自现树：`apps/vscode-dsh`、`packages/bundle/ide`、`packages/context/file-reference*`、`packages/fs/tool-fs`。
 
 ## 1. 任务上下文
 
-对照现行 DSH 核心 / SDK / vscode-dsh / request-context 实现，校验 AD-CCD-11（方案 A：在 `composer/send` → SDK 前改写权威 user 正文）。判定选区/@路径内容今天属于：(1) 内联进 user 消息正文；(2) 仅 path+range 由核心再读盘；(3) 结构化附件/上下文协议。Phase-1 将在 Host 侧实现选区提问与 `@路径` 注入；本报告是该决策的证据基础。
+Phase `phase-1-code-context` 交付 vscode-dsh 的 **R3.1a 指针模型** 代码引用：选区/右键在脏文档自动保存成功后预填官方 `@路径` / `@"含空格路径"` + 自然语言行范围（**无**选区正文 / `languageId`）；Host 发送门禁按官方文法提取并校验 `@` token，**禁止**读盘拼进 prompt；ide bundle **预挂载** `file-reference-local`，使组装后的 system prompt 含 `FILE_REFERENCE_PROMPT`（AC-3b）；L2 stub 证明每个去重后的有效引用 path 在 turn 最后一条 `assistant/message` 之前至少有一次入参覆盖该 path 的 `read`（AC-3a）；引用卡元数据 + 回放 Tab 改走 live。**不在范围**：ChangeList UI（phase-2）、归属 Spike（phase-0 已完成）、改 agent-loop、旧 AD-CCD-11 正文注入。
 
 ## 2. 仓库概览
 
-- **语言/包管理**：TypeScript ESM monorepo（`pnpm` workspaces），Cordis 插件组合。
-- **相关分组**：`packages/core/`（session + agent-loop）、`packages/llm/`（ContentBlock / UserMessage）、`packages/sdk/`（JSON-RPC `session/prompt`）、`packages/context/`（request-context 插件）、`packages/attachment/`（仅图片持久附件）、`apps/vscode-dsh/`（VS Code Extension Host + Webview composer）、`packages/bundle/{base,sdk-app,ide,web-app}/`（profile patch）。
-- **vscode-dsh 运行时**：Extension Host 拉起 `dsh --profile ide`（base + sdk-app + ide-bridge）。stdout = SDK JSON-RPC；Host 审批走 `DSH_IDE_BRIDGE_SOCK`。
+| 方面 | 现状 |
+|------|------|
+| 语言 / 运行时 | TypeScript（ESM）、VS Code Extension Host |
+| 应用面 | `apps/vscode-dsh` — Conversation Webview + Host 门禁 + ide spawn |
+| 包管理 | pnpm workspace（`workspace:^`） |
+| Ide 运行时 | `dsh --profile ide` = `dsh-base` + `dsh-sdk-app` + `dsh-ide` |
+| 工具 / FS | `dsh-base` 挂载 `@deepseek-ai/dsh-tool-fs`（`read` / `write` / `edit`） |
+| 文件引用缝 | `packages/context/file-reference`（文法 + `FILE_REFERENCE_PROMPT`）；本地提供者 `file-reference-local` |
+| 测试 | `apps/vscode-dsh/tests/` Vitest L2；包级 REAL-composition 另处 |
+
+**相关目录快照：**
+
+```
+apps/vscode-dsh/src/
+  chat-panel/     # 协议、Host 门禁、Webview HTML/JS
+  extension.ts    # 命令、ensureHostForSend、面板接线
+  conversation-controller.ts / conversation-registry.ts / message-store.ts
+  session-host.ts # spawn --profile ide
+  # code-context/  ← 尚不存在（本 Phase 新建）
+
+packages/bundle/ide/cordis.patch.yml   # 目前仅 ide-bridge
+packages/context/file-reference{,-local}/
+packages/fs/tool-fs/src/read.ts        # 工具名 `read`，入参 `file_path`
+```
 
 ## 3. 最相关区域
 
 | 路径 | 原因 | 来源 |
-|------|------|------|
-| `apps/vscode-dsh/src/chat-panel/protocol.ts` | Webview→Host `composer/send` **仅** `{ text: string }` | 👁 |
-| `apps/vscode-dsh/src/chat-panel/chat-panel-host.ts` | `sendPrompt(text)` 门禁后 `acceptSend(trimmed)` | 👁 |
-| `apps/vscode-dsh/src/extension.ts` | `acceptSend` → `controller.promptActive(text)` | 👁 |
-| `apps/vscode-dsh/src/conversation-controller.ts` | `promptTab` 构造 `[{ type: 'text', text }]` 再调 Host SDK `prompt` | 👁 |
-| `apps/vscode-dsh/src/session-host.ts` | `prompt(sessionId, contentBlocks)` → SDK client | 👁 |
-| `packages/sdk/protocol/src/types.ts` | `contentBlocks`：文本/持久块/**仅编码图片** | 👁 |
-| `packages/sdk/server/src/server.ts` | `durablePromptContent` + `createUserMessage` + `followup` | 👁 |
-| `packages/llm/llm/src/types.ts` | `ContentBlockMap` 无 file/selection 块 | 👁 |
-| `packages/core/agent-loop/src/agent.ts` | inbox → 记 `user/message` → `deriveMessages()` → LLM | 👁 |
-| `packages/core/session/src/surface.ts` | `user/message` **原样**投影 | 👁 |
-| `packages/context/file-reference/` | 官方 `@path` 语法与发现；**从不读文件内容** | 👁 |
-| `packages/context/file-reference-local/` | 安装 `FILE_REFERENCE_PROMPT`：模型须用 `read` | 👁 |
-| `packages/context/session-reference/` | **对照**：跨会话快照在 `agent/pre-step` 注入 | 👁 |
-| `packages/attachment/attachment/` | 持久附件 = **仅光栅图** | 👁 |
-| `packages/bundle/web-app/cordis.patch.yml` | 挂载 `file-reference-local` + `session-reference`（仅 web） | 👁 |
-| `packages/bundle/ide/` | ide = base + sdk-app + ide-bridge；**无** file-reference | 👁 |
-| `packages/client/ui-reference/` | Web `@` 选择器插入普通提示词文本 | 👁 |
+|------|------|:----:|
+| `apps/vscode-dsh/src/chat-panel/chat-panel-host.ts` | `sendPrompt` / `acceptSend`；replay 拒绝；`ui/reject-send` / `ui/banner` | 👁 |
+| `apps/vscode-dsh/src/chat-panel/protocol.ts` | `composer/send` 仅 `{ text }`；`RejectSendReason` 尚无 at-path 原因 | 👁 |
+| `apps/vscode-dsh/src/chat-panel/chat-panel-provider.ts` | Composer `#input`；气泡渲染；**无** Host→Webview 预填帧；无引用卡 UI | 👁 |
+| `apps/vscode-dsh/src/conversation-controller.ts` | `promptActive` / `promptTab` → SDK `[{ type: 'text', text }]`；空 Tab 复用；live/replay | 👁 |
+| `apps/vscode-dsh/src/conversation-registry.ts` | `mode: 'live' \| 'replay'`；replay 不可发送 | 👁 |
+| `apps/vscode-dsh/src/extension.ts` | 命令注册 / `ensureHostForSend`；**无** `dsh.askAboutSelection`；`VsCodeLike` 缺编辑器/选区 API | 👁 |
+| `apps/vscode-dsh/package.json` | contributes：无选区命令；无 `editor/context` 菜单 | 👁 |
+| `apps/vscode-dsh/src/message-store.ts` | `kind`：`text` \| `subagent` \| `diff-summary` \| `notice` — 尚无引用卡 kind | 👁 |
+| `apps/vscode-dsh/src/session-host.ts` | 以 `profile: 'ide'` spawn | 👁 |
+| `packages/bundle/ide/cordis.patch.yml` | 仅插入 `ide-bridge` — **无** `file-reference-local` | 👁 |
+| `packages/bundle/ide/package.json` | 仅依赖 `dsh-ide-bridge` | 👁 |
+| `packages/bundle/web-app/cordis.patch.yml` | 挂载范例：`file-reference-local` insert | 👁 |
+| `packages/bundle/base/cordis.patch.yml` | 含 `tool-fs` → ide 继承 `read` | 👁 |
+| `packages/context/file-reference/src/grammar.ts` | `activeAtToken`、`formatFileMention`（空格引号形式） | 👁 |
+| `packages/context/file-reference/src/index.ts` | 稳定常量 `FILE_REFERENCE_PROMPT` | 👁 |
+| `packages/context/file-reference-local/src/index.ts` | **仅当**存在 `tools.get('read')` 时注册 `context:file-reference` | 👁 |
+| `packages/fs/tool-fs/src/read.ts` | Schema：**`file_path`**（必填）、`offset`、`limit` — 不是 `path`/`file`/`target` | 👁 |
+| `apps/vscode-dsh/src/code-context/*` | Spec 目标模块 — **目录不存在** | 👁 |
 
 ## 4. 关键入口 / 调用路径
 
-### 路径 A — 当前 vscode-dsh（纯文本）✅ 已确认
+### 路径 A — 今日 Composer 发送（须扩展以满 AC-3）
 
 ```
-Webview composer
-  postMessage({ type: 'composer/send', text })
-       │
-       ▼
-ChatPanelHost.sendPrompt(text)
-  acceptSend(trimmed)
-       │
-       ▼
-ConversationController.promptTab
-  blocks = [{ type: 'text', text }]
-  host.prompt(sessionId, blocks)
-       │
-       ▼
-SDK session/prompt → durablePromptContent
-  createUserMessage → agent.followup
-       │
-       ▼
-记入 user/message → deriveMessages() → LLM messages（正文原样）
+Webview #input Enter
+  → postMessage { type: 'composer/send', text }
+  → ChatPanelHost.handleWebviewMessage
+  → ChatPanelHost.sendPrompt(text)
+       门禁: empty | no-host | no-active | replay | disconnected
+       ★ 尚无 @路径 提取 / 解析
+  → deps.acceptSend(trimmed)   [extension.ts → controller.promptActive]
+  → ConversationController.promptTab
+  → host.prompt(sessionId, [{ type: 'text', text }])
+  → MessageStore 投影 user 气泡（全文原样）
 ```
 
-### 路径 B — 官方 Web `@file`（路径文本 → 模型 `read`）✅ 已确认
+### 路径 B — 选区提问（待建；AC-1/2/12）
 
 ```
-Web @ 补全 → formatFileMention 插入 "@src/foo.ts"
-  → session.prompt([{ type: 'text', text }])
-  → 权威日志只有 @路径字符串，不含文件字节
-  → 可选 FILE_REFERENCE_PROMPT；模型须 tools.read
+命令 dsh.askAboutSelection  或  editor/context 菜单（同一 handler）
+  → 读 active editor 选区 / 文档
+  → 空选区 → 提示（AC-2）；return
+  → isDirty → document.save()；失败 → 警告且不预填（AD-CCD-12）
+  → formatOfficialAtPath(relPath) + 自然语言行范围
+       （含空格 → formatFileMention / @"…"）
+  → storeSelectionMeta({ path, startLine, endLine })  // 仅扩展本地
+  → 确保 live Tab（若 active.mode === 'replay' → 不向只读 Tab 发送；
+       用 newConversationOrReuseEmpty / switch 激活 live）
+  → Host→Webview composer 预填帧  ★ 尚不存在
 ```
 
-### 路径 C — 会注入正文的结构化上下文（仅跨会话）✅ 已确认
+### 路径 C — AC-3b ide 挂载 + AC-3a 覆盖
 
-`session-reference` 在 `agent/pre-step` 解析会话 mention，注入第二条 user 角色快照消息。这不是文件/选区通道；且默认 **未** 挂在 ide/vscode-dsh。
+```
+IdeSessionHost.start → spawn dsh --profile ide
+  → 叠加 dsh-base（tool-fs → tools.register('read')）+ dsh-ide patch
+  → ★ 今日：无 file-reference-local
+  → AD-CCD-13 insert 后：
+       LocalFileReferenceService installPrompt
+       → systemPrompt.section('context:file-reference', FILE_REFERENCE_PROMPT)
+         当 tools.get('read') !== undefined
+
+L2 AC-3a：
+  extractAtPaths(userText) → 去重归一化 → 断言每个 path 被
+  tool/call（名≈read，入参 file_path 覆盖）覆盖，
+  且发生在 turn 内最后一条 assistant/message 之前（N-2）
+```
 
 ## 5. 可能影响面
 
-| 区域 | Phase-1 改动 | 风险 |
-|------|-------------|------|
-| vscode-dsh Host 发送门禁 | 发送前把选区/@路径 **展开进 text** | 🟡 中 |
-| composer 协议 | 可继续只传 `text`；折叠元数据留在扩展侧 | 🟢 低 |
-| MessageStore / 气泡 UI | AC-4 折叠展示 vs 权威全文 | 🟡 中 |
-| `packages/core/**` | **禁止改** agent-loop | 🟢 低（若坚持 Host 侧） |
-| SDK 协议 | 方案 A 无需新 ContentBlock | 🟢 低 |
+| 区域 | 变更类型 | 风险 |
+|------|----------|:----:|
+| **新建** `apps/vscode-dsh/src/code-context/selection-ask.ts` | 脏保存 + 预填编排 | 中 |
+| **新建** `apps/vscode-dsh/src/code-context/at-path.ts` | 全文 `@` 提取 + 工作区解析（三类 reason） | 高（多 root + 空格） |
+| **新建** `apps/vscode-dsh/src/code-context/selection-meta.ts` | 扩展本地行号元数据供开卡 | 低 |
+| **新建** `apps/vscode-dsh/src/code-context/ref-read-coverage.ts` | 覆盖性判定纯函数（P1-1 / AD-CCD-14） | 中 |
+| `chat-panel/protocol.ts` + host + provider | 扩展 `RejectSendReason`；预填/开引用帧；在 `acceptSend` 前接线门禁 | 高 |
+| `extension.ts` + `package.json` | 注册命令/菜单；扩展 `VsCodeLike` | 中 |
+| `message-store.ts` / 气泡渲染 | 引用卡识别（AC-4）；权威文本无正文 | 中 |
+| `packages/bundle/ide/cordis.patch.yml` + `package.json` | insert + 依赖 `dsh-file-reference-local`（对齐 web-app） | 中（idle 成本须记录） |
+| `apps/vscode-dsh/tests/*` | L2：脏保存、空格路径、多引用覆盖、replay→live、无正文注入 | 高 |
+| `apps/vscode-dsh/package.json` dependencies | 可能增加 `@deepseek-ai/dsh-file-reference` 以复用文法 | 低 |
+
+**禁止改动：** `packages/core/agent-loop`、phase-2 变更列表模块、强制正文注入。
 
 ## 6. 既有约束 / 惯例
 
-1. **Model-visible ⟺ logged**：进 LLM 的内容须能从会话日志重建。
-2. **`session/prompt` 原样入队**（协议 JSDoc）。
-3. **Surface 投影透传** `user/message`。
-4. **ContentBlock** 无 file/selection 类型。
-5. **Attachment 仅图片**。
-6. **官方 `@file`**：路径进正文；内容靠 `read`。
-7. **vscode-dsh** `composer/send` 只有 `text`。
-8. **ide profile** 未挂载 `file-reference-local` / `session-reference`。
+1. **Host 拥有决策** — Webview 轻量；非法发送 → `ui/reject-send`；提示 → `ui/banner`。
+2. **Composer 协议纯文本** — `composer/send: { text }`；`promptTab` 仅 `{ type: 'text', text }` — 与 AD-CCD-11 一致。
+3. **回放 Tab 拒发** — `mode === 'replay'` → `'replay'`；AC-1 须预填 **live** Tab。
+4. **空 live Tab 复用** — `newConversationOrReuseEmpty` 仅复用 **当前激活** 的空 Tab（AD-CR-6）。
+5. **官方 `@` 文法** — 复用/镜像 `activeAtToken` / `formatFileMention`；含空格路径必须引号形式。
+6. **grammar 包无全文提取器** — 仅有光标局部 `activeAtToken`；Host 须实现全句扫描等价物。
+7. **Ide 经 dsh-base `tool-fs` 继承 `read`** — P2-3 前置在组合层 ✅。
+8. **file-reference-local 提示词有条件** — 无 `read` 时 section 文本为 `''`。
+9. **AD-CCD-15** — 接受整文件 `read`；在 implementation 文档声明；禁止回退内联选区。
+10. **包级 REAL-composition** — 产品可见插件需 Loader 启动测试；ide 挂载应断言 prompt 含 `FILE_REFERENCE_PROMPT`。
+11. **vscode-dsh 当前依赖** — 仅 ide-bridge / sdk-client / subprocess；是否引入 `dsh-file-reference` 需显式决策。
 
-## 7. 风险 / 未知
+## 7. 风险 / 未知项
 
 | 项 | 确认度 | 说明 |
-|----|--------|------|
-| vscode-dsh 尚无选区/@路径实现 | ✅ 已确认 | 无 `code-context/` 等 |
-| 核心不会把 `@path` 自动展开为文件字节 | ✅ 已确认 | file-reference 明确不读内容 |
-| 方案 A 是保证内容立刻进模型的 Host 策略 | ✅ 已确认 | 等同发送更长 text |
-| 未来是否新增 file ContentBlock | ❓ 未知 | attachment/file-reference 均声明未支持 |
-| 正文改写的具体 fence 格式 | ⚠️ 假设 | 设计允许「可折叠代码块或等价标记」 |
+|----|:------:|------|
+| Ide 默认 agent 经 base `tool-fs` 已注册 `read` | ✅ CONFIRMED | base patch 含 `tool-fs`；ide README：工具归 base/sdk-app |
+| Ide **今日未**挂载 `file-reference-local` | ✅ CONFIRMED | ide `cordis.patch.yml` 仅 `ide-bridge` |
+| `read` 入参字段为 `file_path`（snake_case） | ✅ CONFIRMED | `read.ts` schema + `parseReadArgs` |
+| 设计 AD-CCD-14 示例写 `path`/`file`/`target` — **须映射到 `file_path`** 并按需回写 AD（P2-A） | ✅ CONFIRMED（与设计措辞落差） | implementer 须文档化提取规则 |
+| 无 `composer/prefill`（或等价）Host→Webview 消息 | ✅ CONFIRMED | protocol + provider 仅在发送后清空 input |
+| `VsCodeLike` 缺 `activeTextEditor` / `isDirty` / `save` | ✅ CONFIRMED | 须扩展 duck type + L2 fake |
+| `RejectSendReason` 无 not-found / outside-workspace / ambiguous-root | ✅ CONFIRMED | 须扩展联合类型与 Webview 文案 |
+| Grammar 无 `extractAtPaths(fullText)` | ✅ CONFIRMED | 需新扫描逻辑 |
+| 挂载 file-reference-local 的 idle CPU/内存成本 | ⚠️ HYPOTHESIS | Spec 要求写入 implementation.md（P2-2），无硬阈值 |
+| 多 root：优先 active editor 所属 folder | ⚠️ HYPOTHESIS | 设计清晰；扩展内尚未接线 VS Code API |
+| 最佳 L2 stub 策略（Host 覆盖函数 vs 全进程 llm-replay） | ⚠️ HYPOTHESIS | 设计允许混合；至少一条路径穿过真实 session 事件类型 |
+| vscode-dsh 依赖 `dsh-file-reference` 还是镜像文法 | ❓ UNKNOWN | 倾向 workspace 依赖以保持单一文法源 |
+| 自然语言行范围中文文案是否定稿 | ❓ UNKNOWN | Spec 示例用「的 N-M 行」 |
 
-## 8. 未核实项
+## 8. 未核实 / 不确定
 
-- 多块（含图片）user 消息在 DeepSeek 适配器上的精确序列化（Phase-1 纯文本不依赖）。
-- ACP/webhook 等其他入口未做端到端复审（与 vscode-dsh 正交）。
+- **`WorkspaceFileSearch` 后台索引成本** — 本探索未测量；须作为 Phase 产出观测写入，不可假设便宜。
+- **vscode-dsh L2 中会话日志工具入参形态** — 未端到端跑通 ide-bridge 取证；在夹具读到真实/日志调用前，除 tool-fs schema 外不要假定字段名。
+- **引用卡点击 → 用 meta 行号打开** — 无既有从气泡开文件协议；须在 Host 侧设计（**禁止**解析自然语言行范围）。
+- **`dsh.promptActiveConversation`** — 可发原始文本；不能替代选区预填 UX。
+- 本 Phase Host **尚未调用**、但本体已核实的函数：
+  - `formatFileMention` / `activeAtToken` — ✅ 已读函数体；Host 未用
+  - `LocalFileReferenceService.list` — 发现 UI 本 Phase OOS；挂载仅为 prompt
+  - 覆盖判定助手 — **尚不存在**
 
 ## 9. 桩检测与 Registry 交叉校验
 
@@ -114,67 +171,46 @@ Web @ 补全 → formatFileMention 插入 "@src/foo.ts"
 
 | Registry ID | 文件:函数 | Registry 状态 | 代码实际状态 | 判定 |
 |-------------|-----------|:--:|------------|:--:|
-| — | — | 空表 | 活跃债务为空 | ✅ 匹配 |
+| GAP-CCD-010 | `packages/fs/tool-fs/src/write.ts:presentationMeta` | create / identical overwrite → `meta.diffs: []` | `value.before === null ? [] : computeHunkDiffs(...)` | ✅ 匹配 |
+| GAP-CCD-011 | `packages/fs/tool-str-replace-editor/src/index.ts` | 仅 presentCall diffs；无 presentationMeta | 源码无 `presentationMeta` | ✅ 匹配 |
+| DEBT-CCD-001 | design 附录 / SnapshotStore | meta hunk ≠ 整文件 blob | 设计层；phase-1 无产品 SnapshotStore | ✅ 匹配（文档债） |
+
+三者目标 Phase 均为 **`phase-2-change-list-display`**，阻塞 = 🟡非阻塞。**均不阻塞 phase-1。**
+
+### Phase-1 表面
+
+| 位置 | 发现 |
+|------|------|
+| `apps/vscode-dsh/src/code-context/` | **不存在** — 预期绿地，非未注册桩 |
+| 发送路径 | 真实门禁 + prompt；缺 at-path = **功能缺口**，非假实现桩 |
+| Ide patch | 缺 `file-reference-local` = **计划 insert**，非桩 |
 
 ### Stub Detection Summary
 
-- ✅ 已确认桩：0
-- ⚠️ Registry 不一致：0
-- 🔴 未注册桩：0
-
-**缺口（非桩）**：Phase-1 预期模块 `selection-ask.ts` / `at-path.ts` **尚不存在**——绿地 Host 工作。
+- ✅ 与 registry 匹配的已知缺口： **3**（均指向 phase-2）
+- ⚠️ Registry 不一致： **0**
+- 🔴 phase-1 主路径未注册桩： **0**
+- 说明：勿将缺失的 `code-context/` 标为 STUB — 属本 Phase 新建范围
 
 ## 10. 建议优先阅读
 
-1. ⭐ `packages/sdk/protocol/src/types.ts`
-2. ⭐ `apps/vscode-dsh/src/conversation-controller.ts`（`promptTab`）
-3. ⭐ `apps/vscode-dsh/src/chat-panel/chat-panel-host.ts`（`sendPrompt`）
-4. ⭐ `packages/context/file-reference/README.md`
-5. 🔷 `packages/sdk/server/src/server.ts`
-6. 🔷 `packages/core/agent-loop/src/agent.ts`
-7. 🔷 `packages/core/session/src/surface.ts`
-8. 🔷 `packages/llm/llm/src/types.ts`
-9. 🔹 `packages/context/session-reference/README.md`（对照）
-10. 🔹 `packages/attachment/attachment/README.md`
-11. 🔹 `design.md` AD-CCD-11
+1. ⭐ 必读 — `packages/fs/tool-fs/src/read.ts`（确认 `file_path`，供 AD-CCD-14 / P2-A 回写）
+2. ⭐ 必读 — `packages/context/file-reference/src/grammar.ts` + `index.ts`
+3. ⭐ 必读 — `packages/context/file-reference-local/src/index.ts`（prompt 依赖 `read`）
+4. ⭐ 必读 — `apps/vscode-dsh/src/chat-panel/{protocol,chat-panel-host,chat-panel-provider}.ts`
+5. ⭐ 必读 — `apps/vscode-dsh/src/conversation-controller.ts`（`promptTab`、`newConversationOrReuseEmpty`）
+6. ⭐ 必读 — `.specdev/specs/vscode-dsh-code-context-diff/design.md` AD-CCD-11…15
+7. 🔷 宜读 — `packages/bundle/web-app/cordis.patch.yml`（挂载范例）+ `packages/bundle/ide/cordis.patch.yml`
+8. 🔷 宜读 — `apps/vscode-dsh/src/extension.ts`（命令注册、`VsCodeLike`、`ensureHostForSend`）
+9. 🔷 宜读 — `apps/vscode-dsh/tests/panel-l2-l3-protocol.spec.ts` + `phase3-chat-ui-chassis.spec.ts`
+10. 🔹 可选 — `packages/test-support/llm-replay/README.md`（若走 REAL session AC-3a）
+11. 🔹 可选 — `packages/client/ui-reference/`（仅 Web `@` 参考；vscode-dsh 不共享该 UI）
 
----
+### Implementer 开工核对（P2-A / P2-3）
 
-## 产品结论（调研交付）
-
-### 1. 结论（一句话）
-
-**当前 DSH 核心对「选区/文件上下文」没有专用进模通道：权威路径是「客户端把最终字符串（或 text ContentBlock）原样写入 `user/message`」；官方 `@file` 只塞路径文本、靠模型 `read`；不存在可被核心消费的 user/file attachment 或选区结构化字段。**
-
-| 选项 | 现状 |
-|------|------|
-| 1. 具体正文内联 | ✅ **唯一能保证内容立刻进模型的路径** |
-| 2. 仅索引/路径，核心再读盘 | ❌ **核心不读**；官方是「路径进正文 + 模型工具读」 |
-| 3. 结构化附件/上下文协议 | ❌ **无文件/选区通道**；仅有图片 attachment 与跨会话 session-reference |
-
-### 2. 证据链
-
-- **扩展→SDK**：`composer/send.text` → `[{ type:'text', text }]` → `session/prompt.contentBlocks`
-- **权威日志**：`createUserMessage` + `followup` → `user/message`（surface append）；文本块不被核心改写
-- **进 LLM**：`deriveMessages()` 原样放入 `GenerateOptions.messages`
-- **「只给 path 核心再 read」**：不存在自动注入；仅有模型工具读路径（web + file-reference-local）；ide 默认未挂载
-
-### 3. 对 AD-CCD-11 的含义
-
-- **方案 A 与现状一致，且为必须**：核心不会替 Host 读盘/展开 `@路径`；不改写正文则模型看不到选区内容。
-- **方案 B 当前不可用**：无 user/file attachment；无对应 ContentBlock/SDK 字段。
-- **近似结构化入口（不可直接用于文件选区）**：图片 attachment；`session-reference`；`fileReferences.list`（仅发现）。
-
-### 4. 明确「没有」的东西
-
-- ❌ 可供 prompt 消费的 user/file/selection attachment 协议
-- ❌ file path / line range / selection 的 ContentBlock 类型
-- ❌ 核心自动把 `@path`/选区元数据展开为文件字节
-- ❌ vscode-dsh `composer/send` 在 `text` 之外的字段
-- ❌ vscode-dsh 选区提问 / `@路径` 模块（尚未实现）
-- ❌ ide profile 上的 `file-reference-local` / `session-reference`
-- ❌ 核心读取 VS Code 编辑器 focus/选区（属 Extension IO）
-
----
-
-*探索模式：architecture-design / HG-2 校验，面向 phase-1-code-context。code2prompt 不可用，手动路径聚焦探索。*
+- [x] P2-3：ide 默认 agent 有 `read`（base `tool-fs`）— **已确认**
+- [x] P2-A：read 入参主字段 = **`file_path`** — **已确认**；实现覆盖函数时回写 AD-CCD-14 措辞
+- [ ] ide 挂载 `file-reference-local` + package 依赖
+- [ ] Host at-path 门禁（发送前不读文件内容）
+- [ ] composer 预填协议 + 选区命令/菜单
+- [ ] implementation.md 记录 idle 观测 + AD-CCD-15 接受声明

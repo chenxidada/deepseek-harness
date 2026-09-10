@@ -31,7 +31,9 @@
 
 | ID | 源Phase | 描述 | 解决Phase | 解决日期 | 验证方式 |
 |----|:------:|------|:--------:|---------|---------|
-| — | — | — | — | — | — |
+| GAP-CCD-012 | phase-1-code-context | `openReferencePath` / `planReferenceOpen` 与门禁同序多 root resolve（preferred 未命中则扫全部 folder） | phase-1-code-context（polish） | 2026-09-10 | L2 `phase1-code-context.spec.ts` multi-root open + verifier probe |
+| GAP-CCD-013 | phase-1-code-context | `prefillComposer` 在 port 未 attach 时缓冲 latest；`attach()` 重放 `composer/prefill` | phase-1-code-context（polish） | 2026-09-10 | L2 cold-start attach race + verifier probe |
+| DEBT-CCD-002 | phase-1-code-context | 显式文档：AC-3a L2 stub 断言 ≠ 真模型运行时保证 | phase-1-code-context（polish） | 2026-09-10 | `ref-read-coverage.ts` / phase1 test header / implementation.md |
 
 ---
 

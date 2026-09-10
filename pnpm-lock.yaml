@@ -476,6 +476,9 @@ importers:
 
   apps/vscode-dsh:
     dependencies:
+      '@deepseek-ai/dsh-file-reference':
+        specifier: workspace:^
+        version: link:../../packages/context/file-reference
       '@deepseek-ai/dsh-ide-bridge':
         specifier: workspace:^
         version: link:../../packages/ide/ide-bridge
@@ -1359,6 +1362,9 @@ importers:
 
   packages/bundle/ide:
     dependencies:
+      '@deepseek-ai/dsh-file-reference-local':
+        specifier: workspace:^
+        version: link:../../context/file-reference-local
       '@deepseek-ai/dsh-ide-bridge':
         specifier: workspace:^
         version: link:../../ide/ide-bridge

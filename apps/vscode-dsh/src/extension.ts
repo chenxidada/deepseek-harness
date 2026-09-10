@@ -69,6 +69,14 @@ import {
 } from './auto-ready-coordinator.ts'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
+import {
+  askAboutSelection,
+  planReferenceOpen,
+  SelectionMetaStore,
+  type TextEditorLike,
+} from './code-context/index.ts'
 
 export type { ConversationTreeItem, TimelineTreeItem }
 
@@ -115,13 +123,41 @@ interface VsCodeLike {
     activeColorTheme?: { kind: number }
     /** Theme-change subscription (AC-8a). */
     onDidChangeActiveColorTheme?(listener: (theme: { kind: number }) => void): { dispose(): void }
+    /** Active text editor (selection ask / AC-1). */
+    activeTextEditor?: TextEditorLike
+    /**
+     * Open a text document in an editor.
+     * @param documentOrUri - document or URI.
+     * @param options - optional reveal / selection.
+     */
+    showTextDocument?(
+      documentOrUri: unknown,
+      options?: {
+        selection?: {
+          start: { line: number; character: number }
+          end: { line: number; character: number }
+        }
+        preview?: boolean
+      },
+    ): Promise<unknown>
   }
   workspace: {
-    workspaceFolders?: readonly { uri: { fsPath: string } }[]
+    workspaceFolders?: readonly { uri: { fsPath: string; scheme?: string } }[]
     registerTextDocumentContentProvider?(
       scheme: string,
       provider: { provideTextDocumentContent(uri: { toString(): string }): string },
     ): { dispose(): void }
+    /**
+     * Relative path helper for workspace files.
+     * @param pathOrUri - absolute path or URI.
+     * @param includeWorkspaceFolder - include folder name prefix.
+     */
+    asRelativePath?(pathOrUri: string | { fsPath: string }, includeWorkspaceFolder?: boolean): string
+    /**
+     * Open a text document by URI / path.
+     * @param uri - document URI.
+     */
+    openTextDocument?(uri: unknown): Promise<unknown>
   }
   commands: {
     registerCommand(command: string, callback: (...args: unknown[]) => unknown): { dispose(): void }
@@ -164,6 +200,7 @@ interface ExtensionContextLike {
 let host: IdeSessionHost | undefined
 let conversations: ConversationController | undefined
 let panelHost: ChatPanelHost | undefined
+let selectionMetaStore = new SelectionMetaStore()
 let tabBarRefresh: (() => void) | undefined
 let timelineRefresh: (() => void) | undefined
 let historyRefresh: (() => void) | undefined
@@ -483,6 +520,12 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     }
   })
 
+  // Selection / right-click share this handler (D-6 / AC-1 / AC-2).
+  const askAboutSelectionCmd = vscode.commands.registerCommand(
+    'dsh.askAboutSelection',
+    async () => runAskAboutSelection(vscode),
+  )
+
   const selectPermission = vscode.commands.registerCommand('dsh.selectPermissionPreset', async () => {
     const controller = requireConversations()
     if (controller === undefined) {
@@ -652,6 +695,14 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       vscode.commands.registerCommand('dsh.test.sendPrompt', async (text?: unknown) => {
         if (panelHost === undefined) return { ok: false, reason: 'no-host' as const }
         return panelHost.sendPrompt(typeof text === 'string' ? text : '')
+      }),
+      vscode.commands.registerCommand('dsh.test.askAboutSelection', async () => {
+        return runAskAboutSelection(vscode)
+      }),
+      vscode.commands.registerCommand('dsh.test.prefillComposer', (text?: unknown) => {
+        if (panelHost === undefined) return { ok: false as const }
+        panelHost.prefillComposer(typeof text === 'string' ? text : '')
+        return { ok: true as const }
       }),
       vscode.commands.registerCommand('dsh.test.closeConversation', async (opts?: unknown) => {
         const controller = conversations
@@ -861,6 +912,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     continueConversation,
     restoreMore,
     promptActive,
+    askAboutSelectionCmd,
     selectPermission,
     reviewDiffs,
     openDiff,
@@ -890,6 +942,7 @@ export async function deactivate(): Promise<void> {
   conversationView = undefined
   vscodeWorkspaceFolders = undefined
   panelHost?.detach()
+  selectionMetaStore.clear()
   if (current !== undefined) await current.shutdown()
   userStopping = false
 }
@@ -1030,6 +1083,14 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestOpenWorkspaceDiffs: async () => {
       await vscode.commands.executeCommand?.('dsh.reviewWorkspaceDiffs')
     },
+    getAtPathResolveOptions: () => ({
+      workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath),
+      preferredFolder: preferredWorkspaceFolder(vscode),
+      exists: existsSync,
+    }),
+    requestOpenReference: async (path) => {
+      await openReferencePath(vscode, path)
+    },
     resolveContinueChrome: () => conversations?.continueChromeForTab(),
     resolveDeferredRestoreCount: () => conversations?.panelSnapshot().deferredRestoreCount ?? 0,
     resolveReveal: (callId) => {
@@ -1167,6 +1228,115 @@ function tabTitle(tab: ConversationTab): string {
 
 function shortId(id: string): string {
   return id.slice(0, 8)
+}
+
+/**
+ * Preferred workspace folder for relative `@path` resolve (active editor's folder).
+ * @param vscode - duck-typed vscode.
+ */
+function preferredWorkspaceFolder(vscode: VsCodeLike): string | undefined {
+  const editorPath = vscode.window.activeTextEditor?.document.uri.fsPath
+  const folders = vscode.workspace.workspaceFolders ?? []
+  if (editorPath === undefined) return folders[0]?.uri.fsPath
+  const abs = resolve(editorPath)
+  for (const folder of folders) {
+    const root = resolve(folder.uri.fsPath)
+    if (abs === root || abs.startsWith(`${root}/`) || abs.startsWith(`${root}\\`)) {
+      return folder.uri.fsPath
+    }
+  }
+  return folders[0]?.uri.fsPath
+}
+
+/**
+ * Open a reference-card path using extension-local selection meta for lines (AC-4).
+ * Resolves relative paths with the same multi-root scan as the send gate
+ * (`resolveAtPathInWorkspace` / preferred then all folders). Does not parse
+ * natural-language line ranges from message text.
+ * @param vscode - duck-typed vscode.
+ * @param path - workspace-relative path from the card.
+ */
+async function openReferencePath(vscode: VsCodeLike, path: string): Promise<void> {
+  const folders = vscode.workspace.workspaceFolders ?? []
+  if (folders.length === 0) {
+    await vscode.window.showWarningMessage?.(`无法打开引用：无工作区（${path}）`)
+    return
+  }
+  const plan = planReferenceOpen(
+    path,
+    {
+      workspaceFolders: folders.map(folder => folder.uri.fsPath),
+      preferredFolder: preferredWorkspaceFolder(vscode),
+      exists: existsSync,
+    },
+    selectionMetaStore,
+  )
+  if (!plan.ok) {
+    const message = plan.reason === 'ambiguous-root'
+      ? `引用路径在多个工作区根下歧义：${path}`
+      : plan.reason === 'outside-workspace'
+        ? `引用路径在工作区外：${path}`
+        : `引用文件不存在：${path}`
+    await vscode.window.showWarningMessage?.(message)
+    return
+  }
+  const uri = vscode.Uri?.file(plan.abs) ?? plan.abs
+  try {
+    if (typeof vscode.workspace.openTextDocument === 'function'
+      && typeof vscode.window.showTextDocument === 'function') {
+      const doc = await vscode.workspace.openTextDocument(uri)
+      await vscode.window.showTextDocument(doc, {
+        ...plan.selection === undefined ? {} : { selection: plan.selection },
+        preview: false,
+      })
+      return
+    }
+    await vscode.commands.executeCommand?.('vscode.open', uri)
+  } catch (error) {
+    const message = redactSecrets(error instanceof Error ? error.message : String(error))
+    await vscode.window.showErrorMessage(`打开引用失败：${message}`)
+  }
+}
+
+/**
+ * Shared command / context-menu path for selection ask (D-6).
+ * @param vscode - duck-typed vscode.
+ */
+async function runAskAboutSelection(vscode: VsCodeLike): Promise<unknown> {
+  await ensureHostForSend(vscode)
+  await revealConversationPanel(vscode)
+  const controller = conversations
+  if (controller === undefined || panelHost === undefined) {
+    await vscode.window.showErrorMessage('请先连接 DeepSeek Harness Host。')
+    return { ok: false as const, reason: 'no-host' as const }
+  }
+  const result = await askAboutSelection({
+    getActiveEditor: () => vscode.window.activeTextEditor,
+    getWorkspaceFolders: () => (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath),
+    asRelativePath: vscode.workspace.asRelativePath === undefined
+      ? undefined
+      : (fsPath) => vscode.workspace.asRelativePath!(fsPath, false),
+    selectionMeta: selectionMetaStore,
+    ensureLiveTab: () => {
+      const active = controller.registry.getActive()
+      if (active !== undefined && active.mode === 'live') {
+        return { tabId: active.tabId, sessionId: active.sessionId, mode: 'live' as const }
+      }
+      // Replay or no Tab: never prefill a replay Tab (AC-1) — mint a new live Tab.
+      // AD-CR-6: do not steal inactive empty Tabs; newConversation is correct here.
+      const live = controller.newConversation(EMPTY_LIVE_TITLE)
+      panelHost?.pushFullState()
+      return { tabId: live.tabId, sessionId: live.sessionId, mode: 'live' as const }
+    },
+    prefillComposer: (text) => {
+      panelHost?.prefillComposer(text)
+    },
+    notify: (text, kind) => {
+      panelHost?.pushBanner(text, kind)
+      void vscode.window.showWarningMessage?.(text)
+    },
+  })
+  return result
 }
 
 /**

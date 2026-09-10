@@ -34,6 +34,7 @@
     }
   },
   "dependencies": {
+    "@deepseek-ai/dsh-file-reference-local": "workspace:^",
     "@deepseek-ai/dsh-ide-bridge": "workspace:^"
   },
   "peerDependencies": {

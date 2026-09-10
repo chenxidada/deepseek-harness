@@ -33,6 +33,9 @@ describe('dsh-ide bundle', () => {
     expect(patches.find(patch => patch.id === 'sdk-app-startup')?.config?.profile).toBe('ide')
     const rows = patches.flatMap(patch => patch.insert ?? [])
     expect(rows.find(row => row.id === 'ide-bridge')?.name).toBe('@deepseek-ai/dsh-ide-bridge')
+    expect(rows.find(row => row.id === 'file-reference-local')?.name)
+      .toBe('@deepseek-ai/dsh-file-reference-local')
+    expect(manifest.dependencies).toHaveProperty('@deepseek-ai/dsh-file-reference-local')
     for (const patch of patches) {
       expect(FORBIDDEN_IDS.has(patch.id ?? '')).toBe(false)
       for (const row of patch.insert ?? []) {

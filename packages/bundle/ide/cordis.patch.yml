@@ -1,6 +1,7 @@
 # The IDE application over dsh-base + dsh-sdk-app.
 # Stdout remains exclusive to SDK JSON-RPC; Host bridge uses DSH_IDE_BRIDGE_SOCK.
 # Must NOT mount ui-approval / ui-user-questions (AC-5).
+# file-reference-local pre-mounts FILE_REFERENCE_PROMPT when `read` exists (AC-3b / AD-CCD-13).
 
 - id: sdk-app-startup
   config:
@@ -9,3 +10,6 @@
 - insert:
     - id: ide-bridge
       name: '@deepseek-ai/dsh-ide-bridge'
+
+    - id: file-reference-local
+      name: '@deepseek-ai/dsh-file-reference-local'

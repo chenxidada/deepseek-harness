@@ -17,6 +17,9 @@
     },
     {
       "path": "../../packages/subprocess/subprocess"
+    },
+    {
+      "path": "../../packages/context/file-reference"
     }
   ]
 }

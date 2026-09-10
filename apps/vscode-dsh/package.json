@@ -40,6 +40,7 @@
     "onCommand:dsh.selectPermissionPreset",
     "onCommand:dsh.reviewWorkspaceDiffs",
     "onCommand:dsh.openTimelineDiff",
+    "onCommand:dsh.askAboutSelection",
     "onView:dsh.conversations",
     "onView:dsh.history",
     "onView:dsh.timeline",
@@ -74,6 +75,10 @@
       {
         "command": "dsh.promptActiveConversation",
         "title": "DeepSeek Harness: Prompt Active Conversation"
+      },
+      {
+        "command": "dsh.askAboutSelection",
+        "title": "DeepSeek Harness: Ask About Selection"
       },
       {
         "command": "dsh.selectPermissionPreset",
@@ -121,6 +126,13 @@
       }
     ],
     "menus": {
+      "editor/context": [
+        {
+          "command": "dsh.askAboutSelection",
+          "group": "dsh@1",
+          "when": "editorHasSelection"
+        }
+      ],
       "view/item/context": [
         {
           "command": "dsh.deleteConversation",
@@ -180,6 +192,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@deepseek-ai/dsh-file-reference": "workspace:^",
     "@deepseek-ai/dsh-ide-bridge": "workspace:^",
     "@deepseek-ai/dsh-sdk-client": "workspace:^",
     "@deepseek-ai/dsh-subprocess": "workspace:^"
