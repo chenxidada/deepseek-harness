@@ -3,7 +3,7 @@
   "description": "对话体验日常敢用：呈现态下放 + 流式/活动流/消息交互/引用变更diff呈现/搜索档1+2/分叉 + 可脚本渲染进门槛",
   "created": "2026-09-10T05:57:02Z",
   "current_stage": "phase-implementation",
-  "current_phase": "phase-1-foundation-render-probe",
+  "current_phase": "phase-3-activity-stream",
   "loop_count": 0,
   "human_gates": {
     "hg1": "passed",
@@ -17,9 +17,9 @@
       "verifier": "completed"
     },
     "phase-2-streaming-cancel-follow": {
-      "implementer": "pending",
-      "reviewer": "pending",
-      "verifier": "pending"
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed"
     },
     "phase-3-activity-stream": {
       "implementer": "pending",
@@ -42,8 +42,8 @@
       "verifier": "pending"
     }
   },
-  "last_update": "2026-09-10T10:53:23Z",
-  "notes": "phase-1: verifier PASS; awaiting HG-3",
+  "last_update": "2026-09-10T12:54:58Z",
+  "notes": "phase-2 HG-3 passed & merged; Phase Entry Gate for phase-3 before implement",
   "pending_decisions": {
     "T6_thinking": "locked_B_no_display",
     "hg1": "passed",

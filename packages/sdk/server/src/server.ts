@@ -199,6 +199,27 @@ export class HarnessSdkJsonRpcServer {
   }
 
   /**
+   * Cancel the active turn for one server-owned session (Host Stop / I-真).
+   * Uses `Agent.cancel({ kind:'user' }, { keepInbox: true })` — does not dispose.
+   * No-op when the session id is unknown (idempotent, mirrors dispose).
+   * @param sessionId - SDK session identity to cancel.
+   */
+  async cancelSession(sessionId: string): Promise<void> {
+    if (this.shuttingDown) throw new Error('SDK server is shutting down')
+    const pending = this.sessionCreations.get(sessionId)
+    if (pending !== undefined) {
+      try {
+        await pending
+      } catch {
+        // Creation failed; nothing to cancel.
+      }
+    }
+    const rec = this.sessions.get(sessionId)
+    if (rec === undefined) return
+    rec.handle.agent.cancel({ kind: 'user' }, { keepInbox: true })
+  }
+
+  /**
    * Dispose one server-owned session without touching stdout protocol methods.
    * Clears the Map entry before `handle.dispose()` so a later prompt can
    * recreate the id instead of hitting the zombie-agent error path.

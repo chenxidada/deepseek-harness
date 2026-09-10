@@ -67,6 +67,11 @@ export type OpenHistoryResult =
   | { outcome: 'missing'; sessionId: string }
   | { outcome: 'error'; sessionId: string; error: string }
 
+/** Result of I-真 cancel (AD-CUX-3 / AC-13 / AC-13d). */
+export type CancelActiveTurnResult =
+  | { ok: true }
+  | { ok: false; error: string }
+
 /** Outcome of restart restore orchestration (AC-33/34/69/70). */
 export type RestoreOpenTabsResult =
   | {
@@ -180,6 +185,8 @@ export class ConversationController {
   private pendingSettleTurn = new Map<string, number>()
   /** Serialize per-session settle to keep last-assistant anchoring stable. */
   private settleChain = new Map<string, Promise<void>>()
+  /** Live streaming assistant bubble id per session (stable across chunks). */
+  private streamingAssistant = new Map<string, { messageId: string; turn?: number }>()
   /** Duck-typed workspace write surface for revert (AD-CCD-10); set by extension / L2. */
   private revertWorkspace: RevertWorkspace | undefined
 
@@ -232,6 +239,10 @@ export class ConversationController {
       this.stopStatusWatch = this.host.onStatusChange((status) => {
         if (status === 'connected' && this.pendingRestoreLatch) {
           void this.restoreOpenTabSet()
+        }
+        // AC-19: disconnect / Host error while streaming → fail-closed streaming false.
+        if (status === 'error' || status === 'disconnected') {
+          this.failClosedAllStreaming('Host 连接中断，流式已停止')
         }
       })
     }
@@ -694,6 +705,37 @@ export class ConversationController {
     const capability = row?.continueCapability
       ?? this.resolveContinueCapability(tab.sessionId, this.messages.hasContent(tab.sessionId))
     return continueChromeFor(T0B_GATE_VERDICT, capability, { mode: 'replay', hostReady })
+  }
+
+  /**
+   * I-真 cancel for the active (or specified) live session (AD-CUX-3 / AC-13).
+   * Failures/timeouts surface via banner and do not claim frontend-only stop (AC-13d).
+   * @param sessionId - optional session; defaults to active Tab.
+   */
+  async cancelActiveTurn(sessionId?: string): Promise<CancelActiveTurnResult> {
+    const tab = sessionId === undefined
+      ? this.registry.getActive()
+      : this.registry.getBySessionId(sessionId)
+    if (tab === undefined) {
+      const error = '没有活动会话可中断'
+      this.panelHost?.pushBanner(error, 'cancel-failed')
+      return { ok: false, error }
+    }
+    if (typeof this.host.cancelSession !== 'function') {
+      const error = 'Host 不支持 session/cancel'
+      this.panelHost?.pushBanner(`中断失败：${error}`, 'cancel-failed')
+      return { ok: false, error }
+    }
+    try {
+      await this.host.cancelSession(tab.sessionId)
+      // Streaming settles when live turn/end aborted arrives; do not force follow reset.
+      return { ok: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.panelHost?.pushBanner(`中断失败：${message}`, 'cancel-failed')
+      // Do not mark incomplete or claim success — agent may still be running.
+      return { ok: false, error: message }
+    }
   }
 
   /**
@@ -1331,6 +1373,32 @@ export class ConversationController {
 
   private projectAssistantMessage(sessionId: string, text: string, turn?: number): void {
     if (text === '') return
+    const streaming = this.streamingAssistant.get(sessionId)
+    if (streaming !== undefined) {
+      // Converge the same node with authoritative full text (AC-12 / AC-18).
+      this.messages.patch(sessionId, streaming.messageId, {
+        text,
+        streaming: false,
+        incomplete: false,
+      })
+      this.streamingAssistant.delete(sessionId)
+      const active = this.registry.getActive()
+      if (active !== undefined && active.sessionId === sessionId) {
+        this.panelHost?.pushPatch(sessionId, streaming.messageId, {
+          text,
+          streaming: false,
+          incomplete: false,
+        })
+      } else {
+        const tab = this.registry.getBySessionId(sessionId)
+        if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
+      }
+      this.attributor.noteAssistant(sessionId, streaming.messageId, turn)
+      const settleTurn = turn ?? this.attributor.getLatestTurn(sessionId) ?? 0
+      this.attributor.clearSettled(sessionId, settleTurn)
+      void this.enqueueSettle(sessionId, streaming.messageId, settleTurn)
+      return
+    }
     const messageId = randomUUID()
     const message: ChatMessage = {
       id: messageId,
@@ -1353,6 +1421,147 @@ export class ConversationController {
     // N-2: re-anchor on each assistant; last wins when settle runs.
     this.attributor.clearSettled(sessionId, settleTurn)
     void this.enqueueSettle(sessionId, messageId, settleTurn)
+  }
+
+  /**
+   * Project a live `assistant/chunk` text-delta onto a stable assistant bubble (AC-10).
+   * Ignores reasoning-delta (AD-CUX-7 / T6 lock B).
+   */
+  private projectAssistantChunk(
+    sessionId: string,
+    chunk: Record<string, unknown>,
+    turn: number | undefined,
+  ): void {
+    if (chunk.type === 'reasoning-delta') return
+    if (chunk.type !== 'text-delta') return
+    const delta = typeof chunk.text === 'string' ? chunk.text : ''
+    if (delta === '') return
+
+    let streaming = this.streamingAssistant.get(sessionId)
+    if (streaming === undefined) {
+      const messageId = randomUUID()
+      const message: ChatMessage = {
+        id: messageId,
+        sessionId,
+        role: 'assistant',
+        kind: 'text',
+        text: delta,
+        streaming: true,
+        ...turn === undefined ? {} : { turn },
+      }
+      this.messages.append(sessionId, message)
+      this.streamingAssistant.set(sessionId, { messageId, turn })
+      streaming = { messageId, turn }
+      const active = this.registry.getActive()
+      if (active !== undefined && active.sessionId === sessionId) {
+        this.panelHost?.pushAppend(message)
+      } else {
+        const tab = this.registry.getBySessionId(sessionId)
+        if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
+      }
+      this.attributor.noteAssistant(sessionId, messageId, turn)
+      // Ensure generating chrome for streaming probe (AC-11).
+      const tab = this.registry.getBySessionId(sessionId)
+      if (tab !== undefined && tab.status !== 'running') {
+        this.registry.setStatus(tab.tabId, 'running')
+      }
+      this.panelHost?.pushStatus()
+      return
+    }
+
+    this.messages.patch(sessionId, streaming.messageId, {
+      appendText: delta,
+      streaming: true,
+    })
+    const active = this.registry.getActive()
+    if (active !== undefined && active.sessionId === sessionId) {
+      this.panelHost?.pushPatch(sessionId, streaming.messageId, {
+        appendText: delta,
+        streaming: true,
+      })
+    } else {
+      const tab = this.registry.getBySessionId(sessionId)
+      if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
+    }
+  }
+
+  /**
+   * Mark live turn incomplete from `turn/end` aborted/interrupted (AC-13b).
+   * Keeps partial assistant text; does not force-reset follow-state.
+   */
+  private markTurnIncomplete(sessionId: string, turn: number | undefined): void {
+    const streaming = this.streamingAssistant.get(sessionId)
+    if (streaming !== undefined) {
+      this.messages.patch(sessionId, streaming.messageId, {
+        incomplete: true,
+        streaming: false,
+      })
+      const active = this.registry.getActive()
+      if (active !== undefined && active.sessionId === sessionId) {
+        this.panelHost?.pushPatch(sessionId, streaming.messageId, {
+          incomplete: true,
+          streaming: false,
+        })
+      }
+      this.streamingAssistant.delete(sessionId)
+    } else {
+      // Fall back: mark last assistant for this turn when present.
+      const list = this.messages.get(sessionId)
+      const last = [...list].reverse().find(m =>
+        m.role === 'assistant'
+        && (turn === undefined || m.turn === turn),
+      )
+      if (last !== undefined && last.incomplete !== true) {
+        this.messages.patch(sessionId, last.id, { incomplete: true, streaming: false })
+        const active = this.registry.getActive()
+        if (active !== undefined && active.sessionId === sessionId) {
+          this.panelHost?.pushPatch(sessionId, last.id, { incomplete: true, streaming: false })
+        }
+      }
+    }
+
+    const already = this.messages.get(sessionId).some(m =>
+      m.kind === 'notice' && m.text === '已停止/未完成',
+    )
+    if (!already) {
+      const notice: ChatMessage = {
+        id: randomUUID(),
+        sessionId,
+        role: 'notice',
+        kind: 'notice',
+        text: '已停止/未完成',
+        ...turn === undefined ? {} : { turn },
+      }
+      this.messages.append(sessionId, notice)
+      const active = this.registry.getActive()
+      if (active !== undefined && active.sessionId === sessionId) {
+        this.panelHost?.pushAppend(notice)
+      }
+    }
+
+    const tab = this.registry.getBySessionId(sessionId)
+    if (tab !== undefined) this.registry.setStatus(tab.tabId, 'idle')
+    this.panelHost?.pushStatus()
+  }
+
+  /** Fail-closed: clear all in-flight streaming projections (AC-19). */
+  private failClosedAllStreaming(banner: string): void {
+    const sessionIds = [...this.streamingAssistant.keys()]
+    if (sessionIds.length === 0) return
+    this.panelHost?.pushBanner(banner, 'stream-fail')
+    for (const sessionId of sessionIds) {
+      const streaming = this.streamingAssistant.get(sessionId)
+      if (streaming === undefined) continue
+      this.messages.patch(sessionId, streaming.messageId, { streaming: false })
+      const active = this.registry.getActive()
+      if (active !== undefined && active.sessionId === sessionId) {
+        this.panelHost?.pushPatch(sessionId, streaming.messageId, { streaming: false })
+      }
+      this.streamingAssistant.delete(sessionId)
+      const tab = this.registry.getBySessionId(sessionId)
+      if (tab !== undefined) this.registry.setStatus(tab.tabId, 'idle')
+    }
+    this.panelHost?.pushStatus()
   }
 
   /**
@@ -1452,9 +1661,21 @@ export class ConversationController {
       if (turn !== undefined) this.attributor.ingestToolResult(sessionId, turn, data.meta)
       return
     }
+    if (record.type === 'assistant/chunk') {
+      const chunk = data.chunk as Record<string, unknown> | undefined
+      if (chunk === undefined || typeof chunk !== 'object' || chunk === null) return
+      this.projectAssistantChunk(sessionId, chunk, turn)
+      return
+    }
     if (record.type === 'turn/end') {
+      const reason = data.reason as Record<string, unknown> | undefined
+      const reasonKind = typeof reason?.kind === 'string' ? reason.kind : undefined
+      if (reasonKind === 'aborted' || reasonKind === 'interrupted') {
+        this.markTurnIncomplete(sessionId, turn)
+      }
       if (turn === undefined) return
       const assistantId = this.attributor.getLastAssistantId(sessionId)
+        ?? this.streamingAssistant.get(sessionId)?.messageId
       if (assistantId !== undefined) {
         this.attributor.clearSettled(sessionId, turn)
         void this.enqueueSettle(sessionId, assistantId, turn)

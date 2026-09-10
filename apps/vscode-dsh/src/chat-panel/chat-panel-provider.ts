@@ -485,7 +485,27 @@ export function buildThinChatHtml(cspSource?: string): string {
       color: var(--dsh-send-fg);
     }
     #send:hover:not(:disabled) { background: var(--dsh-send-hover); }
-    #send:disabled, #input:disabled { opacity: 0.55; cursor: not-allowed; }
+    #send:disabled, #input:disabled, #stopBtn:disabled { opacity: 0.55; cursor: not-allowed; }
+    #stopBtn {
+      flex: 0 0 auto;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: 600;
+      border-radius: 6px;
+      border: 1px solid var(--vscode-button-border, transparent);
+      background: var(--vscode-button-secondaryBackground, transparent);
+      color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    }
+    #stopBtn[hidden] { display: none; }
+    #followResumeBtn {
+      position: absolute;
+      right: 12px;
+      bottom: 72px;
+      z-index: 2;
+      padding: 4px 10px;
+      font-size: 12px;
+    }
+    #followResumeBtn[hidden] { display: none; }
     button {
       font-family: var(--vscode-font-family);
       color: var(--vscode-button-foreground);
@@ -520,9 +540,11 @@ export function buildThinChatHtml(cspSource?: string): string {
       <div id="status" role="status" aria-live="polite"></div>
     </div>
     <div id="messages" data-testid="messages"></div>
+    <button id="followResumeBtn" type="button" data-testid="follow-resume" hidden>回到底部</button>
     <div id="reject"></div>
     <div id="composer" data-testid="composer">
       <textarea id="input" placeholder="Message…" aria-label="Message"></textarea>
+      <button id="stopBtn" type="button" data-testid="stop" hidden>Stop</button>
       <button id="send" type="button" data-testid="send">Send</button>
     </div>
   </div>
@@ -537,6 +559,8 @@ export function buildThinChatHtml(cspSource?: string): string {
     const rejectEl = document.getElementById('reject');
     const inputEl = document.getElementById('input');
     const sendEl = document.getElementById('send');
+    const stopBtn = document.getElementById('stopBtn');
+    const followResumeBtn = document.getElementById('followResumeBtn');
     const continueBtn = document.getElementById('continueBtn');
     const continueReason = document.getElementById('continueReason');
     const restoreMoreBtn = document.getElementById('restoreMoreBtn');
@@ -555,6 +579,57 @@ export function buildThinChatHtml(cspSource?: string): string {
     var __dshProbes = createChatUxProbeStore({ followState: 'off', streaming: false });
     if (typeof window !== 'undefined') window.__dshProbes = __dshProbes;
     applyFollowState(chassisEl, 'off');
+    var followState = 'off';
+    var FOLLOW_BOTTOM_PX = 48;
+    function isNearBottom() {
+      if (!messagesEl) return true;
+      var remaining = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+      return remaining <= FOLLOW_BOTTOM_PX;
+    }
+    function syncFollowFromScroll(explicitResume) {
+      var atBottom = isNearBottom();
+      var userTookOver = !atBottom;
+      followState = decideFollowState({
+        followState: followState,
+        atBottom: atBottom,
+        userTookOver: userTookOver,
+        explicitResume: explicitResume === true,
+        streaming: __dshProbes.get().streaming === true,
+      });
+      applyFollowState(chassisEl, followState);
+      if (typeof __dshProbes.setFollowState === 'function') __dshProbes.setFollowState(followState);
+      if (followResumeBtn) followResumeBtn.hidden = followState !== 'off';
+    }
+    function initFollowOnStreamStart() {
+      // P2-2: new stream → follow on unless already in takeover.
+      if (!isNearBottom()) {
+        followState = 'off';
+      } else {
+        followState = 'on';
+      }
+      applyFollowState(chassisEl, followState);
+      if (typeof __dshProbes.setFollowState === 'function') __dshProbes.setFollowState(followState);
+      if (followResumeBtn) followResumeBtn.hidden = followState !== 'off';
+    }
+    function keepBottomIfFollowing() {
+      if (followState !== 'on' || !messagesEl) return;
+      var last = messagesEl.lastElementChild;
+      if (last && typeof last.scrollIntoView === 'function') {
+        last.scrollIntoView({ block: 'end' });
+      } else {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+    }
+    function syncStopChrome() {
+      if (!stopBtn) return;
+      var generating = __dshProbes.get().streaming === true;
+      stopBtn.hidden = !generating;
+    }
+    if (messagesEl) {
+      messagesEl.addEventListener('scroll', function() {
+        syncFollowFromScroll(false);
+      });
+    }
     function resolveComposerKeydown(input) {
       if (input.isComposing === true) return 'none';
       if (input.key !== 'Enter') return 'none';
@@ -612,6 +687,8 @@ export function buildThinChatHtml(cspSource?: string): string {
       var div = document.createElement('div');
       div.className = 'msg bubble ' + msg.role;
       applyMessageIdentity(div, msg);
+      if (msg.incomplete === true) div.setAttribute('data-incomplete', 'true');
+      if (msg.streaming === true) div.setAttribute('data-streaming', 'true');
       if (msg.kind === 'diff-summary') {
         div.setAttribute('data-kind', 'diff-summary');
         if (msg.sourceMessageId) {
@@ -926,10 +1003,43 @@ export function buildThinChatHtml(cspSource?: string): string {
       if (msg.type === 'messages/append') {
         if (sessionId !== undefined && msg.sessionId !== sessionId) return;
         appendMessage(msg.message);
+        if (msg.message && msg.message.streaming === true) {
+          initFollowOnStreamStart();
+          keepBottomIfFollowing();
+        }
+        syncStopChrome();
+        return;
+      }
+      if (msg.type === 'messages/patch') {
+        if (sessionId !== undefined && msg.sessionId !== sessionId) return;
+        if (msg.text !== undefined && msg.appendText !== undefined) return;
+        var wasStreaming = __dshProbes.get().streaming === true;
+        var patched = patchMessageDom(messagesEl, msg.messageId, {
+          text: msg.text,
+          appendText: msg.appendText,
+          incomplete: msg.incomplete,
+          streaming: msg.streaming,
+        });
+        if (!patched) {
+          // Bubble missing (e.g. late patch) — do not tear down the list.
+          return;
+        }
+        if (msg.streaming === true) {
+          if (!wasStreaming) initFollowOnStreamStart();
+          if (typeof __dshProbes.setStreaming === 'function') __dshProbes.setStreaming(true);
+          keepBottomIfFollowing();
+        } else if (msg.streaming === false) {
+          if (typeof __dshProbes.setStreaming === 'function') __dshProbes.setStreaming(false);
+        }
+        syncStopChrome();
         return;
       }
       if (msg.type === 'status/set') {
+        var beforeStreaming = __dshProbes.get().streaming === true;
         applyStreamingStatus(statusEl, msg.status, __dshProbes);
+        var afterStreaming = __dshProbes.get().streaming === true;
+        if (afterStreaming && !beforeStreaming) initFollowOnStreamStart();
+        syncStopChrome();
         return;
       }
       if (msg.type === 'ui/banner') {
@@ -1048,6 +1158,17 @@ export function buildThinChatHtml(cspSource?: string): string {
     sendEl.addEventListener('click', function() {
       sendComposer();
     });
+    if (stopBtn) {
+      stopBtn.addEventListener('click', function() {
+        vscode.postMessage({ type: 'action/stop' });
+      });
+    }
+    if (followResumeBtn) {
+      followResumeBtn.addEventListener('click', function() {
+        syncFollowFromScroll(true);
+        keepBottomIfFollowing();
+      });
+    }
     inputEl.addEventListener('keydown', function(event) {
       var action = resolveComposerKeydown({
         key: event.key,

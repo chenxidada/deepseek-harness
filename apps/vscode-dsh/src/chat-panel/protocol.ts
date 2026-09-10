@@ -93,6 +93,19 @@ export type HostToWebviewMessage =
     message: ChatMessage
   }
   | {
+    /**
+     * Incremental text update for one bubble (AD-CUX-10).
+     * `text` and `appendText` are mutually exclusive.
+     */
+    type: 'messages/patch'
+    sessionId: string
+    messageId: string
+    text?: string
+    appendText?: string
+    incomplete?: boolean
+    streaming?: boolean
+  }
+  | {
     type: 'status/set'
     status: PanelStatus
     sessionId?: string
@@ -157,6 +170,7 @@ export type WebviewToHostMessage =
   | { type: 'composer/send'; text: string }
   | { type: 'action/delete' }
   | { type: 'action/continue' }
+  | { type: 'action/stop' }
   | { type: 'action/new-conversation' }
   | { type: 'action/restore-more'; all?: boolean }
   | { type: 'action/retry-connect' }
@@ -185,6 +199,7 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'ready') return { type: 'ready' }
   if (type === 'action/delete') return { type: 'action/delete' }
   if (type === 'action/continue') return { type: 'action/continue' }
+  if (type === 'action/stop') return { type: 'action/stop' }
   if (type === 'action/new-conversation') return { type: 'action/new-conversation' }
   if (type === 'action/retry-connect') return { type: 'action/retry-connect' }
   if (type === 'action/open-settings') return { type: 'action/open-settings' }
@@ -251,6 +266,14 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
     }
   }
   return undefined
+}
+
+/**
+ * Whether a Host→Webview frame is a messages/patch (streaming identity update).
+ * @param message - host frame.
+ */
+export function isMessagesPatch(message: HostToWebviewMessage): message is Extract<HostToWebviewMessage, { type: 'messages/patch' }> {
+  return message.type === 'messages/patch'
 }
 
 /**

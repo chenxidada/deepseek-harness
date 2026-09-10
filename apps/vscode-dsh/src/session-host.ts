@@ -55,6 +55,8 @@ export interface IdeSessionHostStartOptions {
   initializeTimeoutMs?: number
   /** Bound (ms) for bridge dispose round-trips (default 5000). */
   disposeTimeoutMs?: number
+  /** Bound (ms) for bridge cancel round-trips (default 5000; AD-CUX-3). */
+  cancelTimeoutMs?: number
   /** Bound (ms) for permission RPC round-trips (default 5000). */
   permissionTimeoutMs?: number
 }
@@ -76,9 +78,14 @@ export class IdeSessionHost {
   /** Credentials bag for this session; used only for diagnostic redaction. */
   private credentials: NodeJS.ProcessEnv | undefined
   private disposeTimeoutMs = 5_000
+  private cancelTimeoutMs = 5_000
   private permissionTimeoutMs = 5_000
   private readLogTimeoutMs = 15_000
   private readonly pendingDispose = new Map<string, {
+    resolve: () => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingCancel = new Map<string, {
     resolve: () => void
     reject: (error: Error) => void
   }>()
@@ -202,6 +209,7 @@ export class IdeSessionHost {
     this.bridgeHello = false
     this.credentials = options.credentials
     this.disposeTimeoutMs = options.disposeTimeoutMs ?? 5_000
+    this.cancelTimeoutMs = options.cancelTimeoutMs ?? 5_000
     this.permissionTimeoutMs = options.permissionTimeoutMs ?? 5_000
     const bridgePath = options.bridgeSockPath
       ?? join(tmpdir(), `dsh-ide-bridge-${randomUUID()}.sock`)
@@ -261,6 +269,41 @@ export class IdeSessionHost {
   async prompt(sessionId: string, contentBlocks: SdkPromptContentBlock[]): Promise<string> {
     const client = this.requireClient()
     return client.prompt(sessionId, contentBlocks)
+  }
+
+  /**
+   * Cancel the active turn via Host bridge `session/cancel` → Agent.cancel (AD-CUX-3).
+   * Timeout default 5000ms, no retry; failure/timeout reject for AC-13d fail-closed.
+   * @param sessionId - Tab-bound SDK session identity.
+   */
+  async cancelSession(sessionId: string): Promise<void> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot cancel session')
+    }
+    const id = randomUUID()
+    const response = new Promise<void>((resolve, reject) => {
+      this.pendingCancel.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingCancel.get(id)
+      if (pending === undefined) return
+      this.pendingCancel.delete(id)
+      pending.reject(new Error(`session/cancel timed out after ${this.cancelTimeoutMs}ms`))
+    }, this.cancelTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'session/cancel', id, sessionId })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive session/cancel')
+      }
+      await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingCancel.delete(id)
+    }
   }
 
   /**
@@ -443,6 +486,10 @@ export class IdeSessionHost {
       this.pendingDispose.delete(id)
       pending.reject(new Error(reason))
     }
+    for (const [id, pending] of this.pendingCancel) {
+      this.pendingCancel.delete(id)
+      pending.reject(new Error(reason))
+    }
     for (const [id, pending] of this.pendingPermission) {
       this.pendingPermission.delete(id)
       pending.reject(new Error(reason))
@@ -480,6 +527,17 @@ export class IdeSessionHost {
       const pending = this.pendingDispose.get(frame.id)
       if (pending === undefined) return
       this.pendingDispose.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve()
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'session/cancel/response') {
+      const pending = this.pendingCancel.get(frame.id)
+      if (pending === undefined) return
+      this.pendingCancel.delete(frame.id)
       if (frame.ok) {
         pending.resolve()
         return
@@ -598,6 +656,10 @@ export class IdeSessionHost {
     for (const [id, pending] of this.pendingDispose) {
       this.pendingDispose.delete(id)
       pending.reject(new Error(`${reason} during session/dispose`))
+    }
+    for (const [id, pending] of this.pendingCancel) {
+      this.pendingCancel.delete(id)
+      pending.reject(new Error(`${reason} during session/cancel`))
     }
     for (const [id, pending] of this.pendingPermission) {
       this.pendingPermission.delete(id)

@@ -145,6 +145,16 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       if (typeof record.error !== 'string') return undefined
       return { kind, id: record.id, ok: false, error: record.error }
     }
+    case 'session/cancel': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
+      return { kind, id: record.id, sessionId: record.sessionId }
+    }
+    case 'session/cancel/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) return { kind, id: record.id, ok: true }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
     case 'session/continue-capability': {
       if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
       return { kind, id: record.id, sessionId: record.sessionId }

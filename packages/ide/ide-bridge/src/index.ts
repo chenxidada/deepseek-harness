@@ -19,6 +19,7 @@ import {
   PERMISSION_PRESETS_SERVICE,
   SDK_SESSION_DISPOSE_SERVICE,
   SDK_SESSION_RESUME_SERVICE,
+  SDK_SESSION_CANCEL_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   type BridgeFrame,
@@ -27,6 +28,7 @@ import {
   type IdeBridgeSessions,
   type SdkSessionDisposeCapability,
   type SdkSessionResumeCapability,
+  type SdkSessionCancelCapability,
   type SessionPersistenceReadCapability,
 } from './types.ts'
 import { isApprovalOutcome, isAskUserQuestionAnswer } from './validate.ts'
@@ -37,6 +39,7 @@ export {
   PERMISSION_PRESETS_SERVICE,
   SDK_SESSION_DISPOSE_SERVICE,
   SDK_SESSION_RESUME_SERVICE,
+  SDK_SESSION_CANCEL_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   APPROVAL_OUTCOMES,
@@ -46,6 +49,7 @@ export {
   type IdeBridgeSessions,
   type SdkSessionDisposeCapability,
   type SdkSessionResumeCapability,
+  type SdkSessionCancelCapability,
   type SessionPersistenceReadCapability,
   type ApprovalOutcome,
   type AskUserQuestionAnswer,
@@ -420,6 +424,10 @@ async function handleHostFrame(
     await handleResume(ctx, client, frame)
     return
   }
+  if (frame.kind === 'session/cancel') {
+    await handleCancel(ctx, client, frame)
+    return
+  }
   if (frame.kind === 'session/continue-capability') {
     await handleContinueCapability(ctx, client, frame)
     return
@@ -538,6 +546,38 @@ async function handleResume(
   } catch (error) {
     client.send({
       kind: 'session/resume/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Cancel the active turn via SDK-owned `sdkSessionCancel` → `Agent.cancel`
+ * with `{ keepInbox: true }` (AD-CUX-3 / I-真). Does not dispose the session.
+ */
+async function handleCancel(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'session/cancel' }>,
+): Promise<void> {
+  const canceler = ctx.get(SDK_SESSION_CANCEL_SERVICE) as SdkSessionCancelCapability | undefined
+  if (canceler === undefined) {
+    client.send({
+      kind: 'session/cancel/response',
+      id: frame.id,
+      ok: false,
+      error: `${SDK_SESSION_CANCEL_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    await canceler.cancelSession(frame.sessionId)
+    client.send({ kind: 'session/cancel/response', id: frame.id, ok: true })
+  } catch (error) {
+    client.send({
+      kind: 'session/cancel/response',
       id: frame.id,
       ok: false,
       error: error instanceof Error ? error.message : String(error),

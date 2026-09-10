@@ -19,6 +19,7 @@ import {
   PERMISSION_PRESETS_SERVICE,
   SDK_SESSION_DISPOSE_SERVICE,
   SDK_SESSION_RESUME_SERVICE,
+  SDK_SESSION_CANCEL_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   validateBridgeFrame,
@@ -227,6 +228,11 @@ describe('ide-bridge session/resume (GAP-001 / Continue)', () => {
       ok: true,
       capability: 'same-id',
     })
+    expect(parseBridgeFrame('{"kind":"session/cancel","id":"c1","sessionId":"s"}')).toEqual({
+      kind: 'session/cancel',
+      id: 'c1',
+      sessionId: 's',
+    })
   })
 })
 
@@ -275,6 +281,57 @@ describe('ide-bridge session/dispose (AC-8 / Q-3)', () => {
     )
     expect(disposed).toEqual(['sess-a'])
     expect(responses).toContainEqual({ kind: 'session/dispose/response', id: requestId, ok: true })
+
+    await ctx.fiber.dispose()
+    await host.close()
+  })
+})
+
+describe('ide-bridge session/cancel (AD-CUX-3 / I-真)', () => {
+  const dirs: string[] = []
+  let previousSock: string | undefined
+
+  afterEach(async () => {
+    while (dirs.length > 0) {
+      const dir = dirs.pop()!
+      await rm(dir, { recursive: true, force: true })
+    }
+    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
+  })
+
+  it('Host cancel frame calls sdkSessionCancel and returns ok', async () => {
+    previousSock = process.env[IDE_BRIDGE_SOCK_ENV]
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-cancel-frame-'))
+    dirs.push(dir)
+    const path = join(dir, 'bridge.sock')
+    const cancelled: string[] = []
+    const host = new IdeBridgeHostServer()
+    const responses: BridgeFrame[] = []
+    host.onFrame((frame) => {
+      if (frame.kind === 'hello') return
+      responses.push(frame)
+    })
+    await host.listen(path)
+
+    const ctx = new Context()
+    ctx.provide(SDK_SESSION_CANCEL_SERVICE, {
+      cancelSession: async (sessionId: string) => {
+        cancelled.push(sessionId)
+      },
+    })
+    process.env[IDE_BRIDGE_SOCK_ENV] = path
+    apply(ctx, {})
+    await waitFor(() => host.connectionCount() >= 1, 3_000)
+
+    const requestId = 'cancel-1'
+    expect(host.broadcast({ kind: 'session/cancel', id: requestId, sessionId: 'sess-a' })).toBe(1)
+    await waitFor(
+      () => responses.some(frame => frame.kind === 'session/cancel/response' && frame.id === requestId),
+      3_000,
+    )
+    expect(cancelled).toEqual(['sess-a'])
+    expect(responses).toContainEqual({ kind: 'session/cancel/response', id: requestId, ok: true })
 
     await ctx.fiber.dispose()
     await host.close()

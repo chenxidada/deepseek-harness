@@ -24,6 +24,12 @@ export const SDK_SESSION_DISPOSE_SERVICE = 'sdkSessionDispose'
  */
 export const SDK_SESSION_RESUME_SERVICE = 'sdkSessionResume'
 
+/**
+ * Cordis service key for server-owned per-session cancel (Stop / I-真).
+ * Published by `@deepseek-ai/dsh-sdk-jsonrpc-server` as `sdkSessionCancel`.
+ */
+export const SDK_SESSION_CANCEL_SERVICE = 'sdkSessionCancel'
+
 /** Cordis service key for permission presets (consumed via `ctx.get`). */
 export const PERMISSION_PRESETS_SERVICE = 'permissionPresets'
 
@@ -86,6 +92,18 @@ export interface SdkSessionResumeCapability {
    * @param sessionId - SDK session identity.
    */
   resumeSession(sessionId: string): Promise<void>
+}
+
+/**
+ * Server-owned session cancel capability for Stop (AD-CUX-3 / I-真).
+ * Must call `Agent.cancel({ kind:'user' }, { keepInbox: true })` without dispose.
+ */
+export interface SdkSessionCancelCapability {
+  /**
+   * Cancel the active turn when present; no-op when unknown.
+   * @param sessionId - SDK session identity.
+   */
+  cancelSession(sessionId: string): Promise<void>
 }
 
 /** Minimal session handle needed to apply a permission preset. */
@@ -166,6 +184,9 @@ export type BridgeFrame =
   | { kind: 'session/resume'; id: string; sessionId: string }
   | { kind: 'session/resume/response'; id: string; ok: true }
   | { kind: 'session/resume/response'; id: string; ok: false; error: string }
+  | { kind: 'session/cancel'; id: string; sessionId: string }
+  | { kind: 'session/cancel/response'; id: string; ok: true }
+  | { kind: 'session/cancel/response'; id: string; ok: false; error: string }
   | { kind: 'session/continue-capability'; id: string; sessionId: string }
   | {
     kind: 'session/continue-capability/response'

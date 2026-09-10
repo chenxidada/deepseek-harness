@@ -22,6 +22,8 @@ export interface ChatMessage {
   turn?: number
   /** True when the turn ended incomplete / interrupted. */
   incomplete?: boolean
+  /** True while live text-delta streaming is in progress for this bubble. */
+  streaming?: boolean
   /**
    * Lightweight change-list payload (AC-6 / AC-12).
    * Must not embed full old/new snapshot plaintext.
@@ -32,6 +34,18 @@ export interface ChatMessage {
    * Also mirrored on `changeList.sourceMessageId` for list bubbles.
    */
   sourceMessageId?: string
+}
+
+/** Incremental patch for a projected message (AD-CUX-10). `text` XOR `appendText`. */
+export interface MessagePatch {
+  /** Replace full bubble text. */
+  text?: string
+  /** Append to existing bubble text. */
+  appendText?: string
+  /** Incomplete / aborted marker. */
+  incomplete?: boolean
+  /** Streaming chrome flag on the message. */
+  streaming?: boolean
 }
 
 /**
@@ -63,6 +77,33 @@ export class MessageStore {
     if (list === undefined) this.messages.set(sessionId, [copy])
     else list.push(copy)
     this.emit()
+  }
+
+  /**
+   * Patch one message by id (AD-CUX-10). `text` and `appendText` are mutually exclusive.
+   * @param sessionId - SDK session identity.
+   * @param messageId - stable bubble id.
+   * @param update - patch fields.
+   * @returns the updated message copy, or undefined when not found / protocol error.
+   */
+  patch(sessionId: string, messageId: string, update: MessagePatch): ChatMessage | undefined {
+    if (update.text !== undefined && update.appendText !== undefined) return undefined
+    const list = this.messages.get(sessionId)
+    if (list === undefined) return undefined
+    const idx = list.findIndex(m => m.id === messageId)
+    if (idx === -1) return undefined
+    const current = list[idx]!
+    const next: ChatMessage = { ...current }
+    if (update.text !== undefined) next.text = update.text
+    else if (update.appendText !== undefined) next.text = `${current.text}${update.appendText}`
+    if (update.incomplete !== undefined) next.incomplete = update.incomplete
+    if (update.streaming !== undefined) {
+      if (update.streaming) next.streaming = true
+      else delete next.streaming
+    }
+    list[idx] = next
+    this.emit()
+    return copyMessage(next)
   }
 
   /**

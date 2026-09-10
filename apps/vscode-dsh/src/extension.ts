@@ -1120,6 +1120,11 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       await controller.continueConversation()
       panelHost?.pushFullState()
     },
+    requestStop: async () => {
+      const controller = conversations
+      if (controller === undefined) return
+      await controller.cancelActiveTurn()
+    },
     requestNewConversation: async () => {
       await runNewConversationFromPanel(vscode)
     },

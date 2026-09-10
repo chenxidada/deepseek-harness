@@ -53,6 +53,8 @@ export interface ChatPanelHostDeps {
   requestDelete?: () => Promise<void>
   /** Optional Continue action (AD-CU-8). */
   requestContinue?: () => Promise<void>
+  /** Optional Stop / cancel active turn (AD-CUX-3 / I-真). */
+  requestStop?: () => Promise<void>
   /** Optional「新建会话」action (AD-CR-8); Host owns Start→New/reuse→reveal. */
   requestNewConversation?: () => Promise<void>
   /** Optional 「查看更多」 restore. */
@@ -335,6 +337,37 @@ export class ChatPanelHost {
   }
 
   /**
+   * Push an incremental messages/patch for a stable bubble id (AD-CUX-10).
+   * Rejects frames that include both `text` and `appendText`.
+   * @param sessionId - SDK session identity.
+   * @param messageId - stable bubble id.
+   * @param update - text XOR appendText plus optional flags.
+   */
+  pushPatch(
+    sessionId: string,
+    messageId: string,
+    update: {
+      text?: string
+      appendText?: string
+      incomplete?: boolean
+      streaming?: boolean
+    },
+  ): void {
+    if (update.text !== undefined && update.appendText !== undefined) return
+    const active = this.deps.registry.getActive()
+    if (active === undefined || active.sessionId !== sessionId) return
+    this.post({
+      type: 'messages/patch',
+      sessionId,
+      messageId,
+      ...update.text !== undefined ? { text: update.text } : {},
+      ...update.appendText !== undefined ? { appendText: update.appendText } : {},
+      ...update.incomplete !== undefined ? { incomplete: update.incomplete } : {},
+      ...update.streaming !== undefined ? { streaming: update.streaming } : {},
+    })
+  }
+
+  /**
    * Scroll/expand the message-attached change-list (AC-30 / AD-CCD-4).
    * @param sessionId - session id.
    * @param sourceMessageId - assistant anchor id.
@@ -467,6 +500,10 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/continue') {
       await this.deps.requestContinue?.()
+      return
+    }
+    if (message.type === 'action/stop') {
+      await this.deps.requestStop?.()
       return
     }
     if (message.type === 'action/new-conversation') {

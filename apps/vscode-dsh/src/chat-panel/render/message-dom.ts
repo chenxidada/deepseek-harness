@@ -140,7 +140,7 @@ export function appendMessage(
 export function patchMessageDom(
   root: ParentNode,
   messageId: string,
-  update: { appendText?: string; text?: string; incomplete?: boolean },
+  update: { appendText?: string; text?: string; incomplete?: boolean; streaming?: boolean },
 ): Element | null {
   const el = root.querySelector(`[data-message-id="${cssEscape(messageId)}"]`)
   if (!el) return null
@@ -160,6 +160,11 @@ export function patchMessageDom(
     el.setAttribute('data-incomplete', 'true')
   } else if (update.incomplete === false) {
     el.removeAttribute('data-incomplete')
+  }
+  if (update.streaming === true) {
+    el.setAttribute('data-streaming', 'true')
+  } else if (update.streaming === false) {
+    el.removeAttribute('data-streaming')
   }
   return el
 }
@@ -206,6 +211,8 @@ function patchMessageDom(root, messageId, update) {
   }
   if (update.incomplete === true) el.setAttribute('data-incomplete', 'true');
   else if (update.incomplete === false) el.removeAttribute('data-incomplete');
+  if (update.streaming === true) el.setAttribute('data-streaming', 'true');
+  else if (update.streaming === false) el.removeAttribute('data-streaming');
   return el;
 }
 `
