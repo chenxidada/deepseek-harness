@@ -314,6 +314,81 @@ export async function confirmDeleteConversation(
   return picked === action ? 'confirm' : 'cancel'
 }
 
+/**
+ * Confirm deleting a DSH-created file on revert (AC-14).
+ * @param window - duck-typed vscode.window.
+ * @param path - workspace path.
+ */
+export async function confirmRevertDeleteCreated(
+  window: InteractionWindow,
+  path: string,
+): Promise<'confirm' | 'cancel'> {
+  return confirmWarning(window, `撤销将删除新建文件 ${path}，是否继续？`, '删除并撤销', '取消')
+}
+
+/**
+ * Confirm restoring a deleted file when a same-name path already exists (AC-15).
+ * @param window - duck-typed vscode.window.
+ * @param path - workspace path.
+ */
+export async function confirmRevertRestoreConflict(
+  window: InteractionWindow,
+  path: string,
+): Promise<'confirm' | 'cancel'> {
+  return confirmWarning(
+    window,
+    `路径 ${path} 已存在同名文件。继续撤销将用变更前内容覆盖，是否继续？`,
+    '覆盖并撤销',
+    '取消',
+  )
+}
+
+/**
+ * Confirm reverting an earlier turn while later unreverted changes exist (AD-CCD-10).
+ * @param window - duck-typed vscode.window.
+ * @param path - workspace path.
+ */
+export async function confirmRevertLaterChanges(
+  window: InteractionWindow,
+  path: string,
+): Promise<'confirm' | 'cancel'> {
+  return confirmWarning(
+    window,
+    `${path} 存在后续未撤销变更。继续将先处理后续回合，是否继续？`,
+    '继续撤销',
+    '取消',
+  )
+}
+
+/**
+ * Confirm revert that would discard user edits after after-image (AC-17 / N-3).
+ * @param window - duck-typed vscode.window.
+ * @param path - workspace path.
+ */
+export async function confirmRevertDirty(
+  window: InteractionWindow,
+  path: string,
+): Promise<'confirm' | 'cancel'> {
+  return confirmWarning(
+    window,
+    `${path} 相对变更后内容已有后续改动，撤销将丢失这些改动。是否继续？`,
+    '继续撤销',
+    '取消',
+  )
+}
+
+async function confirmWarning(
+  window: InteractionWindow,
+  message: string,
+  action: string,
+  cancel: string,
+): Promise<'confirm' | 'cancel'> {
+  const picked = window.showWarningMessage === undefined
+    ? await window.showInformationMessage?.(message, action, cancel)
+    : await window.showWarningMessage(message, action, cancel)
+  return picked === action ? 'confirm' : 'cancel'
+}
+
 function shortId(id: string): string {
   return id.slice(0, 8)
 }

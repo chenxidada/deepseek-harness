@@ -646,7 +646,10 @@ export function buildThinChatHtml(cspSource?: string): string {
             openBtn.setAttribute('data-change-id', String(change.changeId || ''));
             openBtn.setAttribute('data-path', String(change.path || ''));
             // AC-10: neutral status label only — no pending-write / approval phrasing.
-            var statusLabel = change.status === 'unreviewed' ? '未查看' : String(change.status || '');
+            var statusLabel = change.status === 'unreviewed' ? '未查看'
+              : change.status === 'reviewed' ? '已审阅'
+              : change.status === 'reverted' ? '已撤销'
+              : String(change.status || '');
             openBtn.textContent = String(change.path || '') + ' · ' + String(change.kind || '')
               + ' · +' + String(change.additions || 0) + '/-' + String(change.deletions || 0)
               + ' · ' + statusLabel;
@@ -699,13 +702,78 @@ export function buildThinChatHtml(cspSource?: string): string {
                 sourceMessageId: String(payload.sourceMessageId),
               });
             });
+            var reviewBtn = document.createElement('button');
+            reviewBtn.type = 'button';
+            reviewBtn.className = 'change-list-mark-reviewed';
+            reviewBtn.setAttribute('data-testid', 'change-list-mark-reviewed');
+            reviewBtn.setAttribute('data-change-id', String(change.changeId || ''));
+            reviewBtn.textContent = '已审阅';
+            reviewBtn.title = '标记为已审阅（不写盘）';
+            reviewBtn.disabled = change.status === 'reverted' || change.status === 'reviewed';
+            reviewBtn.addEventListener('click', function() {
+              vscode.postMessage({ type: 'change/mark-reviewed', changeId: change.changeId });
+            });
+            var revertBtn = document.createElement('button');
+            revertBtn.type = 'button';
+            revertBtn.className = 'change-list-revert';
+            revertBtn.setAttribute('data-testid', 'change-list-revert');
+            revertBtn.setAttribute('data-change-id', String(change.changeId || ''));
+            revertBtn.textContent = '撤销';
+            revertBtn.title = '撤销此文件变更';
+            revertBtn.disabled = change.status === 'reverted';
+            revertBtn.addEventListener('click', function() {
+              vscode.postMessage({ type: 'change/revert', changeId: change.changeId });
+            });
+            var select = document.createElement('input');
+            select.type = 'checkbox';
+            select.className = 'change-list-select';
+            select.setAttribute('data-testid', 'change-list-select');
+            select.setAttribute('data-change-id', String(change.changeId || ''));
+            select.disabled = change.status === 'reverted';
+            row.appendChild(select);
             row.appendChild(openBtn);
             row.appendChild(expandBtn);
             row.appendChild(sourceBtn);
+            row.appendChild(reviewBtn);
+            row.appendChild(revertBtn);
             wrap.appendChild(row);
             wrap.appendChild(diffPane);
           })(changes[i]);
         }
+        var batchBar = document.createElement('div');
+        batchBar.className = 'change-list-batch';
+        var revertManyBtn = document.createElement('button');
+        revertManyBtn.type = 'button';
+        revertManyBtn.className = 'change-list-revert-many';
+        revertManyBtn.setAttribute('data-testid', 'change-list-revert-many');
+        revertManyBtn.textContent = '撤销勾选';
+        revertManyBtn.addEventListener('click', function() {
+          var ids = [];
+          var boxes = wrap.querySelectorAll('.change-list-select:checked');
+          for (var bi = 0; bi < boxes.length; bi++) {
+            var id = boxes[bi].getAttribute('data-change-id');
+            if (id) ids.push(id);
+          }
+          if (ids.length === 0) return;
+          vscode.postMessage({ type: 'change/revert-many', changeIds: ids });
+        });
+        var revertAllBtn = document.createElement('button');
+        revertAllBtn.type = 'button';
+        revertAllBtn.className = 'change-list-revert-all';
+        revertAllBtn.setAttribute('data-testid', 'change-list-revert-all');
+        revertAllBtn.textContent = '全部撤销';
+        revertAllBtn.addEventListener('click', function() {
+          var ids = [];
+          for (var ci = 0; ci < changes.length; ci++) {
+            if (changes[ci].status === 'reverted') continue;
+            if (changes[ci].changeId) ids.push(String(changes[ci].changeId));
+          }
+          if (ids.length === 0) return;
+          vscode.postMessage({ type: 'change/revert-many', changeIds: ids });
+        });
+        batchBar.appendChild(revertManyBtn);
+        batchBar.appendChild(revertAllBtn);
+        wrap.appendChild(batchBar);
         div.appendChild(wrap);
         return div;
       }
@@ -945,6 +1013,17 @@ export function buildThinChatHtml(cspSource?: string): string {
           pane.textContent = '--- before ---\\n' + oldPart + '\\n--- after ---\\n' + newPart;
           break;
         }
+        return;
+      }
+      if (msg.type === 'change/revert-result') {
+        var results = msg.results || [];
+        var okCount = 0;
+        var failCount = 0;
+        for (var ri = 0; ri < results.length; ri++) {
+          if (results[ri].ok) okCount += 1;
+          else failCount += 1;
+        }
+        bannerEl.textContent = '撤销完成：成功 ' + okCount + ' / 失败 ' + failCount;
         return;
       }
     });

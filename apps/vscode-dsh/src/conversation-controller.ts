@@ -41,8 +41,18 @@ import {
   ChangeAttributor,
   ChangeStore,
   SnapshotStore,
+  analyzeRevertGates,
+  executeRevert,
+  executeRevertMany,
+  gateKey,
+  readChangeIndex,
+  writeChangeIndex,
   type IgnoreRulesOptions,
+  type RevertGate,
+  type RevertResult,
+  type RevertWorkspace,
 } from './change/index.ts'
+import type { ChangeRecord } from './change/types.ts'
 
 /** Outcome of opening a history session as replay (AC-30/64/65). */
 export type OpenHistoryResult =
@@ -170,6 +180,8 @@ export class ConversationController {
   private pendingSettleTurn = new Map<string, number>()
   /** Serialize per-session settle to keep last-assistant anchoring stable. */
   private settleChain = new Map<string, Promise<void>>()
+  /** Duck-typed workspace write surface for revert (AD-CCD-10); set by extension / L2. */
+  private revertWorkspace: RevertWorkspace | undefined
 
   /**
    * @param host - window-scoped ide process owner (one process, many sessionIds).
@@ -339,6 +351,7 @@ export class ConversationController {
     const hydrated = hydrateFromAuthoritativeLog(sessionId, events)
     this.messages.replace(sessionId, hydrated.messages)
     this.timeline.replace(sessionId, hydrated.timelineItems)
+    await this.hydrateChangeListsFromIndex(sessionId)
     const capability = this.resolveContinueCapability(sessionId, events.length > 0)
     this.index.upsertSession({
       sessionId,
@@ -503,6 +516,8 @@ export class ConversationController {
         const tab = this.registry.create(title, record.sessionId, 'replay')
         this.messages.replace(record.sessionId, cached.messages)
         this.timeline.replace(record.sessionId, cached.timeline)
+        // AC-22: cold restore must hydrate change-list path/stats like openFromHistory.
+        await this.hydrateChangeListsFromIndex(record.sessionId)
         const capability = this.resolveContinueCapability(record.sessionId, cached.events.length > 0)
         this.index.upsertSession({
           sessionId: record.sessionId,
@@ -734,6 +749,224 @@ export class ConversationController {
   }
 
   /**
+   * Mark a change as reviewed without any workspace write (AC-11).
+   * @param changeId - ChangeRecord id.
+   */
+  async markChangeReviewed(
+    changeId: string,
+  ): Promise<{ ok: true; changeId: string } | { ok: false; changeId: string; reason: string }> {
+    const record = this.changes.getById(changeId)
+    if (record === undefined) return { ok: false, changeId, reason: 'change-not-found' }
+    if (record.status === 'reverted') {
+      return { ok: false, changeId, reason: 'already-reverted' }
+    }
+    const updated = this.changes.updateStatus(changeId, 'reviewed')
+    if (updated === undefined) return { ok: false, changeId, reason: 'change-not-found' }
+    this.messages.patchChangeStatus(updated.sessionId, changeId, 'reviewed')
+    await this.persistChangeIndex(updated.sessionId)
+    this.panelHost?.pushFullState()
+    return { ok: true, changeId }
+  }
+
+  /**
+   * Analyze revert gates for Host confirm UX (AC-14/15/17, AD-CCD-10).
+   * @param changeId - ChangeRecord id.
+   */
+  async analyzeChangeRevertGates(changeId: string): Promise<
+    { record: ChangeRecord; gates: RevertGate[] } | { error: string; changeId: string }
+  > {
+    return analyzeRevertGates({
+      changeStore: this.changes,
+      snapshotStore: this.snapshotStore,
+      workspace: this.requireRevertWorkspace(),
+    }, changeId)
+  }
+
+  /**
+   * Revert one change after Host confirmations (AC-13).
+   * @param changeId - ChangeRecord id.
+   * @param options - confirmed gates + optional skipWrite for L2.
+   */
+  async revertChange(
+    changeId: string,
+    options: {
+      confirmedGates?: ReadonlySet<string>
+      confirmGate?: (gate: RevertGate) => Promise<boolean>
+      skipWrite?: boolean
+    } = {},
+  ): Promise<RevertResult> {
+    const deps = {
+      changeStore: this.changes,
+      snapshotStore: this.snapshotStore,
+      workspace: this.requireRevertWorkspace(),
+    }
+    const analyzed = await analyzeRevertGates(deps, changeId)
+    if ('error' in analyzed) {
+      return { ok: false, changeId, reason: analyzed.error }
+    }
+    const confirmed = options.confirmedGates ?? new Set<string>()
+    for (const gate of analyzed.gates) {
+      const key = gateKey(gate)
+      if (confirmed.has(key)) continue
+      if (options.confirmGate !== undefined) {
+        const ok = await options.confirmGate(gate)
+        if (!ok) return { ok: false, changeId, reason: 'cancelled', cancelled: true }
+        continue
+      }
+      return { ok: false, changeId, reason: 'gates-unconfirmed' }
+    }
+    const result = await executeRevert(deps, changeId, { skipWrite: options.skipWrite })
+    if (result.ok) {
+      const rec = this.changes.getById(changeId)
+      if (rec !== undefined) {
+        this.messages.patchChangeStatus(rec.sessionId, changeId, 'reverted')
+        await this.persistChangeIndex(rec.sessionId)
+        this.panelHost?.pushFullState()
+      }
+    }
+    return result
+  }
+
+  /**
+   * Batch revert with per-file results (AC-18) and turn-DESC same-path order (AD-CCD-10).
+   * @param changeIds - ChangeRecord ids.
+   * @param options - confirms + write control.
+   */
+  async revertChanges(
+    changeIds: readonly string[],
+    options: {
+      confirmedGates?: ReadonlySet<string>
+      confirmGate?: (gate: RevertGate) => Promise<boolean>
+      skipWrite?: boolean
+    } = {},
+  ): Promise<RevertResult[]> {
+    const deps = {
+      changeStore: this.changes,
+      snapshotStore: this.snapshotStore,
+      workspace: this.requireRevertWorkspace(),
+    }
+    const results = await executeRevertMany(deps, changeIds, {
+      confirmedGates: options.confirmedGates ?? new Set(),
+      confirmGate: options.confirmGate,
+      skipWrite: options.skipWrite,
+    })
+    const sessions = new Set<string>()
+    for (const result of results) {
+      if (!result.ok) continue
+      const rec = this.changes.getById(result.changeId)
+      if (rec === undefined) continue
+      this.messages.patchChangeStatus(rec.sessionId, result.changeId, 'reverted')
+      sessions.add(rec.sessionId)
+    }
+    for (const sessionId of sessions) {
+      await this.persistChangeIndex(sessionId)
+    }
+    if (sessions.size > 0) this.panelHost?.pushFullState()
+    return results
+  }
+
+  /**
+   * Inject a RevertWorkspace for L2 tests / extension wiring (AD-CCD-10).
+   * @param workspace - duck-typed write surface.
+   */
+  setRevertWorkspace(workspace: RevertWorkspace | undefined): void {
+    this.revertWorkspace = workspace
+  }
+
+  /**
+   * Soft-budget prune preferring fully-reverted sessions (AD-CCD-6).
+   * Protects openTabSet / in-memory Tabs that still have unreverted changes.
+   */
+  async pruneChangeSnapshots(options?: {
+    /** Override soft budget (tests). */
+    byteBudgetSoft?: number
+  }): Promise<{ prunedSessions: string[] }> {
+    const openIds = new Set<string>([
+      ...this.registry.list().map(tab => tab.sessionId),
+      ...this.index.read().openTabSet.map(tab => tab.sessionId),
+    ])
+    return this.snapshotStore.pruneToBudget({
+      isSessionFullyReverted: id => this.changes.isSessionFullyReverted(id),
+      isSessionProtected: id => openIds.has(id) && !this.changes.isSessionFullyReverted(id),
+      ...options?.byteBudgetSoft === undefined ? {} : { byteBudgetSoft: options.byteBudgetSoft },
+    })
+  }
+
+  private requireRevertWorkspace(): RevertWorkspace {
+    if (this.revertWorkspace === undefined) {
+      throw new Error('revert-workspace-not-configured')
+    }
+    return this.revertWorkspace
+  }
+
+  private async persistChangeIndex(sessionId: string): Promise<void> {
+    await writeChangeIndex(
+      this.snapshotStore.storageRoot,
+      sessionId,
+      this.changes.list(sessionId),
+    )
+  }
+
+  /**
+   * Cold/replay hydrate: load ChangeRecord index + inject path/stats change-list (AC-22).
+   * Does not invent pruned blob bodies.
+   * @param sessionId - session id.
+   */
+  async hydrateChangeListsFromIndex(sessionId: string): Promise<void> {
+    const records = await readChangeIndex(this.snapshotStore.storageRoot, sessionId)
+    for (const record of records) this.changes.upsert(record)
+    if (records.length === 0) return
+
+    const byTurn = new Map<number, ChangeRecord[]>()
+    for (const record of records) {
+      const list = byTurn.get(record.turn) ?? []
+      list.push(record)
+      byTurn.set(record.turn, list)
+    }
+
+    const messages = [...this.messages.get(sessionId)]
+    let mutated = false
+    for (const [turn, turnRecords] of byTurn) {
+      if (messages.some(m => m.kind === 'change-list' && m.turn === turn)) continue
+      const sourceMessageId = turnRecords[0]!.sourceMessageId
+      const payload = this.changes.toListPayload(sessionId, turn, sourceMessageId)
+      const listMessage: ChatMessage = {
+        id: randomUUID(),
+        sessionId,
+        role: 'notice',
+        kind: 'change-list',
+        text: payload.emptyNotice
+          ? CHANGE_LIST_EMPTY_NOTICE
+          : `改动了 ${payload.changes.length} 个文件`,
+        turn,
+        changeList: payload,
+      }
+      const anchorIdx = messages.findIndex(m => m.id === sourceMessageId)
+      if (anchorIdx === -1) messages.push(listMessage)
+      else messages.splice(anchorIdx + 1, 0, listMessage)
+
+      if (!payload.emptyNotice) {
+        const summary: ChatMessage = {
+          id: randomUUID(),
+          sessionId,
+          role: 'notice',
+          kind: 'diff-summary',
+          text: `本回合改了 ${payload.changes.length} 个文件`,
+          turn,
+          sourceMessageId,
+        }
+        const listIdx = messages.findIndex(m => m.id === listMessage.id)
+        messages.splice(listIdx + 1, 0, summary)
+      }
+      mutated = true
+    }
+    if (mutated) {
+      this.messages.replace(sessionId, messages)
+      this.panelHost?.pushFullState()
+    }
+  }
+
+  /**
    * Locate a Timeline short-label target for scroll/reveal (AC-56 Should).
    * Priority: tool-triggered user → that turn's assistant → none.
    * @param sessionId - session to search.
@@ -846,6 +1079,8 @@ export class ConversationController {
     await this.host.disposeSession(tab.sessionId)
     this.messages.clearSession(tab.sessionId)
     this.timeline.clearSession(tab.sessionId)
+    this.attributor.clearSession(tab.sessionId)
+    await this.snapshotStore.clearSession(tab.sessionId)
     this.index.markDeleted(tab.sessionId)
     this.registry.close(tabId)
     this.persistOpenTabs()
@@ -881,6 +1116,8 @@ export class ConversationController {
     await this.host.disposeSession(sessionId)
     this.messages.clearSession(sessionId)
     this.timeline.clearSession(sessionId)
+    this.attributor.clearSession(sessionId)
+    await this.snapshotStore.clearSession(sessionId)
     this.index.markDeleted(sessionId)
     this.persistOpenTabs()
     return { outcome: 'deleted', tabId: '', sessionId }
@@ -1031,6 +1268,7 @@ export class ConversationController {
     this.resumeOverride = undefined
     this.timeline.clear()
     this.messages.clear()
+    this.changes.clear()
     this.registry.clear()
   }
 
@@ -1129,6 +1367,9 @@ export class ConversationController {
     turn: number,
   ): Promise<void> {
     await this.attributor.settleTurn(sessionId, sourceMessageId, turn)
+    await this.persistChangeIndex(sessionId)
+    // AD-CCD-6: best-effort soft-budget prune after snapshot write; never block settle.
+    void this.pruneChangeSnapshots().catch(() => {})
     const payload = this.changes.toListPayload(sessionId, turn, sourceMessageId)
     // Replace prior change-list / diff-summary for this turn (multi-assistant re-anchor).
     this.messages.removeWhere(

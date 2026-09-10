@@ -293,7 +293,8 @@ MessageStore：`kind` 增补 `'change-list'`（及既有 `diff-summary` / `notic
 
 1. 从会话日志取出最终回答之前的每次读取类工具调用（工具名以 ide 实际为准，默认 `read`；允许 Spike/测试文档化的别名）。
 2. 从该次调用的**入参样本**（JSON / 结构化 args / 可恢复 meta）提取「被读取的工作区路径」集合 `R`：
-   - **主路径**：入参含显式 `path` / `file` / `target`（或工具 schema 文档化的等价字段）字符串；
+   - **主字段（ide / tool-fs）**：`file_path`（phase-1 P2-A 实测锁定）；
+   - **别名（兼容）**：`path` / `file` / `target`（或工具 schema 另文档化的等价字段）；
    - 将该字符串与门禁侧归一化 path（工作区相对优先；绝对则相对化后比较）做 **规范化相等**比较。
 3. 某用户引用 path `P` 被覆盖 ⟺ 存在一次调用，其 `R` 中至少一员规范化后等于 `P`。
 4. **目录 / glob**：若一次 read 的入参是目录或 glob，**仅当**该入参经同一归一化规则可证明包含 `P`（例如目录前缀匹配且实现方文档化了规则）才算覆盖；否则 **不算**。L2 stub **优先**使用「精确单文件 path」入参，避免模糊覆盖。
@@ -301,7 +302,7 @@ MessageStore：`kind` 增补 `'change-list'`（及既有 `diff-summary` / `notic
 
 6. **「最终回答」定义（与 N-2 对齐）**：本 AD 的「最终回答」与 N-2 **锚点消息** 同一定义——该顶层 turn 窗口内 **最后一条** `assistant/message`。实现 **不得** 自行选取 turn 内「看起来像最终答复」的中间 assistant 片段作为 `indexOfFinalAssistant` 基准。
 
-7. **phase-1 开工首探（P2-A）**：code-explorer / 开工核对 **必须** 先探测 ide profile 实际装配的 read（或等价）工具 **入参 schema**。若入参 **不存在** 结构化 `path` / `file` / `target`（或文档化等价字段），**必须** 先定义基于该 schema 的路径提取规则并 **回写本 AD**，**不得**假设字段已存在。
+7. **phase-1 开工首探（P2-A）**：code-explorer / 开工核对 **必须** 先探测 ide profile 实际装配的 read（或等价）工具 **入参 schema**。若入参 **不存在** 结构化 `file_path` / `path` / `file` / `target`（或文档化等价字段），**必须** 先定义基于该 schema 的路径提取规则并 **回写本 AD**，**不得**假设字段已存在。
 
 **接线建议（实现可微调，须可测）**：
 
@@ -487,8 +488,9 @@ assertEveryRefReadBeforeFinalAnswer(log, text):
 | R3.1a-rewrite | 2026-09-09 | 全文（含 AD-CCD-11 注入） | 指针+read；AD-CCD-11…15 重定义；继承 N-1…N-4 / AD-1…10 | HG-2 待确认 | requirements R3.1a |
 | HG2-review-P1 | 2026-09-09 | AtPathResolve；AD-CCD-11/13/14 骨架 | P1-1 covering=入参映射；P1-2 去掉 unreadable；P1-3 官方 @ 文法+空格夹具；P2-1 path 去重；P2-2 idle 观测；P2-3 read 工具存在性必查 | HG-2 待确认 | 用户 HG-2 审查 |
 | HG2-review-P2 | 2026-09-09 | AD-CCD-13/14 | P2-A read schema 首探回写；P2-B 最终回答≡N-2 锚点；P2-C AC-3b 与 bundle 预挂载时序等价 | HG-2 待确认 | 用户 HG-2 复审 |
-| Spike-phase-0 | 2026-09-09 | 附录 A（待实证假设） | A.1–A.3 实证锁定：meta.diffs 归因 PASS；存储路径/预算；hunk≠blob 规则 | phase-0 implementer（待 HG-3） | spike-report.md PASS |
+| Spike-phase-0 | 2026-09-09 | 附录 A（待实证假设） | A.1–A.3 实证锁定：meta.diffs 归因 PASS；存储路径/预算；hunk≠blob 规则 | phase-0 HG-3 | spike-report.md PASS |
+| Phase1-P2A-file_path | 2026-09-09 | AD-CCD-14 入参示例 | 主字段锁定为 tool-fs `file_path`；`path`/`file`/`target` 为 aliases | phase-1 review SHOULD-FIX | review-design.md |
 
 ## 建议的下一步
 
-进入 HG-2：确认本设计与 `phase-plan.md` 后，并行启动 `phase-0-spike-attribution-snapshot` 与 `phase-1-code-context`（code-explorer → implementer）。
+Feature DAG 已进入实施收尾（phase-0…3）；设计正文以本文件与 `design.md` 对齐后的附录 A / AD-CCD-14 为准。

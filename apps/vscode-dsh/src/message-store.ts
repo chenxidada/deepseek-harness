@@ -80,6 +80,34 @@ export class MessageStore {
   }
 
   /**
+   * Patch a ChangeRecord status inside every change-list payload (AC-11 / AC-13).
+   * @param sessionId - SDK session identity.
+   * @param changeId - ChangeRecord id.
+   * @param status - new status.
+   * @returns true when at least one row was patched.
+   */
+  patchChangeStatus(
+    sessionId: string,
+    changeId: string,
+    status: NonNullable<ChatMessage['changeList']>['changes'][number]['status'],
+  ): boolean {
+    const list = this.messages.get(sessionId)
+    if (list === undefined) return false
+    let patched = false
+    for (const message of list) {
+      if (message.kind !== 'change-list' || message.changeList === undefined) continue
+      const changes = message.changeList.changes
+      const idx = changes.findIndex(c => c.changeId === changeId)
+      if (idx === -1) continue
+      const nextChanges = changes.map((c, i) => i === idx ? { ...c, status } : { ...c })
+      message.changeList = { ...message.changeList, changes: nextChanges }
+      patched = true
+    }
+    if (patched) this.emit()
+    return patched
+  }
+
+  /**
    * Messages recorded for one session.
    * @param sessionId - SDK session identity.
    * @returns copies in append order.

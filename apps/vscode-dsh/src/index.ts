@@ -112,6 +112,10 @@ export {
   pickPermissionPreset,
   confirmStopAndClose,
   confirmDeleteConversation,
+  confirmRevertDeleteCreated,
+  confirmRevertDirty,
+  confirmRevertLaterChanges,
+  confirmRevertRestoreConflict,
   type InteractionWindow,
   type InteractionQuickPickItem,
 } from './interaction-ui.ts'

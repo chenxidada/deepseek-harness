@@ -130,6 +130,11 @@ export type HostToWebviewMessage =
     reason?: string
   }
   | {
+    /** Per-file revert outcomes for batch / single (AC-18). */
+    type: 'change/revert-result'
+    results: ReadonlyArray<{ changeId: string; ok: boolean; reason?: string }>
+  }
+  | {
     /** Optional theme class broadcast (AC-8a); native `--vscode-*` remains primary. */
     type: 'ui/theme'
     themeKind: string
@@ -152,6 +157,9 @@ export type WebviewToHostMessage =
   | { type: 'change/get-diff'; changeId: string }
   | { type: 'change/open'; changeId: string; path: string }
   | { type: 'change/reveal-source'; sourceMessageId: string }
+  | { type: 'change/mark-reviewed'; changeId: string }
+  | { type: 'change/revert'; changeId: string }
+  | { type: 'change/revert-many'; changeIds: string[] }
   | { type: 'scroll/reveal'; callId?: string }
 
 /**
@@ -209,6 +217,20 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'change/reveal-source') {
     if (typeof record.sourceMessageId !== 'string') return undefined
     return { type: 'change/reveal-source', sourceMessageId: record.sourceMessageId }
+  }
+  if (type === 'change/mark-reviewed') {
+    if (typeof record.changeId !== 'string') return undefined
+    return { type: 'change/mark-reviewed', changeId: record.changeId }
+  }
+  if (type === 'change/revert') {
+    if (typeof record.changeId !== 'string') return undefined
+    return { type: 'change/revert', changeId: record.changeId }
+  }
+  if (type === 'change/revert-many') {
+    if (!Array.isArray(record.changeIds)) return undefined
+    const changeIds = record.changeIds.filter((id): id is string => typeof id === 'string')
+    if (changeIds.length !== record.changeIds.length) return undefined
+    return { type: 'change/revert-many', changeIds }
   }
   if (type === 'scroll/reveal') {
     if (record.callId !== undefined && typeof record.callId !== 'string') return undefined

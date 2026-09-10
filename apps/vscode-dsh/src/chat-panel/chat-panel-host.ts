@@ -118,6 +118,29 @@ export interface ChatPanelHostDeps {
    */
   requestRevealSource?: (sourceMessageId: string) => Promise<void>
   /**
+   * Mark a change reviewed (AC-11) — no workspace write.
+   * @param changeId - ChangeRecord id.
+   */
+  requestMarkReviewed?: (changeId: string) => Promise<void>
+  /**
+   * Revert one change with confirm gates (AC-13…17).
+   * @param changeId - ChangeRecord id.
+   */
+  requestRevert?: (changeId: string) => Promise<{
+    changeId: string
+    ok: boolean
+    reason?: string
+  }>
+  /**
+   * Batch revert with per-file results (AC-18 / AD-CCD-10).
+   * @param changeIds - ChangeRecord ids.
+   */
+  requestRevertMany?: (changeIds: readonly string[]) => Promise<ReadonlyArray<{
+    changeId: string
+    ok: boolean
+    reason?: string
+  }>>
+  /**
    * Workspace roots for `@path` send-gate resolve (AD-CCD-11).
    * When omitted, `@` tokens are rejected as not-found.
    */
@@ -493,6 +516,30 @@ export class ChatPanelHost {
     }
     if (message.type === 'change/reveal-source') {
       await this.deps.requestRevealSource?.(message.sourceMessageId)
+      return
+    }
+    if (message.type === 'change/mark-reviewed') {
+      await this.deps.requestMarkReviewed?.(message.changeId)
+      return
+    }
+    if (message.type === 'change/revert') {
+      const result = await this.deps.requestRevert?.(message.changeId)
+      this.post({
+        type: 'change/revert-result',
+        results: [result ?? { changeId: message.changeId, ok: false, reason: 'no-handler' }],
+      })
+      return
+    }
+    if (message.type === 'change/revert-many') {
+      const results = await this.deps.requestRevertMany?.(message.changeIds)
+      this.post({
+        type: 'change/revert-result',
+        results: results ?? message.changeIds.map(changeId => ({
+          changeId,
+          ok: false,
+          reason: 'no-handler',
+        })),
+      })
       return
     }
     if (message.type === 'action/open-reference') {

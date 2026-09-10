@@ -33,6 +33,10 @@ import {
 import { IdeSessionHost } from './session-host.ts'
 import {
   confirmDeleteConversation,
+  confirmRevertDeleteCreated,
+  confirmRevertDirty,
+  confirmRevertLaterChanges,
+  confirmRevertRestoreConflict,
   confirmStopAndClose,
   createVscodeInteractionUi,
   pickPermissionPreset,
@@ -70,14 +74,19 @@ import {
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import {
   askAboutSelection,
   planReferenceOpen,
   SelectionMetaStore,
   type TextEditorLike,
 } from './code-context/index.ts'
+import {
+  gateKey,
+  type RevertGate,
+  type RevertWorkspace,
+} from './change/index.ts'
 import { SnapshotStore } from './change/index.ts'
 
 export type { ConversationTreeItem, TimelineTreeItem }
@@ -160,7 +169,45 @@ interface VsCodeLike {
      * @param uri - document URI.
      */
     openTextDocument?(uri: unknown): Promise<unknown>
+    /**
+     * Open text documents (AC-17 dirty / AD-CCD-10 document layer).
+     */
+    textDocuments?: ReadonlyArray<{
+      uri: { fsPath: string; scheme?: string }
+      getText(): string
+      isDirty: boolean
+      save?(): Thenable<boolean> | Promise<boolean> | boolean
+    }>
+    /**
+     * VS Code workspace.fs duck type for closed-file revert (AD-CCD-10).
+     */
+    fs?: {
+      writeFile(uri: unknown, content: Uint8Array): Thenable<void> | Promise<void>
+      delete(uri: unknown, options?: { recursive?: boolean; useTrash?: boolean }): Thenable<void> | Promise<void>
+      createDirectory?(uri: unknown): Thenable<void> | Promise<void>
+      stat?(uri: unknown): Thenable<{ type?: number; size?: number }> | Promise<{ type?: number; size?: number }>
+    }
+    /**
+     * Apply a WorkspaceEdit when reverting an open document (AD-CCD-10).
+     * @param edit - opaque WorkspaceEdit-like object.
+     */
+    applyEdit?(edit: unknown): Thenable<boolean> | Promise<boolean>
   }
+  /**
+   * Optional WorkspaceEdit constructor for open-document revert.
+   */
+  WorkspaceEdit?: new () => {
+    replace(uri: unknown, range: unknown, newText: string): void
+  }
+  /**
+   * Optional Range constructor for full-document replace.
+   */
+  Range?: new (
+    startLine: number,
+    startCharacter: number,
+    endLine: number,
+    endCharacter: number,
+  ) => unknown
   commands: {
     registerCommand(command: string, callback: (...args: unknown[]) => unknown): { dispose(): void }
     executeCommand?(command: string, ...args: unknown[]): Promise<unknown>
@@ -226,6 +273,8 @@ let conversationView: WebviewViewLike | undefined
 let conversationVisible = false
 /** Cached vscode workspace accessor for AutoReady workspace-index predicate. */
 let vscodeWorkspaceFolders: (() => readonly { uri: { fsPath: string } }[] | undefined) | undefined
+/** Active duck-typed vscode for revert write surface (AD-CCD-10). */
+let vscodeApi: VsCodeLike | undefined
 /** L2 override for credential presence (`undefined` = scan env). */
 let credentialPresenceOverride: boolean | undefined
 /** Suppress unexpected-disconnect handling during intentional user Stop. */
@@ -250,6 +299,7 @@ function loadVscodeApi(): VsCodeLike {
  */
 export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike): void {
   const vscode = vscodeArg ?? loadVscodeApi()
+  vscodeApi = vscode
   workspaceState = context.workspaceState
   workspaceKey = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''
   changeStorageRoot = resolveChangeStorageRoot(context, workspaceKey)
@@ -950,6 +1000,7 @@ export async function deactivate(): Promise<void> {
   autoReady = undefined
   conversationView = undefined
   vscodeWorkspaceFolders = undefined
+  vscodeApi = undefined
   panelHost?.detach()
   selectionMetaStore.clear()
   if (current !== undefined) await current.shutdown()
@@ -1138,6 +1189,33 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       // AC-19: scroll to the assistant bubble, not the change-list.
       panelHost.pushRevealSource(active.sessionId, sourceMessageId)
     },
+    requestMarkReviewed: async (changeId) => {
+      const controller = conversations
+      if (controller === undefined) return
+      const result = await controller.markChangeReviewed(changeId)
+      if (!result.ok) {
+        await vscode.window.showErrorMessage(`标记已审阅失败：${result.reason}`)
+      }
+    },
+    requestRevert: async (changeId) => {
+      const controller = conversations
+      if (controller === undefined) {
+        return { changeId, ok: false, reason: 'no-controller' }
+      }
+      return runRevertWithConfirms(vscode, controller, changeId)
+    },
+    requestRevertMany: async (changeIds) => {
+      const controller = conversations
+      if (controller === undefined) {
+        return changeIds.map(changeId => ({ changeId, ok: false, reason: 'no-controller' }))
+      }
+      const batch = await controller.revertChanges(changeIds, {
+        confirmGate: async (gate) => confirmRevertGate(vscode, gate),
+      })
+      return batch.map(item => item.ok
+        ? { changeId: item.changeId, ok: true as const }
+        : { changeId: item.changeId, ok: false as const, reason: item.reason })
+    },
     getAtPathResolveOptions: () => ({
       workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath),
       preferredFolder: preferredWorkspaceFolder(vscode),
@@ -1221,6 +1299,7 @@ function wireChangePipeline(controller: ConversationController): void {
       }
     },
   })
+  controller.setRevertWorkspace(createRevertWorkspace(folders))
   // Rebuild SnapshotStore against the activate-time storage root when available.
   if (changeStorageRoot !== undefined) {
     // configureChanges does not replace SnapshotStore; Host create uses controller's store.
@@ -1302,6 +1381,125 @@ function firstChangedLine(oldText: string | null, newText: string): number | und
     if (oldLines[i] !== newLines[i]) return i
   }
   return undefined
+}
+
+/**
+ * Build RevertWorkspace over node fs + optional open TextDocuments (AD-CCD-10).
+ * @param folders - workspace folder absolute paths.
+ */
+function createRevertWorkspace(folders: () => string[]): RevertWorkspace {
+  return {
+    resolveAbsolute(path) {
+      return resolveWorkspacePath(path, folders())
+    },
+    async readText(absPath) {
+      const open = findOpenDocument(absPath)
+      if (open !== undefined) return open.getText()
+      try {
+        return await readFile(absPath, 'utf8')
+      } catch {
+        return undefined
+      }
+    },
+    async exists(absPath) {
+      if (findOpenDocument(absPath) !== undefined) return true
+      return existsSync(absPath)
+    },
+    openDocument(absPath) {
+      return findOpenDocument(absPath)
+    },
+    async writeText(absPath, text) {
+      const vscode = vscodeApi
+      const open = findOpenDocument(absPath)
+      if (open !== undefined && vscode?.WorkspaceEdit !== undefined && vscode.Range !== undefined
+        && typeof vscode.workspace.applyEdit === 'function') {
+        const edit = new vscode.WorkspaceEdit()
+        const full = open.getText()
+        const lines = full.split('\n')
+        const endLine = Math.max(0, lines.length - 1)
+        const endChar = lines[endLine]?.length ?? 0
+        const uri = vscode.Uri?.file(absPath) ?? { fsPath: absPath }
+        edit.replace(uri, new vscode.Range(0, 0, endLine, endChar), text)
+        const ok = await vscode.workspace.applyEdit(edit)
+        if (!ok) throw new Error('applyEdit-failed')
+        return
+      }
+      if (vscode?.workspace.fs?.writeFile !== undefined && vscode.Uri !== undefined) {
+        const uri = vscode.Uri.file(absPath)
+        const parent = dirname(absPath)
+        if (vscode.workspace.fs.createDirectory !== undefined) {
+          try {
+            await vscode.workspace.fs.createDirectory(vscode.Uri.file(parent))
+          } catch {
+            // parent may already exist
+          }
+        }
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(text, 'utf8'))
+        return
+      }
+      await mkdir(dirname(absPath), { recursive: true })
+      await writeFile(absPath, text, 'utf8')
+    },
+    async deleteFile(absPath) {
+      const vscode = vscodeApi
+      if (vscode?.workspace.fs?.delete !== undefined && vscode.Uri !== undefined) {
+        await vscode.workspace.fs.delete(vscode.Uri.file(absPath), { useTrash: false })
+        return
+      }
+      await unlink(absPath)
+    },
+  }
+}
+
+function findOpenDocument(absPath: string): { getText(): string; isDirty: boolean } | undefined {
+  const docs = vscodeApi?.workspace.textDocuments
+  if (docs === undefined) return undefined
+  for (const doc of docs) {
+    if (doc.uri.fsPath === absPath) {
+      return { getText: () => doc.getText(), isDirty: doc.isDirty }
+    }
+  }
+  return undefined
+}
+
+async function confirmRevertGate(vscode: VsCodeLike, gate: RevertGate): Promise<boolean> {
+  const window = vscode.window as InteractionWindow
+  switch (gate.kind) {
+    case 'confirm-delete-created':
+      return (await confirmRevertDeleteCreated(window, gate.path)) === 'confirm'
+    case 'confirm-restore-conflict':
+      return (await confirmRevertRestoreConflict(window, gate.path)) === 'confirm'
+    case 'confirm-later-changes':
+      return (await confirmRevertLaterChanges(window, gate.path)) === 'confirm'
+    case 'confirm-dirty':
+      return (await confirmRevertDirty(window, gate.path)) === 'confirm'
+    default:
+      return false
+  }
+}
+
+async function runRevertWithConfirms(
+  vscode: VsCodeLike,
+  controller: ConversationController,
+  changeId: string,
+): Promise<{ changeId: string; ok: boolean; reason?: string }> {
+  const analyzed = await controller.analyzeChangeRevertGates(changeId)
+  if ('error' in analyzed) {
+    return { changeId, ok: false, reason: analyzed.error }
+  }
+  const confirmed = new Set<string>()
+  for (const gate of analyzed.gates) {
+    const ok = await confirmRevertGate(vscode, gate)
+    if (!ok) return { changeId, ok: false, reason: 'cancelled' }
+    confirmed.add(gateKey(gate))
+  }
+  const result = await controller.revertChange(changeId, { confirmedGates: confirmed })
+  if (!result.ok) {
+    await vscode.window.showErrorMessage(`撤销失败：${result.reason}`)
+  }
+  return result.ok
+    ? { changeId, ok: true }
+    : { changeId, ok: false, reason: result.reason }
 }
 
 function unbindConversations(): void {

@@ -57,6 +57,49 @@ export class ChangeStore {
   }
 
   /**
+   * Records for one path across turns (AD-CCD-10 later-unreverted scan).
+   * @param sessionId - session id.
+   * @param path - workspace-relative path.
+   */
+  listByPath(sessionId: string, path: string): readonly ChangeRecord[] {
+    return this.list(sessionId).filter(r => r.path === path)
+  }
+
+  /**
+   * Update status for a changeId (mark-reviewed / revert). Returns false when missing.
+   * @param changeId - record id.
+   * @param status - new status.
+   * @param updatedAt - optional timestamp.
+   */
+  updateStatus(
+    changeId: string,
+    status: ChangeRecord['status'],
+    updatedAt = Date.now(),
+  ): ChangeRecord | undefined {
+    for (const [sessionId, list] of this.bySession) {
+      const idx = list.findIndex(r => r.changeId === changeId)
+      if (idx === -1) continue
+      const next = { ...list[idx]!, status, updatedAt }
+      list[idx] = next
+      this.bySession.set(sessionId, list)
+      this.emit()
+      return { ...next }
+    }
+    return undefined
+  }
+
+  /**
+   * Whether every record in a session is reverted (AD-CCD-6 prune preference).
+   * Empty sessions are not considered fully-reverted.
+   * @param sessionId - session id.
+   */
+  isSessionFullyReverted(sessionId: string): boolean {
+    const list = this.bySession.get(sessionId) ?? []
+    if (list.length === 0) return false
+    return list.every(r => r.status === 'reverted')
+  }
+
+  /**
    * Build a message-attached ChangeListPayload for one turn.
    * @param sessionId - session id.
    * @param turn - turn number.

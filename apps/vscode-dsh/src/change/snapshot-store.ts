@@ -148,10 +148,24 @@ export class SnapshotStore {
   }
 
   /**
-   * Best-effort soft-budget prune: drop oldest session dirs when total exceeds budget.
-   * Reverted-first ordering is phase-3; phase-2 uses oldest-session only.
+   * Best-effort soft-budget prune (AD-CCD-6 / N-4).
+   * Prefer fully-reverted sessions first, then oldest mtime among the rest.
+   * Protected sessions (open unreverted) sort last and are only pruned when no
+   * other victims remain.
+   * @param options - optional reverted/protected predicates (phase-3).
    */
-  async pruneToBudget(): Promise<{ prunedSessions: string[] }> {
+  async pruneToBudget(options?: {
+    /** When true, session is preferred as a prune victim (all changes reverted). */
+    isSessionFullyReverted?: (sessionId: string) => boolean
+    /**
+     * When true, session is retained while unprotected victims remain
+     * (openTabSet / unreverted — AD-CCD-6).
+     */
+    isSessionProtected?: (sessionId: string) => boolean
+    /** Override soft budget bytes (tests). */
+    byteBudgetSoft?: number
+  }): Promise<{ prunedSessions: string[] }> {
+    const budget = options?.byteBudgetSoft ?? SNAPSHOT_STORE.byteBudgetSoft
     const root = join(this.options.storageRoot, ...SNAPSHOT_STORE.relativeRootSegments)
     let entries: string[]
     try {
@@ -159,18 +173,35 @@ export class SnapshotStore {
     } catch {
       return { prunedSessions: [] }
     }
-    const dirs: Array<{ sessionId: string; mtimeMs: number; bytes: number }> = []
+    const dirs: Array<{
+      sessionId: string
+      mtimeMs: number
+      bytes: number
+      fullyReverted: boolean
+      protected: boolean
+    }> = []
     let total = 0
     for (const sessionId of entries) {
       const dir = join(root, sessionId)
       const bytes = await directoryBytes(dir)
       const st = await stat(dir).catch(() => undefined)
-      dirs.push({ sessionId, mtimeMs: st?.mtimeMs ?? 0, bytes })
+      dirs.push({
+        sessionId,
+        mtimeMs: st?.mtimeMs ?? 0,
+        bytes,
+        fullyReverted: options?.isSessionFullyReverted?.(sessionId) === true,
+        protected: options?.isSessionProtected?.(sessionId) === true,
+      })
       total += bytes
     }
-    dirs.sort((a, b) => a.mtimeMs - b.mtimeMs)
+    // Unprotected first; within that, reverted-first then oldest mtime (AD-CCD-6).
+    dirs.sort((a, b) => {
+      if (a.protected !== b.protected) return a.protected ? 1 : -1
+      if (a.fullyReverted !== b.fullyReverted) return a.fullyReverted ? -1 : 1
+      return a.mtimeMs - b.mtimeMs
+    })
     const prunedSessions: string[] = []
-    while (total > SNAPSHOT_STORE.byteBudgetSoft && dirs.length > 0) {
+    while (total > budget && dirs.length > 0) {
       const victim = dirs.shift()!
       await rm(join(root, victim.sessionId), { recursive: true, force: true })
       total -= victim.bytes
