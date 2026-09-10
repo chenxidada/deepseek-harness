@@ -4,6 +4,8 @@
  * @module @deepseek-ai/dsh-vscode-dsh/message-store
  */
 
+import type { ChangeListPayload } from './change/types.ts'
+
 /** One projected chat bubble for the Conversation Webview. */
 export interface ChatMessage {
   /** Stable message id within the session projection. */
@@ -13,13 +15,23 @@ export interface ChatMessage {
   /** Speaker role. */
   role: 'user' | 'assistant' | 'notice'
   /** MVP content kind (text primary). */
-  kind: 'text' | 'subagent' | 'diff-summary' | 'notice'
+  kind: 'text' | 'subagent' | 'diff-summary' | 'notice' | 'change-list'
   /** Full readable text (user prompt or complete assistant turn). */
   text: string
   /** Optional turn index when known. */
   turn?: number
   /** True when the turn ended incomplete / interrupted. */
   incomplete?: boolean
+  /**
+   * Lightweight change-list payload (AC-6 / AC-12).
+   * Must not embed full old/new snapshot plaintext.
+   */
+  changeList?: ChangeListPayload
+  /**
+   * Assistant anchor id for AC-30 diff-summary → reveal corresponding change-list.
+   * Also mirrored on `changeList.sourceMessageId` for list bubbles.
+   */
+  sourceMessageId?: string
 }
 
 /**
@@ -50,6 +62,20 @@ export class MessageStore {
     const copy = copyMessage(message)
     if (list === undefined) this.messages.set(sessionId, [copy])
     else list.push(copy)
+    this.emit()
+  }
+
+  /**
+   * Remove messages matching a predicate (e.g. replace change-list for same turn).
+   * @param sessionId - SDK session identity.
+   * @param predicate - return true to drop.
+   */
+  removeWhere(sessionId: string, predicate: (message: ChatMessage) => boolean): void {
+    const list = this.messages.get(sessionId)
+    if (list === undefined) return
+    const next = list.filter(m => !predicate(m))
+    if (next.length === list.length) return
+    this.messages.set(sessionId, next)
     this.emit()
   }
 
@@ -103,5 +129,15 @@ export class MessageStore {
 }
 
 function copyMessage(message: ChatMessage): ChatMessage {
-  return { ...message }
+  return {
+    ...message,
+    ...message.changeList === undefined
+      ? {}
+      : {
+        changeList: {
+          ...message.changeList,
+          changes: message.changeList.changes.map(c => ({ ...c })),
+        },
+      },
+  }
 }

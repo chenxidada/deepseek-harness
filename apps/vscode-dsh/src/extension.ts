@@ -70,13 +70,15 @@ import {
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import {
   askAboutSelection,
   planReferenceOpen,
   SelectionMetaStore,
   type TextEditorLike,
 } from './code-context/index.ts'
+import { SnapshotStore } from './change/index.ts'
 
 export type { ConversationTreeItem, TimelineTreeItem }
 
@@ -195,12 +197,18 @@ interface ExtensionContextLike {
   subscriptions: Disposable[]
   extensionPath: string
   workspaceState?: WorkspaceStateLike
+  /** Preferred SnapshotStore root (AD-CCD-3 / A.3). */
+  storageUri?: { fsPath: string }
+  /** Fallback SnapshotStore root when storageUri is absent. */
+  globalStorageUri?: { fsPath: string }
 }
 
 let host: IdeSessionHost | undefined
 let conversations: ConversationController | undefined
 let panelHost: ChatPanelHost | undefined
 let selectionMetaStore = new SelectionMetaStore()
+/** Extension-local SnapshotStore root (phase-2). */
+let changeStorageRoot: string | undefined
 let tabBarRefresh: (() => void) | undefined
 let timelineRefresh: (() => void) | undefined
 let historyRefresh: (() => void) | undefined
@@ -244,6 +252,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   const vscode = vscodeArg ?? loadVscodeApi()
   workspaceState = context.workspaceState
   workspaceKey = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''
+  changeStorageRoot = resolveChangeStorageRoot(context, workspaceKey)
   credentialPresenceOverride = undefined
   userStopping = false
   hostCreateCount = 0
@@ -1083,6 +1092,52 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestOpenWorkspaceDiffs: async () => {
       await vscode.commands.executeCommand?.('dsh.reviewWorkspaceDiffs')
     },
+    requestRevealChangeList: async (sourceMessageId) => {
+      const controller = conversations
+      const active = controller?.registry.getActive()
+      if (controller === undefined || active === undefined || panelHost === undefined) return
+      const messages = controller.messages.get(active.sessionId)
+      const list = [...messages].reverse().find(m =>
+        m.kind === 'change-list'
+        && (sourceMessageId === undefined
+          || m.changeList?.sourceMessageId === sourceMessageId),
+      )
+      panelHost.pushRevealChangeList(
+        active.sessionId,
+        list?.changeList?.sourceMessageId ?? sourceMessageId ?? '',
+        list?.id,
+      )
+    },
+    requestChangeDiff: async (changeId) => {
+      const controller = conversations
+      if (controller === undefined) {
+        return { changeId, available: false, reason: 'no-controller' }
+      }
+      const record = controller.changes.getById(changeId)
+      if (record === undefined || record.snapshotRef === undefined) {
+        return { changeId, available: false, reason: '完整 diff 不可用' }
+      }
+      const snap = await controller.getChangeSnapshotStore().read(record.sessionId, record.snapshotRef)
+      if (snap === undefined) {
+        return { changeId, available: false, reason: '完整 diff 不可用' }
+      }
+      return {
+        changeId,
+        available: true,
+        oldText: snap.oldText,
+        newText: snap.newText,
+      }
+    },
+    requestChangeOpen: async (changeId, path) => {
+      await openChangedPath(vscode, changeId, path)
+    },
+    requestRevealSource: async (sourceMessageId) => {
+      const controller = conversations
+      const active = controller?.registry.getActive()
+      if (controller === undefined || active === undefined || panelHost === undefined) return
+      // AC-19: scroll to the assistant bubble, not the change-list.
+      panelHost.pushRevealSource(active.sessionId, sourceMessageId)
+    },
     getAtPathResolveOptions: () => ({
       workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath),
       preferredFolder: preferredWorkspaceFolder(vscode),
@@ -1116,6 +1171,7 @@ function bindConversations(controller: ConversationController): void {
   stopRegistryWatch?.()
   stopTimelineWatch?.()
   conversations = controller
+  wireChangePipeline(controller)
   controller.setPanelHost(panelHost)
   stopRegistryWatch = controller.registry.onChange(() => {
     tabBarRefresh?.()
@@ -1131,6 +1187,121 @@ function bindConversations(controller: ConversationController): void {
   timelineRefresh?.()
   historyRefresh?.()
   panelHost?.pushFullState()
+}
+
+/**
+ * Resolve SnapshotStore root: storageUri preferred, else globalStorageUri/workspaceKey (A.3).
+ * @param context - extension context.
+ * @param workspaceKey - workspace identity.
+ */
+function resolveChangeStorageRoot(context: ExtensionContextLike, workspaceKey: string): string {
+  if (context.storageUri?.fsPath) return context.storageUri.fsPath
+  if (context.globalStorageUri?.fsPath) {
+    return join(context.globalStorageUri.fsPath, workspaceKey || 'default-workspace')
+  }
+  return join(tmpdir(), 'dsh-vscode-dsh-changes', workspaceKey || 'default-workspace')
+}
+
+/**
+ * Attach workspace readers + ignore roots to the ChangeAttributor pipeline.
+ * @param controller - live conversation controller.
+ */
+function wireChangePipeline(controller: ConversationController): void {
+  const folders = () => (vscodeWorkspaceFolders?.() ?? []).map(f => f.uri.fsPath)
+  controller.configureChanges({
+    getIgnoreOptions: () => ({ workspaceFolders: folders() }),
+    readWorkspaceText: async (path) => {
+      try {
+        const roots = folders()
+        const abs = resolveWorkspacePath(path, roots)
+        if (abs === undefined) return undefined
+        return await readFile(abs, 'utf8')
+      } catch {
+        return undefined
+      }
+    },
+  })
+  // Rebuild SnapshotStore against the activate-time storage root when available.
+  if (changeStorageRoot !== undefined) {
+    // configureChanges does not replace SnapshotStore; Host create uses controller's store.
+    // Controllers constructed after activate already receive storage via constructor below.
+    void changeStorageRoot
+  }
+}
+
+/**
+ * Resolve a workspace-relative path against folder roots.
+ * @param path - relative or absolute path.
+ * @param roots - workspace folder absolute paths.
+ */
+function resolveWorkspacePath(path: string, roots: readonly string[]): string | undefined {
+  if (path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)) return path
+  for (const root of roots) {
+    const abs = resolve(root, path)
+    if (existsSync(abs)) return abs
+  }
+  return roots[0] === undefined ? undefined : resolve(roots[0], path)
+}
+
+/**
+ * Open a changed file and reveal the first differing line when snapshot is available (AC-12a).
+ * @param vscode - duck-typed vscode.
+ * @param changeId - ChangeRecord id.
+ * @param path - workspace path from the list row.
+ */
+async function openChangedPath(vscode: VsCodeLike, changeId: string, path: string): Promise<void> {
+  const controller = conversations
+  const record = controller?.changes.getById(changeId)
+  let selection: { start: { line: number; character: number }; end: { line: number; character: number } } | undefined
+  if (controller !== undefined && record?.snapshotRef !== undefined) {
+    const snap = await controller.getChangeSnapshotStore().read(record.sessionId, record.snapshotRef)
+    if (snap !== undefined) {
+      const line = firstChangedLine(snap.oldText, snap.newText)
+      if (line !== undefined) {
+        selection = {
+          start: { line, character: 0 },
+          end: { line, character: 0 },
+        }
+      }
+    }
+  }
+  const folders = vscode.workspace.workspaceFolders ?? []
+  const abs = resolveWorkspacePath(path, folders.map(f => f.uri.fsPath))
+  if (abs === undefined) {
+    await vscode.window.showWarningMessage?.(`无法打开变更文件：${path}`)
+    return
+  }
+  const uri = vscode.Uri?.file(abs) ?? abs
+  try {
+    if (typeof vscode.workspace.openTextDocument === 'function'
+      && typeof vscode.window.showTextDocument === 'function') {
+      const doc = await vscode.workspace.openTextDocument(uri)
+      await vscode.window.showTextDocument(doc, {
+        ...selection === undefined ? {} : { selection },
+        preview: false,
+      })
+      return
+    }
+    await vscode.commands.executeCommand?.('vscode.open', uri)
+  } catch (error) {
+    const message = redactSecrets(error instanceof Error ? error.message : String(error))
+    await vscode.window.showErrorMessage(`打开变更文件失败：${message}`)
+  }
+}
+
+/**
+ * First 0-based line index that differs between before/after (AC-12a).
+ * @param oldText - before image.
+ * @param newText - after image.
+ */
+function firstChangedLine(oldText: string | null, newText: string): number | undefined {
+  const oldLines = oldText === null ? [] : oldText.split('\n')
+  const newLines = newText.split('\n')
+  const max = Math.max(oldLines.length, newLines.length)
+  for (let i = 0; i < max; i += 1) {
+    if (oldLines[i] !== newLines[i]) return i
+  }
+  return undefined
 }
 
 function unbindConversations(): void {
@@ -1442,7 +1613,14 @@ function createStartHostPort(vscode: VsCodeLike): StartHostPort {
           cwd,
           ...Object.keys(credentials).length === 0 ? {} : { credentials },
         })
-        bindConversations(new ConversationController(next, workspaceState, cwd))
+        bindConversations(new ConversationController(
+          next,
+          workspaceState,
+          cwd,
+          changeStorageRoot === undefined
+            ? undefined
+            : { snapshotStore: new SnapshotStore({ storageRoot: changeStorageRoot }) },
+        ))
         // AutoReady owns restore/New when Conversation is visible (AD-CR-3 / DEBT-001).
         panelHost?.pushFullState()
       } catch (error) {

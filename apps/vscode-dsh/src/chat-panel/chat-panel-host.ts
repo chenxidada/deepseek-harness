@@ -86,10 +86,37 @@ export interface ChatPanelHostDeps {
    */
   requestCopyCode?: (text: string) => Promise<void>
   /**
-   * Optional Timeline/Diff review path for 「本回合改了 N 个文件」(AC-30).
+   * Optional Timeline/Diff review path for 「本回合改了 N 个文件」(AC-30 secondary).
    * Typically `dsh.reviewWorkspaceDiffs`.
    */
   requestOpenWorkspaceDiffs?: () => Promise<void>
+  /**
+   * Reveal message-attached change-list (AC-30 primary / AD-CCD-4).
+   * @param sourceMessageId - optional assistant id from the summary bubble's turn.
+   */
+  requestRevealChangeList?: (sourceMessageId?: string) => Promise<void>
+  /**
+   * Serve on-demand diff from SnapshotStore (AC-12).
+   * @param changeId - ChangeRecord id.
+   */
+  requestChangeDiff?: (changeId: string) => Promise<{
+    changeId: string
+    available: boolean
+    oldText?: string | null
+    newText?: string
+    reason?: string
+  }>
+  /**
+   * Open a changed file and reveal first changed line when known (AC-12a).
+   * @param changeId - ChangeRecord id.
+   * @param path - workspace path.
+   */
+  requestChangeOpen?: (changeId: string, path: string) => Promise<void>
+  /**
+   * Scroll to the source assistant message (AC-19).
+   * @param sourceMessageId - assistant message id.
+   */
+  requestRevealSource?: (sourceMessageId: string) => Promise<void>
   /**
    * Workspace roots for `@path` send-gate resolve (AD-CCD-11).
    * When omitted, `@` tokens are rejected as not-found.
@@ -284,6 +311,34 @@ export class ChatPanelHost {
   }
 
   /**
+   * Scroll/expand the message-attached change-list (AC-30 / AD-CCD-4).
+   * @param sessionId - session id.
+   * @param sourceMessageId - assistant anchor id.
+   * @param messageId - optional change-list bubble id.
+   */
+  pushRevealChangeList(sessionId: string, sourceMessageId: string, messageId?: string): void {
+    this.post({
+      type: 'scroll/reveal-change-list',
+      sessionId,
+      sourceMessageId,
+      ...messageId === undefined ? {} : { messageId },
+    })
+  }
+
+  /**
+   * Scroll to the source assistant message bubble (AC-19).
+   * @param sessionId - session id.
+   * @param sourceMessageId - assistant `data-message-id` to reveal.
+   */
+  pushRevealSource(sessionId: string, sourceMessageId: string): void {
+    this.post({
+      type: 'scroll/reveal-source',
+      sessionId,
+      sourceMessageId,
+    })
+  }
+
+  /**
    * Broadcast theme kind class for Webview belt-and-suspenders refresh (AC-8a).
    * Does not push CSS variable tables — native `--vscode-*` remains primary (AD-CR-7).
    * @param themeKind - VS Code ColorTheme.kind label (e.g. light / dark / high-contrast).
@@ -412,6 +467,32 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/open-workspace-diffs') {
       await this.deps.requestOpenWorkspaceDiffs?.()
+      return
+    }
+    if (message.type === 'action/reveal-change-list') {
+      await this.deps.requestRevealChangeList?.(message.sourceMessageId)
+      return
+    }
+    if (message.type === 'change/get-diff') {
+      const result = await this.deps.requestChangeDiff?.(message.changeId)
+      if (result === undefined) {
+        this.post({
+          type: 'change/diff-content',
+          changeId: message.changeId,
+          available: false,
+          reason: 'no-handler',
+        })
+        return
+      }
+      this.post({ type: 'change/diff-content', ...result })
+      return
+    }
+    if (message.type === 'change/open') {
+      await this.deps.requestChangeOpen?.(message.changeId, message.path)
+      return
+    }
+    if (message.type === 'change/reveal-source') {
+      await this.deps.requestRevealSource?.(message.sourceMessageId)
       return
     }
     if (message.type === 'action/open-reference') {

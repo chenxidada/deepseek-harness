@@ -108,12 +108,34 @@ export type HostToWebviewMessage =
     label?: string
   }
   | {
+    /** Reveal a message-attached change-list bubble (AC-30 / AD-CCD-4). */
+    type: 'scroll/reveal-change-list'
+    sessionId: string
+    sourceMessageId: string
+    messageId?: string
+  }
+  | {
+    /** Scroll to the source assistant bubble (AC-19 change → source). */
+    type: 'scroll/reveal-source'
+    sessionId: string
+    sourceMessageId: string
+  }
+  | {
+    /** On-demand diff body from SnapshotStore (AC-12). */
+    type: 'change/diff-content'
+    changeId: string
+    available: boolean
+    oldText?: string | null
+    newText?: string
+    reason?: string
+  }
+  | {
     /** Optional theme class broadcast (AC-8a); native `--vscode-*` remains primary. */
     type: 'ui/theme'
     themeKind: string
   }
 
-/** Webview → Host frames (Phase 1–4). */
+/** Webview → Host frames (Phase 1–4 + change protocol). */
 export type WebviewToHostMessage =
   | { type: 'ready' }
   | { type: 'composer/send'; text: string }
@@ -126,6 +148,10 @@ export type WebviewToHostMessage =
   | { type: 'action/copy-code'; text: string }
   | { type: 'action/open-workspace-diffs' }
   | { type: 'action/open-reference'; path: string }
+  | { type: 'action/reveal-change-list'; sourceMessageId?: string }
+  | { type: 'change/get-diff'; changeId: string }
+  | { type: 'change/open'; changeId: string; path: string }
+  | { type: 'change/reveal-source'; sourceMessageId: string }
   | { type: 'scroll/reveal'; callId?: string }
 
 /**
@@ -163,6 +189,26 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'action/open-reference') {
     if (typeof record.path !== 'string') return undefined
     return { type: 'action/open-reference', path: record.path }
+  }
+  if (type === 'action/reveal-change-list') {
+    return {
+      type: 'action/reveal-change-list',
+      ...typeof record.sourceMessageId === 'string'
+        ? { sourceMessageId: record.sourceMessageId }
+        : {},
+    }
+  }
+  if (type === 'change/get-diff') {
+    if (typeof record.changeId !== 'string') return undefined
+    return { type: 'change/get-diff', changeId: record.changeId }
+  }
+  if (type === 'change/open') {
+    if (typeof record.changeId !== 'string' || typeof record.path !== 'string') return undefined
+    return { type: 'change/open', changeId: record.changeId, path: record.path }
+  }
+  if (type === 'change/reveal-source') {
+    if (typeof record.sourceMessageId !== 'string') return undefined
+    return { type: 'change/reveal-source', sourceMessageId: record.sourceMessageId }
   }
   if (type === 'scroll/reveal') {
     if (record.callId !== undefined && typeof record.callId !== 'string') return undefined

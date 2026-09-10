@@ -197,7 +197,7 @@ describe('VP-CR-14c / AC-30 turn file-change entry', () => {
     expect(store.changedFileCountForLatestTurn(sessionId)).toBe(0)
   })
 
-  it('L2: assistant turn with diffs appends 「本回合改了 N 个文件」; zero diffs forges none', () => {
+  it('L2: assistant turn with diffs appends 「本回合改了 N 个文件」; zero diffs forges none', async () => {
     let notify: ((n: HarnessNotification) => void) | undefined
     const host = {
       status: 'connected' as const,
@@ -222,6 +222,7 @@ describe('VP-CR-14c / AC-30 turn file-change entry', () => {
 
     // No diffs → inject assistant only → no diff-summary.
     controller.injectAssistantMessage(tab.sessionId, 'no files changed')
+    await controller.flushChangeSettles(tab.sessionId)
     expect(controller.messages.get(tab.sessionId).some(m => m.kind === 'diff-summary')).toBe(false)
 
     // Simulate turn with countable diffs then assistant message via SDK path.
@@ -240,6 +241,7 @@ describe('VP-CR-14c / AC-30 turn file-change entry', () => {
         source: { kind: 'model', provider: 'fake', model: 'fake' },
       },
     }))
+    await controller.flushChangeSettles(tab.sessionId)
 
     const msgs = controller.messages.get(tab.sessionId)
     const summary = msgs.find(m => m.kind === 'diff-summary')
@@ -248,16 +250,20 @@ describe('VP-CR-14c / AC-30 turn file-change entry', () => {
     expect(summary?.role).toBe('notice')
   })
 
-  it('L3: diff-summary renders entry; open-workspace-diffs parses and reaches Host', async () => {
+  it('L3: diff-summary renders entry; reveal-change-list parses and reaches Host', async () => {
     const html = buildThinChatHtml()
     expect(html).toContain('diff-summary')
-    expect(html).toContain('action/open-workspace-diffs')
+    expect(html).toContain('action/reveal-change-list')
 
+    expect(parseWebviewToHostMessage({ type: 'action/reveal-change-list' })).toEqual({
+      type: 'action/reveal-change-list',
+    })
+    // Secondary Timeline path remains parseable.
     expect(parseWebviewToHostMessage({ type: 'action/open-workspace-diffs' })).toEqual({
       type: 'action/open-workspace-diffs',
     })
 
-    const opened: string[] = []
+    const revealed: string[] = []
     const registry = new ConversationRegistry()
     const tab = registry.create('s')
     registry.switchTo(tab.tabId)
@@ -269,19 +275,19 @@ describe('VP-CR-14c / AC-30 turn file-change entry', () => {
       async prompt() { return 'm' },
       async disposeSession() {},
     } as unknown as IdeSessionHost)
-    // Use standalone messages store from a fresh controller with same registry injection via panel.
     const panel = new ChatPanelHost({
       registry,
       messages: controller.messages,
       isHostReady: () => true,
       acceptSend: async () => ({ messageId: 'm', sessionId: tab.sessionId, tabId: tab.tabId }),
-      requestOpenWorkspaceDiffs: async () => { opened.push('review') },
+      requestRevealChangeList: async () => { revealed.push('reveal') },
+      requestOpenWorkspaceDiffs: async () => { revealed.push('timeline') },
     })
     const fake = new FakeWebviewPort()
     panel.attach(fake)
-    fake.emitFromWebview({ type: 'action/open-workspace-diffs' })
-    await waitFor(() => opened.length === 1, 1_000)
-    expect(opened).toEqual(['review'])
+    fake.emitFromWebview({ type: 'action/reveal-change-list' })
+    await waitFor(() => revealed.length === 1, 1_000)
+    expect(revealed).toEqual(['reveal'])
   })
 })
 

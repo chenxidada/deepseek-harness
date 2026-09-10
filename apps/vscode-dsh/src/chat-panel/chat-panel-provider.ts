@@ -336,6 +336,73 @@ export function buildThinChatHtml(cspSource?: string): string {
       background: var(--vscode-button-secondaryBackground, var(--dsh-send-bg));
       color: var(--vscode-button-secondaryForeground, var(--dsh-send-fg));
     }
+    .change-list {
+      font-size: 12px;
+      border: 1px solid var(--dsh-border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      background: var(--vscode-editor-inactiveSelectionBackground, transparent);
+    }
+    .change-list-empty {
+      color: var(--vscode-descriptionForeground, var(--dsh-status-fg));
+    }
+    .change-list-header {
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .change-list-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      margin: 2px 0;
+      padding: 4px 6px;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font: inherit;
+    }
+    .change-list-item:hover {
+      background: var(--vscode-list-hoverBackground, rgba(127,127,127,0.15));
+    }
+    .change-list-item.is-expanded {
+      background: var(--vscode-list-activeSelectionBackground, rgba(127,127,127,0.2));
+    }
+    .change-list-row {
+      display: flex;
+      align-items: stretch;
+      gap: 4px;
+      margin: 2px 0;
+    }
+    .change-list-row .change-list-item {
+      flex: 1;
+      margin: 0;
+    }
+    .change-list-expand,
+    .change-list-reveal-source {
+      flex: 0 0 auto;
+      margin: 0;
+      padding: 4px 8px;
+      border: 1px solid var(--dsh-border);
+      border-radius: 4px;
+      background: var(--vscode-button-secondaryBackground, transparent);
+      color: inherit;
+      cursor: pointer;
+      font: inherit;
+      font-size: 11px;
+    }
+    .change-diff-pane {
+      margin: 4px 0 8px 8px;
+      padding: 6px 8px;
+      border-left: 2px solid var(--dsh-border);
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11px;
+      max-height: 240px;
+      overflow: auto;
+    }
     .ref-card {
       display: inline-flex;
       align-items: center;
@@ -524,17 +591,122 @@ export function buildThinChatHtml(cspSource?: string): string {
       var div = document.createElement('div');
       div.className = 'msg bubble ' + msg.role;
       div.setAttribute('data-role', msg.role);
+      if (msg.id) div.setAttribute('data-message-id', String(msg.id));
+      if (msg.turn !== undefined && msg.turn !== null) {
+        div.setAttribute('data-turn', String(msg.turn));
+      }
       if (msg.kind === 'diff-summary') {
         div.setAttribute('data-kind', 'diff-summary');
+        if (msg.sourceMessageId) {
+          div.setAttribute('data-source-message-id', String(msg.sourceMessageId));
+        }
         var btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'diff-summary-entry';
         btn.setAttribute('data-testid', 'diff-summary-entry');
         btn.textContent = msg.text || '';
         btn.addEventListener('click', function() {
-          vscode.postMessage({ type: 'action/open-workspace-diffs' });
+          // AC-30 / AD-CCD-4: reveal *corresponding* message change-list (carry identity).
+          var reveal = { type: 'action/reveal-change-list' };
+          if (msg.sourceMessageId) reveal.sourceMessageId = String(msg.sourceMessageId);
+          vscode.postMessage(reveal);
         });
         div.appendChild(btn);
+        return div;
+      }
+      if (msg.kind === 'change-list') {
+        div.setAttribute('data-kind', 'change-list');
+        div.setAttribute('data-testid', 'change-list');
+        var payload = msg.changeList || {};
+        if (payload.sourceMessageId) {
+          div.setAttribute('data-source-message-id', String(payload.sourceMessageId));
+        }
+        var wrap = document.createElement('div');
+        wrap.className = 'change-list';
+        if (payload.emptyNotice) {
+          wrap.className += ' change-list-empty';
+          wrap.setAttribute('data-empty', 'true');
+          wrap.textContent = msg.text || '本回合没有可展示的文件变更';
+          div.appendChild(wrap);
+          return div;
+        }
+        var header = document.createElement('div');
+        header.className = 'change-list-header';
+        header.textContent = msg.text || '';
+        wrap.appendChild(header);
+        var changes = payload.changes || [];
+        for (var i = 0; i < changes.length; i++) {
+          (function(change) {
+            var row = document.createElement('div');
+            row.className = 'change-list-row';
+            var openBtn = document.createElement('button');
+            openBtn.type = 'button';
+            openBtn.className = 'change-list-item';
+            openBtn.setAttribute('data-testid', 'change-list-item');
+            openBtn.setAttribute('data-change-id', String(change.changeId || ''));
+            openBtn.setAttribute('data-path', String(change.path || ''));
+            // AC-10: neutral status label only — no pending-write / approval phrasing.
+            var statusLabel = change.status === 'unreviewed' ? '未查看' : String(change.status || '');
+            openBtn.textContent = String(change.path || '') + ' · ' + String(change.kind || '')
+              + ' · +' + String(change.additions || 0) + '/-' + String(change.deletions || 0)
+              + ' · ' + statusLabel;
+            // AC-12a: primary click opens file + first changed line.
+            openBtn.addEventListener('click', function() {
+              vscode.postMessage({
+                type: 'change/open',
+                changeId: change.changeId,
+                path: change.path,
+              });
+            });
+            var expandBtn = document.createElement('button');
+            expandBtn.type = 'button';
+            expandBtn.className = 'change-list-expand';
+            expandBtn.setAttribute('data-testid', 'change-list-expand');
+            expandBtn.setAttribute('data-change-id', String(change.changeId || ''));
+            expandBtn.textContent = 'Diff';
+            expandBtn.title = '展开/折叠 diff';
+            var diffPane = document.createElement('div');
+            diffPane.className = 'change-diff-pane';
+            diffPane.hidden = true;
+            diffPane.setAttribute('data-testid', 'change-diff-pane');
+            diffPane.setAttribute('data-change-id', String(change.changeId || ''));
+            // AC-12: separate control expands on-demand diff (not primary click).
+            expandBtn.addEventListener('click', function() {
+              var expanded = expandBtn.classList.contains('is-expanded');
+              if (expanded) {
+                expandBtn.classList.remove('is-expanded');
+                openBtn.classList.remove('is-expanded');
+                diffPane.hidden = true;
+                return;
+              }
+              expandBtn.classList.add('is-expanded');
+              openBtn.classList.add('is-expanded');
+              diffPane.hidden = false;
+              diffPane.textContent = 'Loading diff…';
+              vscode.postMessage({ type: 'change/get-diff', changeId: change.changeId });
+            });
+            var sourceBtn = document.createElement('button');
+            sourceBtn.type = 'button';
+            sourceBtn.className = 'change-list-reveal-source';
+            sourceBtn.setAttribute('data-testid', 'change-list-reveal-source');
+            sourceBtn.textContent = '来源';
+            sourceBtn.title = '定位到来源助手消息';
+            // AC-19: change → source assistant bubble.
+            sourceBtn.addEventListener('click', function() {
+              if (!payload.sourceMessageId) return;
+              vscode.postMessage({
+                type: 'change/reveal-source',
+                sourceMessageId: String(payload.sourceMessageId),
+              });
+            });
+            row.appendChild(openBtn);
+            row.appendChild(expandBtn);
+            row.appendChild(sourceBtn);
+            wrap.appendChild(row);
+            wrap.appendChild(diffPane);
+          })(changes[i]);
+        }
+        div.appendChild(wrap);
         return div;
       }
       if (msg.role === 'user') {
@@ -720,6 +892,59 @@ export function buildThinChatHtml(cspSource?: string): string {
       }
       if (msg.type === 'ui/theme') {
         applyThemeKind(msg.themeKind);
+        return;
+      }
+      if (msg.type === 'scroll/reveal-change-list') {
+        var target = null;
+        if (msg.messageId) {
+          target = messagesEl.querySelector('[data-message-id="' + msg.messageId + '"]');
+        }
+        if (!target && msg.sourceMessageId) {
+          target = messagesEl.querySelector(
+            '[data-kind="change-list"][data-source-message-id="' + msg.sourceMessageId + '"]'
+          );
+        }
+        if (!target) {
+          target = messagesEl.querySelector('[data-kind="change-list"]');
+        }
+        if (target && typeof target.scrollIntoView === 'function') {
+          target.scrollIntoView({ block: 'nearest' });
+          target.classList.add('is-revealed');
+        }
+        return;
+      }
+      if (msg.type === 'scroll/reveal-source') {
+        // AC-19: scroll to assistant bubble data-message-id === sourceMessageId.
+        var sourceTarget = null;
+        if (msg.sourceMessageId) {
+          sourceTarget = messagesEl.querySelector(
+            '[data-message-id="' + msg.sourceMessageId + '"]'
+          );
+        }
+        if (sourceTarget && typeof sourceTarget.scrollIntoView === 'function') {
+          sourceTarget.scrollIntoView({ block: 'nearest' });
+          sourceTarget.classList.add('is-revealed');
+        }
+        return;
+      }
+      if (msg.type === 'change/diff-content') {
+        var panes = messagesEl.querySelectorAll('[data-testid="change-diff-pane"]');
+        for (var pi = 0; pi < panes.length; pi++) {
+          var pane = panes[pi];
+          var paneChangeId = pane.getAttribute('data-change-id');
+          if (paneChangeId !== String(msg.changeId || '')) continue;
+          if (!msg.available) {
+            pane.textContent = msg.reason || '完整 diff 不可用';
+            break;
+          }
+          // AC-23: textContent only — never interpret HTML / scripts / external URLs.
+          var oldPart = msg.oldText === null || msg.oldText === undefined
+            ? '(new file)\\n'
+            : String(msg.oldText);
+          var newPart = String(msg.newText || '');
+          pane.textContent = '--- before ---\\n' + oldPart + '\\n--- after ---\\n' + newPart;
+          break;
+        }
         return;
       }
     });

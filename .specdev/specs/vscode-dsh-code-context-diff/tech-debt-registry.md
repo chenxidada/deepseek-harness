@@ -23,14 +23,14 @@
 
 | ID | 源Phase | 模块 | 文件:函数:行号 | 当前行为 | 预期行为 | 类型 | 标签 | 依赖它的模块 | 目标Phase | 阻塞 | 来源 | 注册日期 |
 |----|:------:|------|---------------|---------|---------|------|------|-------------|:--------:|:---:|------|---------|
-| GAP-CCD-010 | phase-0-spike-attribution-snapshot | tool-fs / vscode-dsh | `packages/fs/tool-fs/src/write.ts:presentationMeta` | create / identical overwrite → `meta.diffs: []`，Timeline/归因无候选 | 若产品需入账 create：tool/call 边界受控快照或 presentationMeta 补全（仍禁 watcher） | 功能缺失 | module:tool-fs, type:gap, concern:attribution | ChangeAttributor | phase-2-change-list-display | 🟡非阻塞 | implementation.md / spike-report.md | 2026-09-09 |
-| GAP-CCD-011 | phase-0-spike-attribution-snapshot | tool-str-replace-editor | `packages/fs/tool-str-replace-editor/src/index.ts` | 仅 presentCall diffs；无 presentationMeta → 日志无 meta.diffs | 需要入账时补 presentationMeta 或文档化永久漏记 | 功能缺失 | module:tool-str-replace-editor, type:gap, concern:attribution | ChangeAttributor | phase-2-change-list-display | 🟡非阻塞 | implementation.md / spike-report.md | 2026-09-09 |
-| DEBT-CCD-001 | phase-0-spike-attribution-snapshot | vscode-dsh SnapshotStore | design.md 附录 A.2 | meta.diffs 为 DIFF_CONTEXT=3 hunk；不足以单独做大文件 full-file 撤销 | phase-2 入账时另取整文件 before/after 写入 blob；meta 作信号 | 已知缺陷 | module:vscode-dsh, type:debt, concern:snapshot-blob | ChangeStore / revert | phase-2-change-list-display | 🟡非阻塞 | implementation.md / spike-report.md | 2026-09-09 |
 
 ## 已解决
 
 | ID | 源Phase | 描述 | 解决Phase | 解决日期 | 验证方式 |
 |----|:------:|------|:--------:|---------|---------|
+| GAP-CCD-010 | phase-0-spike-attribution-snapshot | create / identical → `meta.diffs: []`：按产品「宁可漏记」永久不入 ChangeList；L2 断言空 diffs 不产生 ChangeRecord（未改 tool-fs / 未加 watcher） | phase-2-change-list-display | 2026-09-10 | `phase2-change-list-display.spec.ts` GAP-010/011 + implementation.md |
+| GAP-CCD-011 | phase-0-spike-attribution-snapshot | str_replace_editor 无 presentationMeta：永久漏记（文档化）；无 meta.diffs 不入账 | phase-2-change-list-display | 2026-09-10 | same L2 + ChangeAttributor header policy |
+| DEBT-CCD-001 | phase-0-spike-attribution-snapshot | 入账时 SnapshotStore 写整文件 before/after（tool/call before-cache + workspace after-read）；meta.diffs 仅作信号/路径集合 | phase-2-change-list-display | 2026-09-10 | AC-5/7/20 L2 full-file blob ≠ hunk |
 | GAP-CCD-012 | phase-1-code-context | `openReferencePath` / `planReferenceOpen` 与门禁同序多 root resolve（preferred 未命中则扫全部 folder） | phase-1-code-context（polish） | 2026-09-10 | L2 `phase1-code-context.spec.ts` multi-root open + verifier probe |
 | GAP-CCD-013 | phase-1-code-context | `prefillComposer` 在 port 未 attach 时缓冲 latest；`attach()` 重放 `composer/prefill` | phase-1-code-context（polish） | 2026-09-10 | L2 cold-start attach race + verifier probe |
 | DEBT-CCD-002 | phase-1-code-context | 显式文档：AC-3a L2 stub 断言 ≠ 真模型运行时保证 | phase-1-code-context（polish） | 2026-09-10 | `ref-read-coverage.ts` / phase1 test header / implementation.md |

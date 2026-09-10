@@ -3,7 +3,7 @@
   "description": "代码引用（指针+磁盘read）+ 消息下可审阅/可撤销变更列表；承接 chat-ready",
   "created": "2026-09-09T07:21:01Z",
   "current_stage": "phase-implementation",
-  "current_phase": "phase-1-code-context",
+  "current_phase": "phase-2-change-list-display",
   "loop_count": 0,
   "human_gates": {
     "hg1": "passed",
@@ -22,9 +22,9 @@
       "verifier": "completed"
     },
     "phase-2-change-list-display": {
-      "implementer": "pending",
-      "reviewer": "pending",
-      "verifier": "pending"
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed"
     },
     "phase-3-review-revert-replay": {
       "implementer": "pending",
@@ -32,6 +32,6 @@
       "verifier": "pending"
     }
   },
-  "notes": "HG-3 passed for phase-1-code-context (incl. polish). Committing and merging.",
-  "last_update": "2026-09-10T02:15:59Z"
+  "notes": "HG-3 passed for phase-2-change-list-display. Committing and merging.",
+  "last_update": "2026-09-10T03:05:21Z"
 }

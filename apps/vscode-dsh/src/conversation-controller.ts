@@ -5,6 +5,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { HarnessNotification, SdkPromptContentBlock } from '@deepseek-ai/dsh-sdk-client'
 import {
   ConversationRegistry,
@@ -34,6 +36,13 @@ import {
   type ContinueChrome,
 } from './continue-capability.ts'
 import { EMPTY_LIVE_TITLE } from './conversation-titles.ts'
+import {
+  CHANGE_LIST_EMPTY_NOTICE,
+  ChangeAttributor,
+  ChangeStore,
+  SnapshotStore,
+  type IgnoreRulesOptions,
+} from './change/index.ts'
 
 /** Outcome of opening a history session as replay (AC-30/64/65). */
 export type OpenHistoryResult =
@@ -110,6 +119,16 @@ export interface DeleteConversationOptions {
   confirmed?: boolean
 }
 
+/** Optional ChangeList / SnapshotStore wiring (phase-2). */
+export interface ConversationChangeOptions {
+  /** Extension-local SnapshotStore (defaults to tmpdir-based store for L2). */
+  snapshotStore?: SnapshotStore
+  /** Workspace text reader for full-file after-images (DEBT-CCD-001). */
+  readWorkspaceText?: (path: string) => Promise<string | undefined>
+  /** Ignore / workspace-root options (AD-CCD-8). */
+  getIgnoreOptions?: () => IgnoreRulesOptions
+}
+
 /**
  * Binds {@link ConversationRegistry} to a connected {@link IdeSessionHost}.
  * Close unloads UI without dispose; delete disposes via bridge (AD-CU-3).
@@ -120,8 +139,15 @@ export class ConversationController {
   readonly timeline = new TimelineStore()
   /** Session-scoped chat message projection for the Conversation panel. */
   readonly messages = new MessageStore()
+  /** Session-scoped attributed ChangeRecord index (phase-2). */
+  readonly changes = new ChangeStore()
   /** Workspace index — immediate persist of openTabSet / activeSessionId. */
   readonly index: ExtensionIndex
+  /** SnapshotStore + attribution pipeline (phase-2). */
+  readonly attributor: ChangeAttributor
+  private readonly snapshotStore: SnapshotStore
+  private readWorkspaceText: (path: string) => Promise<string | undefined>
+  private getIgnoreOptions: () => IgnoreRulesOptions
   private stopNotifications: (() => void) | undefined
   private panelHost: ChatPanelHost | undefined
   private stopRegistryWatch: (() => void) | undefined
@@ -140,18 +166,36 @@ export class ConversationController {
   private stopStatusWatch: (() => void) | undefined
   /** Dedup concurrent auto-restore from Host status transitions. */
   private restoreInFlight: Promise<RestoreOpenTabsResult> | undefined
+  /** sessionId → turn awaiting assistant before settle. */
+  private pendingSettleTurn = new Map<string, number>()
+  /** Serialize per-session settle to keep last-assistant anchoring stable. */
+  private settleChain = new Map<string, Promise<void>>()
 
   /**
    * @param host - window-scoped ide process owner (one process, many sessionIds).
    * @param workspaceState - optional workspaceState for immediate index writes.
    * @param workspaceKey - workspace identity key for the index.
+   * @param changeOptions - optional SnapshotStore / workspace readers.
    */
   constructor(
     private readonly host: IdeSessionHost,
     workspaceState?: WorkspaceStateLike,
     workspaceKey = '',
+    changeOptions?: ConversationChangeOptions,
   ) {
     this.index = new ExtensionIndex(workspaceKey, workspaceState)
+    this.snapshotStore = changeOptions?.snapshotStore
+      ?? new SnapshotStore({ storageRoot: join(tmpdir(), 'dsh-vscode-dsh-changes') })
+    this.readWorkspaceText = changeOptions?.readWorkspaceText
+      ?? (async () => undefined)
+    this.getIgnoreOptions = changeOptions?.getIgnoreOptions
+      ?? (() => ({ workspaceFolders: [] }))
+    this.attributor = new ChangeAttributor({
+      changeStore: this.changes,
+      snapshotStore: this.snapshotStore,
+      getIgnoreOptions: () => this.getIgnoreOptions(),
+      readWorkspaceText: (path) => this.readWorkspaceText(path),
+    })
     this.host.setConversationRegistry?.(this.registry)
     this.stopNotifications = this.host.onNotification((notification) => {
       this.onSdkNotification(notification)
@@ -179,6 +223,20 @@ export class ConversationController {
         }
       })
     }
+  }
+
+  /**
+   * Reconfigure ChangeList workspace readers / storage (extension activate).
+   * @param options - SnapshotStore root + ignore + file reader.
+   */
+  configureChanges(options: ConversationChangeOptions): void {
+    if (options.readWorkspaceText !== undefined) this.readWorkspaceText = options.readWorkspaceText
+    if (options.getIgnoreOptions !== undefined) this.getIgnoreOptions = options.getIgnoreOptions
+  }
+
+  /** SnapshotStore used by attribution (L2 / Host get-diff). */
+  getChangeSnapshotStore(): SnapshotStore {
+    return this.snapshotStore
   }
 
   /**
@@ -654,6 +712,28 @@ export class ConversationController {
   }
 
   /**
+   * Await pending ChangeList settles (L2 tests after SDK notify / inject).
+   * @param sessionId - optional session; omit to flush all.
+   */
+  async flushChangeSettles(sessionId?: string): Promise<void> {
+    if (sessionId !== undefined) {
+      await this.settleChain.get(sessionId)
+      return
+    }
+    await Promise.all([...this.settleChain.values()])
+  }
+
+  /**
+   * L2: seed full-file before-image for DEBT-CCD-001 without a tool/call event.
+   * @param sessionId - session id.
+   * @param path - workspace path.
+   * @param before - full-file before (null = missing).
+   */
+  seedChangeBefore(sessionId: string, path: string, before: string | null): void {
+    this.attributor.seedBeforeCache(sessionId, path, before)
+  }
+
+  /**
    * Locate a Timeline short-label target for scroll/reveal (AC-56 Should).
    * Priority: tool-triggered user → that turn's assistant → none.
    * @param sessionId - session to search.
@@ -1013,8 +1093,9 @@ export class ConversationController {
 
   private projectAssistantMessage(sessionId: string, text: string, turn?: number): void {
     if (text === '') return
+    const messageId = randomUUID()
     const message: ChatMessage = {
-      id: randomUUID(),
+      id: messageId,
       sessionId,
       role: 'assistant',
       kind: 'text',
@@ -1029,34 +1110,76 @@ export class ConversationController {
       const tab = this.registry.getBySessionId(sessionId)
       if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
     }
-    this.maybeAppendDiffSummary(sessionId, turn)
+    this.attributor.noteAssistant(sessionId, messageId, turn)
+    const settleTurn = turn ?? this.attributor.getLatestTurn(sessionId) ?? 0
+    // N-2: re-anchor on each assistant; last wins when settle runs.
+    this.attributor.clearSettled(sessionId, settleTurn)
+    void this.enqueueSettle(sessionId, messageId, settleTurn)
   }
 
   /**
-   * Append 「本回合改了 N 个文件」 when the latest turn has countable diffs (AC-30).
-   * Never forges an entry when N=0.
-   * @param sessionId - session that just received an assistant turn.
-   * @param turn - optional turn index from the assistant event.
+   * Append change-list (+ AC-30 diff-summary when N>0) under the turn's last assistant.
+   * @param sessionId - session id.
+   * @param sourceMessageId - assistant message id (N-2 anchor).
+   * @param turn - turn number.
    */
-  private maybeAppendDiffSummary(sessionId: string, turn?: number): void {
-    const n = this.timeline.changedFileCountForLatestTurn(sessionId)
-    if (n <= 0) return
-    const message: ChatMessage = {
+  private async settleChangeListProjection(
+    sessionId: string,
+    sourceMessageId: string,
+    turn: number,
+  ): Promise<void> {
+    await this.attributor.settleTurn(sessionId, sourceMessageId, turn)
+    const payload = this.changes.toListPayload(sessionId, turn, sourceMessageId)
+    // Replace prior change-list / diff-summary for this turn (multi-assistant re-anchor).
+    this.messages.removeWhere(
+      sessionId,
+      m => (m.kind === 'change-list' || m.kind === 'diff-summary')
+        && m.turn === turn,
+    )
+    const listMessage: ChatMessage = {
       id: randomUUID(),
       sessionId,
       role: 'notice',
-      kind: 'diff-summary',
-      text: `本回合改了 ${n} 个文件`,
-      ...turn === undefined ? {} : { turn },
+      kind: 'change-list',
+      text: payload.emptyNotice
+        ? CHANGE_LIST_EMPTY_NOTICE
+        : `改动了 ${payload.changes.length} 个文件`,
+      turn,
+      changeList: payload,
     }
-    this.messages.append(sessionId, message)
+    this.messages.append(sessionId, listMessage)
+
+    // N-1 / AC-30: inject diff-summary only when N>0; click reveals *corresponding* list.
+    if (!payload.emptyNotice) {
+      const summary: ChatMessage = {
+        id: randomUUID(),
+        sessionId,
+        role: 'notice',
+        kind: 'diff-summary',
+        text: `本回合改了 ${payload.changes.length} 个文件`,
+        turn,
+        sourceMessageId,
+      }
+      this.messages.append(sessionId, summary)
+    }
+
+    // Full replace so removeWhere is reflected in the Webview (not append-only).
     const active = this.registry.getActive()
     if (active !== undefined && active.sessionId === sessionId) {
-      this.panelHost?.pushAppend(message)
+      this.panelHost?.pushFullState()
     } else {
       const tab = this.registry.getBySessionId(sessionId)
       if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
     }
+  }
+
+  private enqueueSettle(sessionId: string, sourceMessageId: string, turn: number): Promise<void> {
+    const prev = this.settleChain.get(sessionId) ?? Promise.resolve()
+    const next = prev
+      .catch(() => {})
+      .then(() => this.settleChangeListProjection(sessionId, sourceMessageId, turn))
+    this.settleChain.set(sessionId, next)
+    return next
   }
 
   private onSdkNotification(notification: HarnessNotification): void {
@@ -1076,14 +1199,39 @@ export class ConversationController {
     const event = notification.params.event
     if (typeof sessionId !== 'string' || typeof event !== 'object' || event === null) return
     const record = event as Record<string, unknown>
+    const data = (record.data as Record<string, unknown> | undefined) ?? {}
+    const turn = typeof data.turn === 'number' ? data.turn : undefined
+
+    if (record.type === 'tool/call') {
+      const args = typeof data.arguments === 'string' ? data.arguments : undefined
+      void this.attributor.noteToolCall(sessionId, args)
+      return
+    }
+    if (record.type === 'tool/result') {
+      if (turn !== undefined) this.attributor.ingestToolResult(sessionId, turn, data.meta)
+      return
+    }
+    if (record.type === 'turn/end') {
+      if (turn === undefined) return
+      const assistantId = this.attributor.getLastAssistantId(sessionId)
+      if (assistantId !== undefined) {
+        this.attributor.clearSettled(sessionId, turn)
+        void this.enqueueSettle(sessionId, assistantId, turn)
+      } else {
+        this.pendingSettleTurn.set(sessionId, turn)
+      }
+      return
+    }
     if (record.type !== 'assistant/message') return
-    const data = record.data as Record<string, unknown> | undefined
-    const message = data?.message as Record<string, unknown> | undefined
+    const message = data.message as Record<string, unknown> | undefined
     const text = firstAssistantText(message)
     // AC-6: never invent assistant body when the event has no text.
     if (text === undefined) return
-    const turn = typeof data?.turn === 'number' ? data.turn : undefined
     this.projectAssistantMessage(sessionId, text, turn)
+    const pending = this.pendingSettleTurn.get(sessionId)
+    if (pending !== undefined && turn === pending) {
+      this.pendingSettleTurn.delete(sessionId)
+    }
   }
 }
 
