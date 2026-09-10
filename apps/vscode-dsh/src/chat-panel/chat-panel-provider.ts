@@ -1,12 +1,17 @@
 /**
- * Thin Conversation WebviewView provider (AD-CU-1 / AD-CR-7).
- * Client follows panel/state only; Host owns send gate via ui/reject-send.
- * Presentation chassis: theme tokens, bubbles, composer, safe Markdown.
+ * Conversation WebviewView provider (revised AD-CU-1 / AD-CR-7 / AD-CUX-1).
+ * Decision state (mode / sessionId / send gate / Continue) follows Host panel/state only.
+ * Presentation state (follow-state, streaming chrome, expand seats) may live in Webview
+ * when probeable via DOM / __dshProbes. Host owns send gate via ui/reject-send.
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/chat-panel-provider
  */
 
 import { safeMarkdownBrowserSource } from '../markdown/safe-markdown.ts'
 import type { ChatPanelHost } from './chat-panel-host.ts'
+import { probesBrowserSource } from './probes.ts'
+import { followStateBrowserSource } from './render/follow-state.ts'
+import { messageDomBrowserSource } from './render/message-dom.ts'
+import { syncChromeBrowserSource } from './render/sync-chrome.ts'
 
 /** Duck-typed Webview used by the provider. */
 interface WebviewLike {
@@ -126,7 +131,9 @@ export function registerChatPanelProvider(
 
 /**
  * Chat UI chassis HTML/JS: theme tokens, bubbles, fixed composer, safe MD (AD-CR-7).
- * Never decides mode/session locally — Host authority only (AC-25).
+ * Never decides mode/session/send locally — Host authority only (AC-25 / AD-CUX-1).
+ * Embeds extracted render/sync/probe browser sources (AD-CUX-2) so layer-A tests and
+ * production Webview share the same algorithms.
  * @param cspSource - optional webview CSP source.
  * @returns HTML document string.
  */
@@ -135,6 +142,10 @@ export function buildThinChatHtml(cspSource?: string): string {
     ? ''
     : `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource} 'unsafe-inline';">`
   const mdSource = safeMarkdownBrowserSource()
+  const followSource = followStateBrowserSource()
+  const messageDomSource = messageDomBrowserSource()
+  const syncSource = syncChromeBrowserSource()
+  const probesSource = probesBrowserSource()
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -486,7 +497,7 @@ export function buildThinChatHtml(cspSource?: string): string {
     }
   </style>
 </head>
-<body class="dsh-chat-chassis" data-testid="chat-chassis">
+<body class="dsh-chat-chassis" data-testid="chat-chassis" data-follow-state="off">
   <div id="layout">
     <div id="top">
       <div id="banner"></div>
@@ -519,6 +530,7 @@ export function buildThinChatHtml(cspSource?: string): string {
     const vscode = acquireVsCodeApi();
     let mode = 'empty';
     let sessionId = undefined;
+    const chassisEl = document.querySelector('[data-testid="chat-chassis"]');
     const messagesEl = document.getElementById('messages');
     const statusEl = document.getElementById('status');
     const bannerEl = document.getElementById('banner');
@@ -535,6 +547,14 @@ export function buildThinChatHtml(cspSource?: string): string {
     const openSettingsBtn = document.getElementById('openSettingsBtn');
     let connectionPhase = 'idle';
     ${mdSource}
+    ${followSource}
+    ${messageDomSource}
+    ${syncSource}
+    ${probesSource}
+    // Presentation probes (AD-CUX-1). No optimistic field in Phase 1 (AC-4).
+    var __dshProbes = createChatUxProbeStore({ followState: 'off', streaming: false });
+    if (typeof window !== 'undefined') window.__dshProbes = __dshProbes;
+    applyFollowState(chassisEl, 'off');
     function resolveComposerKeydown(input) {
       if (input.isComposing === true) return 'none';
       if (input.key !== 'Enter') return 'none';
@@ -562,6 +582,7 @@ export function buildThinChatHtml(cspSource?: string): string {
       });
     }
     function escapeHtml(value) {
+      // Prefer extracted message-dom escapeHtml when present (AD-CUX-2).
       return String(value)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -590,11 +611,7 @@ export function buildThinChatHtml(cspSource?: string): string {
     function renderBubble(msg) {
       var div = document.createElement('div');
       div.className = 'msg bubble ' + msg.role;
-      div.setAttribute('data-role', msg.role);
-      if (msg.id) div.setAttribute('data-message-id', String(msg.id));
-      if (msg.turn !== undefined && msg.turn !== null) {
-        div.setAttribute('data-turn', String(msg.turn));
-      }
+      applyMessageIdentity(div, msg);
       if (msg.kind === 'diff-summary') {
         div.setAttribute('data-kind', 'diff-summary');
         if (msg.sourceMessageId) {
@@ -798,21 +815,9 @@ export function buildThinChatHtml(cspSource?: string): string {
       messagesEl.appendChild(renderBubble(msg));
     }
     function syncComposer() {
-      // AC-22: connecting is never sendable live (Host also gates via ui/reject-send).
-      var live = mode === 'live' && connectionPhase !== 'connecting';
-      inputEl.disabled = !live;
-      sendEl.disabled = !live;
-    }
-    function applyThemeKind(kind) {
-      var k = String(kind || '').toLowerCase();
-      document.body.classList.remove('theme-light', 'theme-dark', 'theme-high-contrast');
-      if (k.indexOf('high') !== -1 || k === '3' || k === '4') {
-        document.body.classList.add('theme-high-contrast');
-      } else if (k.indexOf('light') !== -1 || k === '1') {
-        document.body.classList.add('theme-light');
-      } else {
-        document.body.classList.add('theme-dark');
-      }
+      // AC-22 / AC-1: connecting is never sendable live (Host also gates via ui/reject-send).
+      // Uses extracted syncComposerDisabled — mode/connectionPhase are Host mirrors only.
+      syncComposerDisabled(inputEl, sendEl, { mode: mode, connectionPhase: connectionPhase });
     }
     function syncConnection(msg) {
       var phase = msg.connectionPhase || 'idle';
@@ -872,6 +877,13 @@ export function buildThinChatHtml(cspSource?: string): string {
         restoreMoreBtn.hidden = true;
         restoreMoreBtn.textContent = '查看更多';
       }
+      // Host decision mirrors for E2 / Continue seats (presentation probes stay local).
+      if (msg.probes && typeof __dshProbes.mirrorHostDecisions === 'function') {
+        __dshProbes.mirrorHostDecisions({
+          parentReadonly: msg.probes.parentReadonly,
+          continueSealed: msg.probes.continueSealed,
+        });
+      }
       syncNewConversationChrome(msg);
       syncConnection(msg);
       syncComposer();
@@ -917,19 +929,7 @@ export function buildThinChatHtml(cspSource?: string): string {
         return;
       }
       if (msg.type === 'status/set') {
-        if (msg.status === 'generating') {
-          statusEl.textContent = 'Generating…';
-          statusEl.classList.add('is-generating');
-        } else if (msg.status === 'waiting-interaction') {
-          statusEl.textContent = 'Waiting for interaction…';
-          statusEl.classList.remove('is-generating');
-        } else if (msg.status === 'disconnected') {
-          statusEl.textContent = 'Disconnected';
-          statusEl.classList.remove('is-generating');
-        } else {
-          statusEl.textContent = '';
-          statusEl.classList.remove('is-generating');
-        }
+        applyStreamingStatus(statusEl, msg.status, __dshProbes);
         return;
       }
       if (msg.type === 'ui/banner') {

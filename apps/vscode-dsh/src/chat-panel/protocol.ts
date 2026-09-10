@@ -1,6 +1,8 @@
 /**
- * Host ↔ Conversation Webview message protocol (AD-CU-1).
- * Webview holds no decision state; mode/session follow panel/state only.
+ * Host ↔ Conversation Webview message protocol (revised AD-CU-1 / AD-CUX-1).
+ * Decision state (mode / sessionId / send gate / Continue) follows panel/state only —
+ * Webview must not invent those. Presentation state (follow-state, streaming chrome,
+ * expand seats) may live in Webview when probeable.
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/protocol
  */
 
@@ -70,6 +72,15 @@ export type HostToWebviewMessage =
     connectionPhase?: ConnectionPhase
     connectionMessage?: string
     settingsDeepLinkAvailable?: boolean
+    /**
+     * Optional Host decision-mirror probe seats (AD-CUX-1).
+     * Webview applies via probes.mirrorHostDecisions — must not invent locally.
+     * Presentation probes (streaming / followState) stay Webview-owned.
+     */
+    probes?: {
+      parentReadonly?: boolean
+      continueSealed?: boolean
+    }
   }
   | {
     type: 'messages/replace'

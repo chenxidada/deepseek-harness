@@ -1,0 +1,65 @@
+{
+  "slug": "vscode-dsh-chat-ux",
+  "description": "对话体验日常敢用：呈现态下放 + 流式/活动流/消息交互/引用变更diff呈现/搜索档1+2/分叉 + 可脚本渲染进门槛",
+  "created": "2026-09-10T05:57:02Z",
+  "current_stage": "phase-implementation",
+  "current_phase": "phase-1-foundation-render-probe",
+  "loop_count": 0,
+  "human_gates": {
+    "hg1": "passed",
+    "hg2": "passed",
+    "hg3": "pending"
+  },
+  "phases": {
+    "phase-1-foundation-render-probe": {
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed"
+    },
+    "phase-2-streaming-cancel-follow": {
+      "implementer": "pending",
+      "reviewer": "pending",
+      "verifier": "pending"
+    },
+    "phase-3-activity-stream": {
+      "implementer": "pending",
+      "reviewer": "pending",
+      "verifier": "pending"
+    },
+    "phase-4-refs-changes-diff": {
+      "implementer": "pending",
+      "reviewer": "pending",
+      "verifier": "pending"
+    },
+    "phase-5-fork-retry-branch": {
+      "implementer": "pending",
+      "reviewer": "pending",
+      "verifier": "pending"
+    },
+    "phase-6-session-search": {
+      "implementer": "pending",
+      "reviewer": "pending",
+      "verifier": "pending"
+    }
+  },
+  "last_update": "2026-09-10T10:53:23Z",
+  "notes": "phase-1: verifier PASS; awaiting HG-3",
+  "pending_decisions": {
+    "T6_thinking": "locked_B_no_display",
+    "hg1": "passed",
+    "locked": [
+      "T1",
+      "E2",
+      "T2",
+      "T3",
+      "T4",
+      "T5",
+      "T6",
+      "T7",
+      "T8",
+      "T9",
+      "T10",
+      "R1-R8"
+    ]
+  }
+}

@@ -1,5 +1,6 @@
 /**
- * Conversation panel Host: pushes protocol frames and gates composer/send (AD-CU-1).
+ * Conversation panel Host: pushes protocol frames and gates composer/send (revised AD-CU-1 / AD-CUX-1).
+ * Host owns decision state; Webview may hold probeable presentation state.
  * Works with a real WebviewView or an L3 fake Webview port.
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/chat-panel-host
  */

@@ -34,3 +34,28 @@ export {
   type ComposerKeyAction,
   type ComposerKeydownInput,
 } from './composer-keydown.ts'
+export {
+  createChatUxProbeStore,
+  probesBrowserSource,
+  type ChatUxProbes,
+  type ChatUxProbeStore,
+} from './probes.ts'
+export {
+  applyFollowState,
+  applyMessageIdentity,
+  applyStreamingStatus,
+  appendMessage,
+  decideFollowState,
+  escapeHtml,
+  followStateBrowserSource,
+  messageDomBrowserSource,
+  mountMessages,
+  patchMessageDom,
+  renderTextBubble,
+  syncChromeBrowserSource,
+  syncComposerDisabled,
+  syncFollowPresentation,
+  type FollowDecisionInput,
+  type FollowState,
+  type TextBubbleMessage,
+} from './render/index.ts'

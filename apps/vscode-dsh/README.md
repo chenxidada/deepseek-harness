@@ -8,7 +8,7 @@ Listens on a Host bridge socket, spawns `dsh --profile ide` with `DSH_IDE_BRIDGE
 
 One DSH process serves the window (AD-1). Multiple conversation Tabs each bind a distinct SDK `sessionId`. Switching Tabs retargets prompts and filters the Timeline / Conversation panel.
 
-The **Conversation** Webview is the live reading and input surface. It is intentionally thin: it follows Host `panel/state` / `messages/*` / `status/set` and never owns mode or send decisions. Illegal sends are rejected by the Host via `ui/reject-send`. The **Timeline** TreeView keeps short turn/step/tool/status/subagent labels and Diff entry points — it does **not** show assistant long text (that belongs in the Conversation panel).
+The **Conversation** Webview is the live reading and input surface. **Decision state** (mode / sessionId / send gate / Continue) follows Host `panel/state` / `messages/*` / `status/set` — the Webview never owns those decisions. Illegal sends are rejected by the Host via `ui/reject-send`. Under revised AD-CU-1 / AD-CUX-1, the Webview **may** hold **presentation state** (follow-state, streaming chrome, expand seats) when exposed via DOM / `__dshProbes` contracts. The **Timeline** TreeView keeps short turn/step/tool/status/subagent labels and Diff entry points — it does **not** show assistant long text (that belongs in the Conversation panel).
 
 SDK `session.event` / `session.status` / subagent notifications are projected into Timeline and MessageStore. Write/edit tool results that carry `meta.diffs` expose a **post-hoc** Diff entry (`vscode.diff`); mid-run per-file confirmation is not the default (AD-7).
 
