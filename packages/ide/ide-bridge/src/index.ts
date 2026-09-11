@@ -20,6 +20,7 @@ import {
   SDK_SESSION_DISPOSE_SERVICE,
   SDK_SESSION_RESUME_SERVICE,
   SDK_SESSION_CANCEL_SERVICE,
+  SDK_SESSION_FORK_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   type BridgeFrame,
@@ -29,6 +30,7 @@ import {
   type SdkSessionDisposeCapability,
   type SdkSessionResumeCapability,
   type SdkSessionCancelCapability,
+  type SdkSessionForkCapability,
   type SessionPersistenceReadCapability,
 } from './types.ts'
 import { isApprovalOutcome, isAskUserQuestionAnswer } from './validate.ts'
@@ -40,6 +42,7 @@ export {
   SDK_SESSION_DISPOSE_SERVICE,
   SDK_SESSION_RESUME_SERVICE,
   SDK_SESSION_CANCEL_SERVICE,
+  SDK_SESSION_FORK_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   APPROVAL_OUTCOMES,
@@ -50,6 +53,7 @@ export {
   type SdkSessionDisposeCapability,
   type SdkSessionResumeCapability,
   type SdkSessionCancelCapability,
+  type SdkSessionForkCapability,
   type SessionPersistenceReadCapability,
   type ApprovalOutcome,
   type AskUserQuestionAnswer,
@@ -428,6 +432,10 @@ async function handleHostFrame(
     await handleCancel(ctx, client, frame)
     return
   }
+  if (frame.kind === 'session/fork') {
+    await handleFork(ctx, client, frame)
+    return
+  }
   if (frame.kind === 'session/continue-capability') {
     await handleContinueCapability(ctx, client, frame)
     return
@@ -578,6 +586,47 @@ async function handleCancel(
   } catch (error) {
     client.send({
       kind: 'session/cancel/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Fork a live parent session via SDK-owned `sdkSessionFork` (AD-CUX-5).
+ * Returns the child session id on success.
+ */
+async function handleFork(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'session/fork' }>,
+): Promise<void> {
+  const forker = ctx.get(SDK_SESSION_FORK_SERVICE) as SdkSessionForkCapability | undefined
+  if (forker === undefined) {
+    client.send({
+      kind: 'session/fork/response',
+      id: frame.id,
+      ok: false,
+      error: `${SDK_SESSION_FORK_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const childSessionId = await forker.forkSession(frame.parentSessionId, {
+      ...frame.emptySeed === true ? { emptySeed: true as const } : {},
+      ...frame.boundarySeq === undefined ? {} : { boundarySeq: frame.boundarySeq },
+      ...frame.childSessionId === undefined ? {} : { childSessionId: frame.childSessionId },
+    })
+    client.send({
+      kind: 'session/fork/response',
+      id: frame.id,
+      ok: true,
+      childSessionId,
+    })
+  } catch (error) {
+    client.send({
+      kind: 'session/fork/response',
       id: frame.id,
       ok: false,
       error: error instanceof Error ? error.message : String(error),

@@ -57,6 +57,8 @@ export interface IdeSessionHostStartOptions {
   disposeTimeoutMs?: number
   /** Bound (ms) for bridge cancel round-trips (default 5000; AD-CUX-3). */
   cancelTimeoutMs?: number
+  /** Bound (ms) for bridge fork round-trips (default 5000; AD-CUX-5). */
+  forkTimeoutMs?: number
   /** Bound (ms) for permission RPC round-trips (default 5000). */
   permissionTimeoutMs?: number
 }
@@ -79,6 +81,7 @@ export class IdeSessionHost {
   private credentials: NodeJS.ProcessEnv | undefined
   private disposeTimeoutMs = 5_000
   private cancelTimeoutMs = 5_000
+  private forkTimeoutMs = 5_000
   private permissionTimeoutMs = 5_000
   private readLogTimeoutMs = 15_000
   private readonly pendingDispose = new Map<string, {
@@ -87,6 +90,10 @@ export class IdeSessionHost {
   }>()
   private readonly pendingCancel = new Map<string, {
     resolve: () => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingFork = new Map<string, {
+    resolve: (childSessionId: string) => void
     reject: (error: Error) => void
   }>()
   private readonly pendingPermission = new Map<string, {
@@ -210,6 +217,7 @@ export class IdeSessionHost {
     this.credentials = options.credentials
     this.disposeTimeoutMs = options.disposeTimeoutMs ?? 5_000
     this.cancelTimeoutMs = options.cancelTimeoutMs ?? 5_000
+    this.forkTimeoutMs = options.forkTimeoutMs ?? 5_000
     this.permissionTimeoutMs = options.permissionTimeoutMs ?? 5_000
     const bridgePath = options.bridgeSockPath
       ?? join(tmpdir(), `dsh-ide-bridge-${randomUUID()}.sock`)
@@ -303,6 +311,53 @@ export class IdeSessionHost {
     } finally {
       clearTimeout(timer)
       this.pendingCancel.delete(id)
+    }
+  }
+
+  /**
+   * Fork a live parent session via Host bridge `session/fork` (AD-CUX-5).
+   * Timeout default 5000ms, no retry.
+   * @param parentSessionId - parent Tab-bound SDK session identity.
+   * @param options - optional inclusive boundary seq and child id.
+   * @returns child session id.
+   */
+  async forkSession(
+    parentSessionId: string,
+    options?: { boundarySeq?: number; emptySeed?: boolean; childSessionId?: string },
+  ): Promise<string> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot fork session')
+    }
+    const id = randomUUID()
+    const response = new Promise<string>((resolve, reject) => {
+      this.pendingFork.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingFork.get(id)
+      if (pending === undefined) return
+      this.pendingFork.delete(id)
+      pending.reject(new Error(`session/fork timed out after ${this.forkTimeoutMs}ms`))
+    }, this.forkTimeoutMs)
+    try {
+      const sent = bridge.broadcast({
+        kind: 'session/fork',
+        id,
+        parentSessionId,
+        ...options?.emptySeed === true ? { emptySeed: true as const } : {},
+        ...options?.boundarySeq === undefined ? {} : { boundarySeq: options.boundarySeq },
+        ...options?.childSessionId === undefined ? {} : { childSessionId: options.childSessionId },
+      })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive session/fork')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingFork.delete(id)
     }
   }
 
@@ -490,6 +545,10 @@ export class IdeSessionHost {
       this.pendingCancel.delete(id)
       pending.reject(new Error(reason))
     }
+    for (const [id, pending] of this.pendingFork) {
+      this.pendingFork.delete(id)
+      pending.reject(new Error(reason))
+    }
     for (const [id, pending] of this.pendingPermission) {
       this.pendingPermission.delete(id)
       pending.reject(new Error(reason))
@@ -540,6 +599,17 @@ export class IdeSessionHost {
       this.pendingCancel.delete(frame.id)
       if (frame.ok) {
         pending.resolve()
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'session/fork/response') {
+      const pending = this.pendingFork.get(frame.id)
+      if (pending === undefined) return
+      this.pendingFork.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.childSessionId)
         return
       }
       pending.reject(new Error(frame.error))
@@ -660,6 +730,10 @@ export class IdeSessionHost {
     for (const [id, pending] of this.pendingCancel) {
       this.pendingCancel.delete(id)
       pending.reject(new Error(`${reason} during session/cancel`))
+    }
+    for (const [id, pending] of this.pendingFork) {
+      this.pendingFork.delete(id)
+      pending.reject(new Error(`${reason} during session/fork`))
     }
     for (const [id, pending] of this.pendingPermission) {
       this.pendingPermission.delete(id)

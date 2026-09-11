@@ -64,7 +64,7 @@ export interface ChatPanelHostDeps {
     visibility: 'hidden' | 'disabled' | 'enabled'
     capability?: 'same-id' | 'derive-only' | 'unknown'
     tooltip?: string
-    reason?: 'capability-unavailable' | 'already-live' | 'host-not-ready'
+    reason?: 'capability-unavailable' | 'already-live' | 'host-not-ready' | 'continue-sealed'
     reasonText?: string
   } | undefined
   /** Optional deferred restore count for 「查看更多」. */
@@ -88,6 +88,36 @@ export interface ChatPanelHostDeps {
    * @param text - fenced code body to write.
    */
   requestCopyCode?: (text: string) => Promise<void>
+  /**
+   * Optional message-copy path (AC-30) → clipboard + `lastCopiedText` observability.
+   * @param messageId - projected bubble id.
+   * @param text - optional explicit text; Host falls back to MessageStore.
+   */
+  requestCopyMessage?: (messageId: string, text?: string) => Promise<void>
+  /**
+   * Retry a closed turn via P-接续 fork (AC-31).
+   * @param messageId - message in the closed turn to retry.
+   */
+  requestRetry?: (messageId: string) => Promise<void>
+  /**
+   * Edit-resend via P-接续 fork (AC-32).
+   * @param messageId - user message id.
+   * @param text - edited prompt text.
+   */
+  requestEditResend?: (messageId: string, text: string) => Promise<void>
+  /**
+   * Explicit branch via P-标明 fork (AC-60).
+   * @param turn - closed turn number.
+   */
+  requestBranch?: (turn: number) => Promise<void>
+  /**
+   * Host decision-mirror probes for panel/state (GAP-CUX-002 / AC-31b).
+   */
+  resolveHostProbes?: () => { parentReadonly?: boolean; continueSealed?: boolean } | undefined
+  /**
+   * Optional「派生自 …」parent title for fork chrome (AC-63).
+   */
+  resolveForkParentTitle?: () => string | undefined
   /**
    * Optional Timeline/Diff review path for 「本回合改了 N 个文件」(AC-30 secondary).
    * Typically `dsh.reviewWorkspaceDiffs`.
@@ -293,6 +323,8 @@ export class ChatPanelHost {
         ? 'replay'
         : 'live'
     const continueChrome = this.deps.resolveContinueChrome?.()
+    const hostProbes = this.deps.resolveHostProbes?.()
+    const forkParentTitle = this.deps.resolveForkParentTitle?.()
     this.post({
       type: 'panel/state',
       mode,
@@ -303,6 +335,8 @@ export class ChatPanelHost {
       ...newConversationChrome,
       deferredRestoreCount: this.deps.resolveDeferredRestoreCount?.() ?? 0,
       ...connectionFields,
+      ...forkParentTitle === undefined ? {} : { forkParentTitle },
+      ...hostProbes === undefined ? {} : { probes: hostProbes },
     })
     this.post({
       type: 'messages/replace',
@@ -537,6 +571,22 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/copy-code') {
       await this.deps.requestCopyCode?.(message.text)
+      return
+    }
+    if (message.type === 'action/copy-message') {
+      await this.deps.requestCopyMessage?.(message.messageId, message.text)
+      return
+    }
+    if (message.type === 'action/retry') {
+      await this.deps.requestRetry?.(message.messageId)
+      return
+    }
+    if (message.type === 'action/edit-resend') {
+      await this.deps.requestEditResend?.(message.messageId, message.text)
+      return
+    }
+    if (message.type === 'action/branch') {
+      await this.deps.requestBranch?.(message.turn)
       return
     }
     if (message.type === 'action/open-workspace-diffs') {

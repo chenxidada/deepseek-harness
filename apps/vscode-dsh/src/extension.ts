@@ -255,6 +255,11 @@ let host: IdeSessionHost | undefined
 let conversations: ConversationController | undefined
 let panelHost: ChatPanelHost | undefined
 let selectionMetaStore = new SelectionMetaStore()
+/**
+ * Last text written via copy-message / copy-code for layer-B observability (AC-30).
+ * Cleared only when a new copy succeeds.
+ */
+let lastCopiedText: string | undefined
 /** Extension-local SnapshotStore root (phase-2). */
 let changeStorageRoot: string | undefined
 let tabBarRefresh: (() => void) | undefined
@@ -403,6 +408,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         return { ok: false as const, reason: 'no-clipboard' as const }
       }
       await clipboard.writeText(text)
+      lastCopiedText = text
       await vscode.window.showInformationMessage('Copied to clipboard')
       return { ok: true as const }
     },
@@ -944,6 +950,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         return orchestrator?.getSnapshot()
       }),
       vscode.commands.registerCommand('dsh.test.hostCreateCount', () => ({ count: hostCreateCount })),
+      vscode.commands.registerCommand('dsh.test.lastCopiedText', () => ({ text: lastCopiedText })),
       vscode.commands.registerCommand('dsh.test.injectDisconnect', () => {
         orchestrator?.onUnexpectedDisconnect()
         return orchestrator?.getSnapshot()
@@ -1074,6 +1081,13 @@ export function getChatPanelHost(): ChatPanelHost | undefined {
 }
 
 /**
+ * Last clipboard text from copy-message / copy-code (AC-30 layer B).
+ */
+export function getLastCopiedText(): string | undefined {
+  return lastCopiedText
+}
+
+/**
  * Map VS Code ColorTheme.kind to a stable label for Webview class refresh (AC-8a).
  * @param vscode - duck-typed vscode module.
  */
@@ -1146,6 +1160,60 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestCopyCode: async (text) => {
       await vscode.commands.executeCommand?.('dsh.copyToClipboard', text)
     },
+    requestCopyMessage: async (messageId, text) => {
+      const controller = conversations
+      const active = controller?.registry.getActive()
+      let body = text
+      if ((body === undefined || body === '') && controller !== undefined && active !== undefined) {
+        body = controller.messages.get(active.sessionId).find(m => m.id === messageId)?.text
+      }
+      if (typeof body !== 'string' || body === '') return
+      await vscode.commands.executeCommand?.('dsh.copyToClipboard', body)
+    },
+    requestRetry: async (messageId) => {
+      const controller = conversations
+      const active = controller?.registry.getActive()
+      if (controller === undefined || active === undefined) return
+      const mapped = controller.resolveBoundaryFromMessage(active.sessionId, messageId)
+      if (!mapped.ok) {
+        panelHost?.pushBanner(mapped.error, 'fork-rejected')
+        return
+      }
+      await controller.forkFromClosedTurn({
+        parentSessionId: active.sessionId,
+        boundary: mapped.boundary,
+        intent: 'retry',
+      })
+    },
+    requestEditResend: async (messageId, text) => {
+      const controller = conversations
+      const active = controller?.registry.getActive()
+      if (controller === undefined || active === undefined) return
+      const mapped = controller.resolveBoundaryFromMessage(active.sessionId, messageId)
+      if (!mapped.ok) {
+        panelHost?.pushBanner(mapped.error, 'fork-rejected')
+        return
+      }
+      await controller.forkFromClosedTurn({
+        parentSessionId: active.sessionId,
+        boundary: mapped.boundary,
+        intent: 'edit-resend',
+        seedUserMessageId: messageId,
+        editedText: text,
+      })
+    },
+    requestBranch: async (turn) => {
+      const controller = conversations
+      const active = controller?.registry.getActive()
+      if (controller === undefined || active === undefined) return
+      await controller.forkFromClosedTurn({
+        parentSessionId: active.sessionId,
+        boundary: { kind: 'closed-turn', turn },
+        intent: 'branch',
+      })
+    },
+    resolveHostProbes: () => conversations?.hostProbesForActive(),
+    resolveForkParentTitle: () => conversations?.forkParentTitleForActive(),
     requestOpenWorkspaceDiffs: async () => {
       await vscode.commands.executeCommand?.('dsh.reviewWorkspaceDiffs')
     },

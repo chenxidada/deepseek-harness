@@ -7,12 +7,20 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import { admitEncodedImages, type EncodedImageAttachment, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, ReasoningEffortId, type ContentBlock, type LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { carrierKeyOf, type Scoped } from '@deepseek-ai/dsh-scope'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import {
+  SessionForkError,
+  SessionLogOffset,
+  SessionSeq,
+  type Session,
+  type SessionEvent,
+  type SessionId,
+} from '@deepseek-ai/dsh-session'
 import type SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import type { SubagentRunEndInfo } from '@deepseek-ai/dsh-subagent'
 import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek'
@@ -264,6 +272,51 @@ export class HarnessSdkJsonRpcServer {
   }
 
   /**
+   * Fork a live parent into a prompt-ready child (AD-CUX-5 / session/fork).
+   * Uses `SessionStore.fork` seed cut semantics via `agents.create` with the
+   * same seed/lineage so the child is registered in the SDK session Map.
+   * @param parentSessionId - live parent session identity.
+   * @param options - optional inclusive boundary seq and child id.
+   * @returns child session id.
+   */
+  async forkSession(
+    parentSessionId: string,
+    options?: { boundarySeq?: number; emptySeed?: boolean; childSessionId?: string },
+  ): Promise<string> {
+    if (this.shuttingDown) throw new Error('SDK server is shutting down')
+    if (options?.emptySeed === true && options.boundarySeq !== undefined) {
+      throw new SessionForkError(
+        'fork options cannot set both emptySeed and boundarySeq',
+        'INVALID_BOUNDARY',
+      )
+    }
+    const parent = this.ctx.sessions.get(brandString<SessionId>(parentSessionId))
+    if (parent === undefined) {
+      throw new SessionForkError(`session "${parentSessionId}" not found`, 'SESSION_NOT_FOUND')
+    }
+    const childSessionId = options?.childSessionId ?? randomUUID()
+    if (this.sessions.has(childSessionId) || this.ctx.sessions.get(brandString<SessionId>(childSessionId)) !== undefined) {
+      throw new SessionForkError(`session "${childSessionId}" already exists`, 'SESSION_ALREADY_EXISTS')
+    }
+    const pending = this.sessionCreations.get(childSessionId)
+    if (pending !== undefined) {
+      await pending
+      return childSessionId
+    }
+    const creation = this.createForkedSession(parent, childSessionId, {
+      ...options?.emptySeed === true ? { emptySeed: true as const } : {},
+      ...options?.boundarySeq === undefined ? {} : { boundarySeq: options.boundarySeq },
+    })
+    this.sessionCreations.set(childSessionId, creation)
+    try {
+      await creation
+      return childSessionId
+    } finally {
+      this.sessionCreations.delete(childSessionId)
+    }
+  }
+
+  /**
    * Dispose server-owned agents, adapter, and subscriptions to quiescence.
    * The surrounding context remains running.
    * @returns empty JSON-RPC result.
@@ -375,7 +428,97 @@ export class HarnessSdkJsonRpcServer {
     return rec
   }
 
+  /**
+   * Create a prompt-ready forked child with SessionStore.fork-equivalent seed.
+   * @param parent - live parent session.
+   * @param childSessionId - new child id.
+   * @param cut - empty seed or inclusive boundary seq (omit boundary = tip).
+   */
+  private async createForkedSession(
+    parent: Session,
+    childSessionId: string,
+    cut?: { emptySeed?: boolean; boundarySeq?: number },
+  ): Promise<SessionRecord> {
+    const { seed, inheritedEventCount } = forkSeedFromParent(parent, cut)
+    const handle = await this.ctx.agents.create({
+      sessionId: brandString<SessionId>(childSessionId),
+      seed,
+      inheritedEventCount,
+      meta: {
+        ...parent.header.cwd === undefined ? {} : { cwd: parent.header.cwd },
+        parentSession: parent.id,
+        isSeeded: true,
+      },
+      agentOptions: {
+        provider: this.provider,
+        model: this.model,
+        ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
+        ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
+      },
+    })
+    const rec: SessionRecord = { handle }
+    this.sessions.set(childSessionId, rec)
+    return rec
+  }
+
   private hasAdapterFor(provider: string): boolean {
     return this.ctx.get('llm')?.listProviders().some(entry => entry.id === provider) ?? false
+  }
+}
+
+/**
+ * Build a fork seed matching {@link SessionStore.fork} / `_forkSeed` rules.
+ * @param parent - live parent session.
+ * @param cut - `emptySeed` → []; else inclusive seq (omit = last event / tip).
+ */
+function forkSeedFromParent(
+  parent: Session,
+  cut?: { emptySeed?: boolean; boundarySeq?: number },
+): { seed: readonly SessionEvent[]; inheritedEventCount: ReturnType<typeof SessionLogOffset> } {
+  if (cut?.emptySeed === true) {
+    return { seed: [], inheritedEventCount: SessionLogOffset(0) }
+  }
+  const requestedBoundary = cut?.boundarySeq
+  const lastEvent = parent.snapshotEvents().at(-1)
+  let boundary: number
+  if (requestedBoundary !== undefined) {
+    boundary = requestedBoundary
+  } else {
+    if (lastEvent === undefined) {
+      return { seed: [], inheritedEventCount: SessionLogOffset(0) }
+    }
+    boundary = lastEvent.seq
+  }
+  if (!Number.isSafeInteger(boundary) || boundary < 0) {
+    throw new SessionForkError(
+      `fork boundary for session "${parent.id}" must be a non-negative safe integer, got ${String(boundary)}`,
+      'INVALID_BOUNDARY',
+    )
+  }
+  if (boundary >= parent.seq) {
+    throw new SessionForkError(
+      `fork boundary ${boundary} does not exist in session "${parent.id}" (last seq: ${lastEvent?.seq ?? 'none'})`,
+      'INVALID_BOUNDARY',
+    )
+  }
+  const boundaryEvent = parent.eventAt(SessionSeq(boundary))
+  if (boundaryEvent === undefined || boundaryEvent.seq !== boundary) {
+    throw new SessionForkError(
+      `fork boundary ${boundary} does not match a contiguous event seq in session "${parent.id}"`,
+      'INVALID_BOUNDARY',
+    )
+  }
+  const events = parent.snapshotEvents(SessionLogOffset(0), SessionLogOffset(boundary + 1))
+  const lastTurnBoundary = events
+    .findLast(event => event.type === 'turn/start' || event.type === 'turn/end')
+  if (lastTurnBoundary?.type === 'turn/start') {
+    throw new SessionForkError(
+      `fork boundary ${boundary} in session "${parent.id}" ends inside open turn ${lastTurnBoundary.data.turn}`,
+      'OPEN_TURN',
+    )
+  }
+  return {
+    seed: events,
+    inheritedEventCount: SessionLogOffset(events.length),
   }
 }

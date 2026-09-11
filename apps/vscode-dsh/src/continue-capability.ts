@@ -40,6 +40,7 @@ export type ContinueDisabledReason =
   | 'capability-unavailable'
   | 'already-live'
   | 'host-not-ready'
+  | 'continue-sealed'
 
 /** Optional context for {@link continueChromeFor} reason mapping (AC-29). */
 export interface ContinueChromeOptions {
@@ -47,6 +48,11 @@ export interface ContinueChromeOptions {
   readonly mode?: 'live' | 'replay'
   /** Whether IdeSessionHost is connected. */
   readonly hostReady?: boolean
+  /**
+   * Host E2 seal after P-接续 (AC-31b / GAP-CUX-002).
+   * When true, Continue stays disabled even on replay + same-id.
+   */
+  readonly continueSealed?: boolean
 }
 
 /** Top-bar Continue presentation for panel/state. */
@@ -94,6 +100,9 @@ export function continueChromeFor(
   }
   if (options?.mode === 'live') {
     return disabledChrome('already-live', '已是 live', capability)
+  }
+  if (options?.continueSealed === true) {
+    return disabledChrome('continue-sealed', '父会话已接续分叉，Continue 已封印', capability)
   }
   if (options?.hostReady === false) {
     return disabledChrome('host-not-ready', 'Host 未就绪', capability)

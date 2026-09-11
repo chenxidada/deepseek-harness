@@ -54,7 +54,7 @@ export type HostToWebviewMessage =
       capability?: 'same-id' | 'derive-only' | 'unknown'
       tooltip?: string
       /** AC-29 distinguishable grey-state reason. */
-      reason?: 'capability-unavailable' | 'already-live' | 'host-not-ready'
+      reason?: 'capability-unavailable' | 'already-live' | 'host-not-ready' | 'continue-sealed'
       /** Short adjacent copy for the Continue control (AC-29). */
       reasonText?: string
     }
@@ -72,6 +72,8 @@ export type HostToWebviewMessage =
     connectionPhase?: ConnectionPhase
     connectionMessage?: string
     settingsDeepLinkAvailable?: boolean
+    /** Parent title for fork lineage chrome (AC-63). */
+    forkParentTitle?: string
     /**
      * Optional Host decision-mirror probe seats (AD-CUX-1).
      * Webview applies via probes.mirrorHostDecisions — must not invent locally.
@@ -179,6 +181,10 @@ export type WebviewToHostMessage =
   | { type: 'action/open-settings' }
   | { type: 'action/toggle-activity'; activityId: string; expanded: boolean }
   | { type: 'action/copy-code'; text: string }
+  | { type: 'action/copy-message'; messageId: string; text?: string }
+  | { type: 'action/retry'; messageId: string }
+  | { type: 'action/edit-resend'; messageId: string; text: string }
+  | { type: 'action/branch'; turn: number }
   | { type: 'action/open-workspace-diffs' }
   | { type: 'action/open-reference'; path: string }
   | { type: 'action/reveal-change-list'; sourceMessageId?: string }
@@ -228,6 +234,26 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'action/copy-code') {
     if (typeof record.text !== 'string') return undefined
     return { type: 'action/copy-code', text: record.text }
+  }
+  if (type === 'action/copy-message') {
+    if (typeof record.messageId !== 'string') return undefined
+    return {
+      type: 'action/copy-message',
+      messageId: record.messageId,
+      ...typeof record.text === 'string' ? { text: record.text } : {},
+    }
+  }
+  if (type === 'action/retry') {
+    if (typeof record.messageId !== 'string') return undefined
+    return { type: 'action/retry', messageId: record.messageId }
+  }
+  if (type === 'action/edit-resend') {
+    if (typeof record.messageId !== 'string' || typeof record.text !== 'string') return undefined
+    return { type: 'action/edit-resend', messageId: record.messageId, text: record.text }
+  }
+  if (type === 'action/branch') {
+    if (typeof record.turn !== 'number' || !Number.isSafeInteger(record.turn)) return undefined
+    return { type: 'action/branch', turn: record.turn }
   }
   if (type === 'action/open-workspace-diffs') {
     return { type: 'action/open-workspace-diffs' }

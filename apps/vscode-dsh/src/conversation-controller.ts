@@ -40,6 +40,15 @@ import {
   type ContinueCapability,
   type ContinueChrome,
 } from './continue-capability.ts'
+import {
+  asForkLogEvents,
+  buildForkResult,
+  projectMessagesForForkSeed,
+  resolveClosedTurnBoundary,
+  type ForkOutcome,
+  type ForkRequest,
+  type ForkResult,
+} from './fork/fork-orchestrator.ts'
 import { EMPTY_LIVE_TITLE } from './conversation-titles.ts'
 import {
   CHANGE_LIST_EMPTY_NOTICE,
@@ -76,6 +85,9 @@ export type OpenHistoryResult =
 export type CancelActiveTurnResult =
   | { ok: true }
   | { ok: false; error: string }
+
+/** Result of product fork orchestration (AD-CUX-5). */
+export type ForkFromClosedTurnResult = ForkOutcome
 
 /** Outcome of restart restore orchestration (AC-33/34/69/70). */
 export type RestoreOpenTabsResult =
@@ -183,6 +195,15 @@ export class ConversationController {
   private eventOverrides = new Map<string, readonly HydratorSessionEvent[]>()
   /** Optional resume stub for L2 Continue tests (bypasses bridge). */
   private resumeOverride: ((sessionId: string) => Promise<void>) | undefined
+  /** Optional fork stub for L2 fork tests (bypasses bridge). */
+  private forkOverride: ((
+    parentSessionId: string,
+    options?: { boundarySeq?: number; emptySeed?: boolean; childSessionId?: string },
+  ) => Promise<string>) | undefined
+  /** P-接续 E2: Continue sealed per parent session (GAP-CUX-002). */
+  private continueSealedSessions = new Set<string>()
+  /** P-接续 E2: parentReadonly probe per session. */
+  private parentReadonlySessions = new Set<string>()
   private stopStatusWatch: (() => void) | undefined
   /** Dedup concurrent auto-restore from Host status transitions. */
   private restoreInFlight: Promise<RestoreOpenTabsResult> | undefined
@@ -649,6 +670,9 @@ export class ConversationController {
     if (chrome.visibility === 'disabled') {
       return { outcome: 'disabled', tooltip: chrome.tooltip ?? '暂不可用' }
     }
+    if (this.continueSealedSessions.has(tab.sessionId)) {
+      return { outcome: 'disabled', tooltip: '父会话已接续分叉，Continue 已封印' }
+    }
     if (this.host.status !== 'connected') return { outcome: 'host-not-ready' }
 
     try {
@@ -709,7 +733,11 @@ export class ConversationController {
     const row = this.index.read().sessions.find(s => s.sessionId === tab.sessionId)
     const capability = row?.continueCapability
       ?? this.resolveContinueCapability(tab.sessionId, this.messages.hasContent(tab.sessionId))
-    return continueChromeFor(T0B_GATE_VERDICT, capability, { mode: 'replay', hostReady })
+    return continueChromeFor(T0B_GATE_VERDICT, capability, {
+      mode: 'replay',
+      hostReady,
+      continueSealed: this.continueSealedSessions.has(tab.sessionId),
+    })
   }
 
   /**
@@ -744,14 +772,285 @@ export class ConversationController {
   }
 
   /**
+   * Fork at a validated closed turn: retry/edit → P-接续 + E2; branch → P-标明 (AD-CUX-5).
+   * Product rejects aborted/open/running before calling core/SDK fork (AC-34/61 / P2-1).
+   * Does not reuse `continueConversation` on the parent id (AC-66).
+   * @param req - fork request.
+   */
+  async forkFromClosedTurn(req: ForkRequest): Promise<ForkFromClosedTurnResult> {
+    const parentTab = this.registry.getBySessionId(req.parentSessionId)
+    if (parentTab === undefined) {
+      const reject = {
+        ok: false as const,
+        error: '父会话 Tab 不存在',
+        reason: 'invalid-boundary' as const,
+      }
+      this.panelHost?.pushBanner(reject.error, 'fork-rejected')
+      return reject
+    }
+    if (parentTab.status === 'running') {
+      const reject = {
+        ok: false as const,
+        error: '父会话仍在生成中，请先停止后再重试/分叉',
+        reason: 'parent-running' as const,
+      }
+      this.panelHost?.pushBanner(reject.error, 'fork-rejected')
+      return reject
+    }
+
+    const events = await this.loadForkEvents(req.parentSessionId)
+    const resolved = resolveClosedTurnBoundary(asForkLogEvents(events), req.boundary)
+    if (!resolved.ok) {
+      this.panelHost?.pushBanner(resolved.error, 'fork-rejected')
+      return resolved
+    }
+
+    let promptText = resolved.userText
+    if (req.intent === 'edit-resend') {
+      promptText = req.editedText ?? resolved.userText
+    }
+    if (req.intent === 'retry' || req.intent === 'edit-resend') {
+      const prior = findPriorClosedBoundary(asForkLogEvents(events), resolved.turn)
+      const forkOpts = prior === undefined
+        ? { emptySeed: true as const }
+        : { boundarySeq: prior.boundarySeq }
+      const childSessionId = await this.invokeFork(req.parentSessionId, forkOpts)
+      if (typeof childSessionId !== 'string') {
+        this.panelHost?.pushBanner(childSessionId.error, 'fork-failed')
+        return { ok: false, error: childSessionId.error, reason: 'host-unavailable' }
+      }
+      const seedCut = prior === undefined
+        ? { emptySeed: true as const }
+        : { boundarySeq: prior.boundarySeq, seedMaxTurn: prior.turn }
+      const result = buildForkResult(req, childSessionId, seedCut, promptText)
+      this.applyContinueSwitch(parentTab.tabId, result)
+      if (result.promptText !== undefined && result.promptText !== '') {
+        const childTab = this.registry.getBySessionId(childSessionId)
+        if (childTab !== undefined) {
+          try {
+            await this.promptTab(childTab.tabId, result.promptText)
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            this.panelHost?.pushBanner(`分叉成功但自动重发失败：${message}`, 'fork-prompt-failed')
+          }
+        }
+      }
+      return result
+    }
+
+    const childSessionId = await this.invokeFork(req.parentSessionId, {
+      boundarySeq: resolved.boundarySeq,
+    })
+    if (typeof childSessionId !== 'string') {
+      this.panelHost?.pushBanner(childSessionId.error, 'fork-failed')
+      return { ok: false, error: childSessionId.error, reason: 'host-unavailable' }
+    }
+    const result = buildForkResult(
+      req,
+      childSessionId,
+      { boundarySeq: resolved.boundarySeq, seedMaxTurn: resolved.turn },
+      undefined,
+    )
+    this.applyBranchMark(parentTab.tabId, result)
+    return result
+  }
+
+  /**
+   * P-接续: open child Tab as active live; force parent mode→replay + E2 seal (AC-31/31b/66).
+   * @param parentTabId - parent Tab id.
+   * @param child - successful fork result.
+   */
+  applyContinueSwitch(parentTabId: string, child: ForkResult): void {
+    const parent = this.registry.get(parentTabId)
+    if (parent === undefined) return
+    const parentTitle = parent.title ?? `Conversation ${parent.sessionId.slice(0, 8)}`
+    const forkLabel = `派生自 ${parentTitle}`
+    this.registry.setMode(parentTabId, 'replay')
+    this.continueSealedSessions.add(parent.sessionId)
+    this.parentReadonlySessions.add(parent.sessionId)
+    this.index.upsertSession({
+      sessionId: parent.sessionId,
+      title: parentTitle,
+      mtime: Date.now(),
+      continueCapability: 'same-id',
+    })
+    const parentMessages = this.messages.get(parent.sessionId)
+    this.messages.replace(
+      child.childSessionId,
+      projectMessagesForForkSeed(parentMessages, child.childSessionId, child.seedMaxTurn),
+    )
+    const childTab = this.registry.create(forkLabel, child.childSessionId, 'live')
+    this.index.upsertSession({
+      sessionId: child.childSessionId,
+      title: forkLabel,
+      mtime: Date.now(),
+      parentSessionId: parent.sessionId,
+      forkLabel,
+      continueCapability: 'same-id',
+    })
+    this.registry.switchTo(childTab.tabId)
+    this.persistOpenTabs()
+    this.panelHost?.pushBanner(`已接续到新会话 · ${forkLabel}`, 'fork-continue-switch')
+    this.panelHost?.pushFullState()
+  }
+
+  /**
+   * P-标明: open child Tab; parent mode / Continue unchanged (AC-60/62/63).
+   * @param parentTabId - parent Tab id.
+   * @param child - successful fork result.
+   */
+  applyBranchMark(parentTabId: string, child: ForkResult): void {
+    const parent = this.registry.get(parentTabId)
+    if (parent === undefined) return
+    const parentMode = parent.mode
+    const parentTitle = parent.title ?? `Conversation ${parent.sessionId.slice(0, 8)}`
+    const forkLabel = `派生自 ${parentTitle}`
+    const parentMessages = this.messages.get(parent.sessionId)
+    this.messages.replace(
+      child.childSessionId,
+      projectMessagesForForkSeed(parentMessages, child.childSessionId, child.seedMaxTurn),
+    )
+    const childTab = this.registry.create(forkLabel, child.childSessionId, 'live')
+    this.index.upsertSession({
+      sessionId: child.childSessionId,
+      title: forkLabel,
+      mtime: Date.now(),
+      parentSessionId: parent.sessionId,
+      forkLabel,
+      continueCapability: 'same-id',
+    })
+    if (parent.mode !== parentMode) {
+      this.registry.setMode(parentTabId, parentMode)
+    }
+    this.registry.switchTo(childTab.tabId)
+    this.persistOpenTabs()
+    this.panelHost?.pushBanner(`已分叉新会话 · ${forkLabel}`, 'fork-branch-mark')
+    this.panelHost?.pushFullState()
+  }
+
+  /**
+   * Host decision probes for the active Tab (GAP-CUX-002 / AC-31b).
+   */
+  hostProbesForActive(): { parentReadonly?: boolean; continueSealed?: boolean } | undefined {
+    const active = this.registry.getActive()
+    if (active === undefined) return undefined
+    const parentReadonly = this.parentReadonlySessions.has(active.sessionId)
+    const continueSealed = this.continueSealedSessions.has(active.sessionId)
+    if (!parentReadonly && !continueSealed) return undefined
+    return {
+      ...parentReadonly ? { parentReadonly: true } : {},
+      ...continueSealed ? { continueSealed: true } : {},
+    }
+  }
+
+  /**
+   * Fork parent title for active child Tab chrome (AC-63).
+   */
+  forkParentTitleForActive(): string | undefined {
+    const active = this.registry.getActive()
+    if (active === undefined) return undefined
+    const row = this.index.read().sessions.find(s => s.sessionId === active.sessionId)
+    if (row?.parentSessionId === undefined) return undefined
+    const parent = this.index.read().sessions.find(s => s.sessionId === row.parentSessionId)
+    return parent?.title ?? row.forkLabel ?? `派生自 ${row.parentSessionId.slice(0, 8)}`
+  }
+
+  /**
+   * Resolve fork boundary from a projected message id (retry / edit-resend).
+   * @param sessionId - parent session.
+   * @param messageId - bubble id.
+   */
+  resolveBoundaryFromMessage(
+    sessionId: string,
+    messageId: string,
+  ): { ok: true; boundary: ForkRequest['boundary']; userText?: string } | { ok: false; error: string } {
+    const messages = this.messages.get(sessionId)
+    const target = messages.find(m => m.id === messageId)
+    if (target === undefined) {
+      return { ok: false, error: '找不到要重试/编辑的消息' }
+    }
+    if (target.incomplete === true) {
+      return { ok: false, error: '未完成/已中断的回合不能重试或分叉' }
+    }
+    const turn = target.turn
+    if (typeof turn === 'number') {
+      return {
+        ok: true,
+        boundary: { kind: 'closed-turn', turn },
+        ...target.role === 'user' ? { userText: target.text } : {},
+      }
+    }
+    let inferredTurn: number | undefined
+    let userText: string | undefined
+    for (const m of messages) {
+      if (m.id === messageId) break
+      if (typeof m.turn === 'number') inferredTurn = m.turn
+      if (m.role === 'user') userText = m.text
+    }
+    if (target.role === 'user') userText = target.text
+    if (inferredTurn === undefined) {
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (typeof messages[i]?.turn === 'number') {
+          inferredTurn = messages[i]!.turn
+          break
+        }
+      }
+    }
+    if (inferredTurn === undefined) {
+      return { ok: false, error: '无法将消息映射到已关闭回合' }
+    }
+    return {
+      ok: true,
+      boundary: { kind: 'closed-turn', turn: inferredTurn },
+      ...userText === undefined ? {} : { userText },
+    }
+  }
+
+  private async invokeFork(
+    parentSessionId: string,
+    options?: { boundarySeq?: number; emptySeed?: boolean; childSessionId?: string },
+  ): Promise<string | { error: string }> {
+    try {
+      if (this.forkOverride !== undefined) {
+        return await this.forkOverride(parentSessionId, options)
+      }
+      if (typeof this.host.forkSession !== 'function') {
+        return { error: 'Host 不支持 session/fork' }
+      }
+      return await this.host.forkSession(parentSessionId, options)
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  private async loadForkEvents(sessionId: string): Promise<HydratorSessionEvent[]> {
+    const override = this.eventOverrides.get(sessionId)
+    if (override !== undefined) return [...override]
+    if (typeof this.host.readSessionLog === 'function') {
+      try {
+        const events = await this.host.readSessionLog(sessionId)
+        return events as HydratorSessionEvent[]
+      } catch {
+        // Fall through to message-derived synthetic log.
+      }
+    }
+    return synthesizeEventsFromMessages(this.messages.get(sessionId))
+  }
+
+  /**
    * Install L2 test overrides for resume / event loads (does not change product semantics).
    * @param options - optional resume stub and event map.
    */
   installTestHooks(options: {
     resumeSession?: (sessionId: string) => Promise<void>
+    forkSession?: (
+      parentSessionId: string,
+      options?: { boundarySeq?: number; emptySeed?: boolean; childSessionId?: string },
+    ) => Promise<string>
     eventsBySession?: ReadonlyMap<string, readonly HydratorSessionEvent[]>
   }): void {
     if (options.resumeSession !== undefined) this.resumeOverride = options.resumeSession
+    if (options.forkSession !== undefined) this.forkOverride = options.forkSession
     if (options.eventsBySession !== undefined) {
       for (const [id, events] of options.eventsBySession) this.eventOverrides.set(id, events)
     }
@@ -1867,4 +2166,73 @@ function firstAssistantText(message: Record<string, unknown> | undefined): strin
 function asActivityRecord(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   return value as Record<string, unknown>
+}
+
+/**
+ * Find the inclusive seq of the closed turn immediately before `turn`.
+ * @param events - fork log events.
+ * @param turn - target turn number.
+ */
+function findPriorClosedBoundary(
+  events: ReturnType<typeof asForkLogEvents>,
+  turn: number,
+): { boundarySeq: number; turn: number } | undefined {
+  for (let t = turn - 1; t >= 0; t -= 1) {
+    const prior = resolveClosedTurnBoundary(events, { kind: 'closed-turn', turn: t })
+    if (prior.ok) {
+      return { boundarySeq: prior.boundarySeq, turn: prior.turn }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Build a minimal synthetic log from MessageStore when cold log is unavailable (L2).
+ * @param messages - projected chat messages.
+ */
+function synthesizeEventsFromMessages(
+  messages: readonly ChatMessage[],
+): HydratorSessionEvent[] {
+  const events: HydratorSessionEvent[] = []
+  let seq = 0
+  const byTurn = new Map<number, { user?: string; assistant?: string; incomplete?: boolean }>()
+  for (const m of messages) {
+    if (m.kind !== 'text') continue
+    const turn = typeof m.turn === 'number' ? m.turn : 0
+    const row = byTurn.get(turn) ?? {}
+    if (m.role === 'user') row.user = m.text
+    if (m.role === 'assistant') {
+      row.assistant = m.text
+      if (m.incomplete === true) row.incomplete = true
+    }
+    byTurn.set(turn, row)
+  }
+  for (const [turn, row] of [...byTurn.entries()].sort((a, b) => a[0] - b[0])) {
+    events.push({ type: 'turn/start', seq: seq++, data: { turn } })
+    if (row.user !== undefined) {
+      events.push({
+        type: 'user/message',
+        seq: seq++,
+        data: { content: [{ type: 'text', text: row.user }] },
+      })
+    }
+    if (row.assistant !== undefined) {
+      events.push({
+        type: 'assistant/message',
+        seq: seq++,
+        data: { message: { content: [{ type: 'text', text: row.assistant }] } },
+      })
+    }
+    events.push({
+      type: 'turn/end',
+      seq: seq++,
+      data: {
+        turn,
+        reason: row.incomplete === true
+          ? { kind: 'aborted', reason: { kind: 'user' } }
+          : { kind: 'completed' },
+      },
+    })
+  }
+  return events
 }

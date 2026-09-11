@@ -30,6 +30,12 @@ export const SDK_SESSION_RESUME_SERVICE = 'sdkSessionResume'
  */
 export const SDK_SESSION_CANCEL_SERVICE = 'sdkSessionCancel'
 
+/**
+ * Cordis service key for server-owned per-session fork (retry / edit / branch).
+ * Published by `@deepseek-ai/dsh-sdk-jsonrpc-server` as `sdkSessionFork`.
+ */
+export const SDK_SESSION_FORK_SERVICE = 'sdkSessionFork'
+
 /** Cordis service key for permission presets (consumed via `ctx.get`). */
 export const PERMISSION_PRESETS_SERVICE = 'permissionPresets'
 
@@ -104,6 +110,23 @@ export interface SdkSessionCancelCapability {
    * @param sessionId - SDK session identity.
    */
   cancelSession(sessionId: string): Promise<void>
+}
+
+/**
+ * Server-owned session fork capability for retry / edit-resend / branch (AD-CUX-5).
+ * Must create a prompt-ready child with `parentSession` lineage.
+ */
+export interface SdkSessionForkCapability {
+  /**
+   * Fork a live parent session at an inclusive boundary seq (or empty seed).
+   * @param parentSessionId - parent SDK session identity.
+   * @param options - boundary seq, emptySeed, and optional child id.
+   * @returns child session id.
+   */
+  forkSession(
+    parentSessionId: string,
+    options?: { boundarySeq?: number; emptySeed?: boolean; childSessionId?: string },
+  ): Promise<string>
 }
 
 /** Minimal session handle needed to apply a permission preset. */
@@ -187,6 +210,18 @@ export type BridgeFrame =
   | { kind: 'session/cancel'; id: string; sessionId: string }
   | { kind: 'session/cancel/response'; id: string; ok: true }
   | { kind: 'session/cancel/response'; id: string; ok: false; error: string }
+  | {
+    kind: 'session/fork'
+    id: string
+    parentSessionId: string
+    /** Inclusive source event seq; omit without emptySeed = tip (last event). */
+    boundarySeq?: number
+    /** Explicit empty seed; mutually exclusive with boundarySeq. */
+    emptySeed?: boolean
+    childSessionId?: string
+  }
+  | { kind: 'session/fork/response'; id: string; ok: true; childSessionId: string }
+  | { kind: 'session/fork/response'; id: string; ok: false; error: string }
   | { kind: 'session/continue-capability'; id: string; sessionId: string }
   | {
     kind: 'session/continue-capability/response'

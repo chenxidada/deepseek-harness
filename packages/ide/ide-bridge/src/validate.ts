@@ -155,6 +155,39 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       if (typeof record.error !== 'string') return undefined
       return { kind, id: record.id, ok: false, error: record.error }
     }
+    case 'session/fork': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.parentSessionId)) return undefined
+      const frame: Extract<BridgeFrame, { kind: 'session/fork' }> = {
+        kind,
+        id: record.id,
+        parentSessionId: record.parentSessionId,
+      }
+      if (record.emptySeed !== undefined) {
+        if (record.emptySeed !== true) return undefined
+        frame.emptySeed = true
+      }
+      if (record.boundarySeq !== undefined) {
+        if (typeof record.boundarySeq !== 'number' || !Number.isSafeInteger(record.boundarySeq) || record.boundarySeq < 0) {
+          return undefined
+        }
+        frame.boundarySeq = record.boundarySeq
+      }
+      if (frame.emptySeed === true && frame.boundarySeq !== undefined) return undefined
+      if (record.childSessionId !== undefined) {
+        if (!isNonEmptyString(record.childSessionId)) return undefined
+        frame.childSessionId = record.childSessionId
+      }
+      return frame
+    }
+    case 'session/fork/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isNonEmptyString(record.childSessionId)) return undefined
+        return { kind, id: record.id, ok: true, childSessionId: record.childSessionId }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
     case 'session/continue-capability': {
       if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
       return { kind, id: record.id, sessionId: record.sessionId }

@@ -31,6 +31,8 @@ export interface SessionIndexEntry {
   continueCapability?: 'same-id' | 'derive-only' | 'unknown'
   firstUserPreview?: string
   parentSessionId?: string
+  /** Optional「派生自 …」label for fork chrome (AC-63). */
+  forkLabel?: string
   deleted?: boolean
 }
 

@@ -283,6 +283,21 @@ export function buildThinChatHtml(cspSource?: string): string {
       background: var(--vscode-inputValidation-warningBackground, var(--dsh-bubble-user-bg));
       border-left: 3px solid var(--vscode-inputValidation-warningBorder, var(--vscode-editorWarning-foreground));
     }
+    .msg-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 6px;
+    }
+    .msg-actions button {
+      font-size: 11px;
+      padding: 2px 8px;
+      border: 1px solid var(--vscode-button-border, transparent);
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+      border-radius: 2px;
+      cursor: pointer;
+    }
     .md-h { margin: 0.35em 0; font-size: 1.05em; }
     .md-list { margin: 0.35em 0; padding-left: 1.4em; }
     .md-p, .md-plain { margin: 0.25em 0; white-space: pre-wrap; }
@@ -715,16 +730,72 @@ export function buildThinChatHtml(cspSource?: string): string {
       applyMessageIdentity(div, msg);
       if (msg.incomplete === true) div.setAttribute('data-incomplete', 'true');
       if (msg.streaming === true) div.setAttribute('data-streaming', 'true');
+      if (typeof msg.turn === 'number') div.setAttribute('data-turn', String(msg.turn));
       if (msg.role === 'user') {
         div.setAttribute('data-kind', 'user-refs');
         fillUserBubbleWithRefCards(div, msg.text || '');
         wireRefCards(div);
+        appendMessageActions(div, msg);
         return div;
       }
       var rendered = renderSafeMarkdown(msg.text || '');
       div.innerHTML = rendered.html;
       wireCopyButtons(div);
+      appendMessageActions(div, msg);
       return div;
+    }
+    function appendMessageActions(div, msg) {
+      if (msg.kind !== 'text' && msg.kind !== undefined) return;
+      if (msg.streaming === true) return;
+      var actions = document.createElement('div');
+      actions.className = 'msg-actions';
+      var copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.textContent = '复制';
+      copyBtn.setAttribute('data-action', 'copy-message');
+      copyBtn.addEventListener('click', function() {
+        vscode.postMessage({
+          type: 'action/copy-message',
+          messageId: msg.id,
+          text: msg.text || '',
+        });
+      });
+      actions.appendChild(copyBtn);
+      var parentReadonly = __dshProbes.get && __dshProbes.get().parentReadonly === true;
+      var running = __dshProbes.get && __dshProbes.get().streaming === true;
+      if (!parentReadonly && !running && msg.incomplete !== true) {
+        if (msg.role === 'assistant' || msg.role === 'user') {
+          var retryBtn = document.createElement('button');
+          retryBtn.type = 'button';
+          retryBtn.textContent = msg.role === 'user' ? '编辑重发' : '重试';
+          retryBtn.setAttribute('data-action', msg.role === 'user' ? 'edit-resend' : 'retry');
+          retryBtn.addEventListener('click', function() {
+            if (msg.role === 'user') {
+              var next = window.prompt('编辑后重发', msg.text || '');
+              if (next === null) return;
+              vscode.postMessage({
+                type: 'action/edit-resend',
+                messageId: msg.id,
+                text: next,
+              });
+              return;
+            }
+            vscode.postMessage({ type: 'action/retry', messageId: msg.id });
+          });
+          actions.appendChild(retryBtn);
+        }
+        if (typeof msg.turn === 'number') {
+          var branchBtn = document.createElement('button');
+          branchBtn.type = 'button';
+          branchBtn.textContent = '分叉';
+          branchBtn.setAttribute('data-action', 'branch');
+          branchBtn.addEventListener('click', function() {
+            vscode.postMessage({ type: 'action/branch', turn: msg.turn });
+          });
+          actions.appendChild(branchBtn);
+        }
+      }
+      div.appendChild(actions);
     }
     function renderMessages(list) {
       messagesEl.innerHTML = '';
@@ -840,6 +911,9 @@ export function buildThinChatHtml(cspSource?: string): string {
           : mode === 'empty' ? 'No active conversation'
           : mode === 'replay' ? 'Replay (read-only)'
           : (msg.title || 'Conversation');
+        if (msg.forkParentTitle) {
+          bannerEl.textContent = (msg.title || 'Conversation') + ' · ' + msg.forkParentTitle;
+        }
         if (mode === 'empty' || (mode === 'waiting-host' && connectionPhase !== 'connecting')) {
           renderMessages([]);
         }

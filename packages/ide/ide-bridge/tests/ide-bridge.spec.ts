@@ -20,6 +20,7 @@ import {
   SDK_SESSION_DISPOSE_SERVICE,
   SDK_SESSION_RESUME_SERVICE,
   SDK_SESSION_CANCEL_SERVICE,
+  SDK_SESSION_FORK_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   validateBridgeFrame,
@@ -233,6 +234,14 @@ describe('ide-bridge session/resume (GAP-001 / Continue)', () => {
       id: 'c1',
       sessionId: 's',
     })
+    expect(parseBridgeFrame(
+      '{"kind":"session/fork","id":"f1","parentSessionId":"p","boundarySeq":3}',
+    )).toEqual({
+      kind: 'session/fork',
+      id: 'f1',
+      parentSessionId: 'p',
+      boundarySeq: 3,
+    })
   })
 })
 
@@ -332,6 +341,68 @@ describe('ide-bridge session/cancel (AD-CUX-3 / I-真)', () => {
     )
     expect(cancelled).toEqual(['sess-a'])
     expect(responses).toContainEqual({ kind: 'session/cancel/response', id: requestId, ok: true })
+
+    await ctx.fiber.dispose()
+    await host.close()
+  })
+})
+
+describe('ide-bridge session/fork (AD-CUX-5)', () => {
+  const dirs: string[] = []
+  let previousSock: string | undefined
+
+  afterEach(async () => {
+    while (dirs.length > 0) {
+      const dir = dirs.pop()!
+      await rm(dir, { recursive: true, force: true })
+    }
+    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
+  })
+
+  it('Host fork frame calls sdkSessionFork and returns childSessionId', async () => {
+    previousSock = process.env[IDE_BRIDGE_SOCK_ENV]
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-fork-frame-'))
+    dirs.push(dir)
+    const path = join(dir, 'bridge.sock')
+    const forked: Array<{ parent: string; boundarySeq?: number }> = []
+    const host = new IdeBridgeHostServer()
+    const responses: BridgeFrame[] = []
+    host.onFrame((frame) => {
+      if (frame.kind === 'hello') return
+      responses.push(frame)
+    })
+    await host.listen(path)
+
+    const ctx = new Context()
+    ctx.provide(SDK_SESSION_FORK_SERVICE, {
+      forkSession: async (parentSessionId: string, options?: { boundarySeq?: number }) => {
+        forked.push({ parent: parentSessionId, boundarySeq: options?.boundarySeq })
+        return 'child-from-fork'
+      },
+    })
+    process.env[IDE_BRIDGE_SOCK_ENV] = path
+    apply(ctx, {})
+    await waitFor(() => host.connectionCount() >= 1, 3_000)
+
+    const requestId = 'fork-1'
+    expect(host.broadcast({
+      kind: 'session/fork',
+      id: requestId,
+      parentSessionId: 'parent-a',
+      boundarySeq: 3,
+    })).toBe(1)
+    await waitFor(
+      () => responses.some(frame => frame.kind === 'session/fork/response' && frame.id === requestId),
+      3_000,
+    )
+    expect(forked).toEqual([{ parent: 'parent-a', boundarySeq: 3 }])
+    expect(responses).toContainEqual({
+      kind: 'session/fork/response',
+      id: requestId,
+      ok: true,
+      childSessionId: 'child-from-fork',
+    })
 
     await ctx.fiber.dispose()
     await host.close()
