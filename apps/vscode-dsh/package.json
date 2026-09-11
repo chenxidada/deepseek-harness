@@ -97,6 +97,10 @@
         "title": "DeepSeek Harness: Open History Replay"
       },
       {
+        "command": "dsh.searchSessions",
+        "title": "DeepSeek Harness: Search Sessions"
+      },
+      {
         "command": "dsh.deleteHistory",
         "title": "DeepSeek Harness: Delete History Session"
       },

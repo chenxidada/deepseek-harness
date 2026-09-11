@@ -67,6 +67,12 @@ import {
   type RevertWorkspace,
 } from './change/index.ts'
 import type { ChangeRecord } from './change/types.ts'
+import {
+  PathSessionIndex,
+  searchSessions as runSessionSearch,
+  type SearchHit,
+  type SearchQuery,
+} from './search/index.ts'
 
 /** Outcome of opening a history session as replay (AC-30/64/65). */
 export type OpenHistoryResult =
@@ -175,6 +181,8 @@ export class ConversationController {
   readonly changes = new ChangeStore()
   /** Workspace index — immediate persist of openTabSet / activeSessionId. */
   readonly index: ExtensionIndex
+  /** Tier-2 path→session reverse index (AD-CUX-9 / AC-51). */
+  readonly pathSessionIndex: PathSessionIndex
   /** SnapshotStore + attribution pipeline (phase-2). */
   readonly attributor: ChangeAttributor
   private readonly snapshotStore: SnapshotStore
@@ -229,6 +237,7 @@ export class ConversationController {
     changeOptions?: ConversationChangeOptions,
   ) {
     this.index = new ExtensionIndex(workspaceKey, workspaceState)
+    this.pathSessionIndex = new PathSessionIndex(workspaceKey, workspaceState)
     this.snapshotStore = changeOptions?.snapshotStore
       ?? new SnapshotStore({ storageRoot: join(tmpdir(), 'dsh-vscode-dsh-changes') })
     this.readWorkspaceText = changeOptions?.readWorkspaceText
@@ -1246,11 +1255,39 @@ export class ConversationController {
   }
 
   private async persistChangeIndex(sessionId: string): Promise<void> {
+    const records = this.changes.list(sessionId)
     await writeChangeIndex(
       this.snapshotStore.storageRoot,
       sessionId,
-      this.changes.list(sessionId),
+      records,
     )
+    // AC-51: keep path→session reverse index in sync with Change metadata writes.
+    this.pathSessionIndex.replaceSessionPaths(
+      sessionId,
+      records.map(r => r.path),
+    )
+  }
+
+  /**
+   * Search sessions via tier 1 (title/preview) and/or tier 2 (path→session).
+   * Never scans message bodies or authority JSONL (AC-50/51/53).
+   * @param query - text and/or path fragments.
+   */
+  searchSessions(query: SearchQuery): SearchHit[] {
+    return runSessionSearch(this.index, this.pathSessionIndex, query)
+  }
+
+  /**
+   * Open a search hit via the existing history/replay path (AC-52).
+   * Does not Start a new live session.
+   * @param sessionId - hit session id.
+   * @param options - optional preloaded events for L2.
+   */
+  async openSearchHit(
+    sessionId: string,
+    options: { events?: readonly HydratorSessionEvent[] } = {},
+  ): Promise<OpenHistoryResult> {
+    return this.openFromHistory(sessionId, options)
   }
 
   /**
@@ -1426,6 +1463,8 @@ export class ConversationController {
     this.messages.clearSession(tab.sessionId)
     this.timeline.clearSession(tab.sessionId)
     this.attributor.clearSession(tab.sessionId)
+    this.changes.clearSession(tab.sessionId)
+    this.pathSessionIndex.removeSession(tab.sessionId)
     await this.snapshotStore.clearSession(tab.sessionId)
     this.index.markDeleted(tab.sessionId)
     this.registry.close(tabId)
@@ -1463,6 +1502,8 @@ export class ConversationController {
     this.messages.clearSession(sessionId)
     this.timeline.clearSession(sessionId)
     this.attributor.clearSession(sessionId)
+    this.changes.clearSession(sessionId)
+    this.pathSessionIndex.removeSession(sessionId)
     await this.snapshotStore.clearSession(sessionId)
     this.index.markDeleted(sessionId)
     this.persistOpenTabs()

@@ -111,6 +111,27 @@ export interface ChatPanelHostDeps {
    */
   requestBranch?: (turn: number) => Promise<void>
   /**
+   * Tier 1/2 session search (AD-CUX-9). Returns metadata hits only.
+   * @param query - optional text (tier 1) and/or path (tier 2).
+   */
+  requestSearchSessions?: (query: {
+    text?: string
+    path?: string
+  }) => Promise<Array<{
+    sessionId: string
+    title: string
+    mtime: number
+    matchTiers: Array<1 | 2>
+    matchField?: 'title' | 'firstUserPreview'
+    firstUserPreview?: string
+    matchedPath?: string
+  }>>
+  /**
+   * Open a search hit via history/replay — must not auto-Start (AC-52).
+   * @param sessionId - hit session id.
+   */
+  requestOpenSearchHit?: (sessionId: string) => Promise<void>
+  /**
    * Host decision-mirror probes for panel/state (GAP-CUX-002 / AC-31b).
    */
   resolveHostProbes?: () => { parentReadonly?: boolean; continueSealed?: boolean } | undefined
@@ -587,6 +608,23 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/branch') {
       await this.deps.requestBranch?.(message.turn)
+      return
+    }
+    if (message.type === 'action/search-sessions') {
+      const hits = await this.deps.requestSearchSessions?.({
+        ...message.text === undefined ? {} : { text: message.text },
+        ...message.path === undefined ? {} : { path: message.path },
+      }) ?? []
+      this.post({
+        type: 'search/results',
+        ...message.text === undefined ? {} : { text: message.text },
+        ...message.path === undefined ? {} : { path: message.path },
+        hits,
+      })
+      return
+    }
+    if (message.type === 'action/open-search-hit') {
+      await this.deps.requestOpenSearchHit?.(message.sessionId)
       return
     }
     if (message.type === 'action/open-workspace-diffs') {

@@ -562,6 +562,92 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     return result
   })
 
+  /**
+   * Query/browse: tier 1 title/preview + tier 2 path→session search.
+   * Opening a hit reuses openFromHistory — never auto-Starts (AC-50–52).
+   */
+  const searchSessions = vscode.commands.registerCommand(
+    'dsh.searchSessions',
+    async (queryArg?: unknown) => {
+      const controller = requireConversations()
+      if (controller === undefined) {
+        await vscode.window.showErrorMessage(
+          'DeepSeek Harness Host is not connected. Connect Host before searching sessions.',
+        )
+        return { outcome: 'host-not-ready' as const, hits: [] as const }
+      }
+      let text: string | undefined
+      let path: string | undefined
+      if (queryArg !== undefined && queryArg !== null && typeof queryArg === 'object') {
+        const record = queryArg as Record<string, unknown>
+        if (typeof record.text === 'string') text = record.text
+        if (typeof record.path === 'string') path = record.path
+      } else if (typeof queryArg === 'string' && queryArg.trim() !== '') {
+        text = queryArg
+      }
+      if ((text === undefined || text.trim() === '') && (path === undefined || path.trim() === '')) {
+        if (vscode.window.showInputBox === undefined) {
+          await vscode.window.showErrorMessage('Provide a search query for dsh.searchSessions.')
+          return { outcome: 'cancelled' as const, hits: [] as const }
+        }
+        const typed = await vscode.window.showInputBox({
+          title: 'Search Sessions',
+          placeHolder: 'Title / preview text, or path:src/foo.ts',
+          prompt: 'Tier 1 metadata search. Prefix with path: for tier 2 path→session.',
+        })
+        if (typed === undefined || typed.trim() === '') {
+          return { outcome: 'cancelled' as const, hits: [] as const }
+        }
+        const trimmed = typed.trim()
+        if (trimmed.toLowerCase().startsWith('path:')) {
+          path = trimmed.slice('path:'.length).trim()
+        } else {
+          text = trimmed
+        }
+      }
+      const hits = controller.searchSessions({
+        ...text === undefined || text.trim() === '' ? {} : { text },
+        ...path === undefined || path.trim() === '' ? {} : { path },
+      })
+      if (hits.length === 0) {
+        await vscode.window.showInformationMessage('No matching sessions.')
+        return { outcome: 'empty' as const, hits }
+      }
+      if (vscode.window.showQuickPick === undefined) {
+        return { outcome: 'listed' as const, hits }
+      }
+      const pick = await vscode.window.showQuickPick(
+        hits.map(hit => ({
+          label: hit.title,
+          description: [
+            hit.matchTiers.includes(1) ? `t1:${hit.matchField ?? 'meta'}` : undefined,
+            hit.matchTiers.includes(2) ? `t2:${hit.matchedPath ?? 'path'}` : undefined,
+            hit.sessionId.slice(0, 8),
+          ].filter(Boolean).join(' · '),
+          detail: hit.firstUserPreview ?? hit.matchedPath,
+          tabId: hit.sessionId,
+        })),
+        { title: 'Search Sessions', placeHolder: 'Open a matching session (replay / activate)' },
+      )
+      const chosen = Array.isArray(pick) ? pick[0] : pick
+      if (chosen === undefined) return { outcome: 'cancelled' as const, hits }
+      const result = await controller.openSearchHit(chosen.tabId)
+      historyRefresh?.()
+      tabBarRefresh?.()
+      panelHost?.pushFullState()
+      if (result.outcome === 'host-not-ready') {
+        await vscode.window.showInformationMessage(
+          'Waiting for Host before replaying this session from the authoritative log.',
+        )
+      } else if (result.outcome === 'error') {
+        await vscode.window.showErrorMessage(`Failed to open search result: ${result.error}`)
+      } else if (result.outcome === 'missing') {
+        await vscode.window.showErrorMessage('Search result session not found or deleted.')
+      }
+      return { outcome: 'opened' as const, hits, open: result }
+    },
+  )
+
   const promptActive = vscode.commands.registerCommand('dsh.promptActiveConversation', async (text?: unknown) => {
     await ensureHostForSend(vscode)
     const controller = requireConversations()
@@ -975,6 +1061,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     closeConversation,
     deleteConversation,
     openHistory,
+    searchSessions,
     deleteHistory,
     continueConversation,
     restoreMore,
@@ -1211,6 +1298,33 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
         boundary: { kind: 'closed-turn', turn },
         intent: 'branch',
       })
+    },
+    requestSearchSessions: async (query) => {
+      const controller = conversations
+      if (controller === undefined) return []
+      return controller.searchSessions(query)
+    },
+    requestOpenSearchHit: async (sessionId) => {
+      const controller = conversations
+      if (controller === undefined) {
+        await vscode.window.showErrorMessage(
+          'DeepSeek Harness Host is not connected. Connect Host before opening a search result.',
+        )
+        return
+      }
+      const result = await controller.openSearchHit(sessionId)
+      historyRefresh?.()
+      tabBarRefresh?.()
+      panelHost?.pushFullState()
+      if (result.outcome === 'host-not-ready') {
+        await vscode.window.showInformationMessage(
+          'Waiting for Host before replaying this session from the authoritative log.',
+        )
+      } else if (result.outcome === 'error') {
+        await vscode.window.showErrorMessage(`Failed to open search result: ${result.error}`)
+      } else if (result.outcome === 'missing') {
+        await vscode.window.showErrorMessage('Search result session not found or deleted.')
+      }
     },
     resolveHostProbes: () => conversations?.hostProbesForActive(),
     resolveForkParentTitle: () => conversations?.forkParentTitleForActive(),

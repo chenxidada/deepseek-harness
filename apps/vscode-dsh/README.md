@@ -79,7 +79,7 @@ Matrix documentation also lives in `tests/chat-ready-regression.spec.ts`. Delive
 |---|---|:---:|
 | **Start** | `dsh.startSession` | ✅ (`command-start`) |
 | **Send / New** | `dsh.newConversation`, `dsh.promptActiveConversation`, `dsh.continueConversation`; Webview `action/new-conversation` / `action/continue` | ✅ (`command-send`) |
-| **Query / browse** | `dsh.openHistory`, `dsh.switchConversation`, History/Conversations refresh | ❌ |
+| **Query / browse** | `dsh.openHistory`, `dsh.searchSessions`, `dsh.switchConversation`, History/Conversations refresh | ❌ |
 | **Delete** | `dsh.deleteConversation`, `dsh.deleteHistory` | ❌ — offline shows「Host 连接后可删除」; never fake-deletes authority |
 | **Panel / settings** | `dsh.showPanel`, `dsh.openExtensionSettings` | ❌ (show details / settings only) |
 | **Status bar** | `dsh.statusBarAction` | ✅ (`status-bar`) |

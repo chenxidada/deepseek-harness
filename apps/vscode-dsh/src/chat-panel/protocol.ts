@@ -167,6 +167,21 @@ export type HostToWebviewMessage =
     type: 'ui/theme'
     themeKind: string
   }
+  | {
+    /** Tier 1/2 search results (AD-CUX-9); metadata hits only — never bodies. */
+    type: 'search/results'
+    text?: string
+    path?: string
+    hits: Array<{
+      sessionId: string
+      title: string
+      mtime: number
+      matchTiers: Array<1 | 2>
+      matchField?: 'title' | 'firstUserPreview'
+      firstUserPreview?: string
+      matchedPath?: string
+    }>
+  }
 
 /** Webview → Host frames (Phase 1–4 + change protocol). */
 export type WebviewToHostMessage =
@@ -188,6 +203,17 @@ export type WebviewToHostMessage =
   | { type: 'action/open-workspace-diffs' }
   | { type: 'action/open-reference'; path: string }
   | { type: 'action/reveal-change-list'; sourceMessageId?: string }
+  | {
+    /** Tier 1/2 session search (AD-CUX-9). */
+    type: 'action/search-sessions'
+    text?: string
+    path?: string
+  }
+  | {
+    /** Open a search hit via history/replay — must not auto-Start (AC-52). */
+    type: 'action/open-search-hit'
+    sessionId: string
+  }
   | { type: 'change/get-diff'; changeId: string }
   | { type: 'change/open'; changeId: string; path: string }
   | { type: 'change/open-native-diff'; changeId: string }
@@ -269,6 +295,17 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
         ? { sourceMessageId: record.sourceMessageId }
         : {},
     }
+  }
+  if (type === 'action/search-sessions') {
+    return {
+      type: 'action/search-sessions',
+      ...typeof record.text === 'string' ? { text: record.text } : {},
+      ...typeof record.path === 'string' ? { path: record.path } : {},
+    }
+  }
+  if (type === 'action/open-search-hit') {
+    if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
+    return { type: 'action/open-search-hit', sessionId: record.sessionId }
   }
   if (type === 'change/get-diff') {
     if (typeof record.changeId !== 'string') return undefined
