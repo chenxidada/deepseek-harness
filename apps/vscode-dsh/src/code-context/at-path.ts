@@ -207,3 +207,34 @@ function isPathInside(absPath: string, folder: string): boolean {
 function toPosixRelative(folder: string, absPath: string): string {
   return normalizePathKey(relative(folder, absPath))
 }
+
+/**
+ * Browser-inline source mirroring {@link extractAtPathTokens} for Webview embed (AD-CUX-11 / R5).
+ * Must stay byte-identical in algorithm to the TypeScript implementation above.
+ */
+export function atPathExtractBrowserSource(): string {
+  return `
+function extractAtPathTokens(text) {
+  var out = [];
+  var source = String(text || '');
+  var re = /(?:^|[\\s])(@(?:"([^"]+)"|([^\\s"]+)))/g;
+  var match;
+  while ((match = re.exec(source)) !== null) {
+    var token = match[1];
+    var quotedPath = match[2];
+    var plainPath = match[3];
+    if (token === undefined) continue;
+    var path = quotedPath !== undefined ? quotedPath : plainPath;
+    if (path === undefined || path.length === 0) continue;
+    var atIndex = match.index + (match[0].indexOf(token) === 0 ? 0 : match[0].length - token.length);
+    out.push({
+      token: token,
+      path: path,
+      quoted: quotedPath !== undefined,
+      index: atIndex,
+    });
+  }
+  return out;
+}
+`
+}

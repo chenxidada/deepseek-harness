@@ -97,10 +97,43 @@ export async function openTimelineDiff(vscode: DiffVsCodeLike, hunk: TimelineDif
   if (!isRecoverableReplayDiff(hunk)) {
     throw new Error('Diff unavailable: missing authoritative before/after snapshot')
   }
+  await openChangeSnapshotDiff(vscode, {
+    path: hunk.path,
+    oldText: hunk.oldText,
+    newText: hunk.newText,
+  })
+}
+
+/**
+ * Open native `vscode.diff` from a ChangeRecord snapshot (AC-43 / T8 explicit jump).
+ * Both sides are virtual `dsh-diff` documents — never current disk.
+ * @param vscode - duck-typed vscode module.
+ * @param snapshot - path + before/after texts from SnapshotStore.
+ */
+export async function openChangeSnapshotDiff(
+  vscode: DiffVsCodeLike,
+  snapshot: {
+    path: string
+    oldText: string | null
+    newText: string
+    changeId?: string
+  },
+): Promise<void> {
+  if (typeof snapshot.path !== 'string' || typeof snapshot.newText !== 'string') {
+    throw new Error('Diff unavailable: missing authoritative before/after snapshot')
+  }
+  if (typeof snapshot.oldText !== 'string' && snapshot.oldText !== null) {
+    throw new Error('Diff unavailable: missing authoritative before/after snapshot')
+  }
   ensureDiffProvider(vscode)
-  const args = buildDiffOpenArgs(hunk)
-  const leftKey = encodeURIComponent(`old:${hunk.path}`)
-  const rightKey = encodeURIComponent(`new:${hunk.path}`)
+  const args = buildDiffOpenArgs({
+    path: snapshot.path,
+    oldText: snapshot.oldText,
+    newText: snapshot.newText,
+  })
+  const idPart = snapshot.changeId === undefined ? snapshot.path : `${snapshot.changeId}:${snapshot.path}`
+  const leftKey = encodeURIComponent(`old:${idPart}`)
+  const rightKey = encodeURIComponent(`new:${idPart}`)
   const leftUri = vscode.Uri.parse(`dsh-diff:${leftKey}`)
   const rightUri = vscode.Uri.parse(`dsh-diff:${rightKey}`)
   leftContents.set(leftUri.toString(), args.oldText)

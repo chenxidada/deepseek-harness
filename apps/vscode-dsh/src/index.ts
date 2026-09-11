@@ -96,6 +96,7 @@ export {
 export {
   DEFAULT_POST_HOC_DIFF_ONLY,
   buildDiffOpenArgs,
+  openChangeSnapshotDiff,
   openTimelineDiff,
   reviewWorkspaceDiffs,
   type DiffOpenArgs,

@@ -34,6 +34,26 @@ export {
 } from './activity-dom.ts'
 
 export {
+  changeDiffDomBrowserSource,
+  changeStatusLabel,
+  fillChangeDiffPane,
+  mountChangeDiffMessage,
+  renderChangeListBubble,
+  renderDiffSummaryBubble,
+  type ChangeDiffBubbleMessage,
+  type ChangeDiffPostMessage,
+} from './change-diff-dom.ts'
+
+export {
+  fillUserBubbleWithRefCards,
+  refCardsBrowserSource,
+  renderRefCardNodes,
+  renderUserTextWithRefCardsHtml,
+  segmentTextWithRefs,
+  syncComposerRefCards,
+} from './ref-cards.ts'
+
+export {
   applyStreamingStatus,
   applyThemeKind,
   syncChromeBrowserSource,

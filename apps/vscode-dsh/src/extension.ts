@@ -26,6 +26,7 @@ import {
 } from './history-view.ts'
 import {
   DEFAULT_POST_HOC_DIFF_ONLY,
+  openChangeSnapshotDiff,
   openTimelineDiff,
   reviewWorkspaceDiffs,
   type DiffVsCodeLike,
@@ -1187,6 +1188,9 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestChangeOpen: async (changeId, path) => {
       await openChangedPath(vscode, changeId, path)
     },
+    requestChangeOpenNativeDiff: async (changeId) => {
+      await openChangedNativeDiff(vscode, changeId)
+    },
     requestRevealSource: async (sourceMessageId) => {
       const controller = conversations
       const active = controller?.registry.getActive()
@@ -1370,6 +1374,40 @@ async function openChangedPath(vscode: VsCodeLike, changeId: string, path: strin
   } catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error))
     await vscode.window.showErrorMessage(`打开变更文件失败：${message}`)
+  }
+}
+
+/**
+ * Explicit T8 native Diff from ChangeRecord SnapshotStore (AC-43).
+ * @param vscode - duck-typed vscode.
+ * @param changeId - ChangeRecord id.
+ */
+async function openChangedNativeDiff(vscode: VsCodeLike, changeId: string): Promise<void> {
+  const controller = conversations
+  if (controller === undefined) {
+    await vscode.window.showWarningMessage?.('无法打开 Diff：无活动控制器')
+    return
+  }
+  const record = controller.changes.getById(changeId)
+  if (record === undefined || record.snapshotRef === undefined) {
+    await vscode.window.showWarningMessage?.('完整 diff 不可用')
+    return
+  }
+  const snap = await controller.getChangeSnapshotStore().read(record.sessionId, record.snapshotRef)
+  if (snap === undefined) {
+    await vscode.window.showWarningMessage?.('完整 diff 不可用')
+    return
+  }
+  try {
+    await openChangeSnapshotDiff(vscode as DiffVsCodeLike, {
+      path: record.path,
+      oldText: snap.oldText,
+      newText: snap.newText,
+      changeId,
+    })
+  } catch (error) {
+    const message = redactSecrets(error instanceof Error ? error.message : String(error))
+    await vscode.window.showErrorMessage(`打开原生 Diff 失败：${message}`)
   }
 }
 

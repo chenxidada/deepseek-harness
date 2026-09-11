@@ -116,6 +116,11 @@ export interface ChatPanelHostDeps {
    */
   requestChangeOpen?: (changeId: string, path: string) => Promise<void>
   /**
+   * Explicit T8 native Diff open from ChangeRecord snapshot (AC-43).
+   * @param changeId - ChangeRecord id.
+   */
+  requestChangeOpenNativeDiff?: (changeId: string) => Promise<void>
+  /**
    * Scroll to the source assistant message (AC-19).
    * @param sourceMessageId - assistant message id.
    */
@@ -558,6 +563,10 @@ export class ChatPanelHost {
     }
     if (message.type === 'change/open') {
       await this.deps.requestChangeOpen?.(message.changeId, message.path)
+      return
+    }
+    if (message.type === 'change/open-native-diff') {
+      await this.deps.requestChangeOpenNativeDiff?.(message.changeId)
       return
     }
     if (message.type === 'change/reveal-source') {

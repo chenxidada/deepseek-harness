@@ -7,11 +7,14 @@
  */
 
 import { safeMarkdownBrowserSource } from '../markdown/safe-markdown.ts'
+import { atPathExtractBrowserSource } from '../code-context/at-path.ts'
 import type { ChatPanelHost } from './chat-panel-host.ts'
 import { probesBrowserSource } from './probes.ts'
 import { followStateBrowserSource } from './render/follow-state.ts'
 import { messageDomBrowserSource } from './render/message-dom.ts'
 import { activityDomBrowserSource } from './render/activity-dom.ts'
+import { changeDiffDomBrowserSource } from './render/change-diff-dom.ts'
+import { refCardsBrowserSource } from './render/ref-cards.ts'
 import { syncChromeBrowserSource } from './render/sync-chrome.ts'
 
 /** Duck-typed Webview used by the provider. */
@@ -145,7 +148,10 @@ export function buildThinChatHtml(cspSource?: string): string {
   const mdSource = safeMarkdownBrowserSource()
   const followSource = followStateBrowserSource()
   const messageDomSource = messageDomBrowserSource()
+  const atPathExtractSource = atPathExtractBrowserSource()
+  const refCardsSource = refCardsBrowserSource()
   const activityDomSource = activityDomBrowserSource()
+  const changeDiffDomSource = changeDiffDomBrowserSource()
   const syncSource = syncChromeBrowserSource()
   const probesSource = probesBrowserSource()
   return `<!DOCTYPE html>
@@ -393,7 +399,8 @@ export function buildThinChatHtml(cspSource?: string): string {
       margin: 0;
     }
     .change-list-expand,
-    .change-list-reveal-source {
+    .change-list-reveal-source,
+    .change-list-open-native-diff {
       flex: 0 0 auto;
       margin: 0;
       padding: 4px 8px;
@@ -478,6 +485,7 @@ export function buildThinChatHtml(cspSource?: string): string {
     #composer {
       flex-shrink: 0;
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       align-items: flex-end;
       padding: 8px 10px 10px;
@@ -485,6 +493,17 @@ export function buildThinChatHtml(cspSource?: string): string {
       background: var(--dsh-composer-bg);
       position: sticky;
       bottom: 0;
+    }
+    #composer-ref-cards {
+      flex: 1 1 100%;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      min-height: 0;
+    }
+    #composer-ref-cards[hidden] { display: none !important; }
+    #composer-ref-cards .composer-ref-card {
+      margin: 0;
     }
     #input {
       flex: 1;
@@ -571,6 +590,7 @@ export function buildThinChatHtml(cspSource?: string): string {
     <button id="followResumeBtn" type="button" data-testid="follow-resume" hidden>回到底部</button>
     <div id="reject"></div>
     <div id="composer" data-testid="composer">
+      <div id="composer-ref-cards" data-testid="composer-ref-cards" hidden></div>
       <textarea id="input" placeholder="Message…" aria-label="Message"></textarea>
       <button id="stopBtn" type="button" data-testid="stop" hidden>Stop</button>
       <button id="send" type="button" data-testid="send">Send</button>
@@ -586,6 +606,7 @@ export function buildThinChatHtml(cspSource?: string): string {
     const bannerEl = document.getElementById('banner');
     const rejectEl = document.getElementById('reject');
     const inputEl = document.getElementById('input');
+    const composerRefCardsEl = document.getElementById('composer-ref-cards');
     const sendEl = document.getElementById('send');
     const stopBtn = document.getElementById('stopBtn');
     const followResumeBtn = document.getElementById('followResumeBtn');
@@ -601,7 +622,10 @@ export function buildThinChatHtml(cspSource?: string): string {
     ${mdSource}
     ${followSource}
     ${messageDomSource}
+    ${atPathExtractSource}
+    ${refCardsSource}
     ${activityDomSource}
+    ${changeDiffDomSource}
     ${syncSource}
     ${probesSource}
     // Presentation probes (AD-CUX-1). No optimistic field in Phase 1 (AC-4).
@@ -676,236 +700,24 @@ export function buildThinChatHtml(cspSource?: string): string {
         });
       });
     }
-    function wireRefCards(root) {
-      root.querySelectorAll('button.ref-card[data-ref-path]').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var path = btn.getAttribute('data-ref-path') || '';
-          if (!path) return;
-          vscode.postMessage({ type: 'action/open-reference', path: path });
-        });
-      });
-    }
-    function escapeHtml(value) {
-      // Prefer extracted message-dom escapeHtml when present (AD-CUX-2).
-      return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
-    function renderUserTextWithRefCards(text) {
-      var source = String(text || '');
-      var re = /(?:^|[\s])(@(?:"([^"]+)"|([^\s"]+)))/g;
-      var html = '';
-      var last = 0;
-      var match;
-      while ((match = re.exec(source)) !== null) {
-        var token = match[1];
-        var path = match[2] || match[3] || '';
-        var tokenStart = match.index + (match[0].length - token.length);
-        html += escapeHtml(source.slice(last, tokenStart));
-        html += '<button type="button" class="ref-card" data-testid="ref-card" data-ref-path="'
-          + escapeHtml(path) + '" title="' + escapeHtml(path) + '">'
-          + escapeHtml(token) + '</button>';
-        last = tokenStart + token.length;
-      }
-      html += escapeHtml(source.slice(last));
-      return html;
-    }
     function renderBubble(msg) {
+      if (msg.kind === 'activity') {
+        return renderActivityBubble(document, msg, __dshProbes);
+      }
+      if (msg.kind === 'diff-summary') {
+        return renderDiffSummaryBubble(document, msg);
+      }
+      if (msg.kind === 'change-list') {
+        return renderChangeListBubble(document, msg);
+      }
       var div = document.createElement('div');
       div.className = 'msg bubble ' + msg.role;
       applyMessageIdentity(div, msg);
       if (msg.incomplete === true) div.setAttribute('data-incomplete', 'true');
       if (msg.streaming === true) div.setAttribute('data-streaming', 'true');
-      if (msg.kind === 'activity') {
-        return renderActivityBubble(document, msg, __dshProbes);
-      }
-      if (msg.kind === 'diff-summary') {
-        div.setAttribute('data-kind', 'diff-summary');
-        if (msg.sourceMessageId) {
-          div.setAttribute('data-source-message-id', String(msg.sourceMessageId));
-        }
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'diff-summary-entry';
-        btn.setAttribute('data-testid', 'diff-summary-entry');
-        btn.textContent = msg.text || '';
-        btn.addEventListener('click', function() {
-          // AC-30 / AD-CCD-4: reveal *corresponding* message change-list (carry identity).
-          var reveal = { type: 'action/reveal-change-list' };
-          if (msg.sourceMessageId) reveal.sourceMessageId = String(msg.sourceMessageId);
-          vscode.postMessage(reveal);
-        });
-        div.appendChild(btn);
-        return div;
-      }
-      if (msg.kind === 'change-list') {
-        div.setAttribute('data-kind', 'change-list');
-        div.setAttribute('data-testid', 'change-list');
-        var payload = msg.changeList || {};
-        if (payload.sourceMessageId) {
-          div.setAttribute('data-source-message-id', String(payload.sourceMessageId));
-        }
-        var wrap = document.createElement('div');
-        wrap.className = 'change-list';
-        if (payload.emptyNotice) {
-          wrap.className += ' change-list-empty';
-          wrap.setAttribute('data-empty', 'true');
-          wrap.textContent = msg.text || '本回合没有可展示的文件变更';
-          div.appendChild(wrap);
-          return div;
-        }
-        var header = document.createElement('div');
-        header.className = 'change-list-header';
-        header.textContent = msg.text || '';
-        wrap.appendChild(header);
-        var changes = payload.changes || [];
-        for (var i = 0; i < changes.length; i++) {
-          (function(change) {
-            var row = document.createElement('div');
-            row.className = 'change-list-row';
-            var openBtn = document.createElement('button');
-            openBtn.type = 'button';
-            openBtn.className = 'change-list-item';
-            openBtn.setAttribute('data-testid', 'change-list-item');
-            openBtn.setAttribute('data-change-id', String(change.changeId || ''));
-            openBtn.setAttribute('data-path', String(change.path || ''));
-            // AC-10: neutral status label only — no pending-write / approval phrasing.
-            var statusLabel = change.status === 'unreviewed' ? '未查看'
-              : change.status === 'reviewed' ? '已审阅'
-              : change.status === 'reverted' ? '已撤销'
-              : String(change.status || '');
-            openBtn.textContent = String(change.path || '') + ' · ' + String(change.kind || '')
-              + ' · +' + String(change.additions || 0) + '/-' + String(change.deletions || 0)
-              + ' · ' + statusLabel;
-            // AC-12a: primary click opens file + first changed line.
-            openBtn.addEventListener('click', function() {
-              vscode.postMessage({
-                type: 'change/open',
-                changeId: change.changeId,
-                path: change.path,
-              });
-            });
-            var expandBtn = document.createElement('button');
-            expandBtn.type = 'button';
-            expandBtn.className = 'change-list-expand';
-            expandBtn.setAttribute('data-testid', 'change-list-expand');
-            expandBtn.setAttribute('data-change-id', String(change.changeId || ''));
-            expandBtn.textContent = 'Diff';
-            expandBtn.title = '展开/折叠 diff';
-            var diffPane = document.createElement('div');
-            diffPane.className = 'change-diff-pane';
-            diffPane.hidden = true;
-            diffPane.setAttribute('data-testid', 'change-diff-pane');
-            diffPane.setAttribute('data-change-id', String(change.changeId || ''));
-            // AC-12: separate control expands on-demand diff (not primary click).
-            expandBtn.addEventListener('click', function() {
-              var expanded = expandBtn.classList.contains('is-expanded');
-              if (expanded) {
-                expandBtn.classList.remove('is-expanded');
-                openBtn.classList.remove('is-expanded');
-                diffPane.hidden = true;
-                return;
-              }
-              expandBtn.classList.add('is-expanded');
-              openBtn.classList.add('is-expanded');
-              diffPane.hidden = false;
-              diffPane.textContent = 'Loading diff…';
-              vscode.postMessage({ type: 'change/get-diff', changeId: change.changeId });
-            });
-            var sourceBtn = document.createElement('button');
-            sourceBtn.type = 'button';
-            sourceBtn.className = 'change-list-reveal-source';
-            sourceBtn.setAttribute('data-testid', 'change-list-reveal-source');
-            sourceBtn.textContent = '来源';
-            sourceBtn.title = '定位到来源助手消息';
-            // AC-19: change → source assistant bubble.
-            sourceBtn.addEventListener('click', function() {
-              if (!payload.sourceMessageId) return;
-              vscode.postMessage({
-                type: 'change/reveal-source',
-                sourceMessageId: String(payload.sourceMessageId),
-              });
-            });
-            var reviewBtn = document.createElement('button');
-            reviewBtn.type = 'button';
-            reviewBtn.className = 'change-list-mark-reviewed';
-            reviewBtn.setAttribute('data-testid', 'change-list-mark-reviewed');
-            reviewBtn.setAttribute('data-change-id', String(change.changeId || ''));
-            reviewBtn.textContent = '已审阅';
-            reviewBtn.title = '标记为已审阅（不写盘）';
-            reviewBtn.disabled = change.status === 'reverted' || change.status === 'reviewed';
-            reviewBtn.addEventListener('click', function() {
-              vscode.postMessage({ type: 'change/mark-reviewed', changeId: change.changeId });
-            });
-            var revertBtn = document.createElement('button');
-            revertBtn.type = 'button';
-            revertBtn.className = 'change-list-revert';
-            revertBtn.setAttribute('data-testid', 'change-list-revert');
-            revertBtn.setAttribute('data-change-id', String(change.changeId || ''));
-            revertBtn.textContent = '撤销';
-            revertBtn.title = '撤销此文件变更';
-            revertBtn.disabled = change.status === 'reverted';
-            revertBtn.addEventListener('click', function() {
-              vscode.postMessage({ type: 'change/revert', changeId: change.changeId });
-            });
-            var select = document.createElement('input');
-            select.type = 'checkbox';
-            select.className = 'change-list-select';
-            select.setAttribute('data-testid', 'change-list-select');
-            select.setAttribute('data-change-id', String(change.changeId || ''));
-            select.disabled = change.status === 'reverted';
-            row.appendChild(select);
-            row.appendChild(openBtn);
-            row.appendChild(expandBtn);
-            row.appendChild(sourceBtn);
-            row.appendChild(reviewBtn);
-            row.appendChild(revertBtn);
-            wrap.appendChild(row);
-            wrap.appendChild(diffPane);
-          })(changes[i]);
-        }
-        var batchBar = document.createElement('div');
-        batchBar.className = 'change-list-batch';
-        var revertManyBtn = document.createElement('button');
-        revertManyBtn.type = 'button';
-        revertManyBtn.className = 'change-list-revert-many';
-        revertManyBtn.setAttribute('data-testid', 'change-list-revert-many');
-        revertManyBtn.textContent = '撤销勾选';
-        revertManyBtn.addEventListener('click', function() {
-          var ids = [];
-          var boxes = wrap.querySelectorAll('.change-list-select:checked');
-          for (var bi = 0; bi < boxes.length; bi++) {
-            var id = boxes[bi].getAttribute('data-change-id');
-            if (id) ids.push(id);
-          }
-          if (ids.length === 0) return;
-          vscode.postMessage({ type: 'change/revert-many', changeIds: ids });
-        });
-        var revertAllBtn = document.createElement('button');
-        revertAllBtn.type = 'button';
-        revertAllBtn.className = 'change-list-revert-all';
-        revertAllBtn.setAttribute('data-testid', 'change-list-revert-all');
-        revertAllBtn.textContent = '全部撤销';
-        revertAllBtn.addEventListener('click', function() {
-          var ids = [];
-          for (var ci = 0; ci < changes.length; ci++) {
-            if (changes[ci].status === 'reverted') continue;
-            if (changes[ci].changeId) ids.push(String(changes[ci].changeId));
-          }
-          if (ids.length === 0) return;
-          vscode.postMessage({ type: 'change/revert-many', changeIds: ids });
-        });
-        batchBar.appendChild(revertManyBtn);
-        batchBar.appendChild(revertAllBtn);
-        wrap.appendChild(batchBar);
-        div.appendChild(wrap);
-        return div;
-      }
       if (msg.role === 'user') {
         div.setAttribute('data-kind', 'user-refs');
-        div.innerHTML = renderUserTextWithRefCards(msg.text || '');
+        fillUserBubbleWithRefCards(div, msg.text || '');
         wireRefCards(div);
         return div;
       }
@@ -927,6 +739,10 @@ export function buildThinChatHtml(cspSource?: string): string {
       // AC-22 / AC-1: connecting is never sendable live (Host also gates via ui/reject-send).
       // Uses extracted syncComposerDisabled — mode/connectionPhase are Host mirrors only.
       syncComposerDisabled(inputEl, sendEl, { mode: mode, connectionPhase: connectionPhase });
+      if (composerRefCardsEl) {
+        syncComposerRefCards(composerRefCardsEl, inputEl.value || '');
+        wireRefCards(composerRefCardsEl);
+      }
     }
     function syncConnection(msg) {
       var phase = msg.connectionPhase || 'idle';
@@ -1007,6 +823,9 @@ export function buildThinChatHtml(cspSource?: string): string {
       if (String(text).trim() === '') return;
       vscode.postMessage({ type: 'composer/send', text: text });
       inputEl.value = '';
+      if (composerRefCardsEl) {
+        syncComposerRefCards(composerRefCardsEl, '');
+      }
     }
     window.addEventListener('message', function(event) {
       var msg = event.data;
@@ -1087,6 +906,10 @@ export function buildThinChatHtml(cspSource?: string): string {
       }
       if (msg.type === 'composer/prefill') {
         inputEl.value = typeof msg.text === 'string' ? msg.text : '';
+        if (composerRefCardsEl) {
+          syncComposerRefCards(composerRefCardsEl, inputEl.value || '');
+          wireRefCards(composerRefCardsEl);
+        }
         if (!inputEl.disabled) {
           try { inputEl.focus(); } catch (e) {}
         }
@@ -1150,16 +973,7 @@ export function buildThinChatHtml(cspSource?: string): string {
           var pane = panes[pi];
           var paneChangeId = pane.getAttribute('data-change-id');
           if (paneChangeId !== String(msg.changeId || '')) continue;
-          if (!msg.available) {
-            pane.textContent = msg.reason || '完整 diff 不可用';
-            break;
-          }
-          // AC-23: textContent only — never interpret HTML / scripts / external URLs.
-          var oldPart = msg.oldText === null || msg.oldText === undefined
-            ? '(new file)\\n'
-            : String(msg.oldText);
-          var newPart = String(msg.newText || '');
-          pane.textContent = '--- before ---\\n' + oldPart + '\\n--- after ---\\n' + newPart;
+          fillChangeDiffPane(pane, msg);
           break;
         }
         return;
@@ -1208,6 +1022,12 @@ export function buildThinChatHtml(cspSource?: string): string {
         keepBottomIfFollowing();
       });
     }
+    inputEl.addEventListener('input', function() {
+      if (composerRefCardsEl) {
+        syncComposerRefCards(composerRefCardsEl, inputEl.value || '');
+        wireRefCards(composerRefCardsEl);
+      }
+    });
     inputEl.addEventListener('keydown', function(event) {
       var action = resolveComposerKeydown({
         key: event.key,

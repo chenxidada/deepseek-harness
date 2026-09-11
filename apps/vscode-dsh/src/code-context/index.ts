@@ -4,6 +4,7 @@
  */
 
 export {
+  atPathExtractBrowserSource,
   extractAtPathTokens,
   extractAtPaths,
   formatOfficialAtPath,

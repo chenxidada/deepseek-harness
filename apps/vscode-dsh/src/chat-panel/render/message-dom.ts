@@ -1,7 +1,7 @@
 /**
  * Message bubble DOM helpers for layer-A jsdom tests and Webview identity contracts.
- * Text/user/assistant paths are the Phase-1 extract; change-list remains in provider HTML
- * (short-term dual path documented in implementation.md) until phase-4.
+ * Text/user/assistant + identity helpers; change-list/diff live in `change-diff-dom.ts`
+ * (phase-4 / DEBT-CUX-001); user `@` cards live in `ref-cards.ts` (AD-CUX-11).
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/render/message-dom
  */
 
@@ -178,7 +178,7 @@ function cssEscape(value: string): string {
 
 /**
  * Browser-inline source for text-bubble identity + list helpers.
- * Change-list / diff-summary stay in provider HTML until phase-4 extract.
+ * Change-list / ref-cards are embedded via their own *BrowserSource helpers.
  */
 export function messageDomBrowserSource(): string {
   return `

@@ -226,7 +226,10 @@ describe('phase-2 change-list display', () => {
   it('AC-10: copy dictionary has no pending-write / awaiting-approval wording', () => {
     const html = buildThinChatHtml()
     // Assert product strings / status chip path — ignore comments.
-    expect(html).toContain("change.status === 'unreviewed' ? '未查看'")
+    // phase-4: status labels live in extracted changeStatusLabel (DEBT-CUX-001).
+    expect(html).toContain("status === 'unreviewed'")
+    expect(html).toContain("'未查看'")
+    expect(html).toContain('function changeStatusLabel')
     expect(html).not.toMatch(/['"]尚未写入['"]|['"]等待批准['"]|['"]待批准['"]|['"]未写入['"]/)
     expect(CHANGE_STATUS_UNREVIEWED_LABEL).toBe('未查看')
     expect(CHANGE_STATUS_UNREVIEWED_LABEL).not.toMatch(/写入|批准/)

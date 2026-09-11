@@ -184,6 +184,7 @@ export type WebviewToHostMessage =
   | { type: 'action/reveal-change-list'; sourceMessageId?: string }
   | { type: 'change/get-diff'; changeId: string }
   | { type: 'change/open'; changeId: string; path: string }
+  | { type: 'change/open-native-diff'; changeId: string }
   | { type: 'change/reveal-source'; sourceMessageId: string }
   | { type: 'change/mark-reviewed'; changeId: string }
   | { type: 'change/revert'; changeId: string }
@@ -250,6 +251,10 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'change/open') {
     if (typeof record.changeId !== 'string' || typeof record.path !== 'string') return undefined
     return { type: 'change/open', changeId: record.changeId, path: record.path }
+  }
+  if (type === 'change/open-native-diff') {
+    if (typeof record.changeId !== 'string') return undefined
+    return { type: 'change/open-native-diff', changeId: record.changeId }
   }
   if (type === 'change/reveal-source') {
     if (typeof record.sourceMessageId !== 'string') return undefined
