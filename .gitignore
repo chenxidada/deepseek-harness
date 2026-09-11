@@ -41,3 +41,8 @@ apps/web/dist/
 worktrees/
 .agents/worktrees/
 .typert-*/
+
+# Spec-driven workflow artifacts (local only; do not commit)
+.specdev/specs/
+.specdev/kb-pending/
+.specdev/active-workflow

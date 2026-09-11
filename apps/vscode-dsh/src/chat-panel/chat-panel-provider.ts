@@ -11,6 +11,7 @@ import type { ChatPanelHost } from './chat-panel-host.ts'
 import { probesBrowserSource } from './probes.ts'
 import { followStateBrowserSource } from './render/follow-state.ts'
 import { messageDomBrowserSource } from './render/message-dom.ts'
+import { activityDomBrowserSource } from './render/activity-dom.ts'
 import { syncChromeBrowserSource } from './render/sync-chrome.ts'
 
 /** Duck-typed Webview used by the provider. */
@@ -144,6 +145,7 @@ export function buildThinChatHtml(cspSource?: string): string {
   const mdSource = safeMarkdownBrowserSource()
   const followSource = followStateBrowserSource()
   const messageDomSource = messageDomBrowserSource()
+  const activityDomSource = activityDomBrowserSource()
   const syncSource = syncChromeBrowserSource()
   const probesSource = probesBrowserSource()
   return `<!DOCTYPE html>
@@ -414,6 +416,32 @@ export function buildThinChatHtml(cspSource?: string): string {
       max-height: 240px;
       overflow: auto;
     }
+    .msg.bubble.activity {
+      align-self: flex-start;
+      opacity: 0.95;
+      background: var(--vscode-editor-inactiveSelectionBackground, transparent);
+      border-left: 3px solid var(--vscode-charts-blue, var(--vscode-textLink-foreground));
+      font-size: 12px;
+      padding: 6px 8px;
+    }
+    .msg.bubble.activity.is-collapsed .activity-body { display: none; }
+    .activity-toggle {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: none;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font: inherit;
+      padding: 2px 0;
+    }
+    .activity-body {
+      margin-top: 4px;
+      padding-left: 12px;
+      color: var(--vscode-descriptionForeground, var(--dsh-status-fg));
+      white-space: pre-wrap;
+    }
     .ref-card {
       display: inline-flex;
       align-items: center;
@@ -573,6 +601,7 @@ export function buildThinChatHtml(cspSource?: string): string {
     ${mdSource}
     ${followSource}
     ${messageDomSource}
+    ${activityDomSource}
     ${syncSource}
     ${probesSource}
     // Presentation probes (AD-CUX-1). No optimistic field in Phase 1 (AC-4).
@@ -689,6 +718,9 @@ export function buildThinChatHtml(cspSource?: string): string {
       applyMessageIdentity(div, msg);
       if (msg.incomplete === true) div.setAttribute('data-incomplete', 'true');
       if (msg.streaming === true) div.setAttribute('data-streaming', 'true');
+      if (msg.kind === 'activity') {
+        return renderActivityBubble(document, msg, __dshProbes);
+      }
       if (msg.kind === 'diff-summary') {
         div.setAttribute('data-kind', 'diff-summary');
         if (msg.sourceMessageId) {
@@ -1014,6 +1046,13 @@ export function buildThinChatHtml(cspSource?: string): string {
         if (sessionId !== undefined && msg.sessionId !== sessionId) return;
         if (msg.text !== undefined && msg.appendText !== undefined) return;
         var wasStreaming = __dshProbes.get().streaming === true;
+        if (msg.activityStatus !== undefined) {
+          var activityEl = messagesEl.querySelector('[data-message-id="' + String(msg.messageId).replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"') + '"]');
+          if (activityEl && activityEl.getAttribute('data-kind') === 'activity') {
+            applyActivityStatus(activityEl, msg.activityStatus, __dshProbes);
+          }
+          return;
+        }
         var patched = patchMessageDom(messagesEl, msg.messageId, {
           text: msg.text,
           appendText: msg.appendText,

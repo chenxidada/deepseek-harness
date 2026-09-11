@@ -24,6 +24,16 @@ export {
 } from './message-dom.ts'
 
 export {
+  activityDomBrowserSource,
+  applyActivityExpanded,
+  applyActivityStatus,
+  mountActivityMessage,
+  renderActivityBubble,
+  toggleActivityExpanded,
+  type ActivityBubbleMessage,
+} from './activity-dom.ts'
+
+export {
   applyStreamingStatus,
   applyThemeKind,
   syncChromeBrowserSource,

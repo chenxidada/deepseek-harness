@@ -1,12 +1,18 @@
 /**
  * Product ReplayHydrator: one-shot fold of authoritative session events into
  * MessageStore + TimelineStore projections (AD-CU-2 / T-0a).
+ * Phase-3: also folds tool/call|result into conversation activity messages (AC-28).
  * @module @deepseek-ai/dsh-vscode-dsh/replay-hydrator
  */
 
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage } from './message-store.ts'
 import type { TimelineDiffHunk, TimelineItem } from './timeline-store.ts'
+import {
+  activityMessageId,
+  activityStatusFromToolResult,
+  type ActivityItem,
+} from './chat-panel/activity-types.ts'
 
 /** Minimal session event shape accepted by the hydrator (structural). */
 export interface HydratorSessionEvent {
@@ -81,6 +87,20 @@ export function hydrateFromAuthoritativeLog(
       ...incomplete && isLast ? { incomplete: true as const } : {},
     }
   })
+
+  // AC-28: rebuild conversation-inline activity items from tool events.
+  for (const activity of foldActivities(sessionId, events)) {
+    messages.push({
+      id: activity.id,
+      sessionId,
+      role: 'notice',
+      kind: 'activity',
+      text: `${activity.summary ?? activity.toolName ?? 'tool'} · ${activity.status}`,
+      turn: activity.turn,
+      activity,
+    })
+  }
+
   if (incomplete) {
     messages.push({
       id: randomUUID(),
@@ -107,6 +127,87 @@ export function hydrateFromAuthoritativeLog(
     return base
   })
   return { messages, timelineItems, foldedMessages, foldedTimeline }
+}
+
+/**
+ * Fold tool/call + tool/result (+ residual turn/end abort) into ActivityItem list (AC-28).
+ * Expanded always false on hydrate (presentation default).
+ */
+export function foldActivities(
+  sessionId: string,
+  events: readonly HydratorSessionEvent[],
+): ActivityItem[] {
+  const byCallId = new Map<string, ActivityItem>()
+  const ordered: ActivityItem[] = []
+  const ordinalByTurn = new Map<number, number>()
+
+  const pushRunning = (
+    turn: number,
+    callId: string | undefined,
+    toolName: string,
+  ): ActivityItem => {
+    const ordinal = ordinalByTurn.get(turn) ?? 0
+    ordinalByTurn.set(turn, ordinal + 1)
+    const id = activityMessageId(sessionId, turn, callId, ordinal)
+    const item: ActivityItem = {
+      id,
+      sessionId,
+      turn,
+      ordinal,
+      toolName,
+      ...callId === undefined ? {} : { callId },
+      status: 'running',
+      expanded: false,
+      summary: toolName,
+    }
+    ordered.push(item)
+    if (callId !== undefined) byCallId.set(callId, item)
+    return item
+  }
+
+  for (const event of events) {
+    const data = asRecord(event.data) ?? {}
+    if (event.type === 'tool/call') {
+      const turn = asNumber(data.turn) ?? 0
+      const callId = data.callId === undefined ? undefined : String(data.callId)
+      const toolName = typeof data.name === 'string' ? data.name : 'tool'
+      if (callId !== undefined && byCallId.has(callId)) continue
+      pushRunning(turn, callId, toolName)
+      continue
+    }
+    if (event.type === 'tool/result') {
+      const message = asRecord(data.message)
+      const source = asRecord(message?.source)
+      const callId = source?.callId === undefined && data.callId === undefined
+        ? undefined
+        : String(source?.callId ?? data.callId)
+      const status = activityStatusFromToolResult(data)
+      const turn = asNumber(data.turn) ?? 0
+      let item = callId === undefined ? undefined : byCallId.get(callId)
+      if (item === undefined) {
+        const toolName = typeof message?.name === 'string'
+          ? message.name
+          : typeof data.name === 'string'
+            ? data.name
+            : 'tool'
+        item = pushRunning(turn, callId, toolName)
+      }
+      item.status = status
+      continue
+    }
+    if (event.type === 'turn/end') {
+      const reason = asRecord(data.reason)
+      const kind = typeof reason?.kind === 'string' ? reason.kind : undefined
+      if (kind !== 'aborted' && kind !== 'interrupted') continue
+      const turn = asNumber(data.turn)
+      for (const item of ordered) {
+        if (item.status !== 'running') continue
+        if (turn !== undefined && item.turn !== turn) continue
+        item.status = 'aborted'
+      }
+    }
+  }
+  return ordered.map(item => ({ ...item }))
 }
 
 /**

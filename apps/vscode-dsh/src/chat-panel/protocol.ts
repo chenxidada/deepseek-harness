@@ -104,6 +104,8 @@ export type HostToWebviewMessage =
     appendText?: string
     incomplete?: boolean
     streaming?: boolean
+    /** Activity status transition for kind:activity bubbles. */
+    activityStatus?: 'running' | 'done' | 'failed' | 'aborted'
   }
   | {
     type: 'status/set'
@@ -175,6 +177,7 @@ export type WebviewToHostMessage =
   | { type: 'action/restore-more'; all?: boolean }
   | { type: 'action/retry-connect' }
   | { type: 'action/open-settings' }
+  | { type: 'action/toggle-activity'; activityId: string; expanded: boolean }
   | { type: 'action/copy-code'; text: string }
   | { type: 'action/open-workspace-diffs' }
   | { type: 'action/open-reference'; path: string }
@@ -203,6 +206,14 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'action/new-conversation') return { type: 'action/new-conversation' }
   if (type === 'action/retry-connect') return { type: 'action/retry-connect' }
   if (type === 'action/open-settings') return { type: 'action/open-settings' }
+  if (type === 'action/toggle-activity') {
+    if (typeof record.activityId !== 'string') return undefined
+    return {
+      type: 'action/toggle-activity',
+      activityId: record.activityId,
+      expanded: record.expanded === true,
+    }
+  }
   if (type === 'action/restore-more') {
     return {
       type: 'action/restore-more',

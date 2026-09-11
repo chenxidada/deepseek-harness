@@ -18,6 +18,11 @@ import type { IdeSessionHost } from './session-host.ts'
 import { TimelineStore } from './timeline-store.ts'
 import { MessageStore, type ChatMessage } from './message-store.ts'
 import {
+  activityMessageId,
+  activityStatusFromToolResult,
+  type ActivityItem,
+} from './chat-panel/activity-types.ts'
+import {
   ExtensionIndex,
   type OpenTabRecord,
   type WorkspaceStateLike,
@@ -1488,8 +1493,11 @@ export class ConversationController {
   /**
    * Mark live turn incomplete from `turn/end` aborted/interrupted (AC-13b).
    * Keeps partial assistant text; does not force-reset follow-state.
+   * Also converges any still-running activity items to aborted (AC-13c).
    */
   private markTurnIncomplete(sessionId: string, turn: number | undefined): void {
+    this.abortRunningActivities(sessionId, turn)
+
     const streaming = this.streamingAssistant.get(sessionId)
     if (streaming !== undefined) {
       this.messages.patch(sessionId, streaming.messageId, {
@@ -1542,6 +1550,151 @@ export class ConversationController {
     const tab = this.registry.getBySessionId(sessionId)
     if (tab !== undefined) this.registry.setStatus(tab.tabId, 'idle')
     this.panelHost?.pushStatus()
+  }
+
+  /**
+   * Fail-closed: any still-running activity items → aborted (AC-13c).
+   * Does **not** revert files.
+   */
+  private abortRunningActivities(sessionId: string, turn: number | undefined): void {
+    const list = this.messages.get(sessionId)
+    for (const message of list) {
+      if (message.kind !== 'activity') continue
+      if (message.activity?.status !== 'running') continue
+      if (turn !== undefined && message.turn !== turn && message.activity.turn !== turn) continue
+      const patched = this.messages.patch(sessionId, message.id, { activityStatus: 'aborted' })
+      if (patched === undefined) continue
+      const active = this.registry.getActive()
+      if (active !== undefined && active.sessionId === sessionId) {
+        this.panelHost?.pushPatch(sessionId, message.id, { activityStatus: 'aborted' })
+      }
+    }
+  }
+
+  /**
+   * Project tool/call into a conversation-inline activity bubble (AC-20/24).
+   */
+  private projectToolCallActivity(
+    sessionId: string,
+    data: Record<string, unknown>,
+    turn: number | undefined,
+  ): void {
+    const turnNumber = turn ?? 0
+    const callId = typeof data.callId === 'string' ? data.callId : undefined
+    const toolName = typeof data.name === 'string' ? data.name : 'tool'
+    const existing = callId === undefined
+      ? undefined
+      : this.messages.get(sessionId).find(m =>
+        m.kind === 'activity' && m.activity?.callId === callId,
+      )
+    if (existing !== undefined) return
+
+    const ordinal = this.messages.get(sessionId)
+      .filter(m => m.kind === 'activity' && (m.turn === turnNumber || m.activity?.turn === turnNumber))
+      .length
+    const id = activityMessageId(sessionId, turnNumber, callId, ordinal)
+    const activity: ActivityItem = {
+      id,
+      sessionId,
+      turn: turnNumber,
+      ordinal,
+      toolName,
+      ...callId === undefined ? {} : { callId },
+      status: 'running',
+      expanded: false,
+      summary: toolName,
+    }
+    const message: ChatMessage = {
+      id,
+      sessionId,
+      role: 'notice',
+      kind: 'activity',
+      text: `${toolName} · running`,
+      turn: turnNumber,
+      activity,
+    }
+    this.messages.append(sessionId, message)
+    const active = this.registry.getActive()
+    if (active !== undefined && active.sessionId === sessionId) {
+      this.panelHost?.pushAppend(message)
+    } else {
+      const tab = this.registry.getBySessionId(sessionId)
+      if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
+    }
+  }
+
+  /**
+   * Apply tool/result → activity status (done | failed | aborted).
+   */
+  private projectToolResultActivity(
+    sessionId: string,
+    data: Record<string, unknown>,
+    turn: number | undefined,
+  ): void {
+    const messageRec = asActivityRecord(data.message)
+    const source = asActivityRecord(messageRec?.source)
+    const callId = typeof source?.callId === 'string'
+      ? source.callId
+      : typeof data.callId === 'string'
+        ? data.callId
+        : typeof messageRec?.callId === 'string'
+          ? messageRec.callId
+          : undefined
+    const status = activityStatusFromToolResult(data)
+    const list = this.messages.get(sessionId)
+    const target = callId === undefined
+      ? [...list].reverse().find(m =>
+        m.kind === 'activity'
+        && m.activity?.status === 'running'
+        && (turn === undefined || m.turn === turn || m.activity?.turn === turn),
+      )
+      : list.find(m => m.kind === 'activity' && m.activity?.callId === callId)
+    if (target === undefined) {
+      // Result without prior call (rare) — synthesize a terminal activity.
+      if (turn === undefined && callId === undefined) return
+      const turnNumber = turn ?? 0
+      const ordinal = list.filter(m =>
+        m.kind === 'activity' && (m.turn === turnNumber || m.activity?.turn === turnNumber),
+      ).length
+      const toolName = typeof messageRec?.name === 'string'
+        ? messageRec.name
+        : typeof data.name === 'string'
+          ? data.name
+          : 'tool'
+      const id = activityMessageId(sessionId, turnNumber, callId, ordinal)
+      const activity: ActivityItem = {
+        id,
+        sessionId,
+        turn: turnNumber,
+        ordinal,
+        toolName,
+        ...callId === undefined ? {} : { callId },
+        status,
+        expanded: false,
+        summary: toolName,
+      }
+      const message: ChatMessage = {
+        id,
+        sessionId,
+        role: 'notice',
+        kind: 'activity',
+        text: `${toolName} · ${status}`,
+        turn: turnNumber,
+        activity,
+      }
+      this.messages.append(sessionId, message)
+      const active = this.registry.getActive()
+      if (active !== undefined && active.sessionId === sessionId) {
+        this.panelHost?.pushAppend(message)
+      }
+      return
+    }
+    const patched = this.messages.patch(sessionId, target.id, { activityStatus: status })
+    if (patched === undefined) return
+    const active = this.registry.getActive()
+    if (active !== undefined && active.sessionId === sessionId) {
+      this.panelHost?.pushPatch(sessionId, target.id, { activityStatus: status })
+    }
   }
 
   /** Fail-closed: clear all in-flight streaming projections (AC-19). */
@@ -1655,10 +1808,12 @@ export class ConversationController {
     if (record.type === 'tool/call') {
       const args = typeof data.arguments === 'string' ? data.arguments : undefined
       void this.attributor.noteToolCall(sessionId, args)
+      this.projectToolCallActivity(sessionId, data, turn)
       return
     }
     if (record.type === 'tool/result') {
       if (turn !== undefined) this.attributor.ingestToolResult(sessionId, turn, data.meta)
+      this.projectToolResultActivity(sessionId, data, turn)
       return
     }
     if (record.type === 'assistant/chunk') {
@@ -1707,4 +1862,9 @@ function firstAssistantText(message: Record<string, unknown> | undefined): strin
     if (record.type === 'text' && typeof record.text === 'string') return record.text
   }
   return undefined
+}
+
+function asActivityRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
 }

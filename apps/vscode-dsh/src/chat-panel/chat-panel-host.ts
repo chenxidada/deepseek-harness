@@ -351,6 +351,7 @@ export class ChatPanelHost {
       appendText?: string
       incomplete?: boolean
       streaming?: boolean
+      activityStatus?: 'running' | 'done' | 'failed' | 'aborted'
     },
   ): void {
     if (update.text !== undefined && update.appendText !== undefined) return
@@ -364,6 +365,9 @@ export class ChatPanelHost {
       ...update.appendText !== undefined ? { appendText: update.appendText } : {},
       ...update.incomplete !== undefined ? { incomplete: update.incomplete } : {},
       ...update.streaming !== undefined ? { streaming: update.streaming } : {},
+      ...update.activityStatus !== undefined
+        ? { activityStatus: update.activityStatus }
+        : {},
     })
   }
 
@@ -504,6 +508,10 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/stop') {
       await this.deps.requestStop?.()
+      return
+    }
+    if (message.type === 'action/toggle-activity') {
+      // Presentation-owned: Webview already toggled DOM + probes; Host acknowledges without reorder.
       return
     }
     if (message.type === 'action/new-conversation') {

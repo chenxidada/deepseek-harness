@@ -7,6 +7,7 @@
  */
 
 import type { FollowState } from './render/follow-state.ts'
+import type { ActivityStatus } from './activity-types.ts'
 
 /**
  * Probe snapshot.
@@ -19,8 +20,8 @@ export interface ChatUxProbes {
   followState: FollowState
   /** Expand seats (message / activity id → expanded). */
   expanded: Record<string, boolean>
-  /** Activity item seats — reserved; filled when activity stream lands. */
-  activity?: Record<string, { status: string; expanded: boolean }>
+  /** Activity item seats — filled by product activity path (GAP-CUX-001). */
+  activity?: Record<string, { status: ActivityStatus | string; expanded: boolean }>
   /** P-接续父 Tab E2 — Host mirror only. */
   parentReadonly?: boolean
   /** Continue chrome sealed — Host mirror only. */
@@ -41,10 +42,10 @@ export interface ChatUxProbeStore {
     parentReadonly?: boolean
     continueSealed?: boolean
   }): void
-  /** Optional activity seat updater (skeleton). */
+  /** Product activity seat updater (status + expanded). */
   setActivity(
     id: string,
-    value: { status: string; expanded: boolean } | undefined,
+    value: { status: ActivityStatus | string; expanded: boolean } | undefined,
   ): void
 }
 

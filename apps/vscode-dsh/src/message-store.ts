@@ -5,6 +5,9 @@
  */
 
 import type { ChangeListPayload } from './change/types.ts'
+import type { ActivityItem, ActivityStatus } from './chat-panel/activity-types.ts'
+
+export type { ActivityItem, ActivityStatus } from './chat-panel/activity-types.ts'
 
 /** One projected chat bubble for the Conversation Webview. */
 export interface ChatMessage {
@@ -14,8 +17,8 @@ export interface ChatMessage {
   sessionId: string
   /** Speaker role. */
   role: 'user' | 'assistant' | 'notice'
-  /** MVP content kind (text primary). */
-  kind: 'text' | 'subagent' | 'diff-summary' | 'notice' | 'change-list'
+  /** Content kind (text primary + activity stream). */
+  kind: 'text' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity'
   /** Full readable text (user prompt or complete assistant turn). */
   text: string
   /** Optional turn index when known. */
@@ -34,6 +37,8 @@ export interface ChatMessage {
    * Also mirrored on `changeList.sourceMessageId` for list bubbles.
    */
   sourceMessageId?: string
+  /** Conversation-inline tool/step activity payload (phase-3). */
+  activity?: ActivityItem
 }
 
 /** Incremental patch for a projected message (AD-CUX-10). `text` XOR `appendText`. */
@@ -46,6 +51,8 @@ export interface MessagePatch {
   incomplete?: boolean
   /** Streaming chrome flag on the message. */
   streaming?: boolean
+  /** Activity status transition (running → done|failed|aborted). */
+  activityStatus?: ActivityStatus
 }
 
 /**
@@ -100,6 +107,10 @@ export class MessageStore {
     if (update.streaming !== undefined) {
       if (update.streaming) next.streaming = true
       else delete next.streaming
+    }
+    if (update.activityStatus !== undefined && next.activity !== undefined) {
+      next.activity = { ...next.activity, status: update.activityStatus }
+      next.text = activityLabel(next.activity)
     }
     list[idx] = next
     this.emit()
@@ -208,5 +219,11 @@ function copyMessage(message: ChatMessage): ChatMessage {
           changes: message.changeList.changes.map(c => ({ ...c })),
         },
       },
+    ...message.activity === undefined ? {} : { activity: { ...message.activity } },
   }
+}
+
+function activityLabel(activity: ActivityItem): string {
+  const name = activity.summary ?? activity.toolName ?? 'tool'
+  return `${name} · ${activity.status}`
 }
