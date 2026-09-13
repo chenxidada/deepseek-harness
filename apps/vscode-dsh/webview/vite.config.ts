@@ -9,6 +9,16 @@ export default defineConfig({
   plugins: [react()],
   root: webviewRoot,
   base: './',
+  resolve: {
+    alias: {
+      '@dsh/safe-markdown': resolve(webviewRoot, '../src/markdown/safe-markdown.ts'),
+    },
+  },
+  server: {
+    fs: {
+      allow: [resolve(webviewRoot, '..')],
+    },
+  },
   build: {
     outDir: resolve(webviewRoot, 'dist'),
     emptyOutDir: true,

@@ -15,6 +15,27 @@ export type ChromeIntent =
   | { type: 'ui/history-close' }
   | { type: 'ui/history-select'; sessionId: string }
   | { type: 'ui/search-open' }
+  | { type: 'ui/delete-request'; sessionId: string }
+  | { type: 'ui/open-timeline' }
+  | { type: 'action/stop' }
+  | { type: 'action/continue' }
+  | { type: 'action/delete' }
+  | { type: 'action/copy-code'; text: string }
+  | { type: 'action/copy-message'; messageId: string; text?: string }
+  | { type: 'action/retry'; messageId: string }
+  | { type: 'action/edit-resend'; messageId: string; text: string }
+  | { type: 'action/branch'; turn: number }
+  | { type: 'action/toggle-activity'; activityId: string; expanded: boolean }
+  | { type: 'action/search-sessions'; text?: string; path?: string }
+  | { type: 'action/open-search-hit'; sessionId: string }
+  | { type: 'action/open-reference'; path: string }
+  | { type: 'action/reveal-change-list'; sourceMessageId?: string }
+  | { type: 'action/open-workspace-diffs' }
+  | { type: 'change/open'; changeId: string; path: string }
+  | { type: 'change/open-native-diff'; changeId: string }
+  | { type: 'change/get-diff'; changeId: string }
+  | { type: 'change/mark-reviewed'; changeId: string }
+  | { type: 'change/revert'; changeId: string }
 
 export interface MessageBridge {
   applyFrame(frame: unknown): void

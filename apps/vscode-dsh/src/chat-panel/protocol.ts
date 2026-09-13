@@ -188,6 +188,8 @@ export type HostToWebviewMessage =
     activeTabId: string | undefined
     tabs: Array<{
       tabId: string
+      /** Bound session for tab-context delete (Q-6 / AC-13c). */
+      sessionId: string
       title: string
       status: 'idle' | 'running' | 'error' | 'disconnected'
       unread: boolean
@@ -195,6 +197,7 @@ export type HostToWebviewMessage =
       mode: 'live' | 'replay'
       parentHint?: string
     }>
+
   }
   | {
     /** In-panel history window projection (AD-ECP-3 / AC-50a). */
@@ -223,6 +226,10 @@ export type WebviewToHostMessage =
   | { type: 'ui/history-close' }
   | { type: 'ui/history-select'; sessionId: string }
   | { type: 'ui/search-open' }
+  /** Webview modal confirmed delete (AD-ECP-6); Host must skip native confirm. */
+  | { type: 'ui/delete-request'; sessionId: string }
+  /** Open Timeline view (AD-ECP-7 weaken; overflow entry). */
+  | { type: 'ui/open-timeline' }
   | { type: 'action/delete' }
   | { type: 'action/continue' }
   | { type: 'action/stop' }
@@ -273,6 +280,11 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'ui/history-open') return { type: 'ui/history-open' }
   if (type === 'ui/history-close') return { type: 'ui/history-close' }
   if (type === 'ui/search-open') return { type: 'ui/search-open' }
+  if (type === 'ui/open-timeline') return { type: 'ui/open-timeline' }
+  if (type === 'ui/delete-request') {
+    if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
+    return { type: 'ui/delete-request', sessionId: record.sessionId }
+  }
   if (type === 'ui/tab-select') {
     if (typeof record.tabId !== 'string' || record.tabId === '') return undefined
     return { type: 'ui/tab-select', tabId: record.tabId }

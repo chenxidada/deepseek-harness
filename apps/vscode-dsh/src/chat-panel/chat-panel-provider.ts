@@ -3,6 +3,10 @@
  * Phase 1 (AD-ECP-1/8): Editor WebviewPanel is the primary chat surface.
  * This sidebar view is demoted to a migration launcher (AC-4/5) — not a second
  * writable messages path. Production Panel HTML is React SPA via editor-chat-panel.
+ *
+ * `buildThinChatHtml` is **fixture-only** as of Phase 2 (AD-ECP-8 / DEBT-ECP-001):
+ * not used by production Panel or sidebar. Legacy layer-A suites may still import it;
+ * those suites are NOT feature UI PASS evidence (AD-ECP-10).
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/chat-panel-provider
  */
 

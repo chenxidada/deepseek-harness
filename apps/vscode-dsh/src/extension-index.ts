@@ -45,6 +45,9 @@ export interface HistoryListRow {
   /** List hint text; empty when capability is unknown (no「可继续」). */
   continueHint: string
   firstUserPreview?: string
+  /** Parent session title for fork lineage (AC-57 / UI-AC-43). */
+  parentTitle?: string
+  parentSessionId?: string
 }
 
 /**
@@ -196,16 +199,30 @@ export class ExtensionIndex {
    * @returns title / mtime / capability hint rows sorted by mtime desc.
    */
   listHistorySessions(): HistoryListRow[] {
+    const byId = new Map(
+      this.snapshot.sessions.map(row => [row.sessionId, row] as const),
+    )
     return this.snapshot.sessions
       .filter(row => row.deleted !== true && isHistoryEligibleSession(row))
-      .map(row => ({
-        sessionId: row.sessionId,
-        title: row.title,
-        mtime: row.mtime,
-        continueCapability: row.continueCapability ?? 'unknown',
-        continueHint: continueCapabilityListHint(row.continueCapability ?? 'unknown'),
-        ...row.firstUserPreview === undefined ? {} : { firstUserPreview: row.firstUserPreview },
-      }))
+      .map((row) => {
+        const parent = row.parentSessionId !== undefined
+          ? byId.get(row.parentSessionId)
+          : undefined
+        const parentTitle = parent?.title
+          ?? (typeof row.forkLabel === 'string' && row.forkLabel.startsWith('派生自 ')
+            ? row.forkLabel.slice('派生自 '.length)
+            : undefined)
+        return {
+          sessionId: row.sessionId,
+          title: row.title,
+          mtime: row.mtime,
+          continueCapability: row.continueCapability ?? 'unknown',
+          continueHint: continueCapabilityListHint(row.continueCapability ?? 'unknown'),
+          ...row.firstUserPreview === undefined ? {} : { firstUserPreview: row.firstUserPreview },
+          ...row.parentSessionId === undefined ? {} : { parentSessionId: row.parentSessionId },
+          ...parentTitle === undefined || parentTitle === '' ? {} : { parentTitle },
+        }
+      })
       .sort((a, b) => b.mtime - a.mtime)
   }
 

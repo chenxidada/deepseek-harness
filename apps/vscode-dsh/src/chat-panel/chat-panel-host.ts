@@ -49,8 +49,15 @@ export interface ChatPanelHostDeps {
    * @param text - trimmed user text.
    */
   acceptSend: (text: string) => Promise<{ messageId: string; sessionId: string; tabId: string }>
-  /** Optional delete action requested from the panel. */
+  /** Optional delete action requested from the panel (may still native-confirm). */
   requestDelete?: () => Promise<void>
+  /**
+   * Webview-modal-confirmed delete (AD-ECP-6 / AC-60).
+   * Must call deleteSession/deleteConversation with `{ confirmed: true }` — no second confirm.
+   */
+  requestDeleteConfirmed?: (sessionId: string) => Promise<void>
+  /** Open Timeline view from overflow (AD-ECP-7). */
+  requestOpenTimeline?: () => Promise<void>
   /** Optional Continue action (AD-CU-8). */
   requestContinue?: () => Promise<void>
   /** Optional Stop / cancel active turn (AD-CUX-3 / I-真). */
@@ -418,12 +425,14 @@ export class ChatPanelHost {
       activeTabId: snap.activeTabId,
       tabs: snap.tabs.map(tab => ({
         tabId: tab.tabId,
+        sessionId: tab.sessionId,
         title: tab.title?.trim() || tab.sessionId.slice(0, 8),
         status: tab.status,
         unread: tab.unread,
         approvalBadge: tab.approvalBadge,
         mode: tab.mode,
       })),
+
     })
   }
 
@@ -679,6 +688,17 @@ export class ChatPanelHost {
     }
     if (message.type === 'ui/search-open') {
       await this.deps.requestOpenSearch?.()
+      return
+    }
+    if (message.type === 'ui/delete-request') {
+      await this.deps.requestDeleteConfirmed?.(message.sessionId)
+      this.historyOpen = true
+      this.pushHistoryFrame()
+      this.pushFullState()
+      return
+    }
+    if (message.type === 'ui/open-timeline') {
+      await this.deps.requestOpenTimeline?.()
       return
     }
     if (message.type === 'action/delete') {
