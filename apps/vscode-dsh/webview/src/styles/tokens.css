@@ -1,0 +1,70 @@
+/**
+ * Theme-first tokens for Editor Chat Panel (UF0 / UI-AC-2).
+ * Uses --vscode-* with --dsh-* aliases; no external fonts.
+ */
+
+:root {
+  --dsh-fg: var(--vscode-foreground);
+  --dsh-bg: var(--vscode-editor-background);
+  --dsh-panel-bg: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --dsh-border: var(--vscode-panel-border, var(--vscode-widget-border));
+  --dsh-muted: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  --dsh-tab-active-bg: var(--vscode-tab-activeBackground, var(--vscode-editor-background));
+  --dsh-tab-inactive-bg: var(--vscode-tab-inactiveBackground, transparent);
+  --dsh-tab-active-fg: var(--vscode-tab-activeForeground, var(--vscode-foreground));
+  --dsh-tab-inactive-fg: var(--vscode-tab-inactiveForeground, var(--vscode-descriptionForeground));
+  /* Canonical visual-spec §4 names */
+  --dsh-btn-bg: var(--vscode-button-background);
+  --dsh-btn-fg: var(--vscode-button-foreground);
+  --dsh-btn-secondary-bg: var(--vscode-button-secondaryBackground, transparent);
+  /* Legacy aliases kept for existing component refs */
+  --dsh-button-bg: var(--dsh-btn-bg);
+  --dsh-button-fg: var(--dsh-btn-fg);
+  --dsh-button-hover: var(--vscode-button-hoverBackground);
+  --dsh-input-bg: var(--vscode-input-background);
+  --dsh-input-fg: var(--vscode-input-foreground);
+  --dsh-input-border: var(--vscode-input-border, var(--dsh-border));
+  --dsh-list-hover: var(--vscode-list-hoverBackground);
+  --dsh-list-active: var(--vscode-list-activeSelectionBackground);
+  --dsh-bubble-user: var(--vscode-editor-inactiveSelectionBackground);
+  --dsh-bubble-assistant: var(--vscode-editor-selectionHighlightBackground, var(--vscode-editor-inactiveSelectionBackground));
+  --dsh-focus: var(--vscode-focusBorder, var(--vscode-button-background));
+  --dsh-chrome-height: 36px;
+  --dsh-status-fg: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  --dsh-radius-sm: 4px;
+  --dsh-radius-md: 6px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--dsh-fg);
+  background: var(--dsh-bg);
+}
+
+button:focus-visible,
+textarea:focus-visible,
+[data-testid='tab-item']:focus-visible,
+[data-testid='history-row']:focus-visible {
+  outline: 1px solid var(--dsh-focus);
+  outline-offset: 1px;
+}
+
+button:hover:not(:disabled),
+[data-testid='tab-item']:hover,
+[data-testid='history-row']:hover {
+  filter: brightness(1.05);
+}

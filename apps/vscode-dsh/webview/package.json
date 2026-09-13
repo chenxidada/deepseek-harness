@@ -1,0 +1,21 @@
+{
+  "name": "@deepseek-ai/dsh-vscode-dsh-webview",
+  "private": true,
+  "version": "0.1.2-rc.1",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^6.0.3",
+    "vite": "^6.0.0"
+  }
+}

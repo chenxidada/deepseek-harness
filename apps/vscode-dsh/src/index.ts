@@ -79,8 +79,13 @@ export {
   ChatPanelHost,
   FakeWebviewPort,
   CHAT_PANEL_VIEW_ID,
+  EDITOR_CHAT_PANEL_VIEW_TYPE,
   buildThinChatHtml,
+  buildSidebarMigrationHtml,
+  buildEditorChatSpaHtml,
   canRegisterChatPanel,
+  canCreateEditorChatPanel,
+  createEditorChatPanelController,
   registerChatPanelProvider,
   parseWebviewToHostMessage,
   type HostToWebviewMessage,
@@ -88,6 +93,7 @@ export {
   type PanelMode,
   type RejectSendReason,
   type SendGateResult,
+  type EditorChatPanelController,
 } from './chat-panel/index.ts'
 export {
   timelineTreeItems,

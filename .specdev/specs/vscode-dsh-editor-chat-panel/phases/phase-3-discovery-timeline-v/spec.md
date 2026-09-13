@@ -1,6 +1,8 @@
+> ⚠️ **OBSOLETE（2026-09-13）** — 2-Phase plan 下无此 ID；职责并入 `phase-2-stream-capabilities-full-history`。见同目录 `OBSOLETE.md`。禁止实施。
+
 # Phase 3: 历史搜索入口、Timeline 弱化与层 V 收齐
 
-**Phase ID:** `phase-3-discovery-timeline-v`  
+**Phase ID:** `phase-3-discovery-timeline-v`
 **DAG 依赖:** `phase-2-usable-stream`
 
 ## 目标

@@ -1,6 +1,8 @@
+> ⚠️ **OBSOLETE（2026-09-13）** — 已由 `phase-1-shell-tabs-basic-history` 取代。见同目录 `OBSOLETE.md`。禁止实施。
+
 # Phase 1: 编辑器壳层与顶栏多会话 Tab
 
-**Phase ID:** `phase-1-editor-shell-tabs`  
+**Phase ID:** `phase-1-editor-shell-tabs`
 **DAG 依赖:** 无
 
 ## 目标

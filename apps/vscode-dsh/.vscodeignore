@@ -1,0 +1,20 @@
+# Source / tooling (do not ship)
+webview/src/**
+webview/node_modules/**
+webview/index.html
+webview/vite.config.ts
+webview/tsconfig.json
+webview/package.json
+src/**
+tests/**
+test-scripts/**
+**/*.ts
+!**/*.d.ts
+tsconfig.json
+README.md
+
+# Keep production SPA assets
+!webview/dist/**
+!media/**
+!lib/**
+!package.json
