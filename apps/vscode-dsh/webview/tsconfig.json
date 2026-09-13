@@ -11,7 +11,11 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@dsh/safe-markdown": ["../src/markdown/safe-markdown.ts"]
+    }
   },
   "include": ["src"]
 }

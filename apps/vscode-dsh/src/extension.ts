@@ -1308,6 +1308,13 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestDelete: async () => {
       await runDeleteActive(vscode)
     },
+    requestDeleteConfirmed: async (sessionId) => {
+      await runDeleteConfirmed(vscode, sessionId)
+    },
+    requestOpenTimeline: async () => {
+      // Reveal activity-bar container; Timeline is a sibling view under `dsh`.
+      await vscode.commands.executeCommand?.('workbench.view.extension.dsh')
+    },
     requestContinue: async () => {
       // DEBT-003: Webview Continue must auto-start like dsh.continueConversation.
       await ensureHostForSend(vscode)
@@ -1527,6 +1534,7 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
         updatedAt: new Date(row.mtime).toISOString(),
         previewOrPath: row.firstUserPreview?.trim() || row.continueHint || row.sessionId.slice(0, 8),
         ...row.continueHint ? { continueHint: row.continueHint } : {},
+        ...row.parentTitle ? { parentTitle: row.parentTitle } : {},
       }))
     },
     requestOpenHistorySession: async (sessionId) => {
@@ -1952,6 +1960,40 @@ async function runDeleteActive(vscode: VsCodeLike, tabIdArg?: string): Promise<v
       const message = redactSecrets(error instanceof Error ? error.message : String(error))
       await vscode.window.showErrorMessage(`Failed to delete conversation: ${message}`)
     }
+  }
+}
+
+/**
+ * Webview-modal-confirmed delete (AD-ECP-6 / AC-60).
+ * Single backend path: deleteSession({ confirmed: true }) — no native re-confirm.
+ */
+async function runDeleteConfirmed(vscode: VsCodeLike, sessionId: string): Promise<void> {
+  const controller = requireConversations()
+  if (controller === undefined) {
+    await vscode.window.showErrorMessage('Host 连接后可删除')
+    return
+  }
+  if (sessionId === '') {
+    await vscode.window.showInformationMessage('No conversation to delete.')
+    return
+  }
+  try {
+    const deleted = await controller.deleteSession(sessionId, { confirmed: true })
+    timelineRefresh?.()
+    historyRefresh?.()
+    panelHost?.pushFullState()
+    if (deleted.outcome === 'deleted') {
+      await vscode.window.showInformationMessage(
+        `Deleted conversation ${shortId(deleted.sessionId)}.`,
+      )
+    } else if (deleted.outcome === 'host-not-ready') {
+      await vscode.window.showErrorMessage('Host 连接后可删除')
+    } else if (deleted.outcome === 'missing') {
+      await vscode.window.showInformationMessage('No conversation to delete.')
+    }
+  } catch (error) {
+    const message = redactSecrets(error instanceof Error ? error.message : String(error))
+    await vscode.window.showErrorMessage(`Failed to delete conversation: ${message}`)
   }
 }
 

@@ -2,13 +2,13 @@
   "slug": "vscode-dsh-editor-chat-panel",
   "description": "对话面板从侧栏 WebviewView 升级为编辑器区 WebviewPanel，面板内多会话 Tab；补齐完整可用级 UI，整合既有 DSH 能力展示（参考 Cursor 式顶栏 Tab 对话体验）",
   "created": "2026-09-11T06:56:26Z",
-  "current_stage": "phase-implementation",
-  "current_phase": "phase-2-stream-capabilities-full-history",
+  "current_stage": "completed",
+  "current_phase": null,
   "loop_count": 0,
   "human_gates": {
     "hg1": "passed",
     "hg2": "passed",
-    "hg3": "pending"
+    "hg3": "passed"
   },
   "phases": {
     "phase-1-shell-tabs-basic-history": {
@@ -17,22 +17,30 @@
       "verifier": "completed",
       "hg3": "passed",
       "verification_verdict": "PARTIAL",
-      "note": "User accepted PARTIAL (layer V blocked in CI host); merge to vscode-dsh 2026-09-13"
+      "note": "User accepted PARTIAL (layer V blocked); merge to vscode-dsh 2026-09-13"
     },
     "phase-2-stream-capabilities-full-history": {
-      "implementer": "pending",
-      "reviewer": "pending",
-      "verifier": "pending"
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed",
+      "code_explorer": "completed",
+      "phase_entry_gate": "passed",
+      "debt_strategy": "a_resolve_in_phase",
+      "last_review_verdict": "SHOULD-FIX",
+      "verification_verdict": "PARTIAL",
+      "hg3": "passed",
+      "must_fix_loop": 2,
+      "note": "User accepted PARTIAL (layer V blocked) + Q-6 tab context delete; merge to vscode-dsh 2026-09-13"
     }
   },
-  "last_update": "2026-09-13T14:10:00Z",
+  "last_update": "2026-09-13T15:45:00Z",
   "command": "implement",
-  "notes": "HG-3 Phase 1 PASSED (user accepted PARTIAL). Merged to vscode-dsh NOT master. Next: Phase Entry Gate (debt) then phase-2-stream-capabilities-full-history.",
+  "notes": "Feature complete (2/2 phases). Both HG-3 accepted PARTIAL (layer V deferred). Merged to vscode-dsh NOT master.",
   "git": {
     "base_branch": "vscode-dsh",
     "merge_target": "vscode-dsh",
     "phase_branch": null,
-    "last_merged_phase_branch": "impl-phase-1-shell-tabs-basic-history",
+    "last_merged_phase_branch": "impl-phase-2-stream-capabilities-full-history",
     "do_not_merge_master": true
   },
   "ui_requirements": {
@@ -43,6 +51,8 @@
   "pending_decisions": {
     "HG-2": "passed",
     "HG-UI": "passed",
-    "HG-3-phase-1": "passed_accept_partial"
+    "HG-3-phase-1": "passed_accept_partial",
+    "phase-entry-gate-phase-2": "a_resolve_in_phase",
+    "HG-3-phase-2": "passed_accept_partial"
   }
 }
