@@ -54,9 +54,12 @@ import {
 import { EMPTY_LIVE_TITLE } from './conversation-titles.ts'
 import {
   ChatPanelHost,
+  canCreateEditorChatPanel,
   canRegisterChatPanel,
+  createEditorChatPanelController,
   registerChatPanelProvider,
   type ChatPanelHostDeps,
+  type EditorChatPanelController,
   type WebviewViewLike,
 } from './chat-panel/index.ts'
 import {
@@ -123,6 +126,29 @@ interface VsCodeLike {
       provider: unknown,
       options?: unknown,
     ): { dispose(): void }
+    createWebviewPanel?(
+      viewType: string,
+      title: string,
+      showOptions: unknown,
+      options?: unknown,
+    ): {
+      webview: {
+        html: string
+        cspSource?: string
+        options?: unknown
+        postMessage(message: unknown): Promise<boolean> | boolean | void
+        onDidReceiveMessage(listener: (message: unknown) => void): { dispose(): void }
+        asWebviewUri?(localResource: unknown): { toString(): string }
+      }
+      title?: string
+      visible?: boolean
+      reveal?(column?: unknown, preserveFocus?: boolean): void
+      dispose(): void
+      onDidDispose(listener: () => void): { dispose(): void }
+      onDidChangeViewState?(listener: (e: { webviewPanel: { visible?: boolean } }) => void): {
+        dispose(): void
+      }
+    }
     createStatusBarItem?(alignment?: number, priority?: number): {
       text: string
       tooltip?: string
@@ -230,7 +256,10 @@ interface VsCodeLike {
     fire(data?: T): void
     dispose(): void
   }
-  Uri?: DiffVsCodeLike['Uri']
+  Uri?: DiffVsCodeLike['Uri'] & {
+    file?(path: string): { fsPath?: string; scheme?: string; toString?: () => string }
+  }
+  ViewColumn?: { Beside?: unknown; Active?: unknown; One?: unknown }
   StatusBarAlignment?: { Left: number; Right: number }
   ColorThemeKind?: { Light: number; Dark: number; HighContrast: number; HighContrastLight: number }
 }
@@ -254,7 +283,8 @@ interface ExtensionContextLike {
 let host: IdeSessionHost | undefined
 let conversations: ConversationController | undefined
 let panelHost: ChatPanelHost | undefined
-let selectionMetaStore = new SelectionMetaStore()
+let editorChatPanel: EditorChatPanelController | undefined
+const selectionMetaStore = new SelectionMetaStore()
 /**
  * Last text written via copy-message / copy-code for layer-B observability (AC-30).
  * Cleared only when a new copy succeeds.
@@ -314,6 +344,8 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   hostCreateCount = 0
   conversationView = undefined
   conversationVisible = false
+  editorChatPanel?.dispose()
+  editorChatPanel = undefined
   vscodeWorkspaceFolders = () => vscode.workspace.workspaceFolders
   autoReady = new AutoReadyCoordinator({
     getController: () => conversations,
@@ -352,10 +384,45 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   const startPort = createStartHostPort(vscode)
   orchestrator = new AutoStartOrchestrator(startPort)
   stopOrchestratorWatch?.()
-  stopOrchestratorWatch = orchestrator.onChange(snap => {
+  stopOrchestratorWatch = orchestrator.onChange((snap) => {
     connectionUi?.projectOrchestrator(snap)
     autoReady?.onHostReadyChanged(snap.state === 'started')
   })
+
+  if (canCreateEditorChatPanel(vscode) && typeof vscode.Uri?.file === 'function') {
+    const emptyRegistry = new ConversationRegistry()
+    editorChatPanel = createEditorChatPanelController({
+      vscode,
+      panelHost,
+      get registry() {
+        return conversations?.registry ?? emptyRegistry
+      },
+      extensionRoot: context.extensionPath,
+      onRunningPanelClosed: () => {
+        // Q-5 / AD-ECP-4: visible hint only — do NOT cancel running turns.
+        void vscode.window.showInformationMessage(
+          '对话仍在后台继续生成。关闭 Conversation Panel 不会取消进行中的任务。',
+        )
+      },
+      onVisibilityChanged: (visible) => {
+        handleConversationVisibility(visible)
+      },
+      onOpenSession: async (sessionId) => {
+        const controller = conversations
+        if (controller === undefined) return
+        const existing = controller.registry.getBySessionId(sessionId)
+        if (existing !== undefined) {
+          controller.switchConversation(existing.tabId)
+        }
+      },
+    })
+    context.subscriptions.push({
+      dispose: () => {
+        editorChatPanel?.dispose()
+        editorChatPanel = undefined
+      },
+    })
+  }
 
   if (canRegisterChatPanel(vscode)) {
     context.subscriptions.push(registerChatPanelProvider(vscode, panelHost, {
@@ -363,8 +430,8 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         conversationView = view
         pushActiveTheme(vscode)
       },
-      onVisibilityChanged(visible) {
-        handleConversationVisibility(visible)
+      onOpenEditorChat: () => {
+        void revealConversationPanel(vscode)
       },
     }))
   }
@@ -378,7 +445,12 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
 
   const showPanel = vscode.commands.registerCommand('dsh.showPanel', async () => {
     await revealConversationPanel(vscode)
-    return { ok: true as const, viewId: 'dsh.chat', visible: conversationVisible }
+    return {
+      ok: true as const,
+      viewId: 'dsh.editorChat',
+      visible: conversationVisible,
+      panelOpen: editorChatPanel?.isOpen() === true,
+    }
   })
 
   const statusBarAction = vscode.commands.registerCommand('dsh.statusBarAction', async () => {
@@ -415,7 +487,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   )
 
   const start = vscode.commands.registerCommand('dsh.startSession', async () => {
-    await orchestrator!.request('command-start')
+    await orchestrator?.request('command-start')
   })
 
   const stop = vscode.commands.registerCommand('dsh.stopSession', async () => {
@@ -456,6 +528,12 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         timelineRefresh?.()
         panelHost?.pushFullState()
         const tab = controller.registry.get(tabIdArg)
+        // AC-1c: external TreeView / command switch must focus Editor Chat Panel.
+        await revealConversationPanel(
+          vscode,
+          false,
+          tab?.sessionId === undefined ? undefined : { sessionId: tab.sessionId },
+        )
         await vscode.window.showInformationMessage(
           `Switched to ${tab === undefined ? shortId(tabIdArg) : tabTitle(tab)}.`,
         )
@@ -482,6 +560,12 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     controller.switchConversation(picked.tabId)
     timelineRefresh?.()
     panelHost?.pushFullState()
+    const switched = controller.registry.get(picked.tabId)
+    await revealConversationPanel(
+      vscode,
+      false,
+      switched?.sessionId === undefined ? undefined : { sessionId: switched.sessionId },
+    )
     await vscode.window.showInformationMessage(`Switched to ${picked.label}.`)
   })
 
@@ -550,7 +634,11 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     const result = await controller.openFromHistory(sessionId)
     historyRefresh?.()
     tabBarRefresh?.()
-    if (result.outcome === 'host-not-ready') {
+    panelHost?.pushFullState()
+    if (result.outcome === 'opened' || result.outcome === 'activated') {
+      // AC-1c: History TreeView / command open must create+focus Editor Chat Panel.
+      await revealConversationPanel(vscode, false, { sessionId })
+    } else if (result.outcome === 'host-not-ready') {
       await vscode.window.showInformationMessage(
         'Waiting for Host before replaying this session from the authoritative log.',
       )
@@ -635,7 +723,10 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       historyRefresh?.()
       tabBarRefresh?.()
       panelHost?.pushFullState()
-      if (result.outcome === 'host-not-ready') {
+      if (result.outcome === 'opened' || result.outcome === 'activated') {
+        // AC-1c: search hit open must create+focus Editor Chat Panel.
+        await revealConversationPanel(vscode, false, { sessionId: chosen.tabId })
+      } else if (result.outcome === 'host-not-ready') {
         await vscode.window.showInformationMessage(
           'Waiting for Host before replaying this session from the authoritative log.',
         )
@@ -724,8 +815,9 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       return
     }
     if (vscode.Uri === undefined || vscode.commands.executeCommand === undefined) {
+      const firstPath = hunks[0]?.path ?? 'file'
       await vscode.window.showInformationMessage(
-        `Post-hoc Diff ready for ${hunks[0]!.path} (Diff APIs unavailable in this host).`,
+        `Post-hoc Diff ready for ${firstPath} (Diff APIs unavailable in this host).`,
       )
       return
     }
@@ -1096,6 +1188,8 @@ export async function deactivate(): Promise<void> {
   conversationView = undefined
   vscodeWorkspaceFolders = undefined
   vscodeApi = undefined
+  editorChatPanel?.dispose()
+  editorChatPanel = undefined
   panelHost?.detach()
   selectionMetaStore.clear()
   if (current !== undefined) await current.shutdown()
@@ -1401,7 +1495,7 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
         return changeIds.map(changeId => ({ changeId, ok: false, reason: 'no-controller' }))
       }
       const batch = await controller.revertChanges(changeIds, {
-        confirmGate: async (gate) => confirmRevertGate(vscode, gate),
+        confirmGate: async gate => confirmRevertGate(vscode, gate),
       })
       return batch.map(item => item.ok
         ? { changeId: item.changeId, ok: true as const }
@@ -1414,6 +1508,51 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     }),
     requestOpenReference: async (path) => {
       await openReferencePath(vscode, path)
+    },
+    requestSelectTab: async (tabId) => {
+      const controller = conversations
+      if (controller === undefined) return
+      controller.switchConversation(tabId)
+    },
+    requestCloseTab: async (tabId) => {
+      const controller = conversations
+      if (controller === undefined) return
+      await runCloseTab(vscode, controller, tabId)
+    },
+    listHistoryRows: () => {
+      const index = resolveWorkspaceIndex()
+      return index.listHistorySessions().map(row => ({
+        sessionId: row.sessionId,
+        title: row.title,
+        updatedAt: new Date(row.mtime).toISOString(),
+        previewOrPath: row.firstUserPreview?.trim() || row.continueHint || row.sessionId.slice(0, 8),
+        ...row.continueHint ? { continueHint: row.continueHint } : {},
+      }))
+    },
+    requestOpenHistorySession: async (sessionId) => {
+      const controller = conversations
+      if (controller === undefined) {
+        await vscode.window.showErrorMessage(
+          'DeepSeek Harness Host is not connected. Connect Host before opening a history replay.',
+        )
+        return
+      }
+      const result = await controller.openFromHistory(sessionId)
+      historyRefresh?.()
+      tabBarRefresh?.()
+      panelHost?.pushFullState()
+      if (result.outcome === 'host-not-ready') {
+        await vscode.window.showInformationMessage(
+          'Waiting for Host before replaying this session from the authoritative log.',
+        )
+      } else if (result.outcome === 'error') {
+        await vscode.window.showErrorMessage(`Failed to open history replay: ${result.error}`)
+      } else if (result.outcome === 'missing') {
+        await vscode.window.showErrorMessage('History session not found or deleted.')
+      }
+    },
+    requestOpenSearch: async () => {
+      await vscode.commands.executeCommand?.('dsh.searchSessions')
     },
     resolveContinueChrome: () => conversations?.continueChromeForTab(),
     resolveDeferredRestoreCount: () => conversations?.panelSnapshot().deferredRestoreCount ?? 0,
@@ -1909,7 +2048,10 @@ async function runAskAboutSelection(vscode: VsCodeLike): Promise<unknown> {
     getWorkspaceFolders: () => (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath),
     asRelativePath: vscode.workspace.asRelativePath === undefined
       ? undefined
-      : (fsPath) => vscode.workspace.asRelativePath!(fsPath, false),
+      : (fsPath) => {
+        const relative = vscode.workspace.asRelativePath
+        return relative === undefined ? fsPath : relative(fsPath, false)
+      },
     selectionMeta: selectionMetaStore,
     ensureLiveTab: () => {
       const active = controller.registry.getActive()
@@ -2086,25 +2228,33 @@ async function onActivityBarOpened(vscode: VsCodeLike): Promise<void> {
 }
 
 /**
- * Reveal Conversation view (AC-1b) and optionally treat as activity-bar open.
+ * Reveal Editor Conversation Panel (AC-1b / AD-ECP-1 / AC-1c). Never called from activate alone (Q-7).
+ * Prefer a single path through `openOrFocus({ sessionId })` so external opens do not drift from reveal.
  * @param vscode - duck-typed vscode.
  * @param requestActivityBar - when true, also request('activity-bar').
+ * @param opts - optional `sessionId` to activate before reveal (AC-1c).
  */
 async function revealConversationPanel(
   vscode: VsCodeLike,
   requestActivityBar = false,
+  opts?: { sessionId?: string },
 ): Promise<void> {
-  if (conversationView?.show !== undefined) {
+  if (editorChatPanel !== undefined) {
+    await editorChatPanel.openOrFocus({
+      preserveFocus: false,
+      ...opts?.sessionId ? { sessionId: opts.sessionId } : {},
+    })
+  } else if (conversationView?.show !== undefined) {
+    // Fallback for hosts without createWebviewPanel (tests / degraded).
     conversationView.show(false)
+    if (!conversationVisible) {
+      conversationVisible = true
+      connectionUi?.setConversationVisible(true)
+      autoReady?.onVisibilityChanged(true)
+    }
   } else {
     await vscode.commands.executeCommand?.('dsh.chat.focus')
     await vscode.commands.executeCommand?.('workbench.view.extension.dsh')
-  }
-  if (!conversationVisible) {
-    // Mark visible for routing; production onDidChangeVisibility will also fire.
-    conversationVisible = true
-    connectionUi?.setConversationVisible(true)
-    autoReady?.onVisibilityChanged(true)
   }
   if (requestActivityBar) {
     await orchestrator?.request('activity-bar')

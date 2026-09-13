@@ -1,6 +1,9 @@
 /**
  * Layer A — ref-cards / shared @ parse / change-diff / T8 (phase-4).
  * @vitest-environment jsdom
+ *
+ * NOTE (AD-ECP-10): NOT UI PASS evidence for vscode-dsh-editor-chat-panel.
+ * Phase 1 UI PASS = apps/vscode-dsh/tests/layer-a-rtl/* only.
  */
 
 import { describe, expect, it, beforeEach } from 'vitest'

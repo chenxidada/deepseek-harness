@@ -13,12 +13,24 @@ export {
 export {
   CHAT_PANEL_VIEW_ID,
   buildThinChatHtml,
+  buildSidebarMigrationHtml,
   canRegisterChatPanel,
   registerChatPanelProvider,
   type ChatPanelVsCode,
   type ChatPanelProviderHooks,
   type WebviewViewLike,
 } from './chat-panel-provider.ts'
+export {
+  EDITOR_CHAT_PANEL_VIEW_TYPE,
+  buildEditorChatSpaHtml,
+  canCreateEditorChatPanel,
+  createEditorChatPanelController,
+  defaultExtensionRootFromModuleUrl,
+  resolveWebviewDistRoot,
+  type EditorChatPanelController,
+  type EditorChatPanelDeps,
+  type EditorChatVsCode,
+} from './editor-chat-panel.ts'
 export {
   isMessagesAppend,
   parseWebviewToHostMessage,

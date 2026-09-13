@@ -1,8 +1,8 @@
 /**
  * Conversation WebviewView provider (revised AD-CU-1 / AD-CR-7 / AD-CUX-1).
- * Decision state (mode / sessionId / send gate / Continue) follows Host panel/state only.
- * Presentation state (follow-state, streaming chrome, expand seats) may live in Webview
- * when probeable via DOM / __dshProbes. Host owns send gate via ui/reject-send.
+ * Phase 1 (AD-ECP-1/8): Editor WebviewPanel is the primary chat surface.
+ * This sidebar view is demoted to a migration launcher (AC-4/5) — not a second
+ * writable messages path. Production Panel HTML is React SPA via editor-chat-panel.
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/chat-panel-provider
  */
 
@@ -65,6 +65,10 @@ export interface ChatPanelProviderHooks {
    * @param view - resolved Conversation view.
    */
   onViewResolved?: (view: WebviewViewLike) => void
+  /**
+   * Sidebar migration launcher → open Editor Chat Panel (AC-4).
+   */
+  onOpenEditorChat?: () => void
 }
 
 /** Conversation panel view id contributed in package.json. */
@@ -103,23 +107,26 @@ export function registerChatPanelProvider(
       resolveWebviewView(webviewView) {
         webviewView.title = 'Conversation'
         webviewView.webview.options = { enableScripts: true }
-        webviewView.webview.html = buildThinChatHtml(webviewView.webview.cspSource)
-        panelHost.attach({
-          postMessage(message) {
-            void webviewView.webview.postMessage(message)
-          },
-          onDidReceiveMessage(listener) {
-            return webviewView.webview.onDidReceiveMessage(listener)
-          },
+        // AC-4/5: sidebar is launcher-only — do not attach ChatPanelHost (no second writable surface).
+        webviewView.webview.html = buildSidebarMigrationHtml(webviewView.webview.cspSource)
+        const openEditor = webviewView.webview.onDidReceiveMessage((message: unknown) => {
+          if (
+            typeof message === 'object'
+            && message !== null
+            && (message as { type?: string }).type === 'ui/open-editor-chat'
+          ) {
+            hooks?.onOpenEditorChat?.()
+          }
         })
+        disposers.push(openEditor)
+        // Keep panelHost reference so callers still type-check; Host attaches to Editor Panel only.
+        void panelHost
         hooks?.onViewResolved?.(webviewView)
+        // Do NOT latch conversationVisible from sidebar — Editor Panel owns visibility (Q-7).
         if (typeof webviewView.onDidChangeVisibility === 'function') {
           disposers.push(webviewView.onDidChangeVisibility(() => {
-            hooks?.onVisibilityChanged?.(webviewView.visible === true)
+            /* sidebar visibility must not auto-open Editor Panel or drive AutoReady */
           }))
-        }
-        if (webviewView.visible === true) {
-          hooks?.onVisibilityChanged?.(true)
         }
       },
     },
@@ -134,10 +141,45 @@ export function registerChatPanelProvider(
 }
 
 /**
+ * Sidebar migration tip (AC-4/5) — not a writable chat surface.
+ * @param cspSource - optional webview CSP source.
+ */
+export function buildSidebarMigrationHtml(cspSource?: string): string {
+  const csp = cspSource === undefined
+    ? ''
+    : `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource} 'unsafe-inline';">`
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" />${csp}
+<style>
+  body { font-family: var(--vscode-font-family); color: var(--vscode-foreground);
+    background: var(--vscode-sideBar-background); padding: 16px; margin: 0; }
+  button { background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+    border: none; padding: 8px 12px; cursor: pointer; border-radius: 2px; }
+  button:hover { background: var(--vscode-button-hoverBackground); }
+  p { color: var(--vscode-descriptionForeground); line-height: 1.45; }
+</style></head>
+<body data-testid="sidebar-migration">
+  <h3 style="margin-top:0">对话已移至编辑器区</h3>
+  <p>主聊天面现为编辑器区 Conversation Panel。侧栏不再承载可读写消息流。</p>
+  <button type="button" data-testid="btn-open-editor-chat" id="open-editor">打开 Conversation Panel</button>
+  <script>
+    const vscode = acquireVsCodeApi();
+    document.getElementById('open-editor').addEventListener('click', () => {
+      vscode.postMessage({ type: 'ui/open-editor-chat' });
+    });
+  </script>
+</body></html>`
+}
+
+/**
+ * @deprecated Phase 1+: production Editor Panel uses React SPA (`editor-chat-panel`).
+ * Kept temporarily for legacy layer-A fixtures only — must not be Panel production HTML
+ * (AD-ECP-8 / AD-ECP-10). Do not use as this feature's UI PASS evidence.
+ *
  * Chat UI chassis HTML/JS: theme tokens, bubbles, fixed composer, safe MD (AD-CR-7).
  * Never decides mode/session/send locally — Host authority only (AC-25 / AD-CUX-1).
  * Embeds extracted render/sync/probe browser sources (AD-CUX-2) so layer-A tests and
- * production Webview share the same algorithms.
+ * legacy fixtures share the same algorithms.
  * @param cspSource - optional webview CSP source.
  * @returns HTML document string.
  */

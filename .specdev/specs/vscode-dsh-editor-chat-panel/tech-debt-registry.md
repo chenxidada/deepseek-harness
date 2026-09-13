@@ -23,7 +23,14 @@
 
 | ID | 源Phase | 模块 | 文件:函数:行号 | 当前行为 | 预期行为 | 类型 | 标签 | 依赖它的模块 | 目标Phase | 阻塞 | 来源 | 注册日期 |
 |----|:------:|------|---------------|---------|---------|------|------|-------------|:--------:|:---:|------|---------|
-| — | — | — | — | — | — | — | — | — | — | — | — | — |
+| GAP-ECP-001 | phase-1-shell-tabs-basic-history | editor-chat | webview/src/components/Composer.tsx | P1 composer 仅 live/readonly/waiting/error 骨架；无 Stop 按钮 | AC-23a 可理解失败文案 + 可操作提示；完整四态人眼可分 | 功能缺失 | module:editor-chat, type:gap, concern:ac-23a-composer | verifier | phase-2-stream-capabilities-full-history | 🟡非阻塞 | implementation.md | 2026-09-13 |
+| GAP-ECP-002 | phase-1-shell-tabs-basic-history | editor-chat | webview/src/App.tsx / status | streaming 仅 status「生成中…」；无 btn-stop | AC-33b / UI-AC-32 Stop 完整 + 停止中 DOM | 功能缺失 | module:editor-chat, type:gap, concern:stop | verifier | phase-2-stream-capabilities-full-history | 🟡非阻塞 | implementation.md | 2026-09-13 |
+| GAP-ECP-003 | phase-1-shell-tabs-basic-history | editor-chat | webview TabChrome btn-search → dsh.searchSessions | 搜索入口打开命令/QuickPick | 面板内档1+2 搜索联动 UI（AC-14a/b） | 功能缺失 | module:editor-chat, type:gap, concern:search-ui | history | phase-2-stream-capabilities-full-history | 🟡非阻塞 | implementation.md | 2026-09-13 |
+| GAP-ECP-004 | phase-1-shell-tabs-basic-history | editor-chat | HistoryPanel.tsx | 基础列表+打开；无删除/Continue/父子行 | AC-53–57/59/60 + UI-AC-42/43 | 功能缺失 | module:editor-chat, type:gap, concern:history-full | history | phase-2-stream-capabilities-full-history | 🟡非阻塞 | implementation.md | 2026-09-13 |
+| GAP-ECP-005 | phase-1-shell-tabs-basic-history | editor-chat | MessageList.tsx | 纯文本气泡最小可聊 | Markdown settle + sanitize + 弱描边精修（UI-AC-20/23） | 功能缺失 | module:editor-chat, type:gap, concern:md-settle | messages | phase-2-stream-capabilities-full-history | 🟡非阻塞 | implementation.md | 2026-09-13 |
+| GAP-ECP-006 | phase-1-shell-tabs-basic-history | editor-chat | styles/tokens.css | 基础 hover/focus | UI-AC-51/52 动效与 ≥8px 精修 | 功能缺失 | module:editor-chat, type:gap, concern:ui-polish | ui | phase-2-stream-capabilities-full-history | 🟡非阻塞 | implementation.md | 2026-09-13 |
+| DEBT-ECP-001 | phase-1-shell-tabs-basic-history | chat-panel | chat-panel-provider.ts:buildThinChatHtml | 标 @deprecated，仍保留源码（legacy 层 A fixture） | P2 退出生产路径 / 仅非生产夹具（AD-ECP-8） | 已知缺陷 | module:chat-panel, type:debt, concern:inline-html-retire | tests | phase-2-stream-capabilities-full-history | 🟡非阻塞 | implementation.md | 2026-09-13 |
+| GAP-ECP-007 | phase-1-shell-tabs-basic-history | editor-chat | Extension Development Host | 验证环境无 code/cursor CLI/DISPLAY；§9 层 V 未人眼执行（PARTIAL） | 真机层 V 核对 §9 Phase1（及后续 Phase2 清单） | 功能缺失 | module:editor-chat, type:gap, concern:layer-v | verifier | phase-2-stream-capabilities-full-history | 🟡非阻塞 | verification.md + HG-3 accept PARTIAL | 2026-09-13 |
 
 ## 已解决
 

@@ -2,6 +2,9 @@
  * Layer A — jsdom render/sync foundation (phase-1-foundation-render-probe).
  * Asserts real DOM nodes/attributes; imports extracted chat-panel/render/* modules.
  * Must not rely on whole-page runScripts: 'dangerously' as the primary path.
+ *
+ * NOTE (AD-ECP-10): NOT UI PASS evidence for vscode-dsh-editor-chat-panel.
+ * Phase 1 UI PASS = apps/vscode-dsh/tests/layer-a-rtl/* only.
  */
 // @vitest-environment jsdom
 
@@ -187,7 +190,8 @@ describe('layer-A foundation render + probes (AC-2/3/5/6/70)', () => {
     expect(messages.querySelectorAll('[data-message-id]').length).toBe(1)
   })
 
-  it('AC-6/AC-8: buildThinChatHtml embeds extracted follow-state + probe contracts', () => {
+  // Deprecated production path — retained as fixture smoke only (not editor-chat-panel UI PASS).
+  it.skip('AC-6/AC-8: buildThinChatHtml embeds extracted follow-state + probe contracts [legacy fixture]', () => {
     const html = buildThinChatHtml()
     expect(html).toContain('data-follow-state')
     expect(html).toContain('decideFollowState')

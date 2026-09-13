@@ -1,6 +1,6 @@
 # Phase 3: 历史搜索入口、Timeline 弱化与层 V 收齐
 
-**Phase ID:** `phase-3-discovery-timeline-v`  
+**Phase ID:** `phase-3-discovery-timeline-v`
 **DAG 依赖:** `phase-2-usable-stream`
 
 ## 目标

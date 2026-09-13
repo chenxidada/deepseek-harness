@@ -182,11 +182,47 @@ export type HostToWebviewMessage =
       matchedPath?: string
     }>
   }
+  | {
+    /** In-panel Tab chrome projection (AD-ECP-2 / AC-10). */
+    type: 'panel/tabs'
+    activeTabId: string | undefined
+    tabs: Array<{
+      tabId: string
+      title: string
+      status: 'idle' | 'running' | 'error' | 'disconnected'
+      unread: boolean
+      approvalBadge: boolean
+      mode: 'live' | 'replay'
+      parentHint?: string
+    }>
+  }
+  | {
+    /** In-panel history window projection (AD-ECP-3 / AC-50a). */
+    type: 'panel/history'
+    open: boolean
+    loading: boolean
+    query?: string
+    rows: Array<{
+      sessionId: string
+      title: string
+      updatedAt: string
+      previewOrPath: string
+      parentTitle?: string
+      continueHint?: string
+    }>
+  }
 
-/** Webview → Host frames (Phase 1–4 + change protocol). */
+/** Webview → Host frames (Phase 1–4 + change protocol + editor chrome). */
 export type WebviewToHostMessage =
   | { type: 'ready' }
   | { type: 'composer/send'; text: string }
+  | { type: 'ui/tab-select'; tabId: string }
+  | { type: 'ui/tab-close'; tabId: string }
+  | { type: 'ui/tab-new' }
+  | { type: 'ui/history-open' }
+  | { type: 'ui/history-close' }
+  | { type: 'ui/history-select'; sessionId: string }
+  | { type: 'ui/search-open' }
   | { type: 'action/delete' }
   | { type: 'action/continue' }
   | { type: 'action/stop' }
@@ -233,6 +269,22 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   const record = value as Record<string, unknown>
   const type = record.type
   if (type === 'ready') return { type: 'ready' }
+  if (type === 'ui/tab-new') return { type: 'ui/tab-new' }
+  if (type === 'ui/history-open') return { type: 'ui/history-open' }
+  if (type === 'ui/history-close') return { type: 'ui/history-close' }
+  if (type === 'ui/search-open') return { type: 'ui/search-open' }
+  if (type === 'ui/tab-select') {
+    if (typeof record.tabId !== 'string' || record.tabId === '') return undefined
+    return { type: 'ui/tab-select', tabId: record.tabId }
+  }
+  if (type === 'ui/tab-close') {
+    if (typeof record.tabId !== 'string' || record.tabId === '') return undefined
+    return { type: 'ui/tab-close', tabId: record.tabId }
+  }
+  if (type === 'ui/history-select') {
+    if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
+    return { type: 'ui/history-select', sessionId: record.sessionId }
+  }
   if (type === 'action/delete') return { type: 'action/delete' }
   if (type === 'action/continue') return { type: 'action/continue' }
   if (type === 'action/stop') return { type: 'action/stop' }

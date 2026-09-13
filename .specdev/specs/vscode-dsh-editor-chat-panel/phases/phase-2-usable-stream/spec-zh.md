@@ -1,6 +1,6 @@
 # Phase 2: 可用级消息流与流内能力呈现
 
-**Phase ID:** `phase-2-usable-stream`  
+**Phase ID:** `phase-2-usable-stream`
 **DAG 依赖:** `phase-1-editor-shell-tabs`
 
 ## 目标

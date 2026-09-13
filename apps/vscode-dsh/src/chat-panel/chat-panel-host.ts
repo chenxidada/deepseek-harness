@@ -209,6 +209,36 @@ export interface ChatPanelHostDeps {
    * @param path - workspace-relative path from the card.
    */
   requestOpenReference?: (path: string) => Promise<void>
+  /**
+   * Switch active Tab from in-panel chrome (AC-11).
+   * @param tabId - Tab to activate.
+   */
+  requestSelectTab?: (tabId: string) => Promise<void>
+  /**
+   * Close a Tab from in-panel chrome (AC-13); Host owns confirm-running.
+   * @param tabId - Tab to close.
+   */
+  requestCloseTab?: (tabId: string) => Promise<void>
+  /**
+   * Load history rows for the in-panel history window (AC-50a).
+   */
+  listHistoryRows?: () => Array<{
+    sessionId: string
+    title: string
+    updatedAt: string
+    previewOrPath: string
+    parentTitle?: string
+    continueHint?: string
+  }>
+  /**
+   * Open a history session (dedupe + replay; no auto-Start) — AC-52.
+   * @param sessionId - history session id.
+   */
+  requestOpenHistorySession?: (sessionId: string) => Promise<void>
+  /**
+   * Optional search entry from chrome (P1: open command / banner; full search UI → P2).
+   */
+  requestOpenSearch?: () => Promise<void>
 }
 
 /**
@@ -223,6 +253,9 @@ export class ChatPanelHost {
   private settingsDeepLinkAvailable = false
   /** Latest composer/prefill text waiting for a Webview attach (cold-start). */
   private pendingPrefill: string | undefined
+  /** Whether the in-panel history window is open (presentation request; Host owns rows). */
+  private historyOpen = false
+  private historyLoading = false
 
   /**
    * @param deps - registry / store / send gate callbacks.
@@ -263,7 +296,7 @@ export class ChatPanelHost {
   attach(port: WebviewMessagePort): void {
     this.stopPort?.()
     this.port = port
-    const sub = port.onDidReceiveMessage(raw => {
+    const sub = port.onDidReceiveMessage((raw) => {
       const message = parseWebviewToHostMessage(raw)
       if (message === undefined) return
       void this.onWebviewMessage(message)
@@ -300,7 +333,8 @@ export class ChatPanelHost {
   }
 
   /**
-   * Push panel/state + messages/replace + status for the active Tab (or empty).
+   * Push panel/state + messages/replace + status + tabs (+ history when open)
+   * for the active Tab (or empty).
    * Empty / waiting-host always includes messages/replace([]) so attached Webviews
    * clear residual bubbles (AC-2 / AC-24).
    */
@@ -315,6 +349,7 @@ export class ChatPanelHost {
     const newConversationChrome = {
       chrome: { newConversation: { visibility: 'enabled' as const } },
     }
+    this.pushTabsFrame()
     if (active === undefined) {
       const mode: PanelMode = this.connectionPhase === 'connecting' || !this.deps.isHostReady()
         ? 'waiting-host'
@@ -335,6 +370,7 @@ export class ChatPanelHost {
           ? 'disconnected'
           : 'idle',
       })
+      this.pushHistoryFrame()
       return
     }
     // AC-22 / R1: while Start is in flight, never project sendable `live`.
@@ -370,6 +406,53 @@ export class ChatPanelHost {
       status: this.connectionPhase === 'connecting'
         ? 'disconnected'
         : this.resolveStatus(active.sessionId, active.status),
+    })
+    this.pushHistoryFrame()
+  }
+
+  /** Push Registry projection for in-panel Tab chrome (AC-10 / AC-10c). */
+  pushTabsFrame(): void {
+    const snap = this.deps.registry.snapshot()
+    this.post({
+      type: 'panel/tabs',
+      activeTabId: snap.activeTabId,
+      tabs: snap.tabs.map(tab => ({
+        tabId: tab.tabId,
+        title: tab.title?.trim() || tab.sessionId.slice(0, 8),
+        status: tab.status,
+        unread: tab.unread,
+        approvalBadge: tab.approvalBadge,
+        mode: tab.mode,
+      })),
+    })
+  }
+
+  /** Push history window frame (closed → empty rows; open → list or loading). */
+  pushHistoryFrame(): void {
+    if (!this.historyOpen) {
+      this.post({
+        type: 'panel/history',
+        open: false,
+        loading: false,
+        rows: [],
+      })
+      return
+    }
+    if (this.historyLoading) {
+      this.post({
+        type: 'panel/history',
+        open: true,
+        loading: true,
+        rows: [],
+      })
+      return
+    }
+    const rows = this.deps.listHistoryRows?.() ?? []
+    this.post({
+      type: 'panel/history',
+      open: true,
+      loading: false,
+      rows,
     })
   }
 
@@ -556,6 +639,46 @@ export class ChatPanelHost {
     }
     if (message.type === 'composer/send') {
       await this.sendPrompt(message.text)
+      return
+    }
+    if (message.type === 'ui/tab-select') {
+      await this.deps.requestSelectTab?.(message.tabId)
+      this.pushFullState()
+      return
+    }
+    if (message.type === 'ui/tab-close') {
+      await this.deps.requestCloseTab?.(message.tabId)
+      this.pushFullState()
+      return
+    }
+    if (message.type === 'ui/tab-new') {
+      await this.deps.requestNewConversation?.()
+      this.pushFullState()
+      return
+    }
+    if (message.type === 'ui/history-open') {
+      this.historyOpen = true
+      this.historyLoading = true
+      this.pushHistoryFrame()
+      // Yield one tick so loading state is observable, then fill rows.
+      this.historyLoading = false
+      this.pushHistoryFrame()
+      return
+    }
+    if (message.type === 'ui/history-close') {
+      this.historyOpen = false
+      this.historyLoading = false
+      this.pushHistoryFrame()
+      return
+    }
+    if (message.type === 'ui/history-select') {
+      await this.deps.requestOpenHistorySession?.(message.sessionId)
+      this.historyOpen = false
+      this.pushFullState()
+      return
+    }
+    if (message.type === 'ui/search-open') {
+      await this.deps.requestOpenSearch?.()
       return
     }
     if (message.type === 'action/delete') {
