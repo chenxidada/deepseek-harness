@@ -47,6 +47,11 @@ import {
   type DispatchSpecdevRoleResult,
 } from './dispatch.ts'
 import {
+  dispatchWiki as dispatchWikiFn,
+  type DispatchWikiRequest,
+  type DispatchWikiResult,
+} from './wiki.ts'
+import {
   completePhaseGit as completePhaseGitFn,
   ensurePhaseBranch as ensurePhaseBranchFn,
   type CompletePhaseGitResult,
@@ -129,6 +134,17 @@ export type {
   DispatchSpecdevRoleRequest,
   DispatchSpecdevRoleResult,
 } from './dispatch.ts'
+export {
+  dispatchWiki,
+  isFinalFeatureHg3Pass,
+  wikiRolePrompt,
+  WIKI_RELATIVE_ROOT,
+} from './wiki.ts'
+export type {
+  DispatchWikiRequest,
+  DispatchWikiResult,
+  WikiDispatchMode,
+} from './wiki.ts'
 export { interpretGateReply } from './gate-reply.ts'
 export type { GateReplyInterpretation } from './gate-reply.ts'
 export {
@@ -310,6 +326,18 @@ export class SpecdevService extends Service {
     request: DispatchSpecdevRoleRequest,
   ): Promise<DispatchSpecdevRoleResult> {
     return dispatchSpecdevRole(this.ctx, parent, request)
+  }
+
+  /**
+   * Shared wiki dispatch (Q-3 / AC-20): ensure workspace `docs/wiki/` and spawn
+   * the wiki role with Standalone or Pipeline prompt. Used by `/wiki` and
+   * final Feature HG-3 auto path — no Knowledge Base sync (AC-55).
+   */
+  dispatchWiki(
+    parent: Agent,
+    request: DispatchWikiRequest,
+  ): Promise<DispatchWikiResult> {
+    return dispatchWikiFn(this.ctx, parent, request)
   }
 
   /**

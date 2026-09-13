@@ -36,11 +36,11 @@ kind: "package-reference"
 |---|---|
 | `/feature <desc>` | 确保 `.specdev` 布局；多 Phase Feature 走向 HG-1 |
 | `/bugfix` / `/brief` / `/research` / `/specify` | 同级启动模式（见设计） |
-| `/plan` | 架构路径；HG-1 未过或 requirements 为空时拒绝 |
+| `/plan` | SpecDev 架构规划（**不是**原生 `dsh-plan-mode`）；HG-1 未过或 requirements 为空时拒绝 |
 | `/status` | 与 `snapshot()` 一致的人类可读报告 |
-| `/confirm-gate <gate> <pass\|确认\|通过\|…>` | 唯一 NLP→API 路径，共享 `confirmGate` |
+| `/confirm-gate <gate> <pass\|确认\|通过\|…>` | 唯一 NLP→API 路径，共享 `confirmGate`；终态 Feature HG-3 自动调度 wiki（AC-20） |
 | `/implement` | Phase 运行时闭环：Entry Gate → `ensurePhaseBranch` → explorer/implementer 调度 + followup |
-| `/wiki` | 已注册；实体延后到 Phase 5 |
+| `/wiki` | 共享 wiki 调度（`dispatchWiki` Standalone）→ 工作区 `docs/wiki/`（无 KB） |
 
 -----
 
@@ -90,5 +90,5 @@ kind: "package-reference"
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- **`/wiki` 实体未完成** — 返回 `@STUB(phase-5-wiki-hardening)`；wiki 调度属 Phase 5。
-- **HG-3 git** — Orchestrator 须在 `confirmGate(hg3)` 之后调用 `ctx.specdev.completePhaseGit({ phaseId, files })`，文件列表必须显式（禁止 `git add -A`）。
+- **HG-3 git** — Orchestrator 须在 `confirmGate(hg3)` 之后调用 `ctx.specdev.completePhaseGit({ phaseId, files })`，文件列表必须显式（禁止 `git add -A`）。终态 HG-3 的 wiki 自动调度与 git helper 分离。
+- **Wiki LLM 内容** — harness 负责调度 wiki 角色并确保 `docs/wiki/` 目录；页面质量取决于模型与 `specdev-wiki` persona。

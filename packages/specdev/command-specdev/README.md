@@ -36,11 +36,11 @@ Mount with `specdev` and `commands` (sdk-app inserts this automatically):
 |---|---|
 | `/feature <desc>` | Ensure `.specdev` layout; multi-phase Feature toward HG-1 |
 | `/bugfix` / `/brief` / `/research` / `/specify` | Sibling start modes (see design) |
-| `/plan` | Architecture path; refuses if HG-1 not passed or requirements empty |
+| `/plan` | SpecDev architecture planning (NOT native `dsh-plan-mode`); refuses if HG-1 not passed or requirements empty |
 | `/status` | Human report matching `snapshot()` |
-| `/confirm-gate <gate> <pass\|确认\|通过\|…>` | Sole NLP→API path sharing `confirmGate` |
+| `/confirm-gate <gate> <pass\|确认\|通过\|…>` | Sole NLP→API path sharing `confirmGate`; final Feature HG-3 auto-dispatches wiki (AC-20) |
 | `/implement` | Phase runtime loop: Entry Gate → `ensurePhaseBranch` → explorer/implementer dispatch + followup |
-| `/wiki` | Registered; body stubbed to Phase 5 |
+| `/wiki` | Shared wiki dispatch (`dispatchWiki` Standalone) → workspace `docs/wiki/` (no KB) |
 
 -----
 
@@ -90,5 +90,5 @@ Independent of the model cache; command bookkeeping does not rewrite conversatio
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- **`/wiki` body incomplete** — returns `@STUB(phase-5-wiki-hardening)`; wiki dispatch is Phase 5.
-- **HG-3 git** — Orchestrator must call `ctx.specdev.completePhaseGit({ phaseId, files })` after `confirmGate(hg3)` with an explicit file list (never `git add -A`).
+- **HG-3 git** — Orchestrator must call `ctx.specdev.completePhaseGit({ phaseId, files })` after `confirmGate(hg3)` with an explicit file list (never `git add -A`). Wiki auto-dispatch on final HG-3 is separate from the git helper.
+- **Wiki LLM content** — harness dispatches the wiki role and ensures `docs/wiki/`; page quality depends on the model + `specdev-wiki` persona.

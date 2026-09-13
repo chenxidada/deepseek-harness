@@ -59,14 +59,19 @@ export function guidanceForRole(role: SpecdevRole): string {
         'Record the completed phaseId NOW (confirmGate will advance current_phase).',
         'Wait for an explicit Phase pass, then confirmGate({ gate: "hg3", decision: "pass" }).',
         'After confirmGate, call ctx.specdev.completePhaseGit({ phaseId: <recorded>, files }) with an explicit file list.',
-        'Do not auto-merge git or flip hg3 in JSON by hand.',
+        'If this was the final Feature phase (snapshot.phase === null / no remaining dependent phase):',
+        '  AC-20 expects wiki auto-dispatch via /confirm-gate or ctx.specdev.dispatchWiki({ mode: "pipeline" }) → docs/wiki/.',
+        'Do not auto-merge git or flip hg3 in JSON by hand. No Knowledge Base sync.',
       ].join('\n')
 
     case 'code-explorer':
       return '🔎 code-explorer completed → repo-exploration.md. Next: ensure impl-<phase> branch, then dispatch implementer.'
 
     case 'wiki':
-      return '📚 wiki agent completed. Review docs/wiki/ updates.'
+      return [
+        '📚 wiki agent completed. Review docs/wiki/ updates and changelog.',
+        'No Knowledge Base / Knownbase sync (AC-55).',
+      ].join('\n')
 
     case 'orchestrator':
       return 'Orchestrator idle — no SpecDev advance action.'

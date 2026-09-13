@@ -89,7 +89,11 @@ export function defaultRolePrompt(
     case 'verifier':
       return `SpecDev: independently verify the phase for \`${ctx.slug}\`.${phase} Write verification.md.`
     case 'wiki':
-      return `SpecDev: update docs/wiki/ for \`${ctx.slug}\`.${phase}`
+      // Prefer {@link wikiRolePrompt} via dispatchWiki; this fallback is Standalone.
+      return [
+        `SpecDev wiki (Standalone mode) for workflow \`${ctx.slug}\`.${phase}`,
+        'Update workspace `docs/wiki/`. No Knowledge Base / Knownbase sync (AC-55).',
+      ].join(' ')
     case 'orchestrator':
       return `SpecDev: orchestrate workflow \`${ctx.slug}\`.${phase}`
     default:

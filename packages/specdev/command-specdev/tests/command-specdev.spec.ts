@@ -4,9 +4,10 @@
  * HG-1 refusal, \`/status\` aligned with snapshot().
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
@@ -16,6 +17,7 @@ import CommandRuntime from '@deepseek-ai/dsh-commands'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SpecdevService, {
+  applySpecdevProjection,
   createInitialStatus,
   interpretGateReply,
   parseCurrentStatus,
@@ -381,12 +383,126 @@ describe('@deepseek-ai/dsh-command-specdev', () => {
     expect(impl.text).toMatch(/followup=true/)
   })
 
-  it('registers /wiki stub only (STUB-002 remains Phase 5)', async () => {
-    const workspace = tempDir('cmd-specdev-wiki-stub-')
+  it('AC-20/VP-2: /wiki dispatches wiki role → docs/wiki/ (STUB-002 closed)', async () => {
+    const workspace = tempDir('cmd-specdev-wiki-')
     const test = await harness(workspace)
+    const noWorkflow = await run(test, '/wiki')
+    expect(noWorkflow.kind).toBe('error')
+    expect(noWorkflow.text).toContain('No active SpecDev workflow')
+
+    await run(test, '/feature wiki demo')
     const wiki = await run(test, '/wiki')
-    expect(wiki.kind).toBe('error')
-    expect(wiki.text).toContain('@STUB(phase-5-wiki-hardening)')
+    expect(wiki.kind).toBe('success')
+    expect(wiki.text).not.toContain('@STUB(phase-5-wiki-hardening)')
+    expect(wiki.text).toContain('Standalone')
+    expect(wiki.text).toContain(join(workspace, 'docs', 'wiki'))
+    expect(wiki.text).toMatch(/followup=true/)
+    expect(existsSync(join(workspace, 'docs', 'wiki'))).toBe(true)
+
+    const dispatchEvents = test.session.snapshotEvents().filter(event => event.type === 'specdev/dispatch')
+    const wikiDispatch = dispatchEvents.filter(event => (event.data as { role?: string }).role === 'wiki')
+    expect(wikiDispatch.length).toBeGreaterThanOrEqual(1)
+    expect(wikiDispatch[0]?.data).toMatchObject({
+      kind: 'specdev/dispatch',
+      role: 'wiki',
+      slug: 'wiki-demo',
+    })
+  })
+
+  it('AC-20/AC-56: final HG-3 auto wiki + bridge fold equals snapshot(); no KB', async () => {
+    const workspace = tempDir('cmd-specdev-wiki-e2e-')
+    const slug = 'wiki-e2e'
+    const slugDir = join(workspace, '.specdev', 'specs', slug)
+    mkdirSync(slugDir, { recursive: true })
+    writeFileSync(join(workspace, '.specdev', 'active-workflow'), `${slug}\n`)
+    writeFileSync(join(slugDir, 'requirements.md'), '# Requirements\n\nenough\n')
+    writeFileSync(join(slugDir, 'design.md'), '# Design\n\nok\n')
+    writeFileSync(join(slugDir, 'phase-plan.md'), `# Plan
+
+\`\`\`json
+{
+  "phases": [
+    { "id": "phase-1-p0-core", "name": "P1", "dependencies": [], "acceptance_criteria": [] }
+  ]
+}
+\`\`\`
+`)
+    writeFileSync(join(slugDir, 'tech-debt-registry.md'), '# Debt\n\n## 活跃债务\n\n## 已解决\n\n')
+    writeStatusFixture(join(slugDir, 'current-status.json'), {
+      ...createInitialStatus(slug, 'feature', { initiating_command: 'feature', pipeline_mode: 'feature' }),
+      human_gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' },
+      current_stage: 'phase-implementation',
+      current_phase: 'phase-1-p0-core',
+      phases: {
+        'phase-1-p0-core': {
+          implementer: 'completed',
+          reviewer: 'completed',
+          verifier: 'completed',
+        },
+      },
+    })
+
+    const test = await harness(workspace)
+    const hg3 = await run(test, '/confirm-gate hg3 通过')
+    expect(hg3.kind).toBe('success')
+    expect(hg3.text).toContain('AC-20')
+    expect(hg3.text).toContain('docs/wiki')
+    expect(hg3.text).toContain('Pipeline')
+    expect(hg3.text).toContain('No Knowledge Base')
+
+    const status = test.ctx.specdev.readStatus(slug, { cwd: workspace })
+    expect(status.current_phase).toBeNull()
+    expect(status.human_gates.hg3).toBe('passed')
+    expect(existsSync(join(workspace, 'docs', 'wiki'))).toBe(true)
+
+    // Deterministic marker under docs/wiki/ (wiki LLM not required in unit harness).
+    writeFileSync(
+      join(workspace, 'docs', 'wiki', 'changelog.md'),
+      `# Changelog\n\n- AC-20 pipeline wiki for \`${slug}\`\n`,
+    )
+    expect(readFileSync(join(workspace, 'docs', 'wiki', 'changelog.md'), 'utf8')).toContain(slug)
+
+    const wikiDispatch = test.session.snapshotEvents().filter(
+      event => event.type === 'specdev/dispatch'
+        && (event.data as { role?: string }).role === 'wiki',
+    )
+    expect(wikiDispatch).toHaveLength(1)
+    expect(wikiDispatch[0]?.data).toMatchObject({
+      kind: 'specdev/dispatch',
+      role: 'wiki',
+      slug,
+    })
+
+    // Bridge reconstructability: offline fold of specdev/* events == live snapshot().
+    let folded: { status: ReturnType<typeof test.ctx.specdev.snapshot>; failure: string | null } = {
+      status: null,
+      failure: null,
+    }
+    for (const event of test.session.snapshotEvents()) {
+      if (!event.type.startsWith('specdev/')) continue
+      folded = applySpecdevProjection(folded, event)
+    }
+    const live = test.ctx.specdev.snapshot(test.session, { cwd: workspace })
+    expect(live).not.toBeNull()
+    expect(folded.failure).toBeNull()
+    expect(folded.status).toEqual(live)
+
+    // AC-55: wiki + command sources must not call Knownbase / KB clients.
+    const harnessRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
+    const wikiSrc = readFileSync(
+      join(harnessRoot, 'packages/specdev/specdev/src/wiki.ts'),
+      'utf8',
+    )
+    const cmdSrc = readFileSync(
+      join(harnessRoot, 'packages/specdev/command-specdev/src/index.ts'),
+      'utf8',
+    )
+    for (const src of [wikiSrc, cmdSrc]) {
+      expect(src).not.toMatch(/from\s+['"][^'"]*knowledge-base[^'"]*['"]/i)
+      expect(src).not.toMatch(/\bsave_document\s*\(/)
+      expect(src).not.toMatch(/\bkb-pending\b/)
+      expect(src).not.toContain('@STUB(phase-5-wiki-hardening)')
+    }
   })
 
   it('VP-4: /implement blocks on Phase Entry Gate with 🔴 debt', async () => {

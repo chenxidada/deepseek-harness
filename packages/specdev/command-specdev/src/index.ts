@@ -13,6 +13,7 @@ import {
   firstReadyPhaseId,
   interpretGateReply,
   isDagPhaseId,
+  isFinalFeatureHg3Pass,
   readPhasePlanDag,
   requiresPhaseEntryGate,
   type SpecdevGateId,
@@ -40,9 +41,9 @@ const COMMAND_MODE: Readonly<Record<string, string>> = {
   brief: 'lightweight single-phase; single reviewer (not three-perspective)',
   research: 'exploration only — no implementer/reviewer/verifier',
   specify: 'requirements only; stop at HG-1',
-  plan: 'architecture + phase-plan; stop at HG-2',
+  plan: 'architecture + phase-plan (SpecDev /plan — NOT native dsh-plan-mode); stop at HG-2',
   implement: 'current-phase implement→review→verify loop',
-  wiki: 'wiki agent dispatch',
+  wiki: 'wiki agent → workspace docs/wiki/ (no KB sync)',
   status: 'status report',
   'confirm-gate': 'Human Gate confirmation via confirmGate',
 }
@@ -180,6 +181,7 @@ async function runPlan(ctx: Context, invocation: CommandInvocation): Promise<Com
     text: [
       `SpecDev /plan for \`${active.slug}\`.`,
       'Mode: architecture + phase-plan; stop at HG-2.',
+      'R-2: This is SpecDev architecture planning — NOT native dsh-plan-mode (disabled on the sdk profile).',
       `Dispatched \`plan-generator\` (preset \`${dispatched.presetId}\`) childSession=${dispatched.childSessionId}`
         + ` mounted=${String(dispatched.mounted)} factory=${String(dispatched.factoryCreated)}.`,
       'Emitted specdev/dispatch for bridge lineage (AC-24).',
@@ -295,18 +297,41 @@ async function runImplement(ctx: Context, invocation: CommandInvocation): Promis
 }
 
 /**
- * `/wiki` — registered; body deferred to Phase 5.
- * @STUB(phase-5-wiki-hardening)
+ * `/wiki` — shared wiki dispatch contract (Q-3 / STUB-002 closed).
+ * Standalone mode → workspace `docs/wiki/`; same helper as final HG-3 auto path.
  */
-async function runWiki(_ctx: Context, _invocation: CommandInvocation): Promise<CommandResult> {
-  // @STUB(phase-5-wiki-hardening) — wiki agent dispatch + docs/wiki generation lands in Phase 5.
+async function runWiki(ctx: Context, invocation: CommandInvocation): Promise<CommandResult> {
+  const cwd = workspaceCwd(invocation)
+  const active = ctx.specdev.active({ cwd })
+  if (active === null) {
+    return {
+      kind: 'error',
+      text: 'No active SpecDev workflow. Start with /feature (or sibling) first, then /wiki.',
+    }
+  }
+
+  attachOrchestratorMetadata(invocation.agent, active.slug)
+  const note = invocation.rawInput.trim()
+  const status = ctx.specdev.readStatus(active.slug, { cwd })
+  const phaseId = status.current_phase ?? undefined
+
+  const dispatched = await ctx.specdev.dispatchWiki(invocation.agent, {
+    slug: active.slug,
+    mode: 'standalone',
+    ...phaseId === undefined ? {} : { phaseId },
+  })
+
   return {
-    kind: 'error',
+    kind: 'success',
     text: [
-      'SpecDev /wiki is registered but wiki dispatch is not implemented yet.',
-      '@STUB(phase-5-wiki-hardening)',
-      'See tech-debt-registry STUB-002.',
-    ].join('\n'),
+      `SpecDev /wiki (Standalone) for \`${active.slug}\`.`,
+      `Wiki root: ${dispatched.wikiRoot}`,
+      `Dispatched \`wiki\` (preset \`${dispatched.presetId}\`) childSession=${dispatched.childSessionId}`
+        + ` followup=${String(dispatched.followupSent)} mounted=${String(dispatched.mounted)}.`,
+      'Same wiki-agent contract as final Feature HG-3 auto-dispatch (Q-3).',
+      'No Knowledge Base / Knownbase sync (AC-55).',
+      note.length > 0 ? `Note: ${note}` : undefined,
+    ].filter((line): line is string => line !== undefined).join('\n'),
   }
 }
 
@@ -364,11 +389,32 @@ async function runConfirmGate(ctx: Context, invocation: CommandInvocation): Prom
     }
   }
   const snap = result.snapshot
-  return {
-    kind: 'success',
-    text: snap === undefined
+  const lines: string[] = [
+    snap === undefined
       ? `Gate ${gate} decision=${decision} recorded.`
       : `Gate ${gate} decision=${decision}. pendingGate=${snap.pendingGate ?? '(none)'} stage=${snap.stage} phase=${snap.phase ?? '(none)'}`,
+  ]
+
+  // AC-20: final Feature HG-3 (no remaining dependent phase) → auto wiki (Q-3 shared helper).
+  if (isFinalFeatureHg3Pass(gate, decision, snap)) {
+    const active = ctx.specdev.active({ cwd: workspaceCwd(invocation) })
+    if (active !== null) {
+      attachOrchestratorMetadata(invocation.agent, active.slug)
+      const wiki = await ctx.specdev.dispatchWiki(invocation.agent, {
+        slug: active.slug,
+        mode: 'pipeline',
+      })
+      lines.push(
+        `AC-20: Feature complete — auto-dispatched wiki (Pipeline) → ${wiki.wikiRoot}`,
+        `wiki childSession=${wiki.childSessionId} followup=${String(wiki.followupSent)} preset=${wiki.presetId}`,
+        'No Knowledge Base / Knownbase sync (AC-55).',
+      )
+    }
+  }
+
+  return {
+    kind: 'success',
+    text: lines.join('\n'),
   }
 }
 

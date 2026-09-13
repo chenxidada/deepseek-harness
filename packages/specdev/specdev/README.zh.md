@@ -95,6 +95,6 @@ ctx.specdev.completePhaseGit({ phaseId, files: ['src/a.ts'] }, { cwd: workspaceR
 
 - **斜杠命令 / Orchestrator 预设** — 不在本包注册；由 `command-specdev` / `specdev-presets` 负责 `/feature`…`/wiki` 与角色资产。
 - **Gate waterfall / advance 监听** — 已在 `specdev-gate` / `specdev-advance`（Phase 3）交付。
-- **Wiki 实体** — `/wiki` 仍为 `@STUB(phase-5-wiki-hardening)`。
+- **Wiki** — `ctx.specdev.dispatchWiki`（Standalone / Pipeline）→ 工作区 `docs/wiki/`；`/wiki` 与终态 HG-3 自动路径共享该契约（Phase 5 / STUB-002 已关闭）。无 Knowledge Base 同步（AC-55）。
 - **Snapshot schema v2** — `SpecdevSnapshot` 可含可选 `pipelineMode` / `initiatingCommand`（来自 durable `pipeline_mode` / `initiating_command`）。fold 同时接受无这些字段的 v1 与带字段的 v2 载荷。
 - **Phase runtime（Phase 4）** — `ensurePhaseBranch` / `completePhaseGit` / `mergePhaseReviews` / `prepareRerun` / tech-debt Entry Gate；`dispatchRole` 通过 `createUserMessage` + `followup` 唤醒子 Agent。
