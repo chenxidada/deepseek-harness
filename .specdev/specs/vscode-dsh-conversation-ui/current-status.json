@@ -1,0 +1,47 @@
+{
+  "slug": "vscode-dsh-conversation-ui",
+  "description": "VS Code DSH 对话面板",
+  "created": "2026-09-07T07:37:00Z",
+  "current_stage": "phase-implementation",
+  "current_phase": "phase-4-subagent-enter-pin",
+  "loop_count": 0,
+  "human_gates": {
+    "hg1": "passed",
+    "hg2": "passed",
+    "hg3": "passed"
+  },
+  "phases": {
+    "phase-0a-spike-replay-rebuild": {
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed"
+    },
+    "phase-0b-spike-continue-capability": {
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed"
+    },
+    "phase-1-panel-live-recoverable-close": {
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed"
+    },
+    "phase-2-multitab-history-replay": {
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed"
+    },
+    "phase-3-restart-continue": {
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed"
+    },
+    "phase-4-subagent-enter-pin": {
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed"
+    }
+  },
+  "last_update": "2026-09-08T08:43:00Z",
+  "notes": "HG-3 passed: feature complete. Handoff: feature-delivery-summary.md (delivered vs gaps). Product commit awaits explicit 允许提交; then merge master + wiki."
+}

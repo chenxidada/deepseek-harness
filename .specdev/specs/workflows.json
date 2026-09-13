@@ -1,0 +1,40 @@
+{
+  "vscode-dsh-ide": {
+    "status": "completed",
+    "created": "2026-09-04T10:04:44Z",
+    "description": "VS Code + DSH IDE 插件（bridge/hooks/时间线/Diff）"
+  },
+  "vscode-dsh-conversation-ui": {
+    "status": "completed",
+    "created": "2026-09-07T07:37:32Z",
+    "description": "VS Code DSH 对话面板：在已有窗口壳上增加真正的会话 Webview/聊天 UI（消息流、输入区、与 Tab/时间线联动）",
+    "completed": "2026-09-08T08:58:25Z",
+    "handoff": ".specdev/specs/vscode-dsh-conversation-ui/feature-delivery-summary.md"
+  },
+  "vscode-dsh-chat-ready": {
+    "status": "completed",
+    "created": "2026-09-08T08:58:25Z",
+    "description": "点开即可聊：自动建连/恢复/新建 + 可用级 Chat UI 底盘 + 对话界面新建会话按钮",
+    "completed": "2026-09-09T06:49:44Z",
+    "handoff": ".specdev/specs/vscode-dsh-chat-ready/feature-delivery-summary.md"
+  },
+  "vscode-dsh-code-context-diff": {
+    "status": "completed",
+    "created": "2026-09-09T07:21:01Z",
+    "description": "代码上下文（选区/@路径）+ 消息下可审阅/可撤销变更列表；承接 chat-ready",
+    "completed": "2026-09-10T05:56:23Z",
+    "handoff": ".specdev/specs/vscode-dsh-code-context-diff/feature-delivery-summary.md"
+  },
+  "vscode-dsh-chat-ux": {
+    "status": "completed",
+    "created": "2026-09-10T05:57:02Z",
+    "completed": "2026-09-11T06:34:08Z",
+    "description": "对话体验日常敢用：呈现态下放、流式/活动流/交互/引用变更diff、搜索1+2、分叉；可脚本渲染进门槛",
+    "handoff": ".specdev/specs/vscode-dsh-chat-ux/feature-delivery-summary.md"
+  },
+  "vscode-dsh-editor-chat-panel": {
+    "status": "active",
+    "created": "2026-09-11T06:56:26Z",
+    "description": "对话面板从侧栏 WebviewView 升级为编辑器区 WebviewPanel，面板内多会话 Tab；补齐完整可用级 UI，整合既有 DSH 能力展示（参考 Cursor 式顶栏 Tab 对话体验）"
+  }
+}
