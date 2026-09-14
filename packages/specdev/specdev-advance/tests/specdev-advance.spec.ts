@@ -114,7 +114,7 @@ describe('SpecDev advance VP-5', () => {
     expect(data.nextAction).toContain('implementer completed')
     expect(data.nextAction).toContain('reviewer-correctness')
     // No confirmGate / projection yet → advance must not embed file snapshot (AC-28).
-    expect((data as { snapshot: unknown }).snapshot).toBeNull()
+    expect((data as unknown as { snapshot: unknown }).snapshot).toBeNull()
   })
 
   it('AC-28: forge file HG + emitAdvance leaves fail-closed projection (snapshot null)', async () => {

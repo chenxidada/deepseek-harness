@@ -310,7 +310,7 @@ describe('SpecDev confirmGate → file + event + projection', () => {
 
 describe('SpecDev metadata + dependency contract', () => {
   it('attaches specdev.role / slug / phaseId on AgentOptions', () => {
-    const agent = { options: {} as Record<string, unknown> } as Agent
+    const agent = { options: {} as Record<string, unknown> } as unknown as Agent
     attachSpecdevMetadata(agent, {
       role: 'implementer',
       slug: 'demo',

@@ -6,6 +6,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { afterEach, describe, expect, it } from 'vitest'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import {
@@ -377,7 +378,10 @@ describe('ide-bridge session/fork (AD-CUX-5)', () => {
     const ctx = new Context()
     ctx.provide(SDK_SESSION_FORK_SERVICE, {
       forkSession: async (parentSessionId: string, options?: { boundarySeq?: number }) => {
-        forked.push({ parent: parentSessionId, boundarySeq: options?.boundarySeq })
+        forked.push({
+          parent: parentSessionId,
+          ...(options?.boundarySeq === undefined ? {} : { boundarySeq: options.boundarySeq }),
+        })
         return 'child-from-fork'
       },
     })
@@ -441,7 +445,7 @@ describe('ide-bridge approval / user-questions round-trip (AC-16/17/20)', () => 
     let nextCalled = false
     const outcome = await ctx.waterfall(
       'approval/request',
-      { agent: { id: 'a', session: { id: 'sess-1' } }, toolName: 'bash' },
+      { agent: stubAgent('a', 'sess-1'), toolName: 'bash' },
       () => {
         nextCalled = true
         return Promise.resolve('allowed-once' as const)
@@ -478,7 +482,7 @@ describe('ide-bridge approval / user-questions round-trip (AC-16/17/20)', () => 
     const answer = await ctx.waterfall(
       'user-questions/request',
       {
-        agent: { id: 'a', session: { id: 'sess-1' } },
+        agent: stubAgent('a', 'sess-1'),
         questions: [{ id: 'q1', question: 'ok?' }],
       },
       () => Promise.reject(new UserQuestionError('fallback', 'NO_PROVIDER')),
@@ -510,7 +514,7 @@ describe('ide-bridge fail-closed (AC-19)', () => {
     let nextCalled = false
     const approval = await ctx.waterfall(
       'approval/request',
-      { agent: { id: 'a', session: { id: 's' } }, toolName: 'bash' },
+      { agent: stubAgent('a', 's'), toolName: 'bash' },
       () => {
         nextCalled = true
         return Promise.resolve('allowed-once' as const)
@@ -542,7 +546,7 @@ describe('ide-bridge fail-closed (AC-19)', () => {
 
     const outcome = await ctx.waterfall(
       'approval/request',
-      { agent: { id: 'a', session: { id: 's' } }, toolName: 'bash' },
+      { agent: stubAgent('a', 's'), toolName: 'bash' },
       () => Promise.resolve('allowed-once' as const),
     )
     expect(outcome).toBe('unavailable')
@@ -566,7 +570,7 @@ describe('ide-bridge fail-closed (AC-19)', () => {
 
     const pending = ctx.waterfall(
       'approval/request',
-      { agent: { id: 'a', session: { id: 's' } }, toolName: 'bash' },
+      { agent: stubAgent('a', 's'), toolName: 'bash' },
       () => Promise.resolve('allowed-once' as const),
     )
     await waitFor(() => host.connectionCount() >= 1, 1_000)
@@ -639,6 +643,10 @@ describe('ide-bridge permission RPC (AC-21/22)', () => {
     await host.close()
   })
 })
+
+function stubAgent(id: string, sessionId: string): Agent {
+  return { id, session: { id: sessionId } } as unknown as Agent
+}
 
 function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
