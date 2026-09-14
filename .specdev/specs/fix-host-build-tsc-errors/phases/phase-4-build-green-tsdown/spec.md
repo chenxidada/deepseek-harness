@@ -39,3 +39,9 @@
 ## 产出清单
 
 - 新增 `packages/specdev/command-specdev/tsdown.config.ts`
+
+## Amendments
+
+| 编号 | 日期 | 原始章节 | 变更内容 | 批准人 | 偏差来源 |
+|------|------|---------|---------|--------|---------|
+| A1 | 2026-09-14 | §约束 | 「与 specdev / specdev-gate / specdev-advance / specdev-presets 完全一致」澄清为「与 3 个单入口兄弟包（specdev / specdev-gate / specdev-advance）逐字一致；specdev-presets 为双入口数组变体，command-specdev 因 src 仅含 index.ts 采用单入口形式」 | reviewer | implementation.md 偏差 1 |

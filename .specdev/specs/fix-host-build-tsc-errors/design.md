@@ -164,7 +164,7 @@
 
 | # | 日期 | 原设计章节 | 修改为 | 批准人 | 偏差来源 |
 |---|------|-----------|--------|--------|---------|
-| — | — | — | — | — | — |
+| A1 | 2026-09-14 | §决策 D-3 | 「与 4 个 specdev 兄弟包完全一致」澄清为「与 3 个单入口兄弟包（specdev / specdev-gate / specdev-advance）逐字一致；specdev-presets 为双入口数组变体，command-specdev 因 src 仅含 index.ts 采用单入口形式」 | reviewer | implementation.md 偏差 1 |
 
 ## 建议的下一步
 
