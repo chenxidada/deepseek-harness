@@ -125,7 +125,7 @@ function wrapDispatchRole(ctx: Context, gitReader: GitBranchReader): void {
     const cwd = parent.session.header.cwd ?? process.cwd()
     const auth = resolveAuthoritativeStatus(ctx, parent.session, { cwd })
     const denial = evaluateRoleDispatch(role, auth, {
-      gitBranch: role === 'implementer' ? gitReader(cwd) : undefined,
+      ...role === 'implementer' ? { gitBranch: gitReader(cwd) } : {},
     })
     if (denial !== undefined) {
       throw new SpecdevGateDeniedError(denial)
@@ -164,7 +164,7 @@ function evaluateForRole(
   const cwd = session.header.cwd ?? authoritySession.header.cwd ?? process.cwd()
   const auth = resolveAuthoritativeStatus(ctx, authoritySession, { cwd })
   return evaluateRoleDispatch(role, auth, {
-    gitBranch: role === 'implementer' ? gitReader(cwd) : undefined,
+    ...role === 'implementer' ? { gitBranch: gitReader(cwd) } : {},
   })
 }
 
