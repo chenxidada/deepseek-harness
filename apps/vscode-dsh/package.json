@@ -22,8 +22,7 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/index.js",
-    "lib/extension.js",
+    "lib/*.js",
     "lib/types/**/*.d.ts",
     "media/**/*",
     "webview/dist/**/*"
@@ -31,8 +30,9 @@
   "scripts": {
     "webview:build": "vite build --config webview/vite.config.ts",
     "build:webview": "pnpm run webview:build",
-    "vscode:prepublish": "pnpm run webview:build",
-    "prepublishOnly": "pnpm run webview:build"
+    "build:host": "tsc -b && tsdown",
+    "vscode:prepublish": "pnpm run build:host && pnpm run webview:build",
+    "prepublishOnly": "pnpm run build:host && pnpm run webview:build"
   },
   "engines": {
     "vscode": "^1.90.0"
@@ -215,6 +215,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
     "vite": "^6.0.0",
     "vitest": "^4.1.8"
