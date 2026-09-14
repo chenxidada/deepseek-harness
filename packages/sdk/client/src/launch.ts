@@ -117,17 +117,15 @@ export function resolveDshNodeLaunchFromManifests(
 }
 
 /**
- * Node executable used to spawn dsh. Extension Hosts expose Electron as
- * `process.execPath`; that binary cannot resolve this monorepo's workspace
- * packages the way a real Node does, so prefer `DSH_NODE_BIN` or `node` on PATH.
- * @returns absolute Node path, or the `node` command name for PATH lookup.
+ * Node executable used to spawn dsh. A caller-provided `DSH_NODE_BIN` wins;
+ * otherwise the current process executable is returned, so an Extension Host
+ * spawns Electron's bundled Node (22.x on current VS Code) rather than a bare
+ * `node` that PATH may resolve to an older version missing Node 22 APIs.
+ * @returns the absolute Node path to spawn.
  */
 export function resolveNodeExecutable(): string {
   if (process.env.DSH_NODE_BIN !== undefined && process.env.DSH_NODE_BIN !== '') {
     return process.env.DSH_NODE_BIN
-  }
-  if (process.versions.electron !== undefined) {
-    return 'node'
   }
   return process.execPath
 }
@@ -162,6 +160,12 @@ export function resolveDshLaunch(
     ...(options.patches ?? []).map(path => resolve(callerCwd, path)),
   ]
   const dshHome = options.dshHome === undefined ? undefined : resolve(callerCwd, options.dshHome)
+  // Electron's binary only runs as Node when this env flag is set; without it
+  // the spawn launches a GUI process instead of the harness subprocess.
+  const dshNodeBinSet = process.env.DSH_NODE_BIN !== undefined && process.env.DSH_NODE_BIN !== ''
+  const electronNodeEnv = process.versions.electron !== undefined && !dshNodeBinSet
+    ? { ELECTRON_RUN_AS_NODE: '1' as const }
+    : {}
   return {
     command: resolveNodeExecutable(),
     args: [...dshLaunch.nodeArgs, '--profile', profile, ...patches.flatMap(path => ['--patch', path])],
@@ -169,6 +173,7 @@ export function resolveDshLaunch(
     environment: () => ({
       ...(options.env ?? process.env),
       ...dshLaunch.environment,
+      ...electronNodeEnv,
       ...dshHome === undefined ? {} : { DSH_HOME: dshHome },
     }),
     description: `dsh profile ${JSON.stringify(profile)}`,
