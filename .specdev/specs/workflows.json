@@ -33,8 +33,9 @@
     "handoff": ".specdev/specs/vscode-dsh-chat-ux/feature-delivery-summary.md"
   },
   "vscode-dsh-editor-chat-panel": {
-    "status": "active",
+    "status": "completed",
     "created": "2026-09-11T06:56:26Z",
+    "completed": "2026-09-14T12:46:46Z",
     "description": "对话面板从侧栏 WebviewView 升级为编辑器区 WebviewPanel，面板内多会话 Tab；补齐完整可用级 UI，整合既有 DSH 能力展示（参考 Cursor 式顶栏 Tab 对话体验）"
   },
   "fix-vscode-dsh-host-tsc": {
@@ -50,8 +51,9 @@
     "description": "修复 apps/vscode-dsh 构建产物目录不一致（tsconfig outDir=lib/types 与插件入口 main=lib/extension.js 不匹配）"
   },
   "fix-host-build-tsc-errors": {
-    "status": "active",
+    "status": "completed",
     "created": "2026-09-14T05:52:00Z",
+    "completed": "2026-09-14T12:46:46Z",
     "description": "修复根 build:lib:host 统一命令被 specdev/specdev-gate/sdk/server/ide-bridge 等包的预先存在类型错误及 dsh-command-specdev 缺 tsdown entry 阻断的问题"
   }
 }
