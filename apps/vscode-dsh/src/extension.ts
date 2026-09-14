@@ -203,22 +203,22 @@ interface VsCodeLike {
       uri: { fsPath: string; scheme?: string }
       getText(): string
       isDirty: boolean
-      save?(): Thenable<boolean> | Promise<boolean> | boolean
+      save?(): PromiseLike<boolean> | Promise<boolean> | boolean
     }>
     /**
      * VS Code workspace.fs duck type for closed-file revert (AD-CCD-10).
      */
     fs?: {
-      writeFile(uri: unknown, content: Uint8Array): Thenable<void> | Promise<void>
-      delete(uri: unknown, options?: { recursive?: boolean; useTrash?: boolean }): Thenable<void> | Promise<void>
-      createDirectory?(uri: unknown): Thenable<void> | Promise<void>
-      stat?(uri: unknown): Thenable<{ type?: number; size?: number }> | Promise<{ type?: number; size?: number }>
+      writeFile(uri: unknown, content: Uint8Array): PromiseLike<void> | Promise<void>
+      delete(uri: unknown, options?: { recursive?: boolean; useTrash?: boolean }): PromiseLike<void> | Promise<void>
+      createDirectory?(uri: unknown): PromiseLike<void> | Promise<void>
+      stat?(uri: unknown): PromiseLike<{ type?: number; size?: number }> | Promise<{ type?: number; size?: number }>
     }
     /**
      * Apply a WorkspaceEdit when reverting an open document (AD-CCD-10).
      * @param edit - opaque WorkspaceEdit-like object.
      */
-    applyEdit?(edit: unknown): Thenable<boolean> | Promise<boolean>
+    applyEdit?(edit: unknown): PromiseLike<boolean> | Promise<boolean>
   }
   /**
    * Optional WorkspaceEdit constructor for open-document revert.
@@ -2088,12 +2088,12 @@ async function runAskAboutSelection(vscode: VsCodeLike): Promise<unknown> {
   const result = await askAboutSelection({
     getActiveEditor: () => vscode.window.activeTextEditor,
     getWorkspaceFolders: () => (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath),
-    asRelativePath: vscode.workspace.asRelativePath === undefined
-      ? undefined
-      : (fsPath) => {
-        const relative = vscode.workspace.asRelativePath
-        return relative === undefined ? fsPath : relative(fsPath, false)
-      },
+    ...(vscode.workspace.asRelativePath === undefined
+      ? {}
+      : { asRelativePath: (fsPath) => {
+          const relative = vscode.workspace.asRelativePath
+          return relative === undefined ? fsPath : relative(fsPath, false)
+        } }),
     selectionMeta: selectionMetaStore,
     ensureLiveTab: () => {
       const active = controller.registry.getActive()

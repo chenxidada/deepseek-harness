@@ -1170,7 +1170,9 @@ export class ConversationController {
       }
       return { ok: false, changeId, reason: 'gates-unconfirmed' }
     }
-    const result = await executeRevert(deps, changeId, { skipWrite: options.skipWrite })
+    const result = await executeRevert(deps, changeId, {
+      ...(options.skipWrite === undefined ? {} : { skipWrite: options.skipWrite }),
+    })
     if (result.ok) {
       const rec = this.changes.getById(changeId)
       if (rec !== undefined) {
@@ -1202,8 +1204,8 @@ export class ConversationController {
     }
     const results = await executeRevertMany(deps, changeIds, {
       confirmedGates: options.confirmedGates ?? new Set(),
-      confirmGate: options.confirmGate,
-      skipWrite: options.skipWrite,
+      ...options.confirmGate === undefined ? {} : { confirmGate: options.confirmGate },
+      ...options.skipWrite === undefined ? {} : { skipWrite: options.skipWrite },
     })
     const sessions = new Set<string>()
     for (const result of results) {
@@ -1795,8 +1797,8 @@ export class ConversationController {
         ...turn === undefined ? {} : { turn },
       }
       this.messages.append(sessionId, message)
-      this.streamingAssistant.set(sessionId, { messageId, turn })
-      streaming = { messageId, turn }
+      this.streamingAssistant.set(sessionId, { messageId, ...turn === undefined ? {} : { turn } })
+      streaming = { messageId, ...turn === undefined ? {} : { turn } }
       const active = this.registry.getActive()
       if (active !== undefined && active.sessionId === sessionId) {
         this.panelHost?.pushAppend(message)

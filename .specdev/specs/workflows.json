@@ -36,5 +36,10 @@
     "status": "active",
     "created": "2026-09-11T06:56:26Z",
     "description": "对话面板从侧栏 WebviewView 升级为编辑器区 WebviewPanel，面板内多会话 Tab；补齐完整可用级 UI，整合既有 DSH 能力展示（参考 Cursor 式顶栏 Tab 对话体验）"
+  },
+  "fix-vscode-dsh-host-tsc": {
+    "status": "active",
+    "created": "2026-09-14T01:30:00Z",
+    "description": "修复 apps/vscode-dsh Host 侧 tsc 严格类型错误（matchTiers/matchTier、Thenable、exactOptionalPropertyTypes）"
   }
 }

@@ -28,7 +28,7 @@ export interface SearchHit {
   sessionId: string
   title: string
   mtime: number
-  matchTier: SearchMatchTier[]
+  matchTiers: SearchMatchTier[]
   /** Present when tier 1 matched. */
   matchField?: Tier1MatchField
   firstUserPreview?: string

@@ -275,7 +275,9 @@ export async function executeRevertMany(
       results.push({ ok: false, changeId, reason: 'cancelled', cancelled: true })
       continue
     }
-    results.push(await executeRevert(deps, changeId, { skipWrite: options.skipWrite }))
+    results.push(await executeRevert(deps, changeId, {
+      ...(options.skipWrite === undefined ? {} : { skipWrite: options.skipWrite }),
+    }))
   }
   return results
 }

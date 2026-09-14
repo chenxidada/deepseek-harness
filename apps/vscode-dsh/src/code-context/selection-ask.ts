@@ -19,7 +19,7 @@ export interface EditorSelectionLike {
 export interface TextDocumentLike {
   uri: { fsPath: string; scheme?: string }
   isDirty: boolean
-  save(): Thenable<boolean> | Promise<boolean> | boolean
+  save(): PromiseLike<boolean> | Promise<boolean> | boolean
   languageId?: string
 }
 
