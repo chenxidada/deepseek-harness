@@ -53,6 +53,11 @@ console.log(result.finalResponse)
 
 本客户端为每种失败模式导出类型化错误：`JsonRpcResponseError`（协议错误响应，保留 code 与 data）、`RequestTimeoutError`（配置的时限已到）、`SdkProtocolError`（响应超出文档化协议）、`TransportClosedError`（运行时已消失——消息携带退出码与有界 stderr 尾部）。`close()` 先请求协议 `shutdown`（受 `shutdownTimeoutMs` 约束，默认 1000 毫秒），然后走 stdin-EOF → SIGTERM → SIGKILL 阶梯直到进程退出；幂等，已关闭的客户端拒绝复用。`HarnessClientOptions.env` 给定时整体替换子进程环境（`undefined` 原样继承父进程环境）；凭据策略归调用方——`dsh-subprocess` 的 `scrubbedParentEnv` 是面向隔离启动的共享擦除基底。
 
+<a id="choosing-the-node-executable"></a>
+### 选择 Node 可执行文件
+
+运行时子进程由本客户端解析出的 Node 可执行文件承载，绝不使用经 `PATH` 找到的 `node`。`resolveNodeExecutableSpec({ nodeBinSetting? })` 按以下顺序取第一个非空输入，返回 `ResolvedNodeExecutable { path, source, electronRunAsNode }`：`DSH_NODE_BIN` 环境变量、调用方的 `nodeBinSetting` 值（嵌入方传入自己的配置项）、然后是本进程自身的可执行文件。请把该对象作为 `HarnessClientOptions.nodeExecutable` 传回，使你校验过的那个可执行文件就是被 spawn 的那个；省略时走同一解析函数。`source` 报告命中的输入；`electronRunAsNode` 仅在 Electron 下的 `process.execPath` 为 true，此时 `resolveDshLaunch()` 会注入 `ELECTRON_RUN_AS_NODE=1`。安装一个客户端无法使用的 Node 属于调用方的环境问题，因此本包只负责解析与报告；探测可执行文件的版本与 API、并对结果给出诊断，属于嵌入方应用的职责。
+
 -----
 
 <a id="understand-the-implementation"></a>

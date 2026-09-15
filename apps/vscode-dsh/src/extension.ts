@@ -31,7 +31,7 @@ import {
   reviewWorkspaceDiffs,
   type DiffVsCodeLike,
 } from './diff-entry.ts'
-import { IdeSessionHost } from './session-host.ts'
+import { HostStartError, IdeSessionHost } from './session-host.ts'
 import {
   confirmDeleteConversation,
   confirmRevertDeleteCreated,
@@ -45,6 +45,7 @@ import {
   type InteractionQuickPick,
 } from './interaction-ui.ts'
 import { redactSecrets } from './redact.ts'
+import { NODE_BIN_SETTING } from './node-env-guard.ts'
 import type { ConversationRegistrySnapshot, ConversationTab } from './conversation-registry.ts'
 import type { TimelineDiffHunk, TimelineItem } from './timeline-store.ts'
 import {
@@ -219,6 +220,20 @@ interface VsCodeLike {
      * @param edit - opaque WorkspaceEdit-like object.
      */
     applyEdit?(edit: unknown): PromiseLike<boolean> | Promise<boolean>
+    /**
+     * Read this extension's settings (AD-10).
+     * @param section - configuration section id, `dsh` for this extension.
+     * @returns accessor for the section's values.
+     */
+    getConfiguration?(section: string): {
+      /**
+       * Read one value from the section. The value is untrusted: a non-string
+       * result fails the start instead of being coerced to a path.
+       * @param key - setting name without the section prefix.
+       * @returns the configured value, or `undefined` when unset.
+       */
+      get?(key: string): unknown
+    }
   }
   /**
    * Optional WorkspaceEdit constructor for open-document revert.
@@ -2155,6 +2170,27 @@ function detectCredentialsFromEnv(): boolean {
 }
 
 /**
+ * Read the `dsh.nodeBin` Node executable setting (AD-10). A non-string value
+ * fails loud under the `invalid-setting` class: selecting a different Node
+ * executable silently would hide the misconfiguration the setting exists to
+ * fix.
+ * @param vscode - duck-typed vscode.
+ * @returns the configured Node executable path (possibly empty), or `undefined` when unset.
+ */
+function readNodeBinSetting(vscode: VsCodeLike): string | undefined {
+  const configuration = vscode.workspace.getConfiguration?.('dsh')
+  const value: unknown = configuration === undefined ? undefined : configuration.get?.('nodeBin')
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string') {
+    throw new HostStartError(
+      'invalid-setting',
+      `${NODE_BIN_SETTING} must be a path to a Node.js executable string, got ${typeof value}`,
+    )
+  }
+  return value
+}
+
+/**
  * Collect credential env bag for IdeSessionHost.start (redacted elsewhere).
  */
 function collectCredentialsEnv(): NodeJS.ProcessEnv {
@@ -2216,8 +2252,10 @@ function createStartHostPort(vscode: VsCodeLike): StartHostPort {
       host = next
       try {
         const credentials = collectCredentialsEnv()
+        const nodeBinSetting = readNodeBinSetting(vscode)
         await next.start({
           cwd,
+          ...nodeBinSetting === undefined ? {} : { nodeBinSetting },
           ...Object.keys(credentials).length === 0 ? {} : { credentials },
         })
         bindConversations(new ConversationController(

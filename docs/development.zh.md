@@ -10,7 +10,7 @@
 
 ### 前置条件
 
-- Node.js 支持 22.19+ 与 24+。CI 覆盖 22.19、24 和 26；见 [Node 引擎下限 Agent Note](../.agents/notes/implemented/process/2026-07-06-node-engine-floor.zh.md)。
+- Node.js 支持 22.19+ 与 24+。CI 覆盖 22.19、24 和 26；见 [Node 引擎下限 Agent Note](../.agents/notes/implemented/process/2026-07-06-node-engine-floor.zh.md)。[Node 环境](#node-environment) 一节说明所需 API、`dsh` 子进程的 Node 解析顺序，以及两侧各自的修复方式。
 - 启用了 Corepack 的 pnpm。仓库在 `package.json` 中固定使用 `pnpm@11.7.0`；如果 `pnpm --version` 无法通过 Corepack 解析，请先运行 `corepack enable`。
 - Git 2.26 或更高版本；钩子设置会启用 Git 的 worktree 专属配置扩展。
 - 可选：一个 DeepSeek API key，用于 Web、headless 和 ACP（Agent Client Protocol）自动化 agent（智能体）演示以及真实 API 的 e2e 测试。
@@ -103,6 +103,37 @@ DEEPSEEK_BASE_URL=https://... # optional
 ```
 
 `DEEPSEEK_BASE_URL` 可选，默认为公开 API。请勿提交真实凭证。未设置 `DEEPSEEK_API_KEY` 时，真实 API 的 e2e 套件会自动跳过。
+
+<a id="node-environment"></a>
+### Node 环境
+
+harness 运行在 Node.js 22.19 及以上的 22 线、或 24 及以上。版本下限只由一个地方负责——根 [`package.json`](../package.json) 的 `engines.node`；扩展在被强制执行的范围内镜像该值，并由测试保证两者相等。[`.nvmrc`](../.nvmrc) 指明本仓库的检查所依据的 24.3.0 发布版。会话日志写为 `.jsonl.zstd`，这需要 `zlib.createZstdDecompress`；运行时还需要 `Promise.withResolvers`。这两个 API 都早于版本下限，因此低于 22.19 的 Node 会在第一次写会话日志时失败而不是在启动时失败——这正是扩展在 spawn 任何东西之前先检查它们的原因。该检查判定的是这两个 API，而不是版本号字符串：两者齐备的解释器即使自报版本落在范围之外也会被接受（扩展宿主自带的 Electron Node 就是这种情况），诊断改为报告检测到的版本与期望范围，而不是据此拒绝。
+
+`dsh` 会话子进程由按以下顺序取第一个非空输入解析出的 Node 可执行文件承载：`DSH_NODE_BIN` 环境变量，然后是 VS Code 设置 `dsh.nodeBin`，然后是扩展宿主已经在使用的 Node.js 进程（`process.execPath`）。解析绝不查询 `PATH`，不可用的输入绝不会被静默跳过而改用后续来源，检查失败会报告解析到的路径、探测到的版本、期望范围、缺失的能力以及修复方法。自行持有设置项的嵌入方读取同一个函数：[`resolveNodeExecutableSpec()`](../packages/sdk/client/README.zh.md#choosing-the-node-executable) 返回路径与选中它的输入。
+
+**仓库侧职责。** 每行是本仓库已交付的机制及其验证命令。
+
+| 机制 | 验证 |
+|---|---|
+| Node 下限由 `engines.node` 负责、并由扩展强制执行的版本范围镜像，同时为版本管理器在 `.nvmrc` 中固定 | `node --version` 报告的版本被 `engines.node` 接受、扩展强制执行的版本范围与该字段相等、`.nvmrc` 指明本仓库的检查所依据的那个发布版，且 `pnpm run typecheck` 以 0 退出 |
+| 扩展侧前置校验、五要素诊断与 `dsh.nodeBin` 设置项 | `pnpm run test apps/vscode-dsh` |
+| SDK 客户端中的 `DSH_NODE_BIN` > `dsh.nodeBin` > 扩展宿主 Node 解析链 | `pnpm run test packages/sdk/client` |
+| 本页与其 `.i18n.yaml` 配对记录 | `pnpm run test:docs` |
+| 全部文档门禁，含双语配对 | `pnpm run doc-sync` |
+
+**本机环境侧职责。** 你的终端与扩展的子进程是两个独立的 Node 使用方，各自需要各自的处理。
+
+*终端侧* —— 运行 `pnpm`、CLI 与测试的那个 Node：
+
+- `node --version` 输出 `v22.19.*`，或 `v24.*` 及以上。若排在 `PATH` 首位的 `node` 低于 pnpm 自身的下限，`pnpm` 会在启动任何脚本之前直接拒绝，所以请先检查这一项。
+- 在当前 shell 中选定该版本：`nvm use`（读取 `.nvmrc`）或 `n 24.3.0`，随后重新运行 `node --version` 确认切换已生效。
+- 如果版本管理器的 bin 目录不在 `PATH` 首位，请前置它：`export PATH="/usr/local/n/versions/node/24.3.0/bin:$PATH"`。
+
+*扩展子进程侧* —— 在 VS Code 下运行 `dsh` 的那个 Node；VS Code 从图形界面启动，不继承登录 shell 的 `PATH`：
+
+- 在 VS Code 设置中配置 `dsh.nodeBin`（`"dsh.nodeBin": "/usr/local/n/versions/node/24.3.0/bin/node"`），或在 VS Code 自身继承的环境中导出 `DSH_NODE_BIN`。`DSH_NODE_BIN` 优先于设置项；两者都优先于扩展宿主自带的 Node。
+- 随时确认所选可执行文件满足下限：`/usr/local/n/versions/node/24.3.0/bin/node --version`。
+- 改动 `dsh.nodeBin` 或 `DSH_NODE_BIN` 后请重新加载窗口：从命令面板运行 `Developer: Reload Window`（`workbench.action.reloadWindow`）。扩展在每次启动时重新读取设置项，不缓存。
 
 ### Git 集成
 

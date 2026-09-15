@@ -8,7 +8,7 @@ The setup tutorial takes a new contributor from prerequisites to a checked check
 
 ### Prerequisites
 
-- Node.js supports 22.19+ and 24+. CI covers 22.19, 24, and 26; see the [Node engine floor Agent Note](../.agents/notes/implemented/process/2026-07-06-node-engine-floor.md).
+- Node.js supports 22.19+ and 24+. CI covers 22.19, 24, and 26; see the [Node engine floor Agent Note](../.agents/notes/implemented/process/2026-07-06-node-engine-floor.md). The [Node environment](#node-environment) section covers the required APIs, the Node resolution order for `dsh` subprocesses, and how to fix each side.
 - Corepack-enabled pnpm. The repo pins `pnpm@11.7.0` in `package.json`; run `corepack enable` if `pnpm --version` does not resolve through Corepack.
 - Git 2.26 or newer; hook setup enables Git's worktree-specific configuration extension.
 - Optional: a DeepSeek API key for the Web, headless, and ACP automation demos and real-API e2e tests.
@@ -99,6 +99,36 @@ DEEPSEEK_BASE_URL=https://... # optional
 ```
 
 `DEEPSEEK_BASE_URL` is optional and defaults to the public API. Never commit real credentials. The real-API e2e suites self-skip when `DEEPSEEK_API_KEY` is not set.
+
+### Node environment
+
+The harness runs on Node.js 22.19 or later on the 22 line, or 24 and later. The floor has one owner, `engines.node` in the root [`package.json`](../package.json), which the extension mirrors in the range it enforces and a test keeps equal to that field; [`.nvmrc`](../.nvmrc) names the 24.3.0 release this repository's checks were verified against. Session logs are written as `.jsonl.zstd`, which needs `zlib.createZstdDecompress`, and the runtime needs `Promise.withResolvers`. Both APIs predate the floor, so a Node older than 22.19 fails at the first session write rather than at startup, which is why the extension checks them before it spawns anything. That check tests those two APIs, not the version string: an interpreter that provides both is accepted even when the version it reports falls outside the range, because the Extension Host's own Electron Node is such a case, and the diagnostic reports the detected version against the expected range instead of rejecting on it.
+
+`dsh` session subprocesses run under a Node executable resolved from the first non-empty input in this order: the `DSH_NODE_BIN` environment variable, then the VS Code setting `dsh.nodeBin`, then the Node.js process the extension host already runs in (`process.execPath`). Resolution never consults `PATH`, an unusable input is never silently skipped in favor of a later source, and a failed check reports the resolved path, the detected version, the expected range, the missing capability, and the fix. An Embedder passing its own setting reads the same function: [`resolveNodeExecutableSpec()`](../packages/sdk/client/README.md#choosing-the-node-executable) returns the path together with the input that selected it.
+
+**Repository-side responsibilities.** Each row is a mechanism this repository ships with the command that verifies it.
+
+| Mechanism | Verification |
+|---|---|
+| Node floor owned by `engines.node` and mirrored by the range the extension enforces, pinned for version managers in `.nvmrc` | `node --version` reports a release `engines.node` admits, the extension's enforced range equals that field, `.nvmrc` names the release this repository's checks were run against, and `pnpm run typecheck` exits 0 |
+| Extension pre-flight, five-element diagnostic, and the `dsh.nodeBin` setting | `pnpm run test apps/vscode-dsh` |
+| `DSH_NODE_BIN` > `dsh.nodeBin` > Extension Host Node resolution in the SDK client | `pnpm run test packages/sdk/client` |
+| This page and its `.i18n.yaml` pairing records | `pnpm run test:docs` |
+| All documentation gates, including the bilingual pairing | `pnpm run doc-sync` |
+
+**Local-environment responsibilities.** Your shell and the extension's child processes are separate Node consumers, and each needs its own fix.
+
+*Terminal side* — the Node that runs `pnpm`, the CLI, and the tests:
+
+- `node --version` prints `v22.19.*`, or `v24.*` or later. A `node` below pnpm's own floor first on `PATH` makes `pnpm` reject every script before it starts, so check this before anything else.
+- Pick that version in the current shell with `nvm use` (reads `.nvmrc`) or `n 24.3.0`, then re-run `node --version` to confirm the change took effect.
+- If the version manager's bin directory is not first on `PATH`, prepend it: `export PATH="/usr/local/n/versions/node/24.3.0/bin:$PATH"`.
+
+*Extension subprocess side* — the Node that runs `dsh` under VS Code, which starts from the GUI and does not inherit a login shell's `PATH`:
+
+- Set `dsh.nodeBin` in VS Code settings (`"dsh.nodeBin": "/usr/local/n/versions/node/24.3.0/bin/node"`), or export `DSH_NODE_BIN` in the environment VS Code itself inherits. `DSH_NODE_BIN` wins over the setting; both win over the extension host's own Node.
+- Confirm the chosen executable satisfies the floor on demand: `/usr/local/n/versions/node/24.3.0/bin/node --version`.
+- Reload the window after changing either `dsh.nodeBin` or `DSH_NODE_BIN`: run `Developer: Reload Window` (`workbench.action.reloadWindow`) from the Command Palette. The extension reads the setting on every start and does not cache it.
 
 ### Git integrations
 

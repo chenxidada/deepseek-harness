@@ -46,6 +46,11 @@ describe('phase-2 auto-ready L2', () => {
       },
       workspace: {
         workspaceFolders: folders,
+        getConfiguration(section: string) {
+          // `dsh.nodeBin` unset: the empty value does not participate in Node resolution.
+          void section
+          return { get: () => undefined }
+        },
       },
       commands: {
         registerCommand(command: string, callback: (...args: unknown[]) => unknown) {

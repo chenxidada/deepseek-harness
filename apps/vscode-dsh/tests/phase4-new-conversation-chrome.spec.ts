@@ -72,6 +72,11 @@ describe('phase-4 new-conversation chrome L2/L3', () => {
       },
       workspace: {
         workspaceFolders: [{ uri: { fsPath: '/tmp/dsh-phase4' } }],
+        getConfiguration(section: string) {
+          // `dsh.nodeBin` unset: the empty value does not participate in Node resolution.
+          void section
+          return { get: () => undefined }
+        },
       },
       commands: {
         registerCommand(command: string, callback: (...args: unknown[]) => unknown) {

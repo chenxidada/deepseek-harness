@@ -1,8 +1,9 @@
 /** Public dsh launch resolution for the TypeScript SDK. */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -11,12 +12,49 @@ import {
   resolveDshNodeLaunchFromManifests,
   resolveDshBinFromManifests,
   resolveDshLaunch,
+  resolveNodeExecutableSpec,
 } from '../src/launch.ts'
 
 const cleanups: string[] = []
 afterEach(() => {
   for (const path of cleanups.splice(0)) rmSync(path, { recursive: true, force: true })
 })
+
+/** Run `run` with `DSH_NODE_BIN` set to `value`, restoring the caller value afterwards. */
+function withEnvironmentValue(value: string | undefined, run: () => void): void {
+  const previous = process.env.DSH_NODE_BIN
+  if (value === undefined) delete process.env.DSH_NODE_BIN
+  else process.env.DSH_NODE_BIN = value
+  try {
+    run()
+  } finally {
+    if (previous === undefined) delete process.env.DSH_NODE_BIN
+    else process.env.DSH_NODE_BIN = previous
+  }
+}
+
+/** Run `run` while this process reports an Electron host version. */
+function withElectronHost(run: () => void): void {
+  Object.defineProperty(process.versions, 'electron', { value: '30.0.0', configurable: true })
+  try {
+    run()
+  } finally {
+    delete (process.versions as { electron?: string }).electron
+  }
+}
+
+/**
+ * Create a directory holding an executable `node` and return that path. The
+ * directory is the only `PATH` entry callers pass, so `which node` resolves to
+ * it and its difference from `process.execPath` is observable.
+ */
+function pathOnlyNode(): string {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-sdk-path-node-'))
+  cleanups.push(root)
+  const shim = join(root, 'node')
+  writeFileSync(shim, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  return shim
+}
 
 function manifestPair(dsh: object, client: object): { dshUrl: string; clientUrl: string; root: string } {
   const root = mkdtempSync(join(tmpdir(), 'dsh-sdk-manifests-'))
@@ -188,4 +226,97 @@ describe('SDK dsh launch resolution', () => {
         .toThrow('declares no dsh executable')
     },
   )
+})
+
+describe('SDK Node executable resolution', () => {
+  it('prefers a non-empty DSH_NODE_BIN over the configuration setting', () => {
+    withEnvironmentValue('/environment/node', () => {
+      expect(resolveNodeExecutableSpec({ nodeBinSetting: '/setting/node' }))
+        .toEqual({ path: '/environment/node', source: 'dsh-node-bin', electronRunAsNode: false })
+    })
+  })
+
+  it('runs a DSH_NODE_BIN executable as Node without Electron mode on an Electron host', () => {
+    withEnvironmentValue('/environment/node', () => {
+      withElectronHost(() => {
+        const launch = resolveDshLaunch({ dshBin: '/bin/dsh' })
+        expect(launch.command).toBe('/environment/node')
+        expect(launch.environment().ELECTRON_RUN_AS_NODE).toBeUndefined()
+      })
+    })
+  })
+
+  it('uses the configuration setting when DSH_NODE_BIN is unset', () => {
+    withEnvironmentValue(undefined, () => {
+      expect(resolveNodeExecutableSpec({ nodeBinSetting: '/setting/node' }))
+        .toEqual({ path: '/setting/node', source: 'vscode-setting', electronRunAsNode: false })
+      expect(resolveDshLaunch({ dshBin: '/bin/dsh', nodeExecutable: resolveNodeExecutableSpec({ nodeBinSetting: '/setting/node' }) }).command)
+        .toBe('/setting/node')
+    })
+  })
+
+  it('runs a setting-named executable as Node without Electron mode on an Electron host', () => {
+    withEnvironmentValue(undefined, () => {
+      withElectronHost(() => {
+        const spec = resolveNodeExecutableSpec({ nodeBinSetting: '/setting/node' })
+        expect(spec).toEqual({ path: '/setting/node', source: 'vscode-setting', electronRunAsNode: false })
+        expect(resolveDshLaunch({ dshBin: '/bin/dsh', nodeExecutable: spec }).environment().ELECTRON_RUN_AS_NODE)
+          .toBeUndefined()
+      })
+    })
+  })
+
+  it('treats an empty DSH_NODE_BIN as unset and falls through to the setting', () => {
+    withEnvironmentValue('', () => {
+      expect(resolveNodeExecutableSpec({ nodeBinSetting: '/setting/node' }).source).toBe('vscode-setting')
+    })
+  })
+
+  it('uses a whitespace-only DSH_NODE_BIN as given, because only the empty value counts as unset', () => {
+    withEnvironmentValue('   ', () => {
+      expect(resolveNodeExecutableSpec({ nodeBinSetting: '/setting/node' }))
+        .toEqual({ path: '   ', source: 'dsh-node-bin', electronRunAsNode: false })
+    })
+  })
+
+  it.each(['', '   '])('treats a %j configuration setting as unset and falls through to process.execPath', (value) => {
+    withEnvironmentValue(undefined, () => {
+      expect(resolveNodeExecutableSpec({ nodeBinSetting: value }))
+        .toEqual({ path: process.execPath, source: 'process-exec-path', electronRunAsNode: false })
+    })
+  })
+
+  it('falls through both unset sources to process.execPath with Electron mode on an Electron host', () => {
+    withEnvironmentValue(undefined, () => {
+      withElectronHost(() => {
+        expect(resolveNodeExecutableSpec({ nodeBinSetting: '' }))
+          .toEqual({ path: process.execPath, source: 'process-exec-path', electronRunAsNode: true })
+        expect(resolveDshLaunch({ dshBin: '/bin/dsh' }).environment().ELECTRON_RUN_AS_NODE).toBe('1')
+      })
+    })
+  })
+
+  it('never resolves Node through PATH when every source is unset', () => {
+    const pathNode = pathOnlyNode()
+    // The shim shadows any real `node` on PATH, so a PATH-resolving implementation
+    // would return it instead of process.execPath.
+    const which = spawnSync('which', ['node'], {
+      env: { ...process.env, PATH: `${dirname(pathNode)}${delimiter}${process.env.PATH ?? ''}` },
+    })
+    expect(which.status).toBe(0)
+    expect(which.stdout.toString().trim()).toBe(pathNode)
+
+    withEnvironmentValue(undefined, () => {
+      const spec = resolveNodeExecutableSpec({ nodeBinSetting: '  ' })
+      expect(spec.path).toBe(process.execPath)
+      expect(spec.path).not.toBe(pathNode)
+    })
+  })
+
+  it('spawns the exact executable object the caller resolved and validated', () => {
+    const spec = { path: '/checked/node', source: 'vscode-setting' as const, electronRunAsNode: false }
+    const launch = resolveDshLaunch({ dshBin: '/bin/dsh', nodeExecutable: spec })
+    expect(launch.command).toBe(spec.path)
+    expect(launch.environment().ELECTRON_RUN_AS_NODE).toBeUndefined()
+  })
 })

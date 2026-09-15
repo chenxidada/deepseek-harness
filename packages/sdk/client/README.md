@@ -53,6 +53,10 @@ The subprocess starts lazily on first use and stays owned by the instance across
 
 The client exports typed errors for every failure mode: `JsonRpcResponseError` (a wire error response, code and data preserved), `RequestTimeoutError` (a configured bound elapsed), `SdkProtocolError` (a response outside the documented protocol), and `TransportClosedError` (the runtime is gone — the message carries the exit code and a bounded stderr tail). `close()` requests protocol `shutdown` (bounded by `shutdownTimeoutMs`, default 1000 ms), then walks a stdin-EOF → SIGTERM → SIGKILL ladder until the process has exited; it is idempotent, and a closed client refuses reuse. `HarnessClientOptions.env` replaces the child environment entirely when given (`undefined` inherits the parent's); callers own credential policy — `scrubbedParentEnv` from `dsh-subprocess` is the shared scrub base for isolation-minded launches.
 
+### Choosing the Node executable
+
+The runtime subprocess runs under a Node executable this client resolves, never under a `node` found through `PATH`. `resolveNodeExecutableSpec({ nodeBinSetting? })` returns `ResolvedNodeExecutable { path, source, electronRunAsNode }` from the first non-empty input in this order: the `DSH_NODE_BIN` environment variable, the caller's `nodeBinSetting` value (an embedding application passes its own configuration setting), then this process's own executable. Pass that object back as `HarnessClientOptions.nodeExecutable` so the executable you validated is the one spawned; omitting it resolves through the same function. `source` reports which input won, and `electronRunAsNode` is true only for `process.execPath` under Electron, where `resolveDshLaunch()` then injects `ELECTRON_RUN_AS_NODE=1`. Installing a Node executable the client cannot use is a caller-side environment problem, so this package resolves and reports; probing an executable's version and APIs, and diagnosing the result, belongs to the embedding application.
+
 -----
 
 <a id="understand-the-implementation"></a>

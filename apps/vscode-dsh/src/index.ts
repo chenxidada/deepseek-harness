@@ -22,7 +22,21 @@ export {
   type ConnectionUiPhase,
   type ConnectionUiState,
 } from './connection-ui.ts'
-export { IdeSessionHost, type IdeSessionHostStartOptions, type IdeSessionHostStatus } from './session-host.ts'
+export { IdeSessionHost, HostStartError, type HostStartErrorKind, type IdeSessionHostStartOptions, type IdeSessionHostStatus } from './session-host.ts'
+export {
+  DSH_NODE_BIN_VARIABLE,
+  EXPECTED_NODE_RANGE,
+  NODE_BIN_SETTING,
+  NodeEnvironmentError,
+  REQUIRED_NODE_APIS,
+  assertNodeExecutable,
+  formatNodeEnvironmentDiagnostics,
+  validateNodeEnvironment,
+  type NodeEnvironmentFailure,
+  type NodeEnvironmentFailureKind,
+  type NodeEnvironmentReport,
+  type NodeEnvironmentValidation,
+} from './node-env-guard.ts'
 export { buildIdeChildEnv, type IdeChildEnvOptions } from './env.ts'
 export { redactSecrets } from './redact.ts'
 export {

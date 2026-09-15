@@ -20,6 +20,29 @@ export interface HarnessNotification {
 /** Predicate deciding whether a subscription receives a notification. */
 export type NotificationFilter = (notification: HarnessNotification) => boolean
 
+/** Which input selected the Node executable a client spawns. */
+export type NodeExecutableSource = 'dsh-node-bin' | 'vscode-setting' | 'process-exec-path'
+
+/**
+ * One resolved Node executable. A caller validates this object and hands the
+ * same object back through {@link HarnessClientOptions.nodeExecutable}, so the
+ * spawned executable cannot diverge from the validated one.
+ */
+export interface ResolvedNodeExecutable {
+  /** Absolute path of the Node executable to spawn. */
+  path: string
+  /** Input that selected `path`; resolution order is `dsh-node-bin`, then `vscode-setting`, then `process-exec-path`. */
+  source: NodeExecutableSource
+  /** Whether `path` is Electron's own binary and therefore needs `ELECTRON_RUN_AS_NODE=1` to run as Node. */
+  electronRunAsNode: boolean
+}
+
+/** Inputs selecting the Node executable; the parent environment supplies `DSH_NODE_BIN`. */
+export interface NodeExecutableRequest {
+  /** VS Code Node executable path setting; empty or whitespace-only does not participate in resolution. */
+  nodeBinSetting?: string
+}
+
 /** Launch and timeout options for {@link HarnessClient}. */
 export interface HarnessClientOptions {
   /** Absolute or caller-relative dsh CLI module; omitted resolves this package's same-version dependency. */
@@ -30,6 +53,12 @@ export interface HarnessClientOptions {
   patches?: string[]
   /** Explicit Harness home for this child; relative paths resolve before spawn. */
   dshHome?: string
+  /**
+   * Node executable to spawn for this child. Pass the object returned by the
+   * SDK's Node resolution so the executable the caller validated is the one
+   * spawned; omitted resolves from `DSH_NODE_BIN`, else `process.execPath`.
+   */
+  nodeExecutable?: ResolvedNodeExecutable
   /** Working directory for the dsh process itself. */
   processCwd?: string
   /**

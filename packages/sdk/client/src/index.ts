@@ -18,6 +18,7 @@ export {
   TransportClosedError,
 } from './client.ts'
 export type { NotificationSubscription } from './client.ts'
+export { resolveNodeExecutableSpec } from './launch.ts'
 export { JsonRpcResponseError } from '@deepseek-ai/dsh-sdk-protocol'
 export type {
   ContentBlock,
@@ -25,6 +26,9 @@ export type {
   DeepSeekHarnessOptions,
   HarnessClientOptions,
   HarnessNotification,
+  NodeExecutableRequest,
+  NodeExecutableSource,
   NotificationFilter,
+  ResolvedNodeExecutable,
   RunResult,
 } from './types.ts'

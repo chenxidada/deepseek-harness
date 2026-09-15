@@ -11,7 +11,9 @@ import { randomUUID } from 'node:crypto'
 import {
   HarnessClient,
   TransportClosedError,
+  resolveNodeExecutableSpec,
   type HarnessNotification,
+  type ResolvedNodeExecutable,
   type SdkPromptContentBlock,
 } from '@deepseek-ai/dsh-sdk-client'
 import {
@@ -22,7 +24,9 @@ import {
   type BridgeFrame,
   type IdeBridgeHostConnection,
 } from '@deepseek-ai/dsh-ide-bridge'
+import type { StartErrorKind } from './auto-start-orchestrator.ts'
 import { buildIdeChildEnv } from './env.ts'
+import { assertNodeExecutable, NodeEnvironmentError, type NodeEnvironmentFailure } from './node-env-guard.ts'
 import { InteractionCoordinator, type InteractionUi } from './interaction-coordinator.ts'
 import type { ConversationRegistry } from './conversation-registry.ts'
 import { redactSecrets } from './redact.ts'
@@ -34,6 +38,46 @@ export type IdeSessionHostStatus =
   | 'connected'
   | 'error'
   | 'disconnected'
+
+/**
+ * Class of a failed {@link IdeSessionHost.start}, identical to the
+ * {@link StartErrorKind} the auto-start orchestrator projects, so the class
+ * survives that hop instead of being flattened. `node-environment` means the
+ * spawn was refused by the Node pre-flight, so the failure belongs to the
+ * developer's Node installation rather than to dsh (AC-7, AC-9);
+ * `invalid-setting` means a Node selection setting held a value of the wrong
+ * type, so the failure belongs to that setting's value rather than to dsh;
+ * `process-failed` is the generic member for a start failure this phase does
+ * not classify further (AD-4).
+ */
+export type HostStartErrorKind = StartErrorKind
+
+/**
+ * Failed start with a machine-readable class. A `node-environment` failure
+ * carries the pre-flight `diagnostic` that produced it.
+ */
+export class HostStartError extends Error {
+  /** Which start stage failed. */
+  readonly kind: HostStartErrorKind
+  /** Pre-flight diagnostic; present exactly when `kind` is `node-environment`. */
+  readonly diagnostic: NodeEnvironmentFailure | undefined
+
+  /**
+   * @param kind - which start stage failed.
+   * @param message - redacted user-facing message.
+   * @param options - original cause and, for pre-flight failures, the diagnostic.
+   */
+  constructor(
+    kind: HostStartErrorKind,
+    message: string,
+    options: { cause?: unknown; diagnostic?: NodeEnvironmentFailure } = {},
+  ) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause })
+    this.name = 'HostStartError'
+    this.kind = kind
+    this.diagnostic = options.diagnostic
+  }
+}
 
 /** Options for {@link IdeSessionHost.start}. */
 export interface IdeSessionHostStartOptions {
@@ -61,6 +105,10 @@ export interface IdeSessionHostStartOptions {
   forkTimeoutMs?: number
   /** Bound (ms) for permission RPC round-trips (default 5000). */
   permissionTimeoutMs?: number
+  /** Resolved Node executable to pre-flight and spawn; resolved from the fields below when omitted (AD-1). */
+  nodeExecutable?: ResolvedNodeExecutable
+  /** `dsh.nodeBin` setting value used when no resolved executable is supplied. */
+  nodeBinSetting?: string
 }
 
 /**
@@ -204,7 +252,8 @@ export class IdeSessionHost {
   }
 
   /**
-   * Listen on the bridge, spawn `dsh --profile ide`, and complete initialize.
+   * Pre-flight the resolved Node executable, then listen on the bridge, spawn
+   * `dsh --profile ide`, and complete initialize (AC-4, AC-7).
    * @param options - workspace and launch options.
    */
   async start(options: IdeSessionHostStartOptions): Promise<void> {
@@ -235,6 +284,12 @@ export class IdeSessionHost {
       }
     })
     try {
+      // Node pre-flight first: a subprocess that cannot run must fail before any
+      // socket is opened, and the validated object is the one that gets spawned (AD-1).
+      const nodeExecutable = options.nodeExecutable ?? resolveNodeExecutableSpec(
+        options.nodeBinSetting === undefined ? {} : { nodeBinSetting: options.nodeBinSetting },
+      )
+      await assertNodeExecutable(nodeExecutable)
       await bridge.listen(bridgePath)
       const env = buildIdeChildEnv({
         bridgeSock: bridgePath,
@@ -244,6 +299,7 @@ export class IdeSessionHost {
       const client = new HarnessClient({
         profile: 'ide',
         env,
+        nodeExecutable,
         ...options.dshHome === undefined ? {} : { dshHome: options.dshHome },
         ...options.dshBin === undefined ? {} : { dshBin: options.dshBin },
         ...options.initializeTimeoutMs === undefined
@@ -264,7 +320,13 @@ export class IdeSessionHost {
       const message = error instanceof Error ? error.message : String(error)
       this.errorMessage = redactSecrets(message, this.credentials)
       await this.shutdownInternal('start failed')
-      throw new Error(this.errorMessage, { cause: error })
+      if (error instanceof NodeEnvironmentError) {
+        throw new HostStartError('node-environment', this.errorMessage, {
+          cause: error,
+          diagnostic: error.failure,
+        })
+      }
+      throw new HostStartError('process-failed', this.errorMessage, { cause: error })
     }
   }
 

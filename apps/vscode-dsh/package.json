@@ -54,6 +54,18 @@
     "onView:dsh.chat"
   ],
   "contributes": {
+    "configuration": {
+      "title": "DeepSeek Harness",
+      "properties": {
+        "dsh.nodeBin": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Absolute path to the Node.js executable that runs the dsh session subprocess. The check requires the two Node APIs the harness needs, zlib.createZstdDecompress and Promise.withResolvers; the supported range is Node.js ^22.19.0 || >=24.0.0. Resolution order: the DSH_NODE_BIN environment variable, then this setting, then the Node.js of the Extension Host. Leave empty to not participate in resolution.",
+          "markdownDescription": "Absolute path to the Node.js executable that runs the `dsh` session subprocess. The check requires the two Node APIs the harness needs, `zlib.createZstdDecompress` and `Promise.withResolvers`; the supported range is Node.js `^22.19.0 || >=24.0.0`. Resolution order: the `DSH_NODE_BIN` environment variable, then this setting, then the Node.js of the Extension Host. Leave empty to not participate in resolution."
+        }
+      }
+    },
     "commands": [
       {
         "command": "dsh.startSession",

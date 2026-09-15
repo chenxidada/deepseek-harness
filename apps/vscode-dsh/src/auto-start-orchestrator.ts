@@ -23,8 +23,42 @@ export type StartOrchestratorState =
   | 'disconnected'
   | 'failed'
 
-/** Redacted connection failure classification. */
-export type StartErrorKind = 'missing-credentials' | 'process-failed' | 'other'
+/** Members of {@link StartErrorKind}; the single source for both the type and the guard below. */
+const START_ERROR_KINDS = [
+  'invalid-setting',
+  'missing-credentials',
+  'node-environment',
+  'process-failed',
+] as const
+
+/**
+ * Redacted connection failure classification, aligned member-for-member with
+ * the `HostStartErrorKind` vocabulary `IdeSessionHost.start` throws with, so a
+ * typed start failure reaches this snapshot instead of being flattened into the
+ * generic member (AD-4): `node-environment` when the Node pre-flight refused the
+ * spawn, `invalid-setting` when a Node selection setting held a value of the
+ * wrong type. `process-failed` is the single generic member: a start failure
+ * that reports no class stays there rather than in a second umbrella class.
+ */
+export type StartErrorKind = typeof START_ERROR_KINDS[number]
+
+/**
+ * Read the machine-readable class off a thrown start failure, accepting only a
+ * member of {@link START_ERROR_KINDS}. An unrecognised or absent `kind` becomes
+ * the generic `process-failed` member rather than a class the failure did not
+ * report.
+ * @param error - value a `StartHostPort.start` implementation threw.
+ * @returns the reported class, or `process-failed` when it reported none.
+ */
+function startErrorKindOf(error: unknown): StartErrorKind {
+  const kind: unknown = typeof error === 'object' && error !== null
+    ? (error as { kind?: unknown }).kind
+    : undefined
+  for (const candidate of START_ERROR_KINDS) {
+    if (candidate === kind) return candidate
+  }
+  return 'process-failed'
+}
 
 /** Read-only snapshot for L2 hooks / UI projection. */
 export interface StartOrchestratorSnapshot {
@@ -189,11 +223,7 @@ export class AutoStartOrchestrator {
       } catch (error) {
         if (generation !== this.generation) return
         this.state = 'failed'
-        const kind = typeof error === 'object' && error !== null
-          && (error as { kind?: unknown }).kind === 'missing-credentials'
-          ? 'missing-credentials' as const
-          : 'process-failed' as const
-        this.errorKind = kind
+        this.errorKind = startErrorKindOf(error)
         this.errorMessage = error instanceof Error ? error.message : String(error)
       } finally {
         if (generation !== this.generation) {

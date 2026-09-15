@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { HarnessClientOptions } from './types.ts'
+import type { HarnessClientOptions, NodeExecutableRequest, ResolvedNodeExecutable } from './types.ts'
 
 /** Default bound for a profile to answer the SDK initialize handshake. */
 export const DEFAULT_INITIALIZE_TIMEOUT_MS = 10_000
@@ -117,17 +117,31 @@ export function resolveDshNodeLaunchFromManifests(
 }
 
 /**
- * Node executable used to spawn dsh. A caller-provided `DSH_NODE_BIN` wins;
- * otherwise the current process executable is returned, so an Extension Host
- * spawns Electron's bundled Node (22.x on current VS Code) rather than a bare
- * `node` that PATH may resolve to an older version missing Node 22 APIs.
- * @returns the absolute Node path to spawn.
+ * Resolve the Node executable that will host the dsh subprocess.
+ *
+ * Resolution order, first non-empty source wins: the `DSH_NODE_BIN` environment
+ * variable, the `nodeBinSetting` value the caller read from its own
+ * configuration surface, then this process's own executable — which for an
+ * Electron Extension Host is Electron's bundled Node and never a `node`
+ * resolved through `PATH`. Only `process.execPath` needs Electron's
+ * `ELECTRON_RUN_AS_NODE` mode; a caller-named executable runs as Node directly.
+ * @param request - Node executable inputs; `DSH_NODE_BIN` is read from the environment.
+ * @returns the resolved executable with the input that selected it.
  */
-export function resolveNodeExecutable(): string {
-  if (process.env.DSH_NODE_BIN !== undefined && process.env.DSH_NODE_BIN !== '') {
-    return process.env.DSH_NODE_BIN
+export function resolveNodeExecutableSpec(request: NodeExecutableRequest = {}): ResolvedNodeExecutable {
+  const environmentValue = process.env.DSH_NODE_BIN
+  if (environmentValue !== undefined && environmentValue !== '') {
+    return { path: environmentValue, source: 'dsh-node-bin', electronRunAsNode: false }
   }
-  return process.execPath
+  const setting = request.nodeBinSetting
+  if (setting !== undefined && setting.trim() !== '') {
+    return { path: setting, source: 'vscode-setting', electronRunAsNode: false }
+  }
+  return {
+    path: process.execPath,
+    source: 'process-exec-path',
+    electronRunAsNode: process.versions.electron !== undefined,
+  }
 }
 
 /**
@@ -160,14 +174,14 @@ export function resolveDshLaunch(
     ...(options.patches ?? []).map(path => resolve(callerCwd, path)),
   ]
   const dshHome = options.dshHome === undefined ? undefined : resolve(callerCwd, options.dshHome)
+  const nodeExecutable = options.nodeExecutable ?? resolveNodeExecutableSpec()
   // Electron's binary only runs as Node when this env flag is set; without it
   // the spawn launches a GUI process instead of the harness subprocess.
-  const dshNodeBinSet = process.env.DSH_NODE_BIN !== undefined && process.env.DSH_NODE_BIN !== ''
-  const electronNodeEnv = process.versions.electron !== undefined && !dshNodeBinSet
+  const electronNodeEnv = nodeExecutable.electronRunAsNode
     ? { ELECTRON_RUN_AS_NODE: '1' as const }
     : {}
   return {
-    command: resolveNodeExecutable(),
+    command: nodeExecutable.path,
     args: [...dshLaunch.nodeArgs, '--profile', profile, ...patches.flatMap(path => ['--patch', path])],
     ...options.processCwd === undefined ? {} : { cwd: resolve(callerCwd, options.processCwd) },
     environment: () => ({

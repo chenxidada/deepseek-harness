@@ -5,9 +5,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   AutoStartOrchestrator,
+  type StartErrorKind,
   type StartHostPort,
   type StartReason,
 } from '../src/auto-start-orchestrator.ts'
+import { HostStartError, type HostStartErrorKind } from '../src/session-host.ts'
+
+/** Compile-time check that both failure vocabularies are the same set (AD-4). */
+type SameSet<A extends B, B extends A> = true
 
 function mockPort(overrides?: Partial<StartHostPort> & {
   connected?: boolean
@@ -133,5 +138,40 @@ describe('AutoStartOrchestrator L1 FSM', () => {
     await orch.request('manual-retry')
     expect(orch.getStartState()).toBe('started')
     expect(port.startCalls.length).toBe(2)
+  })
+})
+
+describe('AutoStartOrchestrator start-failure classification (AC-9, AD-4)', () => {
+  it('shares one failure vocabulary with the host', () => {
+    const sameVocabulary: SameSet<HostStartErrorKind, StartErrorKind> = true
+    expect(sameVocabulary).toBe(true)
+  })
+
+  it('projects a host node-environment failure as node-environment, not a dsh process failure', async () => {
+    const port = mockPort({
+      async startImpl() {
+        // The real carrier the host throws, so this asserts the hop rather than a shape.
+        throw new HostStartError('node-environment', 'Node environment check failed — source: the DSH_NODE_BIN environment variable')
+      },
+    })
+    const orch = new AutoStartOrchestrator(port)
+    await orch.request('command-start')
+
+    expect(orch.getStartState()).toBe('failed')
+    const snapshot = orch.getSnapshot()
+    expect(snapshot.errorKind).toBe('node-environment')
+    expect(snapshot.errorMessage).toContain('Node environment')
+  })
+
+  it('classifies an untyped start failure as the generic process-failed member', async () => {
+    const port = mockPort({
+      async startImpl() {
+        throw new Error('spawn EBADF')
+      },
+    })
+    const orch = new AutoStartOrchestrator(port)
+    await orch.request('command-start')
+
+    expect(orch.getSnapshot().errorKind).toBe('process-failed')
   })
 })
