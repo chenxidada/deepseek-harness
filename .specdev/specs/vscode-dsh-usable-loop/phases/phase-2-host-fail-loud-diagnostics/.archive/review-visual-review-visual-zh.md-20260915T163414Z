@@ -1,0 +1,74 @@
+# 视觉一致性审查 — Phase 2（`phase-2-host-fail-loud-diagnostics`）
+
+## 视角
+
+**视觉一致性（Visual Consistency）** — 界面是否符合冻结的视觉基准
+
+## 适用性
+
+- **实测 `ui` 字段：`false`**
+- **出处**：`.specdev/specs/vscode-dsh-usable-loop/phase-plan.md:73-74`（DAG JSON `phases[]` 中 `"id": "phase-2-host-fail-loud-diagnostics"` 的下一行即 `"ui": false`）。同一 DAG 中四个 Phase 的 `ui` 均为 `false`（`phase-plan.md:57` / `:74` / `:89` / `:104`），本工作流整体是非 UI 工作流。
+- **结论**：本 Phase 不涉及界面。视觉一致性视角不适用 → **判决 N/A**。
+
+`N/A` **不等于 PASS**。它不否决其他三个视角的 `MUST-FIX`，也不冲抵它们；合并时本视角不参与加权。
+
+## 判决：N/A
+
+## 越界核查（低成本核查 1）
+
+目的：确认本次变更集没有**意外触碰** UI / 视觉资产。
+
+| 核查目标 | 核查方式 | 结论 |
+|:---|:---|:--:|
+| `apps/vscode-dsh/webview/` 下的源或构建产物 | `git status --porcelain \| grep -Ei 'webview\|\.(css\|scss\|sass\|less\|svg\|png\|jpg\|jpeg\|gif\|webp\|ico)$\|design-system\|\.vsix$'` → 无输出 | ✅ 未触碰 |
+| 任何 `.css` / `.scss` / 主题 token 文件 | 同上（扩展名过滤已覆盖 `.css` / `.scss` / `.sass` / `.less`） | ✅ 无命中 |
+| 设计系统目录 `design-system/` | `ls -la design-system` → `No such file or directory` | ✅ 仓库中不存在，本 Phase 不可能改动 |
+| `spec.md` 列出的越界禁止项 | 见下表 | ✅ 未见违反 |
+| 实际改动清单 | `git diff --stat`（工作区）→ 21 个文件，全部为 `apps/vscode-dsh/src/*.ts`、`apps/vscode-dsh/tests/*`、`packages/sdk/client/src/*.ts`、`package.json`、`pnpm-lock.yaml` 及 `.specdev/`、`.cursor/`、`AGENTS.md` 文档类 | ✅ 与 `implementation.md` §2 的改动清单一致 |
+
+`spec.md` 中与视觉资产相关的禁止项与核查结果：
+
+| 禁止项（出处） | 核查结果 |
+|:---|:--:|
+| `spec.md:75` — 文案语言口径（`apps/vscode-dsh/src` 不在 `verify-client-ui-i18n` 扫描范围内，走既有扩展风格） | ✅ 本 Phase 未引入 i18n 资源文件，无 `.i18n.yaml` 改动 |
+| `spec.md:76` — 不新增依赖（不引入日志库）、不新增 `contributes.configuration` | ✅ `package.json` 仅有 `contributes.commands` 的 4 行加性改动（`implementation.md:83`），无依赖、无新配置键 |
+| `spec.md:77` — 不得修改 `packages/core/agent-loop` | ✅ 工作区 diff 中不含该路径 |
+| AD-3（`spec.md:67`）— 呈现层改动限于 Output Channel 与命令注册 | ✅ 无样式 / 布局 / 主题资产改动 |
+
+**一个需要如实说明的观察（非发现，非缺陷）**：`apps/vscode-dsh/webview/dist/` 是**被 git 追踪**的构建产物目录（`git ls-files` 列出 `assets/index.css`、`assets/index.js`、`index.html`），其磁盘 mtime 为今日 22:03。但 `git diff --stat -- apps/vscode-dsh/webview/` 输出为空，`git status --porcelain` 也未列出该目录 → **产物内容未变化**（重建后字节一致）。因此不构成本 Phase 的越界，也不属于视觉审查范围。
+
+## 冻结基准核查（低成本核查 2）
+
+| 项 | 实测 | 判定 |
+|:---|:---|:--:|
+| `.specdev/specs/vscode-dsh-usable-loop/visual-baseline.md` | **不存在**（`ls` → `No such file or directory`） | ✅ 与 `ui: false` 一致 |
+| `design-system/`（仓库根） | **不存在** | ✅ 与 `ui: false` 一致 |
+
+状态**自洽**：本工作流未启用视觉信息链（无 HG-1.5、无冻结 token 表、无原型门禁），与 DAG `ui: false` 完全一致，不构成状态不一致发现。
+
+## 范围声明（避免越界评分）
+
+- AC-19 / AC-20 中关于「连接区终态文案」的要求（`must not` 停留于「正在连接到 Host…」、`must` 显示根因终态、缺凭据时提供设置入口）是**文案语义与行为断言**，其正确性属 `reviewer-correctness` 的 AC 断言范围。本视角**不**对其评分，此处仅登记「已识别、已让渡」。
+- 本报告不含对其他三个视角（实现正确性 / 设计一致性 / 集成连通性）发现的任何评价。
+
+## 关键发现
+
+### 🔴 Must-Fix
+
+- 无（本视角不适用）
+
+### 🟡 Should-Fix
+
+- 无
+
+### 🟢 Observations
+
+- DAG `ui: false` 已**独立核实**（`phase-plan.md:74`），非采信提示。
+- 变更集不含任何 UI / 样式 / 主题 / 设计系统资产；`design-system/` 与 `visual-baseline.md` 均不存在，状态自洽。
+- `apps/vscode-dsh/webview/dist/` 为被追踪的构建产物，工作区内容未变化（`git diff` 为空），不属于本 Phase 越界。
+
+## 自清理记录
+
+- 启动时检测 `review-visual.md` / `review-visual-zh.md` 是否已存在 → **均不存在**（`ls` 本 Phase 目录仅含 `spec.md` / `repo-exploration(.zh).md` / `implementation(.zh).md`），因此**无需归档**，`.archive/` 未创建。
+- 未运行任何 git 写命令（仅只读 `git status` / `git diff` / `git ls-files` / `git log`）。
+- 未修改 `current-status.json`。

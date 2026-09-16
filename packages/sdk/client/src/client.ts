@@ -32,15 +32,49 @@ const STDERR_TAIL_LIMIT = 400
 const STREAM_SETTLE_MS = 100
 
 /**
+ * Structured facts about the runtime the transport lost (AD-5). The message
+ * carries the same facts as text for readers that only hold the error; these
+ * fields expose them so a consumer never has to parse that text back apart.
+ */
+export interface TransportClosedDetails {
+  /** Executable the launch resolved and spawned, when it resolved one. */
+  readonly executable: string | undefined
+  /** Error the spawn itself emitted (`ENOENT`, `EACCES`); present only when the process never launched. */
+  readonly spawnError: Error | undefined
+  /** Exit code of the reaped process; `null` when a signal ended it or it never launched. */
+  readonly exitCode: number | null
+  /** Signal that terminated the process, when one did. */
+  readonly terminationSignal: NodeJS.Signals | null
+  /** Retained stderr of the process, oldest line first, verbatim. */
+  readonly stderrTail: readonly string[]
+}
+
+/** Details for a transport that reported no process end state (a local subscription close). */
+const NO_TRANSPORT_DETAILS: TransportClosedDetails = {
+  executable: undefined,
+  spawnError: undefined,
+  exitCode: null,
+  terminationSignal: null,
+  stderrTail: [],
+}
+
+/**
  * The runtime subprocess is gone or unusable: it exited, its stdio closed, or
- * it was never launchable. The message carries the exit code and a stderr
- * tail when available.
+ * it was never launchable. The message carries the exit code, the termination
+ * signal, and a stderr tail when available.
  */
 export class TransportClosedError extends Error {
-  /** @param message - the failure description, including any stderr tail. */
-  constructor(message: string) {
+  /** Structured facts of the lost transport (AD-5). */
+  readonly details: TransportClosedDetails
+
+  /**
+   * @param message - the failure description, including any stderr tail.
+   * @param details - structured facts of the lost transport.
+   */
+  constructor(message: string, details: TransportClosedDetails = NO_TRANSPORT_DETAILS) {
     super(message)
     this.name = 'TransportClosedError'
+    this.details = details
   }
 }
 
@@ -193,6 +227,7 @@ export class HarnessClient {
   private readonly sessionParents = new Map<string, string>()
   private subscriptionSerial = 0
   private exitCode: number | null | undefined
+  private exitSignal: NodeJS.Signals | undefined
   private spawnError: Error | undefined
   private streamsSettled: Promise<void> = Promise.resolve()
   private closeTask: Promise<void> | undefined
@@ -250,8 +285,9 @@ export class HarnessClient {
       settled.stderr = true
       maybeSettle()
     })
-    child.once('exit', (code) => {
+    child.once('exit', (code, signal) => {
       this.exitCode = code
+      this.exitSignal = signal ?? undefined
       settled.exited = true
       maybeSettle()
       this.failSubscriptions(this.closedError('DeepSeek Harness runtime exited'))
@@ -460,9 +496,21 @@ export class HarnessClient {
   private closedError(reason: string): TransportClosedError {
     const parts = [`${this.runtime.description}: ${reason}`]
     if (this.spawnError !== undefined) parts.push(`spawn error: ${this.spawnError.message}`)
-    if (this.exitCode !== undefined) parts.push(`exit code: ${String(this.exitCode)}`)
+    if (this.exitCode !== undefined && this.exitCode !== null) parts.push(`exit code: ${String(this.exitCode)}`)
+    else if (this.exitSignal !== undefined) parts.push(`termination signal: ${this.exitSignal}`)
     if (this.stderrTail.length > 0) parts.push(`stderr tail:\n${this.stderrTail.join('\n')}`)
-    return new TransportClosedError(parts.join('\n'))
+    return new TransportClosedError(parts.join('\n'), this.transportDetails())
+  }
+
+  /** Snapshot the process facts a consumer needs without parsing the message (AD-5). */
+  private transportDetails(): TransportClosedDetails {
+    return {
+      executable: this.runtime.command,
+      spawnError: this.spawnError,
+      exitCode: this.exitCode ?? null,
+      terminationSignal: this.exitSignal ?? null,
+      stderrTail: [...this.stderrTail],
+    }
   }
 }
 

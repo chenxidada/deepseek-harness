@@ -33,6 +33,13 @@ import {
 } from './diff-entry.ts'
 import { HostStartError, IdeSessionHost } from './session-host.ts'
 import {
+  HOST_DIAGNOSTICS_CHANNEL_NAME,
+  HostDiagnosticRecorder,
+  createStartFailureListener,
+  formatHostDiagnosticRecord,
+  type HostDiagnosticRecord,
+} from './host-diagnostics.ts'
+import {
   confirmDeleteConversation,
   confirmRevertDeleteCreated,
   confirmRevertDirty,
@@ -158,6 +165,8 @@ interface VsCodeLike {
       hide(): void
       dispose(): void
     }
+    /** Output Channel factory for Host start diagnostics (AC-13). */
+    createOutputChannel?(name: string): OutputChannelLike
     /** Active color theme (AC-8a). */
     activeColorTheme?: { kind: number }
     /** Theme-change subscription (AC-8a). */
@@ -221,7 +230,7 @@ interface VsCodeLike {
      */
     applyEdit?(edit: unknown): PromiseLike<boolean> | Promise<boolean>
     /**
-     * Read this extension's settings (AD-10).
+     * Read this extension's settings (AD-9).
      * @param section - configuration section id, `dsh` for this extension.
      * @returns accessor for the section's values.
      */
@@ -284,6 +293,16 @@ interface Disposable {
   dispose(): void
 }
 
+/** Output Channel subset used for the Host start diagnostics block (AC-13). */
+interface OutputChannelLike {
+  /** Append one rendered block; a trailing newline is added by the channel. */
+  appendLine(value: string): void
+  /** Reveal the channel to the user. */
+  show(): void
+  /** Release the underlying channel. */
+  dispose(): void
+}
+
 /** Extension context subset (includes workspaceState for AD-CU-4). */
 interface ExtensionContextLike {
   subscriptions: Disposable[]
@@ -332,6 +351,10 @@ let credentialPresenceOverride: boolean | undefined
 let userStopping = false
 /** Host instances created via StartHostPort (AC-5 ≤1 effective connection). */
 let hostCreateCount = 0
+/** Host start diagnostics store shared by the Host, the commands, and the channel (AC-13). */
+let hostDiagnostics: HostDiagnosticRecorder | undefined
+/** Output Channel the diagnostics render into, when this VS Code surface exposes one (AC-13). */
+let hostDiagnosticsChannel: OutputChannelLike | undefined
 
 /**
  * Resolve the vscode module when the Extension Host activates without an
@@ -396,12 +419,37 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   })
   context.subscriptions.push({ dispose: () => connectionUi?.dispose() })
 
-  const startPort = createStartHostPort(vscode)
+  // Host start diagnostics: the store is created before any start can fail, so
+  // the first failure already has somewhere to be recorded (AC-13, AC-14).
+  hostDiagnosticsChannel = typeof vscode.window.createOutputChannel === 'function'
+    ? vscode.window.createOutputChannel(HOST_DIAGNOSTICS_CHANNEL_NAME)
+    : undefined
+  // A host without an output channel just skips `appendLine`, so the sink wiring
+  // stays unconditional and the recorder has one path for every environment.
+  const diagnostics = new HostDiagnosticRecorder({
+    sink: {
+      present: (record: HostDiagnosticRecord) => {
+        hostDiagnosticsChannel?.appendLine(formatHostDiagnosticRecord(record))
+      },
+    },
+  })
+  hostDiagnostics = diagnostics
+  context.subscriptions.push({
+    dispose: () => {
+      hostDiagnosticsChannel?.dispose()
+      hostDiagnosticsChannel = undefined
+      hostDiagnostics = undefined
+    },
+  })
+
+  const startPort = createStartHostPort(vscode, diagnostics)
   orchestrator = new AutoStartOrchestrator(startPort)
   stopOrchestratorWatch?.()
+  const recordOrchestratorFailure = createStartFailureListener(diagnostics)
   stopOrchestratorWatch = orchestrator.onChange((snap) => {
     connectionUi?.projectOrchestrator(snap)
     autoReady?.onHostReadyChanged(snap.state === 'started')
+    recordOrchestratorFailure(snap)
   })
 
   if (canCreateEditorChatPanel(vscode) && typeof vscode.Uri?.file === 'function') {
@@ -479,6 +527,15 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       'workbench.action.openSettings',
       '@ext:deepseek-ai.dsh-vscode-dsh',
     )
+    return { ok: true as const }
+  })
+
+  /**
+   * Reveal the Host start diagnostics channel (AC-13). The command never starts a
+   * Host and never appends: the channel already holds every recorded failure.
+   */
+  const showHostDiagnostics = vscode.commands.registerCommand('dsh.showHostDiagnostics', () => {
+    hostDiagnosticsChannel?.show()
     return { ok: true as const }
   })
 
@@ -1040,6 +1097,16 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         'dsh.test.listPendingInteractions',
         () => host?.interactions.listPending() ?? [],
       ),
+      /**
+       * Structured Host diagnostic records (AC-13). The name is inherited from the
+       * planned text surface — it is a historical label, not a description of the
+       * value: this returns the `HostDiagnosticRecord[]` array and never text, so
+       * a reader asserts fields instead of parsing prose (AD-14).
+       */
+      vscode.commands.registerCommand(
+        'dsh.test.getDiagnosticsText',
+        () => hostDiagnostics?.records() ?? [],
+      ),
       vscode.commands.registerCommand('dsh.test.reveal', (callId?: unknown) => {
         const controller = conversations
         const active = controller?.registry.getActive()
@@ -1160,6 +1227,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     showPanel,
     statusBarAction,
     openSettings,
+    showHostDiagnostics,
     copyToClipboard,
     start,
     stop,
@@ -1207,6 +1275,11 @@ export async function deactivate(): Promise<void> {
   editorChatPanel = undefined
   panelHost?.detach()
   selectionMetaStore.clear()
+  // The diagnostics channel is a window-scoped resource too: releasing it here
+  // keeps a re-activation from stacking channels (AC-13).
+  hostDiagnosticsChannel?.dispose()
+  hostDiagnosticsChannel = undefined
+  hostDiagnostics = undefined
   if (current !== undefined) await current.shutdown()
   userStopping = false
 }
@@ -2106,9 +2179,9 @@ async function runAskAboutSelection(vscode: VsCodeLike): Promise<unknown> {
     ...(vscode.workspace.asRelativePath === undefined
       ? {}
       : { asRelativePath: (fsPath) => {
-          const relative = vscode.workspace.asRelativePath
-          return relative === undefined ? fsPath : relative(fsPath, false)
-        } }),
+        const relative = vscode.workspace.asRelativePath
+        return relative === undefined ? fsPath : relative(fsPath, false)
+      } }),
     selectionMeta: selectionMetaStore,
     ensureLiveTab: () => {
       const active = controller.registry.getActive()
@@ -2170,7 +2243,7 @@ function detectCredentialsFromEnv(): boolean {
 }
 
 /**
- * Read the `dsh.nodeBin` Node executable setting (AD-10). A non-string value
+ * Read the `dsh.nodeBin` Node executable setting (AD-9). A non-string value
  * fails loud under the `invalid-setting` class: selecting a different Node
  * executable silently would hide the misconfiguration the setting exists to
  * fix.
@@ -2206,8 +2279,12 @@ function collectCredentialsEnv(): NodeJS.ProcessEnv {
 /**
  * Build the singleton StartHostPort used by AutoStartOrchestrator.
  * @param vscode - duck-typed vscode.
+ * @param diagnostics - Host start diagnostic store, or `undefined` when the surface has none.
  */
-function createStartHostPort(vscode: VsCodeLike): StartHostPort {
+function createStartHostPort(
+  vscode: VsCodeLike,
+  diagnostics?: HostDiagnosticRecorder,
+): StartHostPort {
   return {
     isConnected: () => host?.status === 'connected',
     hasCredentials: () => {
@@ -2231,7 +2308,7 @@ function createStartHostPort(vscode: VsCodeLike): StartHostPort {
       }
       const cwd = resolveStartCwd(vscode)
       workspaceKey = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''
-      const next = new IdeSessionHost()
+      const next = new IdeSessionHost(diagnostics)
       hostCreateCount += 1
       if (vscode.window.showQuickPick !== undefined) {
         next.setInteractionUi(createVscodeInteractionUi(vscode.window as InteractionWindow))
@@ -2250,6 +2327,9 @@ function createStartHostPort(vscode: VsCodeLike): StartHostPort {
         }
       })
       host = next
+      // `lastSeq` before the attempt, so a failure that produced no record of
+      // its own can be told apart from one the Host already recorded.
+      const seqBeforeStart = diagnostics?.lastSeq() ?? null
       try {
         const credentials = collectCredentialsEnv()
         const nodeBinSetting = readNodeBinSetting(vscode)
@@ -2275,6 +2355,21 @@ function createStartHostPort(vscode: VsCodeLike): StartHostPort {
         stopStatusWatch = undefined
         unbindConversations()
         host = undefined
+        // A failure that no boundary recorded would otherwise leave the attempt
+        // unrecorded, so this layer writes the generic record. The signal is the
+        // store's high-water mark: a boundary that spoke for the failure — the
+        // Host, or the orchestrator listener for `missing-credentials` — moved
+        // it, and a second record for the same attempt would misreport one
+        // attempt as two (AD-3, AC-22). A failure raised before any Host
+        // boundary exists (a Node selection setting of the wrong type, a dsh
+        // entry that will not resolve) leaves the mark where it was and is
+        // recorded here as `other`, the bucket for a failure no boundary owns.
+        if (diagnostics !== undefined && diagnostics.lastSeq() === seqBeforeStart) {
+          diagnostics.record({
+            kind: 'other',
+            detail: redactSecrets(error instanceof Error ? error.message : String(error)),
+          })
+        }
         throw error instanceof Error
           ? error
           : new Error(redactSecrets(String(error)))

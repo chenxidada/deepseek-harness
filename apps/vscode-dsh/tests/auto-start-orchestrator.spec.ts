@@ -49,15 +49,13 @@ describe('AutoStartOrchestrator L1 FSM', () => {
 
   it('coalesces concurrent requests into one start (AC-1d)', async () => {
     let resolveStart!: () => void
-    const started = new Promise<void>(r => { resolveStart = r })
-    let setConnected!: (v: boolean) => void
+    const started = new Promise<void>((r) => { resolveStart = r })
     const port = mockPort({
       async startImpl() {
         await started
-        setConnected(true)
+        port.setConnected(true)
       },
     })
-    setConnected = port.setConnected.bind(port)
     const orch = new AutoStartOrchestrator(port)
     const a = orch.request('activity-bar')
     // Yield so first request enters starting before second coalesces.
@@ -92,15 +90,13 @@ describe('AutoStartOrchestrator L1 FSM', () => {
 
   it('onUserStop during starting ignores late settle (HG-2)', async () => {
     let resolveStart!: () => void
-    const gate = new Promise<void>(r => { resolveStart = r })
-    let setConnected!: (v: boolean) => void
+    const gate = new Promise<void>((r) => { resolveStart = r })
     const port = mockPort({
       async startImpl() {
         await gate
-        setConnected(true)
+        port.setConnected(true)
       },
     })
-    setConnected = port.setConnected.bind(port)
     const orch = new AutoStartOrchestrator(port)
     const pending = orch.request('command-start')
     await Promise.resolve()
@@ -173,5 +169,53 @@ describe('AutoStartOrchestrator start-failure classification (AC-9, AD-4)', () =
     await orch.request('command-start')
 
     expect(orch.getSnapshot().errorKind).toBe('process-failed')
+  })
+
+  it('keeps every host failure class on the snapshot instead of flattening it', async () => {
+    const kinds: HostStartErrorKind[] = [
+      'invalid-setting',
+      'missing-credentials',
+      'node-environment',
+      'bridge-listen',
+      'spawn',
+      'handshake-timeout',
+      'process-failed',
+    ]
+    for (const kind of kinds) {
+      const port = mockPort({
+        async startImpl() {
+          // The carrier the host throws, so this asserts the hop, not a shape.
+          throw new HostStartError(kind, `${kind} start failure`)
+        },
+      })
+      const orch = new AutoStartOrchestrator(port)
+      await orch.request('command-start')
+      expect(orch.getSnapshot()).toMatchObject({
+        state: 'failed',
+        errorKind: kind,
+        errorMessage: `${kind} start failure`,
+      })
+    }
+  })
+
+  it('re-enters the same start port on the retry entry point (AC-22)', async () => {
+    let fail = true
+    const port = mockPort({
+      async startImpl() {
+        if (fail) throw new HostStartError('spawn', 'runtime subprocess could not be launched')
+        port.setConnected(true)
+      },
+    })
+    const orch = new AutoStartOrchestrator(port)
+    await orch.request('command-start')
+    expect(orch.getSnapshot()).toMatchObject({ state: 'failed', errorKind: 'spawn' })
+    expect(port.startCalls).toEqual(['command-start'])
+
+    fail = false
+    await orch.request('manual-retry')
+    // Same port, same entry point, one more call: the retry reuses the launch path.
+    expect(port.startCalls).toEqual(['command-start', 'manual-retry'])
+    expect(orch.getStartState()).toBe('started')
+    expect(orch.getSnapshot().errorKind).toBeUndefined()
   })
 })

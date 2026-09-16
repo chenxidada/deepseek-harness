@@ -44,6 +44,10 @@
  * - `FAKE_IGNORE_EOF` + `FAKE_SIGTERM_FILE`: keep running after stdin EOF; touch the file on SIGTERM (ladder probe).
  * - `FAKE_TRAP_SIGTERM`: with `FAKE_IGNORE_EOF`, survive SIGTERM too (SIGKILL-rung probe).
  * - `FAKE_EXIT_BEFORE_INIT`: exit 3 immediately (spawn-then-die probe).
+ * - `FAKE_EXIT_CODE`: exit with this code immediately (exit-code probe; must
+ *   be absent when `FAKE_EXIT_BEFORE_INIT` is set).
+ * - `FAKE_SELF_SIGNAL`: signal this process with the named signal immediately
+ *   (termination-signal probe: the exit edge reports a signal, not a code).
  * - `FAKE_STDERR`: write this line to stderr at boot (diagnostics-tail probe).
  * - `FAKE_STDERR_NO_NEWLINE`: write this to stderr WITHOUT a newline (buffer-flush probe).
  * - `FAKE_RECORD_INIT`: append each `initialize` params JSON to this file (handshake probe).
@@ -58,6 +62,8 @@ const env = process.env
 if (env.FAKE_STDERR !== undefined) process.stderr.write(`${env.FAKE_STDERR}\n`)
 if (env.FAKE_STDERR_NO_NEWLINE !== undefined) process.stderr.write(env.FAKE_STDERR_NO_NEWLINE)
 if (env.FAKE_EXIT_BEFORE_INIT !== undefined) process.exit(3)
+if (env.FAKE_EXIT_CODE !== undefined) process.exit(Number(env.FAKE_EXIT_CODE))
+if (env.FAKE_SELF_SIGNAL !== undefined) process.kill(process.pid, env.FAKE_SELF_SIGNAL)
 
 if (env.FAKE_IGNORE_EOF !== undefined) {
   // Simulate a runtime that never quiesces from EOF so the dispose ladder

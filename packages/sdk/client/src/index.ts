@@ -17,8 +17,8 @@ export {
   SdkProtocolError,
   TransportClosedError,
 } from './client.ts'
-export type { NotificationSubscription } from './client.ts'
-export { resolveNodeExecutableSpec } from './launch.ts'
+export type { NotificationSubscription, TransportClosedDetails } from './client.ts'
+export { DEFAULT_INITIALIZE_TIMEOUT_MS, resolveNodeExecutableSpec } from './launch.ts'
 export { JsonRpcResponseError } from '@deepseek-ai/dsh-sdk-protocol'
 export type {
   ContentBlock,

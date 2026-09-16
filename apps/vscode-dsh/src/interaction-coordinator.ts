@@ -52,7 +52,11 @@ export interface InteractionUi {
 /** Queue / presentation state for one Host interaction (AD-CU-7). */
 export type InteractionPresentationState = 'pending' | 'presented' | 'resolved' | 'abort'
 
-/** One Host interaction wait (queued or presented). */
+/**
+ * One Host interaction wait (queued or presented). An approval carries the tool
+ * it asks about and, when the runtime supplied one, its reason — so a reader of
+ * this projection can identify the wait without reaching into the queue (AD-13).
+ */
 export type PendingHostInteraction =
   | {
     kind: 'approval'
@@ -61,6 +65,10 @@ export type PendingHostInteraction =
     tabId?: string
     state: InteractionPresentationState
     abort: AbortController
+    /** Tool the runtime asked approval for, verbatim. */
+    toolName: string
+    /** Runtime-supplied reason for the request, when it sent one. */
+    reason?: string
   }
   | {
     kind: 'questions'
@@ -183,19 +191,41 @@ export class InteractionCoordinator {
 
   /**
    * Snapshot of in-flight interaction ids (tests / status / badges).
-   * @returns pending + presented entries (not resolved/abort).
+   * @returns pending + presented entries (not resolved/abort); an approval entry
+   * carries its `toolName` and, when supplied, its `reason` (AD-13).
    */
   listPending(): readonly PendingHostInteraction[] {
     return this.queue
       .filter(entry => entry.state === 'pending' || entry.state === 'presented')
-      .map(entry => ({
+      .map(entry => this.projectEntry(entry))
+  }
+
+  /**
+   * Project one queue entry into the read-only shape readers receive.
+   * @param entry - queue entry to project.
+   * @returns the projection of `entry`, keeping the queue's plumbing private.
+   */
+  private projectEntry(entry: QueueEntry): PendingHostInteraction {
+    if (entry.kind === 'questions') {
+      return {
         kind: entry.kind,
         id: entry.id,
         sessionId: entry.sessionId,
         state: entry.state,
         abort: entry.abort,
         ...entry.tabId === undefined ? {} : { tabId: entry.tabId },
-      }))
+      }
+    }
+    return {
+      kind: entry.kind,
+      id: entry.id,
+      sessionId: entry.sessionId,
+      state: entry.state,
+      abort: entry.abort,
+      toolName: entry.toolName,
+      ...entry.tabId === undefined ? {} : { tabId: entry.tabId },
+      ...entry.reason === undefined ? {} : { reason: entry.reason },
+    }
   }
 
   /**
@@ -230,7 +260,7 @@ export class InteractionCoordinator {
     toolName: string
     reason?: string
   }): Promise<ApprovalOutcome> {
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       const tabId = this.resolveTabId(frame.sessionId)
       const entry: ApprovalEntry = {
         kind: 'approval',
@@ -324,8 +354,7 @@ export class InteractionCoordinator {
     if (this.activeSessionId !== undefined && entry.sessionId === this.activeSessionId) {
       // Soft priority: insert at front of waiting queue, same-Tab FIFO.
       let insertAt = 0
-      while (insertAt < this.queue.length) {
-        const current = this.queue[insertAt]!
+      for (const current of this.queue) {
         if (current.state === 'presented') {
           insertAt += 1
           continue
@@ -408,7 +437,7 @@ export class InteractionCoordinator {
           ...entry.reason === undefined ? {} : { reason: entry.reason },
           ...entry.tabId === undefined ? {} : { tabId: entry.tabId },
         }
-        const aborted = new Promise<ApprovalOutcome>(resolve => {
+        const aborted = new Promise<ApprovalOutcome>((resolve) => {
           entry.abort.signal.addEventListener('abort', () => resolve('unavailable'), { once: true })
         })
         let outcome: ApprovalOutcome

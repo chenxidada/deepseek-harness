@@ -8,6 +8,14 @@
  * Env knobs:
  * - `FAKE_FAIL_INIT_WITH_API_KEY`: answer initialize with a JSON-RPC error whose
  *   message embeds `DEEPSEEK_API_KEY` (credentials-leak probe for AC-32).
+ * - `FAKE_PENDING_INIT`: never answer initialize, leaving the handshake to time
+ *   out (AC-15).
+ * - `FAKE_STDERR_LINES`: write this many unique marker lines (`DSH-FAKE-STDERR-<n>`)
+ *   to stderr at startup, before exiting (AC-17).
+ * - `FAKE_EXIT_CODE`: exit with this code once the startup stderr flush is done
+ *   (AC-17, AC-18a).
+ * - `FAKE_SELF_SIGNAL`: signal this process with the named signal once the startup
+ *   flush is done, so the exit edge reports a signal rather than a code (AC-18b).
  * - `FAKE_PROMPT_LOG`: when set, append each prompt as JSON lines to this path.
  * - `FAKE_APPROVAL_LOG`: append approval response outcomes.
  * - `FAKE_EMIT_APPROVAL_SESSION`: after bridge hello, emit one approval/request
@@ -224,6 +232,35 @@ function connectBridge() {
 
 connectBridge()
 
+/**
+ * Startup failure probes: write the marker stderr, then end the process the way
+ * the knob asks for. The write callback resolves once the pipe consumed the
+ * bytes, and the short delay keeps the exit edge from racing that read, so the
+ * parent sees both the stderr and the end state (AC-17, AC-18).
+ */
+const markerLines = Number(process.env.FAKE_STDERR_LINES ?? '')
+if (Number.isFinite(markerLines) && markerLines > 0) {
+  const text = Array.from(
+    { length: markerLines },
+    (_, index) => `DSH-FAKE-STDERR-${index + 1}`,
+  ).join('\n')
+  process.stderr.write(`${text}\n`, () => {
+    setTimeout(() => {
+      // `0` is a real exit code and must survive verbatim (AC-18a); only an
+      // absent or non-numeric knob falls back to the generic `1`.
+      const rawCode = process.env.FAKE_EXIT_CODE
+      const code = rawCode === undefined || rawCode === '' ? undefined : Number(rawCode)
+      const signal = process.env.FAKE_SELF_SIGNAL
+      if (typeof signal === 'string' && signal !== '') {
+        process.kill(process.pid, signal)
+        return
+      }
+      bridgeSocket?.destroy()
+      process.exit(code !== undefined && Number.isFinite(code) ? code : 1)
+    }, 50)
+  })
+}
+
 const exitAfter = Number(process.env.FAKE_EXIT_AFTER_MS ?? '')
 if (Number.isFinite(exitAfter) && exitAfter > 0) {
   setTimeout(() => {
@@ -242,6 +279,7 @@ rl.on('line', (line) => {
     return
   }
   if (frame.method === 'initialize') {
+    if (process.env.FAKE_PENDING_INIT !== undefined) return
     if (process.env.FAKE_FAIL_INIT_WITH_API_KEY !== undefined) {
       const key = process.env.DEEPSEEK_API_KEY ?? ''
       write({

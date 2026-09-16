@@ -403,6 +403,53 @@ describe('HarnessClient', () => {
       .rejects.toThrow(/spawn error:.*ENOENT/s)
   })
 
+  it('carries structured spawn-failure details on the transport error (AD-5)', async () => {
+    const missing = join(tmpdir(), 'dsh-no-such-process-command-details')
+    const client = processClient(fakeLaunch({}, { command: missing, args: [] }))
+    cleanups.push(() => client.close())
+    const failure = await client.request('initialize', {}, 1_000).then(
+      () => { throw new Error('request unexpectedly succeeded') },
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(TransportClosedError)
+    const details = (failure as TransportClosedError).details
+    // The spawn error is reachable without parsing the message.
+    expect(details.executable).toBe(missing)
+    expect(details.spawnError?.message).toMatch(/ENOENT/)
+    expect(details.exitCode).toBeNull()
+    expect(details.terminationSignal).toBeNull()
+    expect(details.stderrTail).toEqual([])
+  })
+
+  it('carries the exit code and no signal when the runtime exits (AD-5, AC-18a)', async () => {
+    const client = processClient(fakeLaunch({ FAKE_EXIT_CODE: '7' }))
+    cleanups.push(() => client.close())
+    const failure = await client.initialize({ cwd: process.cwd(), provider: 'p', model: 'm' }).then(
+      () => { throw new Error('initialize unexpectedly succeeded') },
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(TransportClosedError)
+    const details = (failure as TransportClosedError).details
+    expect(details.exitCode).toBe(7)
+    expect(details.terminationSignal).toBeNull()
+    expect(details.spawnError).toBeUndefined()
+    expect(details.executable).toBe(process.execPath)
+  })
+
+  it('carries the termination signal and no exit code when the runtime is signalled (AD-5, AC-18b)', async () => {
+    const client = processClient(fakeLaunch({ FAKE_SELF_SIGNAL: 'SIGTERM' }))
+    cleanups.push(() => client.close())
+    const failure = await client.initialize({ cwd: process.cwd(), provider: 'p', model: 'm' }).then(
+      () => { throw new Error('initialize unexpectedly succeeded') },
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(TransportClosedError)
+    const details = (failure as TransportClosedError).details
+    expect(details.terminationSignal).toBe('SIGTERM')
+    expect(details.exitCode).toBeNull()
+    expect(String(failure)).toContain('termination signal: SIGTERM')
+  })
+
   it('close() is idempotent, reaps the child, and fails later use', async () => {
     const client = processClient(fakeLaunch())
     await client.initialize({ cwd: process.cwd(), provider: 'p', model: 'm' })

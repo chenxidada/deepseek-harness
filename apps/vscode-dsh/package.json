@@ -140,6 +140,10 @@
         "title": "DeepSeek Harness: Open Extension Settings"
       },
       {
+        "command": "dsh.showHostDiagnostics",
+        "title": "DeepSeek Harness: Show Host Start Diagnostics"
+      },
+      {
         "command": "dsh.statusBarAction",
         "title": "DeepSeek Harness: Status Bar Connect"
       },

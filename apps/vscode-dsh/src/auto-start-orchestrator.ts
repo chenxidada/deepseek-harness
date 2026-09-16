@@ -28,17 +28,24 @@ const START_ERROR_KINDS = [
   'invalid-setting',
   'missing-credentials',
   'node-environment',
+  'bridge-listen',
+  'spawn',
+  'handshake-timeout',
   'process-failed',
 ] as const
 
 /**
  * Redacted connection failure classification, aligned member-for-member with
- * the `HostStartErrorKind` vocabulary `IdeSessionHost.start` throws with, so a
- * typed start failure reaches this snapshot instead of being flattened into the
- * generic member (AD-4): `node-environment` when the Node pre-flight refused the
- * spawn, `invalid-setting` when a Node selection setting held a value of the
- * wrong type. `process-failed` is the single generic member: a start failure
- * that reports no class stays there rather than in a second umbrella class.
+ * the `HostStartErrorKind` vocabulary a start throws with — `IdeSessionHost.start`
+ * or the `StartHostPort` wrapping it — so a typed start failure reaches this
+ * snapshot instead of being flattened into the generic member (AD-4):
+ * `node-environment` when the Node pre-flight refused the spawn,
+ * `invalid-setting` when a Node selection setting held a value of the wrong
+ * type, `bridge-listen` when the ide-bridge socket refused to listen, `spawn`
+ * when the runtime subprocess could not be launched, `handshake-timeout` when
+ * `initialize` exceeded its bound, and `missing-credentials` when the window had
+ * none to start with. `process-failed` is the single generic member: a start
+ * failure that reports no class stays there rather than in a second umbrella class.
  */
 export type StartErrorKind = typeof START_ERROR_KINDS[number]
 
@@ -232,8 +239,8 @@ export class AutoStartOrchestrator {
         }
         const more = this.pending.splice(0)
         this.notify()
-        if (more.length > 0 && !this.port.isConnected() && generation === this.generation) {
-          const next = more[more.length - 1]!
+        const next = more.at(-1)
+        if (next !== undefined && !this.port.isConnected() && generation === this.generation) {
           this.startInFlight = undefined
           await this.runStart(next)
           return

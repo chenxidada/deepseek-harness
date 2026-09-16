@@ -9,7 +9,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import {
+  DEFAULT_INITIALIZE_TIMEOUT_MS,
   HarnessClient,
+  RequestTimeoutError,
   TransportClosedError,
   resolveNodeExecutableSpec,
   type HarnessNotification,
@@ -27,6 +29,11 @@ import {
 import type { StartErrorKind } from './auto-start-orchestrator.ts'
 import { buildIdeChildEnv } from './env.ts'
 import { assertNodeExecutable, NodeEnvironmentError, type NodeEnvironmentFailure } from './node-env-guard.ts'
+import {
+  startErrorKindForFailure,
+  type HostDiagnosticInput,
+  type HostFailureRecorder,
+} from './host-diagnostics.ts'
 import { InteractionCoordinator, type InteractionUi } from './interaction-coordinator.ts'
 import type { ConversationRegistry } from './conversation-registry.ts'
 import { redactSecrets } from './redact.ts'
@@ -42,13 +49,20 @@ export type IdeSessionHostStatus =
 /**
  * Class of a failed {@link IdeSessionHost.start}, identical to the
  * {@link StartErrorKind} the auto-start orchestrator projects, so the class
- * survives that hop instead of being flattened. `node-environment` means the
+ * survives that hop instead of being flattened. The class of a start failure is
+ * the same whether it was thrown by {@link IdeSessionHost.start} or by the
+ * `StartHostPort` wrapping it — the latter is where a wrong-typed Node selection
+ * setting (`invalid-setting`) is raised. `node-environment` means the
  * spawn was refused by the Node pre-flight, so the failure belongs to the
  * developer's Node installation rather than to dsh (AC-7, AC-9);
  * `invalid-setting` means a Node selection setting held a value of the wrong
  * type, so the failure belongs to that setting's value rather than to dsh;
+ * `bridge-listen` means the ide-bridge socket refused to listen (AC-16),
+ * `spawn` means the runtime subprocess could not be launched (AC-14), and
+ * `handshake-timeout` means `initialize` exceeded its bound (AC-15);
  * `process-failed` is the generic member for a start failure this phase does
- * not classify further (AD-4).
+ * not classify further — including a child that ran and then exited on its own
+ * (AD-4, AD-5).
  */
 export type HostStartErrorKind = StartErrorKind
 
@@ -77,6 +91,91 @@ export class HostStartError extends Error {
     this.kind = kind
     this.diagnostic = options.diagnostic
   }
+}
+
+/**
+ * Port the Host reports start failures to. The Host only classifies the failure;
+ * storing it, redacting it and rendering it belong to the sink behind this port
+ * (AD-3, AD-13). Extends {@link HostFailureRecorder} — which carries the
+ * credential bag used for redaction (AC-21) — with the success edge that closes
+ * a failure chain (AC-22).
+ */
+export interface HostFailureDiagnostics extends HostFailureRecorder {
+  /** The start in flight reached `initialize`; it must not be reported as a retry (AC-22). */
+  onStartSucceeded(): void
+}
+
+/** Which awaited step of {@link IdeSessionHost.start} was running when it failed (AD-3). */
+type StartStage = 'resolve' | 'preflight' | 'bridge-listen' | 'client-create' | 'spawn' | 'handshake'
+
+/** Facts the start sequence holds at the moment a boundary failed (AD-3). */
+interface StartFailureContext {
+  /** Boundary that failed; disambiguates failures the error type cannot classify. */
+  stage: StartStage
+  /** Bound the child was given for `initialize`, which is the recorded bound (AC-15). */
+  initializeTimeoutMs: number
+  /** Absolute bridge socket path the Host asked to listen on (AC-16). */
+  socketPath: string
+  /** Resolved Node executable, present once resolution succeeded. */
+  nodeExecutable?: ResolvedNodeExecutable
+}
+
+/**
+ * Classify one start failure into the boundary it belongs to, without reading
+ * its message (AC-20). The error's own type decides for the failures this phase
+ * can name from the SDK and the pre-flight; the stage that threw decides the
+ * rest — a bare bridge-listen rejection (AC-16) is the only such failure, and
+ * anything else deliberately lands on the generic class rather than on a class
+ * guessed from text (AD-3, AC-14).
+ * @param error - the thrown value.
+ * @param context - facts the start sequence held when it failed.
+ * @returns the input for one diagnostic record.
+ */
+function describeStartFailure(error: unknown, context: StartFailureContext): HostDiagnosticInput {
+  const detail = error instanceof Error ? error.message : String(error)
+  const located = context.nodeExecutable === undefined
+    ? {}
+    : { resolvedExecutable: context.nodeExecutable.path, source: context.nodeExecutable.source }
+  if (error instanceof NodeEnvironmentError) {
+    const failure = error.failure
+    return {
+      kind: 'node-environment',
+      resolvedExecutable: failure.executablePath,
+      source: failure.source,
+      expectedRange: failure.expected,
+      missingApis: failure.missingApis,
+      hint: failure.remedy,
+      detail,
+      ...failure.version === undefined ? {} : { nodeVersion: failure.version },
+    }
+  }
+  if (error instanceof TransportClosedError) {
+    const details = error.details
+    return {
+      // A launch that never reached its process is a spawn failure; a process
+      // that ran and then ended is a child exit (AD-5).
+      kind: details.spawnError === undefined ? 'child-exited' : 'spawn',
+      ...located,
+      ...details.executable === undefined ? {} : { resolvedExecutable: details.executable },
+      ...details.exitCode === null ? {} : { exitCode: details.exitCode },
+      ...details.terminationSignal === null ? {} : { terminationSignal: details.terminationSignal },
+      stderrTail: details.stderrTail,
+      detail,
+    }
+  }
+  if (error instanceof RequestTimeoutError) {
+    return {
+      kind: 'handshake-timeout',
+      handshakeTimeoutMs: context.initializeTimeoutMs,
+      ...located,
+      socketPath: context.socketPath,
+      detail,
+    }
+  }
+  if (context.stage === 'bridge-listen') {
+    return { kind: 'bridge-listen', socketPath: context.socketPath, detail, ...located }
+  }
+  return { kind: 'other', ...located, detail }
 }
 
 /** Options for {@link IdeSessionHost.start}. */
@@ -121,6 +220,7 @@ export class IdeSessionHost {
   errorMessage: string | undefined
   /** Coordinates approval / questions UI waits bound to Tabs. */
   readonly interactions = new InteractionCoordinator()
+  private readonly diagnostics: HostFailureDiagnostics | undefined
   private client: HarnessClient | undefined
   private bridge: IdeBridgeHostServer | undefined
   private bridgePath: string | undefined
@@ -162,6 +262,13 @@ export class IdeSessionHost {
   private readonly notificationListeners = new Set<(notification: HarnessNotification) => void>()
   private readonly statusListeners = new Set<(status: IdeSessionHostStatus) => void>()
   private _status: IdeSessionHostStatus = 'idle'
+
+  /**
+   * @param diagnostics - sink for start-failure records, when the extension has one (AC-13).
+   */
+  constructor(diagnostics?: HostFailureDiagnostics) {
+    this.diagnostics = diagnostics
+  }
 
   /** Current lifecycle status for UI. */
   get status(): IdeSessionHostStatus {
@@ -253,7 +360,10 @@ export class IdeSessionHost {
 
   /**
    * Pre-flight the resolved Node executable, then listen on the bridge, spawn
-   * `dsh --profile ide`, and complete initialize (AC-4, AC-7).
+   * `dsh --profile ide`, and complete initialize (AC-4, AC-7). Every failure on
+   * those boundaries is classified and recorded before it is thrown, so a start
+   * that fails leaves an inspectable record rather than only a message (AC-14
+   * – AC-18).
    * @param options - workspace and launch options.
    */
   async start(options: IdeSessionHostStartOptions): Promise<void> {
@@ -264,10 +374,14 @@ export class IdeSessionHost {
     this.errorMessage = undefined
     this.bridgeHello = false
     this.credentials = options.credentials
+    this.diagnostics?.setCredentials(options.credentials)
     this.disposeTimeoutMs = options.disposeTimeoutMs ?? 5_000
     this.cancelTimeoutMs = options.cancelTimeoutMs ?? 5_000
     this.forkTimeoutMs = options.forkTimeoutMs ?? 5_000
     this.permissionTimeoutMs = options.permissionTimeoutMs ?? 5_000
+    // The bound the child is given is also the bound recorded on a timeout, so
+    // the record cannot claim a bound the runtime never had (AC-15).
+    const initializeTimeoutMs = options.initializeTimeoutMs ?? DEFAULT_INITIALIZE_TIMEOUT_MS
     const bridgePath = options.bridgeSockPath
       ?? join(tmpdir(), `dsh-ide-bridge-${randomUUID()}.sock`)
     this.bridgePath = bridgePath
@@ -283,42 +397,58 @@ export class IdeSessionHost {
         this.interactions.failClosedAll('ide-bridge runtime disconnected')
       }
     })
+    // Boundary the next awaited step can fail on. It disambiguates the one
+    // failure this phase cannot classify by type: a bare `Error` from the
+    // bridge listen (AD-3, AC-16).
+    let stage: StartStage = 'resolve'
+    let nodeExecutable: ResolvedNodeExecutable | undefined
     try {
       // Node pre-flight first: a subprocess that cannot run must fail before any
       // socket is opened, and the validated object is the one that gets spawned (AD-1).
-      const nodeExecutable = options.nodeExecutable ?? resolveNodeExecutableSpec(
+      nodeExecutable = options.nodeExecutable ?? resolveNodeExecutableSpec(
         options.nodeBinSetting === undefined ? {} : { nodeBinSetting: options.nodeBinSetting },
       )
+      stage = 'preflight'
       await assertNodeExecutable(nodeExecutable)
+      stage = 'bridge-listen'
       await bridge.listen(bridgePath)
       const env = buildIdeChildEnv({
         bridgeSock: bridgePath,
         ...options.dshHome === undefined ? {} : { dshHome: options.dshHome },
         ...options.credentials === undefined ? {} : { credentials: options.credentials },
       })
+      stage = 'client-create'
       const client = new HarnessClient({
         profile: 'ide',
         env,
         nodeExecutable,
         ...options.dshHome === undefined ? {} : { dshHome: options.dshHome },
         ...options.dshBin === undefined ? {} : { dshBin: options.dshBin },
-        ...options.initializeTimeoutMs === undefined
-          ? {}
-          : { initializeTimeoutMs: options.initializeTimeoutMs },
+        initializeTimeoutMs,
       })
       this.client = client
+      stage = 'spawn'
       client.start()
       this.watchTransport(client)
+      stage = 'handshake'
       await client.initialize({
         cwd: options.cwd,
         provider: options.provider ?? 'deepseek-official',
         model: options.model ?? 'deepseek-v4-flash',
       })
       this.status = 'connected'
+      this.diagnostics?.onStartSucceeded()
     } catch (error) {
       this.status = 'error'
       const message = error instanceof Error ? error.message : String(error)
       this.errorMessage = redactSecrets(message, this.credentials)
+      const failure = describeStartFailure(error, {
+        stage,
+        initializeTimeoutMs,
+        socketPath: bridgePath,
+        ...nodeExecutable === undefined ? {} : { nodeExecutable },
+      })
+      this.diagnostics?.record(failure)
       await this.shutdownInternal('start failed')
       if (error instanceof NodeEnvironmentError) {
         throw new HostStartError('node-environment', this.errorMessage, {
@@ -326,7 +456,7 @@ export class IdeSessionHost {
           diagnostic: error.failure,
         })
       }
-      throw new HostStartError('process-failed', this.errorMessage, { cause: error })
+      throw new HostStartError(startErrorKindForFailure(failure.kind), this.errorMessage, { cause: error })
     }
   }
 

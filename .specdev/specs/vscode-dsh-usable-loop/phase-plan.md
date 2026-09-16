@@ -54,6 +54,7 @@ graph TD
   "phases": [
     {
       "id": "phase-1-node-env-preflight",
+      "ui": false,
       "name": "Node 环境契约、设置面与 spawn 前校验",
       "dependencies": [],
       "acceptance_criteria": ["AC-1", "AC-2", "AC-3", "AC-4", "AC-5", "AC-6", "AC-7", "AC-8", "AC-9", "AC-10"],
@@ -70,6 +71,7 @@ graph TD
     },
     {
       "id": "phase-2-host-fail-loud-diagnostics",
+      "ui": false,
       "name": "启动失败 fail-loud 诊断",
       "dependencies": ["phase-1-node-env-preflight"],
       "acceptance_criteria": ["AC-13", "AC-14", "AC-15", "AC-16", "AC-17", "AC-18", "AC-19", "AC-20", "AC-21", "AC-22"],
@@ -84,6 +86,7 @@ graph TD
     },
     {
       "id": "phase-3-layer-v-smoke-loop",
+      "ui": false,
       "name": "真机脚本化冒烟闭环",
       "dependencies": ["phase-2-host-fail-loud-diagnostics"],
       "acceptance_criteria": ["AC-11", "AC-12", "AC-23", "AC-24", "AC-25", "AC-26", "AC-27", "AC-28", "AC-29", "AC-30", "AC-31", "AC-32", "AC-33"],
@@ -98,6 +101,7 @@ graph TD
     },
     {
       "id": "phase-4-regression-closure",
+      "ui": false,
       "name": "全量回归与交付收口",
       "dependencies": ["phase-3-layer-v-smoke-loop"],
       "acceptance_criteria": ["AC-34", "AC-35", "AC-36", "AC-37"],
