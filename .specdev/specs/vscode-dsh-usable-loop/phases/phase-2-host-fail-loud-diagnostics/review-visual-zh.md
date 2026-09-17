@@ -40,9 +40,8 @@
 | `phase-1-node-env-preflight` | `:56` | `:57` | `false` |
 | `phase-2-host-fail-loud-diagnostics` | `:73` | `:74` | `false` |
 | `phase-3-layer-v-smoke-loop` | `:88` | `:89` | `false` |
-| `phase-4-regression-closure` | `:103` | `:104` | `false` |
 
-本工作流全部 4 个 Phase 均为 `ui: false`。
+本工作流全部 3 个 Phase 均为 `ui: false`。
 
 ### 2. 独立判断 —— 本 Phase 不交付视觉面
 
@@ -108,7 +107,7 @@
 
 ### 🟢 Observations
 
-- `vscode-dsh-usable-loop` 的 4 个 Phase 全为 `ui: false`（`phase-plan.md:57, 74, 89, 104`）；整个工作流不存在 `visual-baseline.md`、`design-system/`、`ui-spec.md`、`hg1_5` 或原型标记。自洽。
+- `vscode-dsh-usable-loop` 的 3 个 Phase 全为 `ui: false`（`phase-plan.md:57, 74, 89`）；整个工作流不存在 `visual-baseline.md`、`design-system/`、`ui-spec.md`、`hg1_5` 或原型标记。自洽。
 - Output Channel 技术片段保持英文（`host-diagnostics.ts:432-453`），符合 `spec.md:75`；用户可见命令文案沿用既有 `"DeepSeek Harness: <English Title>"` 约定（`package.json:143`）。
 - `dsh.showHostDiagnostics` 是**揭示**通道而非**组装**通道 —— 这是满足 AC-13 时视觉侵入最小的做法，且不新增任何扩展自有 chrome。
 - 若后续工作流要做界面美化，需另起工作流范围并补齐 `ui-spec.md` + `visual-baseline.md` + HG-1.5；不应把本 Phase 的 `ui: false` 重新解释为「被跳过的基准」。

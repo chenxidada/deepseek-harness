@@ -403,7 +403,7 @@ reproduced, and no gate shows a new failure.
 - **Real Extension Development Host, tier 3** (`process-exec-path` with no setting and no
   `DSH_NODE_BIN`) — Phase 3's remit, carried over unchanged.
 - **`$PNPM run doc-sync`** was not run: `spec.md:100` assigns the first `test:docs` pass to this phase
-  and reserves `doc-sync` for Phase 4. `test:docs` was run and its tally matches the baseline.
+  and reserves `doc-sync` for a follow-up workflow. `test:docs` was run and its tally matches the baseline.
 
 ## Discrepancies with `implementation.md` (round 3)
 

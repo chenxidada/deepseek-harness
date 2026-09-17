@@ -236,7 +236,7 @@ The last two rows are also the AD-2 demonstration: those interpreters are below 
 ## 6. Unresolved items and risks
 
 1. **AC-10(f)** (real Extension Development Host consuming the pre-placed `settings.json`) remains a Phase 3 obligation, as the spec requires. Phase 1 must not be judged complete or incomplete on that branch.
-2. **`$PNPM run doc-sync`** was not run: the spec assigns the first `test:docs` pass to this phase and reserves `doc-sync` for Phase 4's re-check.
+2. **`$PNPM run doc-sync`** was not run: the spec assigns the first `test:docs` pass to this phase and reserves `doc-sync` for a follow-up workflow's re-check.
 3. **The red `lint` baseline is untouched by design.** Its components are in-tree build residue (untracked `packages/**/src/*.d.ts` and maps) and the pre-existing `no-unsafe-*` / `no-unnecessary-*` class in `apps/vscode-dsh/tests/**`, whose structural cause is that `apps/vscode-dsh/tsconfig.json` includes only `src`, leaving those test files outside any TypeScript program. Repairing that class would change the `typecheck` baseline this phase must keep green.
 4. **`apps/vscode-dsh` has no coverage gate** while `packages/sdk/client` keeps its per-file 100% requirement. This phase added no uncovered branch to the SDK.
 5. **`unusable` is the only classification that depends on subprocess behaviour** (exit code, output, timeout) and so is where a unit-test-only regression could hide. It is covered by a real stand-in that exits non-zero and by the `electronRunAsNode` case; the timeout branch is not separately exercised, since inducing it needs a long-running fixture.

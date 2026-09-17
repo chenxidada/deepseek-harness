@@ -268,7 +268,7 @@ grep -n 'child-exited' implementation.md          → 仅 :25（ASCII 边界框�
 `repo-exploration.md` §8.4 要求把该裁定（「`child-exited` **无需**新增 `StartErrorKind` 成员」）写进
 `implementation.md`；它目前只活在代码里（全函数映射表 + JSDoc）。该现状与第 2 轮**完全相同** ——
 §8.9 / §8.10 / §8.12 覆盖的是相邻话题，没有一条是这项裁定。它已登记为 **`DEBT-012`**
-（`tech-debt-registry.md:30`，来源列写 `review-design 🟡① ≡ review.md SF-C`，目标「Phase 4 交付收口」，
+（`tech-debt-registry.md:30`，来源列写 `review-design 🟡① ≡ review.md SF-C`，目标「后续工作流」，
 🟡非阻塞），这是用户裁定，也即当前正确状态。本轮既未修复也未恶化它，我不要求在此修复。
 
 ---
@@ -280,4 +280,4 @@ grep -n 'child-exited' implementation.md          → 仅 :25（ASCII 边界框�
 - 既有约定（`at(-1)`、`for…of`、重构而非抑制、直调 port 方法）：**符合**，附计数证据。
 - `@STUB` / 注册表：**无物需登记；注册表未被本子轮改动**（以时间证明）。
 - 本轮的**代码**是干净的；两条 🟡 都在本轮的**说明文本**里。若调度者按处置 `DEBT-011`/`DEBT-012` 的先例
-  把「自述保真」归入 Phase 4 收口，可把这两条承接为债，并在实质上把本审查读作 PASS。
+  把「自述保真」归入后续工作流收口，可把这两条承接为债，并在实质上把本审查读作 PASS。

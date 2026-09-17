@@ -667,7 +667,7 @@ Mitigation: declare it optional in `VsCodeLike.window` next to `createStatusBarI
 |---|---|---|---|
 | **DEBT-008** | 4 citation/source-phrase inaccuracies, zero behavioural impact; lines `extension.ts:224` / `:2173`, `session-host.ts:43`, `auto-start-orchestrator.ts:36` | **All four line numbers are still accurate.** `extension.ts:224` = `* Read this extension's settings (AD-10).`; `extension.ts:2173` = `* Read the \`dsh.nodeBin\` Node executable setting (AD-10).`; `session-host.ts:43` = `* Class of a failed {@link IdeSessionHost.start}, identical to the`; `auto-start-orchestrator.ts:36` = `* the \`HostStartErrorKind\` vocabulary \`IdeSessionHost.start\` throws with, so a` | ✅ **CONFIRMED as described.** Target Phase is already `phase-2-host-fail-loud-diagnostics` (user-adjudicated merge). Both files are in `primary_files` → fix here |
 | **DEBT-009** | `phases/phase-1-node-env-preflight/implementation.md` §2.3 mis-classified `.cursor/skills/project-build/SKILL.md`; the tool tree is intentionally not committed | Artifact-side debt (a `.specdev` document), **outside** this Phase's `primary_files`; `.cursor/skills/project-build/SKILL.md` **is** currently modified in the working tree (`git status -s` line 1) ✅ CONFIRMED | ✅ **Not this Phase's obligation** — do not attempt to fix it here; do **not** `git add` the `.cursor/` tree (§7.8 / `AGENTS.md`: Phase commits conventionally exclude `.cursor/`) |
-| **DEBT-004** | ide-profile main session is not writable; user decided this workflow will not fix it (route A bypasses it) | Fully outside `apps/vscode-dsh` and `packages/sdk/client`; no file named in the entry is in `primary_files` | ✅ **Out of scope** — must remain visible in Phase 4 / HG-3 reporting, not resolved here |
+| **DEBT-004** | ide-profile main session is not writable; user decided this workflow will not fix it (route A bypasses it) | Fully outside `apps/vscode-dsh` and `packages/sdk/client`; no file named in the entry is in `primary_files` | ✅ **Out of scope** — must remain visible in HG-3 reporting, not resolved here |
 
 ### 9.2 DEBT-008 detail — the exact fix list (F-3 landing, zero behaviour change)
 
@@ -727,7 +727,7 @@ Priority order for the implementer (each is cheap and removes a known unknown):
 
 | Item | Claim | Verdict | Action for Phase 2 |
 |---|---|---|---|
-| DEBT-004 | ide profile not writable; not fixed in this workflow | ✅ out of scope | none (must stay visible at Phase 4/HG-3) |
+| DEBT-004 | ide profile not writable; not fixed in this workflow | ✅ out of scope | none (must stay visible at HG-3) |
 | DEBT-008 (E-1) | `extension.ts:224`, `:2173` cite `(AD-10)`, should be `(AD-9)` | ✅ **CONFIRMED**, lines accurate | fix both citations |
 | DEBT-008 (E-2) | `session-host.ts:43`, `auto-start-orchestrator.ts:36` source phrases omit the `StartHostPort` layer | ✅ **CONFIRMED**, lines accurate | widen both phrases (and mention the Phase-2 members) |
 | DEBT-009 | Phase-1 `implementation.md` §2.3 mis-classification | ✅ real but **out of this Phase's surface** | none here; do not commit `.cursor/` |

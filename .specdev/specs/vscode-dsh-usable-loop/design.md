@@ -2,13 +2,13 @@
 
 **Workflow**: `vscode-dsh-usable-loop`
 **Scope**: R1 运行环境自愈（Node 环境前置校验 + 修复指引）、R2 Host 启动失败 fail loud（结构化诊断）、R3 真机端到端可用回路冒烟（启动 → 会话 → prompt → 审批 → Diff）、R4 回归与收口
-**Input**: `requirements.md`（37 条 AC，全部 `[Must]`）、`spikes/pre-hg2-spike.md`、`spikes/pre-hg2-empirical.md`、`spikes/native-diff-feasibility.md`（含 Follow-up G1/G2/G3 与 EDH route-A verification V1/V2/V3）
+**Input**: `requirements.md`（33 条 AC，全部 `[Must]`）、`spikes/pre-hg2-spike.md`、`spikes/pre-hg2-empirical.md`、`spikes/native-diff-feasibility.md`（含 Follow-up G1/G2/G3 与 EDH route-A verification V1/V2/V3）
 
 本版本为**修订稿 v7**（HG-2 前的修订轮次）。v7 相对 v6 只并入用户评审反馈的 **#3 / #4 / #9** 三项，**不引入任何新的待确认项**，不改变任何 AC 的语义与归属。决策编号兼容性（v7 精确口径）：**AD-1 – AD-16 的含义与编号保持不变**（四份 Phase spec 已按其引用），v7 **不新增任何 `AD-xx` 决策节**；v7 **确实追加**了 AD-14 的**决策 9–12** 与 AD-15 的**决策 4**（属既有 AD 决策节内部条目增补，不改变既有条目的编号与语义）：
 
-- **#3 契约加版本号 + 契约完整性检查**：`HostDiagnosticRecord` 新增 `schemaVersion` 字段（字面量 `1`、**不可空**、每条记录恒存在；产品代码内以单一常量 `HOST_DIAGNOSTIC_SCHEMA_VERSION` 为唯一真相源）→ 字段清单 **17 → 18 个**；驱动**按版本决定断言策略**（`=== 1` → 字段集精确断言；`> 1` → 只断言其依赖的 v1 子集并把观测到的版本记入证据；缺失 / `null` / 非整数 / `< 1` → `HARNESS_ERROR`）；**任何**字段面改动（新增、删除、改名、类型或可空性变更）**必须**在同一次改动中把版本 +1（**严于** `SESSION_FORMAT_VERSION` 的递增口径，理由见 AD-14 取舍）；Phase 2 的契约用例**必须**断言 18 字段清单与版本来源常量。落点：AD-14、§3、§5、§9、§11、Phase 2 / Phase 3 / Phase 4 spec。
+- **#3 契约加版本号 + 契约完整性检查**：`HostDiagnosticRecord` 新增 `schemaVersion` 字段（字面量 `1`、**不可空**、每条记录恒存在；产品代码内以单一常量 `HOST_DIAGNOSTIC_SCHEMA_VERSION` 为唯一真相源）→ 字段清单 **17 → 18 个**；驱动**按版本决定断言策略**（`=== 1` → 字段集精确断言；`> 1` → 只断言其依赖的 v1 子集并把观测到的版本记入证据；缺失 / `null` / 非整数 / `< 1` → `HARNESS_ERROR`）；**任何**字段面改动（新增、删除、改名、类型或可空性变更）**必须**在同一次改动中把版本 +1（**严于** `SESSION_FORMAT_VERSION` 的递增口径，理由见 AD-14 取舍）；Phase 2 的契约用例**必须**断言 18 字段清单与版本来源常量。落点：AD-14、§3、§5、§9、§11、Phase 2 / Phase 3 spec。
 - **#4 影子 preset 生成器模块化 + `--check-shadow-preset` 自检子命令**：生成逻辑**必须**只有一份实现（`apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh`），主冒烟脚本**必须**调用它生成影子 preset，`--check-shadow-preset` **必须**是同一实现的**薄入口**；生成前**必须**先断言 shipped preset 的该 row 位于**第 28–29 行**且两行原文逐字相符（不符即 fail loud，**禁止**按模式模糊删除）；自检**必须**验 `diff` 恰为 **2 行删除且零新增**、连续两次生成逐字节一致、shipped preset 本身未被修改，并打印实际 `diff`；退出码 `0` / `1` / `2` 语义独立，主脚本调用生成器失败映射为 `HARNESS_ERROR`。落点：AD-15 决策 3、§1.1 / §1.3、§3、§5、§11、`phase-plan.md` DAG `primary_files`、Phase 3 spec。
-- **#9 文档预算 / 文档门禁的事实更正与早期评估**：更正 AD-10 取舍段——`docs/development.md` 与 `apps/vscode-dsh/README.md` **不在** `scripts/doc-budgets.manifest.json`（仅 8 条）内，属 `docs/AGENTS.md:57` 的「review governs」非预算层；本工作流**实际**受 `verify-translation-pairing` / `verify-doc-refs` / `doc-standard-tests` / `docs-site-projection` 四个 **gate 标签**约束（经 `doc-quick` 聚合触发，其唯一 pnpm 入口是 **`pnpm run test:docs`** = `tsx scripts/run-gates.ts doc-quick`），预算门禁**只当**改动落在 8 个预算文件之一或预算文件本身被动到时才被触到；预算红时的处置顺序固定为 **Relocate → Condense → Raise**（`docs/AGENTS.md:51-55`）；**Phase 1 与 Phase 3 必须**在写完文档后**本 Phase 内**跑文档门禁快速面 **`pnpm run test:docs`** 并就地修复，**Phase 4 只复核**（重跑 `pnpm run doc-sync` 要求退出 0）。落点：AD-10、§3、§8、§9、Phase 1 / Phase 3 / Phase 4 spec。
+- **#9 文档预算 / 文档门禁的事实更正与早期评估**：更正 AD-10 取舍段——`docs/development.md` 与 `apps/vscode-dsh/README.md` **不在** `scripts/doc-budgets.manifest.json`（仅 8 条）内，属 `docs/AGENTS.md:57` 的「review governs」非预算层；本工作流**实际**受 `verify-translation-pairing` / `verify-doc-refs` / `doc-standard-tests` / `docs-site-projection` 四个 **gate 标签**约束（经 `doc-quick` 聚合触发，其唯一 pnpm 入口是 **`pnpm run test:docs`** = `tsx scripts/run-gates.ts doc-quick`），预算门禁**只当**改动落在 8 个预算文件之一或预算文件本身被动到时才被触到；预算红时的处置顺序固定为 **Relocate → Condense → Raise**（`docs/AGENTS.md:51-55`）；**Phase 1 与 Phase 3 必须**在写完文档后**本 Phase 内**跑文档门禁快速面 **`pnpm run test:docs`** 并就地修复。落点：AD-10、§3、§8、§9、Phase 1 / Phase 3 spec。
 
 v6 与 v5 的落地内容**全部保留不变**：
 
@@ -107,7 +107,7 @@ v6 与 v5 的落地内容**全部保留不变**：
 ```
  run-layer-v-smoke.sh
    │
-   ├─ 0. 环境自检（AC-34 相关）：无合格 Node / 无 code / 缺构建产物 / 生成器调用失败
+   ├─ 0. 环境自检（Node 门槛 / code 可用性 / 构建产物 / 生成器调用失败）：无合格 Node / 无 code / 缺构建产物 / 生成器调用失败
    │    （--check-shadow-preset 退出码 1 或 2）→ HARNESS_ERROR(4)
    ├─ 1. 显示环境：reuse(DISPLAY) → xvfb（已安装） → SKIPPED_NO_DISPLAY(2)
    ├─ 2. PATH 前置到合格 Node 目录（AC-12，必须早于拉起 origin 进程）
@@ -249,7 +249,7 @@ v6 与 v5 的落地内容**全部保留不变**：
 - **本工作流实际受的文档门禁**（**gate 标签**，**不是** pnpm script，**禁止**写成 `pnpm run <标签名>`）：`verify-translation-pairing`、`verify-doc-refs`、`doc-standard-tests`、`docs-site-projection`。它们定义在 `scripts/run-gates.ts` 内，经 **`doc-quick` 聚合**或 **`doc-sync` 聚合**触发；两个聚合在 `package.json` 中的**唯一 pnpm 入口**是 `test:docs` → `tsx scripts/run-gates.ts doc-quick`（即 **`pnpm run test:docs`**）与 `doc-sync` → `tsx scripts/run-gates.ts doc-sync`（即 **`pnpm run doc-sync`**）。注意：`verify-translation-pairing` 与 `verify-doc-refs` 的 **pnpm script 本身确实存在**（`tsx scripts/verify-translation-pairing.ts` / `tsx scripts/verify-doc-refs.ts`，可直接单独执行，作为兜底），而 `doc-standard-tests` / `docs-site-projection` **不存在**独立 pnpm script，**只能**经上述聚合触发。预算门禁**只当**改动落在上述 8 个预算文件之一、或预算文件本身被改动时才会被本工作流触到（本工作流不改这 8 个文件）。
 - **预算门禁变红时的处置顺序**（`docs/AGENTS.md:51-55`，**不得**跳步）：先 **Relocate**（移到其他 tier，必要时留一行链接）→ 再 **Condense**（该留在此处的内容压短）→ **最后**才 **Raise**（仅当内容**确实需要**该篇幅；"A too-low ceiling is a budget bug"）。`Raise` **必须**在同一 Phase 内改 `scripts/doc-budgets.manifest.json`（**仅当**涉及预算文件）、并在该 Phase 的 `implementation.md` 记录理由；**不得**把"上调预算"当作第一手段。
 - **禁止为迁就预算删减本工作流要求的内容**（保留该禁止条款）。
-- **早期评估（v7，用户评审 #9）**：**Phase 1 必须**在写完 `docs/development.md`(+`.zh.md`) 后、**在本 Phase 内**跑文档门禁快速面 **`pnpm run test:docs`**（= `tsx scripts/run-gates.ts doc-quick`，即 `doc-quick` 聚合）并**在本 Phase 内**解决全部失败（按上面顺序处置，含重录 `.i18n.yaml`）；**Phase 3 同理**（对象为 `apps/vscode-dsh/README.md`(+`.zh.md`)）；**Phase 4 只复核**（重跑 `pnpm run doc-sync` 并要求退出 0），**不得**在 Phase 4 才首次做预算 / 配对 / 引用修复。详见 Phase 1 / Phase 3 / Phase 4 spec 的对应硬约束。
+- **早期评估（v7，用户评审 #9）**：**Phase 1 必须**在写完 `docs/development.md`(+`.zh.md`) 后、**在本 Phase 内**跑文档门禁快速面 **`pnpm run test:docs`**（= `tsx scripts/run-gates.ts doc-quick`，即 `doc-quick` 聚合）并**在本 Phase 内**解决全部失败（按上面顺序处置，含重录 `.i18n.yaml`）；**Phase 3 同理**（对象为 `apps/vscode-dsh/README.md`(+`.zh.md`)）。详见 Phase 1 / Phase 3 spec 的对应硬约束。
 - 换来的是单一文档锚点，AC-3 的结构断言可精确落位。
 
 ### AD-11: 冒烟脚本的 Node 锁定方式 = 设置项（`dsh.nodeBin`）+ `PATH` 前置 + **显式清除**继承的 `DSH_NODE_BIN`（v6 强化）
@@ -325,7 +325,7 @@ v6 与 v5 的落地内容**全部保留不变**：
   9. **契约版本字段（v7，用户评审 #3）**：每条记录**必须**含 `schemaVersion`，类型为**字面量 `1`**（TS: `1`）、**不可空**、恒存在；产品代码内**必须**以**单一常量**（`HOST_DIAGNOSTIC_SCHEMA_VERSION = 1`）作为唯一真相源，**不得**在各处散落字面量。版本号**必须**是**每条记录上的字段**（与 `seq` 同级），**不得**改成 `{schemaVersion, records}` 包裹对象 —— 用户既已裁定返回值**必须**满足 `Array.isArray(records) === true`，Phase 2 spec 与 Phase 3 驱动均据此断言。
   10. **驱动的版本策略（v7 钉死；`schemaVersion === 1` / `> 1` / 缺失三种口径）**：记录 `schemaVersion === 1` → 驱动**必须**做**字段集精确**断言（字段名 + 类型 + 可空性**恰好**等于上表 18 字段；多字段 / 少字段 / 改名 / 类型或可空性不符均判失败）；记录 `schemaVersion > 1` → **只允许**断言其依赖的 **v1 子集**（`kind`、`resolvedExecutable`、`source`、`exitCode`、`terminationSignal`、`stderrTail`、`handshakeTimeoutMs`、`phase`、`retryOfSeq`、`seq` 等），**不得**因出现新增字段而失败，且**必须**把观测到的版本号记入证据（状态 JSON）；`schemaVersion` **缺失** / `null` / 非整数 / `< 1` → 判 **`HARNESS_ERROR`**（fail loud，防静默漂移）。
   11. **版本递增规则（v7，升级路径）**：**任何**对字段清单的改动（新增、删除、改名、类型或可空性变更）**必须**在同一次改动中把 `schemaVersion` +1，并在该改动所在 Phase 的 `implementation.md` 记录理由与对驱动的影响；**禁止**在不递增版本的情况下改字段清单。该规则**严于**仓库对 `SESSION_FORMAT_VERSION` 的口径（后者仅在结构格式变化时递增）：本契约的消费者（驱动）在 `schemaVersion === 1` 时断言**字段集精确相等**，故**任何**字段面变化都是破坏性变更 —— 这是**刻意**的差异，**不得**被视为与 `SESSION_FORMAT_VERSION` 口径不一致。
-  12. **契约完整性检查（v7，测试侧）**：`apps/vscode-dsh/tests/host-diagnostics.spec.ts` **必须**含一个契约用例，断言 (a) 字段集**恰好 18 个**；(b) 每字段的类型与可空性与上表一致；(c) `schemaVersion === 1` 且取自产品常量（改常量即测试失败）；(d) `detail` / `hint` 之外**不得**出现任何文本渲染字段（沿用既有 `renderedText` / `summary` / `log` 的否定断言）。Phase 4 的契约复核行**必须**按 18 字段与版本策略重新表述。
+  12. **契约完整性检查（v7，测试侧）**：`apps/vscode-dsh/tests/host-diagnostics.spec.ts` **必须**含一个契约用例，断言 (a) 字段集**恰好 18 个**；(b) 每字段的类型与可空性与上表一致；(c) `schemaVersion === 1` 且取自产品常量（改常量即测试失败）；(d) `detail` / `hint` 之外**不得**出现任何文本渲染字段（沿用既有 `renderedText` / `summary` / `log` 的否定断言）。
 
 - **理由**：(1) AC-13 – AC-22 的主验证面是 Node 层 + fake runtime（真实生产代码路径，非替身实现），但**真机侧**的可读结构化诊断只能由该钩子提供；真机证据不可由单元测试代理——脚本拥有自己写入的文件，无法排除自证。缺它则 AC-13(d)、AC-14 真机侧、AC-15 – AC-22 的真机留证全部落空。(2) 结构化 JSON 使断言与文案解耦：文案属产品可演进内容，字段名与取值属契约；文本渲染会让下游断言随措辞变动而 flaky（用户裁定理由）。
 - **替代方案**：(a) 不新增，真机侧改用截图 + Output Channel 文本抓取 —— 被否，Output Channel 内容无法从扩展宿主外稳定读取（需要 UI 自动化），且截图不可逐字段断言；(b) 让驱动扩展直接读 Host 进程内存 —— 不可能（跨进程）；(c) 只用会话日志 —— 被否，诊断记录不写入会话日志（它属于 Host 进程的运行诊断，不是模型可见内容）；(d) 返回结构化记录的**文本渲染**（v2 方案）—— **已被用户否决**，文本渲染使断言绑定文案；(e) 把结构化记录序列化成 JSON 字符串返回（`JSON.stringify` 后交字符串）—— 被否，等于把解析责任推给驱动且丢失类型，属"变相文本契约"；(f) 把版本号做成 `{schemaVersion, records}` 包裹对象 —— 被否，用户已裁定返回值**必须**是记录数组（`Array.isArray(records) === true`），包裹对象会破坏 Phase 2 spec 与 Phase 3 驱动的既有断言，故版本号**必须**落在每条记录上（决策 9）；(g) 不给契约加版本号（v6 方案）—— 被否（用户评审 #3），任一方增删字段或改类型都会让驱动硬失败，且无法区分"版本演进"与"实现漂移"。
@@ -429,7 +429,7 @@ v6 与 v5 的落地内容**全部保留不变**：
 
 ## 3. 验收标准验证方案
 
-> 每条 AC 的**权威**验证步骤在对应 Phase spec 的「验证策略」章节；本节是设计层的汇总视图，用于确认 37 条 AC 均有归属与可判定预期。
+> 每条 AC 的**权威**验证步骤在对应 Phase spec 的「验证策略」章节；本节是设计层的汇总视图，用于确认 33 条 AC 均有归属与可判定预期。
 
 | AC | Phase | 验证类型 | 验证方法（摘要） | 预期结果 |
 |---|:--:|---|---|---|
@@ -468,12 +468,8 @@ v6 与 v5 的落地内容**全部保留不变**：
 | AC-31 | P3 | 运行时（真实模型往返） | (a) 运行前预检 `DEEPSEEK_API_KEY` 非空且 Extension Host 内 `detectCredentialsFromEnv()` 可读到（Host 进入 `started` 为证）；(b) step3 assistant 文本非空且状态 JSON 记 `model.mode:"real"`（含响应长度与耗时）；(c) 源码 grep 无 fixture/替身引用；(d) stdout 明确标注该步使用真实模型 | 真实往返 + 无 fixture + 输出标注 |
 | AC-32 | P3 | 运行时（负向，与 AC-27 交叉） | unset 凭据（且 cwd `.env` 不含该键）运行 → 非 PASS；`conclusion` 把「缺凭据」与「链路失败」区分为不同取值；措辞明确；不产生 PASS 结论 | 两种结论可区分，缺凭据**不**计为链路失败 |
 | AC-33 | P3 | 静态 + 运行时 | (a) `apps/vscode-dsh/README.md` 与 `README.zh.md` 各含四节：产物目录路径、截图命名规则、跳过条件、退出码含义；(b) 每次运行后 `artifact-index.md` 追加一条（运行时间、产物目录、结论、步骤↔文件名），与实际产物一致；(c) `git ls-files --error-unmatch` 成功且 `git check-ignore` 不命中 | 文档四节 + 索引被 git 追踪且与实际一致 |
-| AC-34 | P4 | 静态检查（git diff） | `git diff --name-only <phase-1 前基线>..HEAD -- packages/core/agent-loop` 输出为空；回归脚本内的 `agent-loop` 未改动断言步骤通过 | 空 diff + 脚本内该步通过 |
-| AC-35 | P4 | 门禁 + 静态检查 | `pnpm run verify-application-entrypoints`（或 `doc-sync`/`hygiene` 中对应叶子）退出 0；`git diff` 断言未新增 `bin` 或可执行入口；驱动扩展目录未被声明为包 `bin` | 门禁 0 退出 + 无新增 `bin` |
-| AC-36 | P4 | 编译 + 回归 | `pnpm run build:lib:host` 退出 0；`pnpm run test -- apps/vscode-dsh` 与 `-- packages/sdk/client` 全过；`typecheck`/`lint`/`hygiene` 退出 0；`test:coverage` 下 `packages/sdk/client/src/{launch,client}.ts` 维持 per-file 100% | 全部 0 退出 |
-| AC-37 | P4 | 运行时（端到端回归） | 直接执行 `bash apps/vscode-dsh/test-scripts/run-chat-ready-regression.sh`，记录退出码与输出末尾 | 退出码 0 |
 
-**跨 Phase 补充证据（不改变 37 条 AC 的归属计数，只声明证据来源）**：
+**跨 Phase 补充证据（不改变 33 条 AC 的归属计数，只声明证据来源）**：
 
 - **AC-10（归属 P1）** 的「真机上设置项被解析链消费」分支由 Phase 3 冒烟运行提供证据（AD-11 预置 `settings.json`、不导出 `DSH_NODE_BIN`）；Phase 1 判定范围是 manifest / 文档 / 单元三类断言，其 `verification.md` 必须显式登记该跨 Phase 依赖。
 - **AC-13（归属 P2）** 与 **AC-14（归属 P2）** 的真机通道证据由 Phase 3 驱动调用 `dsh.test.getDiagnosticsText` 与 `dsh.showHostDiagnostics` 提供；Phase 2 判定范围是 Node 层 + fake runtime + 鸭子类型 vscode。真机侧的字段断言**必须**按 AD-14 决策 10 的版本策略执行（`schemaVersion === 1` → 18 字段精确断言；`> 1` → 只断 v1 子集并把版本记入证据；缺失 / 非法 → `HARNESS_ERROR`）。
@@ -481,7 +477,7 @@ v6 与 v5 的落地内容**全部保留不变**：
 **跨 Phase 硬约束（v7 新增；属"如何达成"层，不改变任何 AC 的编号、归属与语义）**：
 
 - **#4 影子 preset 生成器**：Phase 3 的 `<shadowRoot>/specdev-orchestrator/agent.cordis.yml` **必须**由独立脚本 `apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh` 生成（单一实现、`--check-shadow-preset` 薄入口；退出码 `0`/`1`/`2`，主脚本调用失败 → `HARNESS_ERROR`）；implementer **必须**在接入真机链路**之前**先让 `--check-shadow-preset` 通过并留证（实际 `diff` + 两次生成哈希 + 退出码），verifier 与 reviewer **必须**能独立复跑该命令而无需真机环境（AD-15 决策 4）。
-- **#9 文档门禁的早期评估**：**Phase 1**（`docs/development.md`(+`.zh.md`)）与 **Phase 3**（`apps/vscode-dsh/README.md`(+`.zh.md`)）**必须**在写完文档后**本 Phase 内**跑 **`pnpm run test:docs`**（`doc-quick` 聚合）并解决全部失败；**Phase 4 只复核**（`pnpm run doc-sync` 退出 0），**不得**在 Phase 4 才首次修复（AD-10 取舍）。
+- **#9 文档门禁的早期评估**：**Phase 1**（`docs/development.md`(+`.zh.md`)）与 **Phase 3**（`apps/vscode-dsh/README.md`(+`.zh.md`)）**必须**在写完文档后**本 Phase 内**跑 **`pnpm run test:docs`**（`doc-quick` 聚合）并解决全部失败（AD-10 取舍）。
 
 ---
 
@@ -492,16 +488,14 @@ v6 与 v5 的落地内容**全部保留不变**：
 | 1 | `phase-1-node-env-preflight` | Node 环境契约（`.nvmrc` + 文档两清单）、`dsh.nodeBin` 设置面（该 app 首次引入）、三级解析链与 spawn 前门槛 | 无 | AC-1 – AC-10（10 条） |
 | 2 | `phase-2-host-fail-loud-diagnostics` | Output Channel、六类失败边界的结构化记录与分类、连接区终态与重试、凭据脱敏、真机可读诊断钩子 | Phase 1 | AC-13 – AC-22（10 条） |
 | 3 | `phase-3-layer-v-smoke-loop` | 单命令真机冒烟脚本 + CJS 驱动扩展、五步断言（含两步式审批、**route A 的 `HOME` 沙箱 + 影子 preset 原生 Diff**）、显示环境 `reuse → xvfb（已安装） → SKIPPED_NO_DISPLAY`、资源回收（含 Crashpad）、产物索引、**影子 preset 生成器（独立脚本 `layer-v-shadow-preset.sh` + `--check-shadow-preset` 自检，可在真机链路之前单独跑通）**；**AC-11 两覆盖面独立判定 + AC-12 PATH 前置 + 显式清除继承 `DSH_NODE_BIN` 的真机取证** | Phase 2 | AC-11、AC-12、AC-23 – AC-33（13 条） |
-| 4 | `phase-4-regression-closure` | `agent-loop` 未改动、entrypoints 门禁、全量构建/vitest、既有回归脚本、Agent Note 与文档收口 | Phase 3 | AC-34 – AC-37（4 条） |
 
-合计 10 + 10 + 13 + 4 = **37 条**，与 `requirements.md` 一一对应，无遗漏、无重复。
+合计 10 + 10 + 13 = **33 条**，与 `requirements.md` 一一对应，无遗漏、无重复。
 
 **边界理由**：
 - Phase 1 与 Phase 2 共享"Node 解析与门槛"这一地基（Phase 2 的诊断记录要承载 Phase 1 的失败分类），因此串行依赖。
 - **AC-11 / AC-12 归属 Phase 3 而非 Phase 1**：AC-11 的责任侧是「本机环境」，AC-12 要求脚本在拉起源进程前前置 `PATH`；两者的仓库侧唯一可判定证据都来自真机冒烟脚本本次运行本身（脚本是否锁定合格 Node、两条覆盖面是否各自判定），因此与 AC-23 – AC-33 在同一次真机运行内取证。AC-3 的**文档结构**仍留在 Phase 1（属于仓库侧产物），它要求本机环境侧清单按两覆盖面分列——这正是 AC-11 判定所依赖的锚点。
 - Phase 3 的冒烟需要 Phase 2 的真机可读诊断作为证据通道（AC-13(d) 分支与诊断断言）。
-- Phase 4 的回归门禁必须建立在完整回路之上。
-- **文档门禁的早期评估边界（v7，#9）**：文档门禁（**`pnpm run test:docs`**，即 `doc-quick` 聚合）的首次暴露与修复**必须**落在产出该文档的同一 Phase（Phase 1 的 `docs/development.md`(+`.zh.md`)、Phase 3 的 `apps/vscode-dsh/README.md`(+`.zh.md`)）；Phase 4 **只复核**（`pnpm run doc-sync` 要求退出 0），不承担首次修复。
+- **文档门禁的早期评估边界（v7，#9）**：文档门禁（**`pnpm run test:docs`**，即 `doc-quick` 聚合）的首次暴露与修复**必须**落在产出该文档的同一 Phase（Phase 1 的 `docs/development.md`(+`.zh.md`)、Phase 3 的 `apps/vscode-dsh/README.md`(+`.zh.md`)）；Phase 3 为最后一个 Phase，不承担额外复核。
 
 ---
 
@@ -626,7 +620,7 @@ for (const line of text.trim().split("\n")) {
   - `docs/AGENTS.md:57` 原文：`Review governs unbudgeted tiers.`；同文件 `:51-55` 原文给出处置顺序：`1. **Relocate** … 2. **Condense** … 3. **Raise** the ceiling only when the words need the space; justify the manifest diff in the PR. A too-low ceiling is a budget bug.`
   - `package.json` 的**命令映射**（同时是 §2 修正 1 / AD-10 早期评估所引命令的证据）：`"test:docs": "tsx scripts/run-gates.ts doc-quick"`（即 `doc-quick` 聚合的**唯一** pnpm 入口 —— **`pnpm run test:docs`**）、`"doc-sync": "tsx scripts/run-gates.ts doc-sync"`；`doc-standard-tests` 与 `docs-site-projection` 是 `scripts/run-gates.ts:750,754` 传给 `pnpmExec()` 的 **gate 标签**，`package.json` 中**不存在**同名 script，故**只能**经聚合触发。
 - 静态核实（同一进路）：脚本只遍历 `scripts/doc-budgets.manifest.json` 的条目；该门禁还会因预算文件缺失（`verify-doc-budgets.ts:34-38`）与 ceiling 非正整数（`:28-32`）失败，计数口径为 `wc -w` 式按空白切分。
-- 结论：v6 的 AD-10 取舍（以及 Phase 3 / Phase 4 spec）称 `docs/development.md` / `apps/vscode-dsh/README.md` "受 `verify-doc-budgets` 约束"是**事实错误**；v7 更正为"二者不在预算表内、属 review governs 的非预算层"，本工作流**实际**相关门禁为 `verify-translation-pairing` / `verify-doc-refs` / `doc-standard-tests` / `docs-site-projection`（AD-10 取舍、§8 第 32 条）。
+- 结论：v6 的 AD-10 取舍（以及 Phase 3 spec）称 `docs/development.md` / `apps/vscode-dsh/README.md` "受 `verify-doc-budgets` 约束"是**事实错误**；v7 更正为"二者不在预算表内、属 review governs 的非预算层"，本工作流**实际**相关门禁为 `verify-translation-pairing` / `verify-doc-refs` / `doc-standard-tests` / `docs-site-projection`（AD-10 取舍、§8 第 32 条）。
 
 **事实 F11 — shipped preset 的 `orchestrator-tool-policy` row 恰位于第 28–29 行（**2026-09-15 调度者静态核实（源码）**，无运行时证据）。**
 
@@ -672,9 +666,9 @@ for (const line of text.trim().split("\n")) {
 | 29 | route A 的 25 工具面下两步式审批仍产生**恰好一次**审批（`distinctIdCount:1`、`asked` +3.82s、`decided` +187ms、`allowed-once`、被提权 `bash` `exit 0`、探针落盘后清理）；"按 id 作答"仍未实现（`dsh.test.answerApproval` 属 Phase 3）（V3） | §7 F9；§5 "AC-25 step 4"行由"需在 25 工具面下重验"改为 ✅ 已在 25 工具面下真机重验；§11 删除该风险；Phase 3 spec 的 step4 验证策略写明"重验已通过，仍须在 Phase 3 内复跑" |
 | 30 | 影子 preset 生成后**以一个尾随空行结束**（shipped preset 29 行，该 row 为第 28–29 行，其前第 27 行为空行）；若生成器做尾随空白归一化，`diff` 会变 3 行删除 → **假 `HARNESS_ERROR`**（调度者核对源码 `packages/specdev/specdev-presets/presets/specdev-orchestrator/agent.cordis.yml`） | AD-15 决策 3 新增"尾行口径"段：**采用 (i) 禁止任何空白归一化**（行级过滤生成、`diff` 严格 = 2 行删除且零新增、越界即 fail loud）；Phase 3 spec 与边界清单措辞与之对齐 |
 | 31 | persona 原文 "You must NOT edit application/business source files"（`agent.cordis.yml:11`），而真机启动的工作区就是**仓库本身**；`dsh.reviewWorkspaceDiffs` 走 timeline（`extension.ts:812` 的 `timeline.writeDiffsForSessionTree`）而非 `ChangeAttributor` 的 ignore 过滤（调度者核对源码） | AD-15 新增"step5 目标文件的路径约束"段：目标**必须**为 `apps/vscode-dsh/test-artifacts/layer-v/step-5-target.txt`（AD-7 的 `.gitignore` 覆盖）、prompt **必须**称其为探针/scratch 文件、新增反向用例（落在应用源码路径或未被忽略 → `HARNESS_ERROR`）；§3 AC-25 行同步 |
-| 32 | **事实更正（v7）**：`docs/development.md`（Phase 1 主文档落点）与 `apps/vscode-dsh/README.md`（Phase 3 文档落点）**均不在** `scripts/doc-budgets.manifest.json`（仅 8 条，键名见 §7 F10）内；`scripts/verify-doc-budgets.ts:5` 明写 "Only listed standing docs are budgeted"；`docs/AGENTS.md:57` "Review governs unbudgeted tiers."、`:51-55` 处置顺序 **Relocate → Condense → Raise**；同时更正早期评估命令为 `pnpm run test:docs`（`package.json` 中 `test:docs` → `tsx scripts/run-gates.ts doc-quick`）（用户评审 #9 + 调度者**静态核实** §7 F10） | AD-10 标题 + **取舍段重写**：删除"受 `verify-doc-budgets` 约束"的错误断言，写明本工作流真实门禁（`verify-translation-pairing` / `verify-doc-refs` / `doc-standard-tests` / `docs-site-projection`，**gate 标签**，经 `doc-quick` 聚合触发）与预算门禁的触发条件、固定 Relocate → Condense → Raise 顺序、保留"禁止为迁就预算删减必需内容"；**Phase 1 / Phase 3 spec** 新增"本 Phase 内跑 `pnpm run test:docs` 并解决全部失败"；**Phase 4 spec** 明确"只复核（`pnpm run doc-sync` 退出 0）、不首修"；§3 跨 Phase 硬约束；§4 边界理由；§9 v7 表第 3 项 |
+| 32 | **事实更正（v7）**：`docs/development.md`（Phase 1 主文档落点）与 `apps/vscode-dsh/README.md`（Phase 3 文档落点）**均不在** `scripts/doc-budgets.manifest.json`（仅 8 条，键名见 §7 F10）内；`scripts/verify-doc-budgets.ts:5` 明写 "Only listed standing docs are budgeted"；`docs/AGENTS.md:57` "Review governs unbudgeted tiers."、`:51-55` 处置顺序 **Relocate → Condense → Raise**；同时更正早期评估命令为 `pnpm run test:docs`（`package.json` 中 `test:docs` → `tsx scripts/run-gates.ts doc-quick`）（用户评审 #9 + 调度者**静态核实** §7 F10） | AD-10 标题 + **取舍段重写**：删除"受 `verify-doc-budgets` 约束"的错误断言，写明本工作流真实门禁（`verify-translation-pairing` / `verify-doc-refs` / `doc-standard-tests` / `docs-site-projection`，**gate 标签**，经 `doc-quick` 聚合触发）与预算门禁的触发条件、固定 Relocate → Condense → Raise 顺序、保留"禁止为迁就预算删减必需内容"；**Phase 1 / Phase 3 spec** 新增"本 Phase 内跑 `pnpm run test:docs` 并解决全部失败"；§3 跨 Phase 硬约束；§4 边界理由；§9 v7 表第 3 项 |
 | 33 | route A 的影子 preset 行级生成与 `HOME` 沙箱 / overlay 投放 / `diff` 断言 / 沙箱状态重置全部挤在同一 shell 脚本内，且 shipped preset 的 row 位置（第 28–29 行）与尾行口径是硬前提，易出错（用户评审 #4 + 调度者**静态核实** §7 F11：`agent.cordis.yml` 第 28–29 行原文） | AD-15 **新增决策 4**：生成逻辑独立为 `apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh`（单一实现 + 两个入口；`--check-shadow-preset` 薄入口；禁外部工具 / 网络；生成前断言第 28–29 行原文，不符即 fail loud；退出码 `0`/`1`/`2`，主脚本调用失败 → `HARNESS_ERROR`；自检 `diff` = 2 行删除零新增 + 连续两次生成逐字节一致 + shipped preset 未被改动 + 打印 `diff`）；§1.1 / §1.3、§3 跨 Phase 硬约束、§4 Phase 3 行、§5、§11、`phase-plan.md` DAG `primary_files`、Phase 3 spec 同步；§9 v7 表第 2 项 |
-| 34 | 契约字段一旦发布即成为驱动断言基础，任一方增删字段或改类型都会让驱动**硬失败**，且无法区分"版本演进"与"实现漂移"（用户评审 #3） | AD-14 **新增决策 9–12**：`schemaVersion`（记录上的字面量 `1`、不可空、恒存在、单一常量 `HOST_DIAGNOSTIC_SCHEMA_VERSION`）；字段 **17 → 18**；驱动版本策略（`=== 1` → 字段集精确断言 / `> 1` → 只断 v1 子集并把观测版本记入证据 / 缺失或非法 → `HARNESS_ERROR`；`[]` 合法且不对版本断言）；**任何**字段面改动**必须**同一次改动 +1 版本（严于 `SESSION_FORMAT_VERSION`）；Phase 2 契约完整性用例；§3 AC-13 行 + 跨 Phase 补充证据、§5、§11、Phase 2 / Phase 3 / Phase 4 spec 同步；§9 v7 表第 1 项 |
+| 34 | 契约字段一旦发布即成为驱动断言基础，任一方增删字段或改类型都会让驱动**硬失败**，且无法区分"版本演进"与"实现漂移"（用户评审 #3） | AD-14 **新增决策 9–12**：`schemaVersion`（记录上的字面量 `1`、不可空、恒存在、单一常量 `HOST_DIAGNOSTIC_SCHEMA_VERSION`）；字段 **17 → 18**；驱动版本策略（`=== 1` → 字段集精确断言 / `> 1` → 只断 v1 子集并把观测版本记入证据 / 缺失或非法 → `HARNESS_ERROR`；`[]` 合法且不对版本断言）；**任何**字段面改动**必须**同一次改动 +1 版本（严于 `SESSION_FORMAT_VERSION`）；Phase 2 契约完整性用例；§3 AC-13 行 + 跨 Phase 补充证据、§5、§11、Phase 2 / Phase 3 spec 同步；§9 v7 表第 1 项 |
 
 ---
 
@@ -693,9 +687,9 @@ v7 不改任何 AC 的语义与归属，只并入下列三项（均属"如何达
 
 | # | v7 落地项 | 落点 | 依据 |
 |:--:|---|---|---|
-| 1 | **#3 契约加版本号 + 契约完整性检查**：`schemaVersion`（记录上的字面量 `1`、不可空、恒存在、单一常量 `HOST_DIAGNOSTIC_SCHEMA_VERSION`）；字段 **17 → 18**；驱动版本策略（`=== 1` 精确字段集 / `> 1` 只断 v1 子集并记录版本 / 缺失或非法 → `HARNESS_ERROR`；`[]` 合法且不对版本断言）；**任何**字段面改动**必须** +1 版本（严于 `SESSION_FORMAT_VERSION`）；Phase 2 契约完整性用例 | AD-14 标题 + 追加说明 + 决策 4 表（新增 `schemaVersion` 行）+ 决策 5 与 9–12 + 替代方案 (f)(g) + 取舍；§3 AC-13 行 + 跨 Phase 补充证据；§5 契约版本策略行；§8 第 34 条；§11 契约漂移行；Phase 2 spec；Phase 3 spec 断言口径；Phase 4 spec 契约复核行 | 用户评审 #3 |
+| 1 | **#3 契约加版本号 + 契约完整性检查**：`schemaVersion`（记录上的字面量 `1`、不可空、恒存在、单一常量 `HOST_DIAGNOSTIC_SCHEMA_VERSION`）；字段 **17 → 18**；驱动版本策略（`=== 1` 精确字段集 / `> 1` 只断 v1 子集并记录版本 / 缺失或非法 → `HARNESS_ERROR`；`[]` 合法且不对版本断言）；**任何**字段面改动**必须** +1 版本（严于 `SESSION_FORMAT_VERSION`）；Phase 2 契约完整性用例 | AD-14 标题 + 追加说明 + 决策 4 表（新增 `schemaVersion` 行）+ 决策 5 与 9–12 + 替代方案 (f)(g) + 取舍；§3 AC-13 行 + 跨 Phase 补充证据；§5 契约版本策略行；§8 第 34 条；§11 契约漂移行；Phase 2 spec；Phase 3 spec 断言口径 | 用户评审 #3 |
 | 2 | **#4 影子 preset 生成器模块化 + `--check-shadow-preset` 自检**：独立脚本 `apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh`（单一实现、两个入口；薄自检入口；禁外部工具 / 网络；生成前断言 shipped preset 第 28–29 行原文，不符即 fail loud；退出码 `0`/`1`/`2`，主脚本调用失败 → `HARNESS_ERROR`；自检 `diff` = 2 行删除零新增 + 连续两次生成逐字节一致 + shipped preset 未被改动 + 打印 `diff`） | AD-15 新增决策 4；§1.1 组件清单（新增该脚本条目）；§1.3 步骤 0 / 3.5；§3 跨 Phase 硬约束；§4 Phase 3 行；§5 生成器行；§7 F11；§8 第 33 条；§11 漂移行 + 空白归一行；`phase-plan.md` DAG `primary_files`；Phase 3 spec 产出清单 + 前置步骤 + 验证策略 + 留证要求 | 用户评审 #4 + §7 F11 |
-| 3 | **#9 文档预算 / 门禁事实更正 + 早期评估**：`docs/development.md` 与 `apps/vscode-dsh/README.md` **不在**预算表（仅 8 条）内，属 review governs 非预算层；真实门禁 = `verify-translation-pairing` / `verify-doc-refs` / `doc-standard-tests` / `docs-site-projection`（**gate 标签**，经 `doc-quick` 聚合触发，其唯一 pnpm 入口为 **`pnpm run test:docs`** = `tsx scripts/run-gates.ts doc-quick`）；处置顺序固定 **Relocate → Condense → Raise**；**Phase 1 / Phase 3 本 Phase 内**跑 `pnpm run test:docs` 并解决全部失败，**Phase 4 只复核**（`pnpm run doc-sync` 退出 0） | AD-10 标题 + 取舍段重写；§3 跨 Phase 硬约束；§4 边界理由新增一条；§7 F10；§8 第 32 条；Phase 1 / Phase 3 / Phase 4 spec | 用户评审 #9 + §7 F10（**调度者静态核实**） |
+| 3 | **#9 文档预算 / 门禁事实更正 + 早期评估**：`docs/development.md` 与 `apps/vscode-dsh/README.md` **不在**预算表（仅 8 条）内，属 review governs 非预算层；真实门禁 = `verify-translation-pairing` / `verify-doc-refs` / `doc-standard-tests` / `docs-site-projection`（**gate 标签**，经 `doc-quick` 聚合触发，其唯一 pnpm 入口为 **`pnpm run test:docs`** = `tsx scripts/run-gates.ts doc-quick`）；处置顺序固定 **Relocate → Condense → Raise**；**Phase 1 / Phase 3 本 Phase 内**跑 `pnpm run test:docs` 并解决全部失败 | AD-10 标题 + 取舍段重写；§3 跨 Phase 硬约束；§4 边界理由新增一条；§7 F10；§8 第 32 条；Phase 1 / Phase 3 spec | 用户评审 #9 + §7 F10（**调度者静态核实**） |
 
 ### v6 修订（无新决策点，仅三项收敛）
 
@@ -703,7 +697,7 @@ v6 不新增决策编号、不改任何 AC 的语义与归属，只收敛下列�
 
 | # | v6 落地项 | 落点 | 依据 |
 |:--:|---|---|---|
-| 1 | Xvfb 已安装 → 删除安装分支与 `sudo -n apt-get install -y xvfb` 要求、`DEBT-003` 撤销、`SKIPPED_NO_DISPLAY` / `HARNESS_ERROR` / `LINK_FAILURE` 映射钉死 | AD-8 决策/理由/环境事实/结论分类契约/替代方案/取舍；§3 的 AC-28 行；§5 的 Xvfb 行；§6 的 `DEBT-003` 撤销；§7 F5；§8 第 25 条；§10 冲突点 5 **删除**；§11 的 Xvfb 行；Phase 3 spec 的 skip 表 + 边界清单；Phase 4 spec 与 `phase-plan.md` 的 `DEBT-003` 引用 | 用户指令 + 2026-09-15 实测 |
+| 1 | Xvfb 已安装 → 删除安装分支与 `sudo -n apt-get install -y xvfb` 要求、`DEBT-003` 撤销、`SKIPPED_NO_DISPLAY` / `HARNESS_ERROR` / `LINK_FAILURE` 映射钉死 | AD-8 决策/理由/环境事实/结论分类契约/替代方案/取舍；§3 的 AC-28 行；§5 的 Xvfb 行；§6 的 `DEBT-003` 撤销；§7 F5；§8 第 25 条；§10 冲突点 5 **删除**；§11 的 Xvfb 行；Phase 3 spec 的 skip 表 + 边界清单；`phase-plan.md` 的 `DEBT-003` 引用 | 用户指令 + 2026-09-15 实测 |
 | 2 | AD-11 强化：脚本**必须显式清除**继承的 `DSH_NODE_BIN`（**仅"不导出"不足**）+ 状态 JSON 记录清理动作 + `printenv DSH_NODE_BIN` 空值断言 | AD-11 决策/清理动作证据/理由 (4)/替代方案 (b)/取舍；§1.3 第 2.5 步；§3 的 AC-10 行 (f)；Phase 3 spec 前置步骤 + 边界清单 + README 交付项 | 用户评审反馈第 1 点 |
 | 3 | AD-12 强化：step4 首步写入**未被拒绝** → **立即**判 `LINK_FAILURE`（**不等待任何超时**）+ 落盘模型返回内容与工具调用参数 | AD-12 决策 5/6 与取舍；§3 的 AC-25 行 step4；§11 step4 行；Phase 3 spec 的 step4 验证策略 + 边界清单 | 用户评审反馈第 5 点 |
 
@@ -735,7 +729,7 @@ v5 不改任何既定决策，只把 EDH route-A verification 的实测结论与
 
 - **用户裁定（撤销）**：「Diff 元数据来自注入而非模型原生」这一预计债务**不再成立**（route A 下为原生 `meta.diffs`）→ 删除该预计项，并在 `tech-debt-registry.md`「已解决」表登记撤销说明。
 - **用户裁定（新增）**：出厂 `ide` profile 的**主会话不可写文件**是一条真实产品缺口（默认 preset `specdev-orchestrator` 的 `orchestrator-tool-policy` 把工具收窄为 5 个，用户在 VS Code 里让助手改代码时 `write`/`edit` 被阻断）→ **必须登记为 `DEBT-004`**（🟡非阻塞），写清现象、证据、**已定位的窄口径修法**（`packages/bundle/ide/cordis.patch.yml` 覆盖 `agent-presets.config.default`，须重述全部 config 键；**不得**动 `tool-policy.ts`）、目标工作流（下一个处理 preset 策略 / IDE 默认人设的工作流），以及**用户明确决定不在本工作流内修**这一事实。
-- **落地**：§6 登记两条；`tech-debt-registry.md` 写入（已解决 + 活跃）；`phase-plan.md` 的技术债计划同步；`DEBT-004` **必须**在 Phase 4 的 `verification.md` / HG-3 汇报中可见。
+- **落地**：§6 登记两条；`tech-debt-registry.md` 写入（已解决 + 活跃）；`phase-plan.md` 的技术债计划同步；`DEBT-004` **必须**在 Phase 3 的 `verification.md` / HG-3 汇报中可见。
 
 #### 已裁定 7（**v6 作废**）— AC-28(c) 的安装命令**必须**非交互（安装动作本身已由用户落地消除）
 
@@ -799,7 +793,7 @@ v5 不改任何既定决策，只把 EDH route-A verification 的实测结论与
 
 > **v6 变更（删除原冲突点 5）**：v5 的冲突点 5 登记的是「`requirements.md` 写"允许安装 Xvfb" vs 本设计写"必须尝试安装并记录"」的需求落差。**该落差已不存在**：需求侧（`requirements.md` 的 AC-28 与「约束」章节）已由 `requirement-analyst` 收敛为**与本设计一致的同一份规范文本**（`reuse → xvfb（已安装） → SKIPPED_NO_DISPLAY` 两分支 + 跳过分支；脚本**必须不**尝试 `apt`/`sudo` 安装 Xvfb；显示类不可用**必须不**计为 `LINK_FAILURE` 或 `HARNESS_ERROR`），设计侧也已删除安装分支与 `DEBT-003` 登记路径。因此该条**整条删除**（不是改写为"仍存在"）。本轮**不新增**任何冲突点。
 
-> **v7 变更（不新增冲突点）**：v7 并入的 **#3 / #4 / #9** 三项**均属"如何达成"层**——契约版本号与契约完整性检查（AD-14 决策 9–12）、影子 preset 生成器模块化与自检子命令（AD-15 决策 4）、文档预算/门禁的事实更正与早期评估（AD-10 取舍）——它们**不改变任何 AC 的语义、编号与归属**（仍为 37 条，10 + 10 + 13 + 4），也**不改变** `requirements.md` 的任何文本。其中 #9 是对本设计**自身**陈述的事实更正（v6 的 AD-10 断言与实测不符），修正后设计陈述与仓库事实一致，因此**不产生需求落差**。本轮**不新增**任何冲突点，§9 的「待确认」**仍为空**。
+> **v7 变更（不新增冲突点）**：v7 并入的 **#3 / #4 / #9** 三项**均属"如何达成"层**——契约版本号与契约完整性检查（AD-14 决策 9–12）、影子 preset 生成器模块化与自检子命令（AD-15 决策 4）、文档预算/门禁的事实更正与早期评估（AD-10 取舍）——它们**不改变任何 AC 的语义、编号与归属**（仍为 33 条，10 + 10 + 13），也**不改变** `requirements.md` 的任何文本。其中 #9 是对本设计**自身**陈述的事实更正（v6 的 AD-10 断言与实测不符），修正后设计陈述与仓库事实一致，因此**不产生需求落差**。本轮**不新增**任何冲突点，§9 的「待确认」**仍为空**。
 
 ---
 
@@ -820,7 +814,7 @@ v5 不改任何既定决策，只把 EDH route-A verification 的实测结论与
 | AC-10 无效路径证据的代理性 | 中 | 已裁定接受：保留"无 Host 子进程被创建"独立负面证据 + `verification.md` 标注（AD-11、§9 已裁定 2）；**不新增**观测点 |
 | AC-11 两覆盖面被合并为一条（下游偷懒） | 中 | AC-3 的结构断言必须能证伪合并（删子清单即失败）；AC-11 报告需分别给 ✅/❌ |
 | Xvfb 可执行文件日后不可用 / 启动失败（脚本内**不存在**安装动作） | 中 | 脚本**必须**先验证 `xvfb-run`/`Xvfb` 存在且能启动才能走 `xvfb` 分支；验证失败 → `SKIPPED_NO_DISPLAY` / 退出码 2 + 输出跳过原因，**不得**报 PASS。2026-09-15 实测两者均已安装（§7 F5），故本轮无安装相关风险；脚本**必须不**尝试 `apt`/`sudo` 安装，`DEBT-003` **已撤销**（§6）。显示类不可用**不得**判为 `LINK_FAILURE` 或 `HARNESS_ERROR`（AD-8 结论分类契约） |
-| **`DEBT-004`：出厂 `ide` profile 主会话不可写文件（用户裁定只登记、本工作流不修）** | 中 | 本工作流在测试内经 route A 绕过；**必须**在 Phase 4 的 `verification.md` 与 HG-3 汇报中可见，并注明已定位的窄口径修法（`packages/bundle/ide/cordis.patch.yml` 覆盖 `agent-presets.config.default`，须重述全部 config 键；**不得**动 `tool-policy.ts`）与目标工作流（下一个处理 preset 策略 / IDE 默认人设的工作流）（§6、§9 已裁定 6） |
+| **`DEBT-004`：出厂 `ide` profile 主会话不可写文件（用户裁定只登记、本工作流不修）** | 中 | 本工作流在测试内经 route A 绕过；**必须**在 Phase 3 的 `verification.md` 与 HG-3 汇报中可见，并注明已定位的窄口径修法（`packages/bundle/ide/cordis.patch.yml` 覆盖 `agent-presets.config.default`，须重述全部 config 键；**不得**动 `tool-policy.ts`）与目标工作流（下一个处理 preset 策略 / IDE 默认人设的工作流）（§6、§9 已裁定 6） |
 | 首次引入设置面触发包级门禁（R-6） | 低 | `verify-config-catalog` 已核实不扫描 VS Code 的 `contributes.configuration`；`verify-package-invariants` 相关面在 Phase 1 实测确认，**必须**解决门禁冲突而**不得**以降低验收口径绕过 |
 | 设置项首次引入后与 `DSH_NODE_BIN` 的交互歧义 | 低 | 诊断记录携带 `source` 字段；`docs/development.md` 写明优先级链（AD-9） |
 | 三级解析链读值/应用之间存在窗口 | 低 | 每次 Host 启动重新读取，不缓存跨启动结果（AD-9 取舍） |

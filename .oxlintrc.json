@@ -328,10 +328,11 @@
     {
       // Every other override targets `*.{ts,tsx}`, so Oxlint parsed the Layer V driver
       // (`apps/vscode-dsh/test-scripts/layer-v-driver/extension.cjs`) with no matching rule
-      // set and reported zero diagnostics no matter what the file contained — the `pnpm run
-      // lint` half of the AC-25 regression claim was therefore unfailable for this asset
-      // (DEBT-018). The rules below are syntax/semantics only: `*.cjs` has no TypeScript
-      // program, so the type-aware rules used elsewhere cannot apply to it.
+      // set and reported zero diagnostics no matter what the file contained, which made the
+      // lint half of an acceptance criterion unfailable for this asset (DEBT-018): the Phase 3
+      // regression row (`.specdev/specs/vscode-dsh-usable-loop/phases/phase-3-layer-v-smoke-loop/spec.md:197`).
+      // The rules below are syntax/semantics only: `*.cjs` has no TypeScript program, so the
+      // type-aware rules used elsewhere cannot apply to it.
       //
       // `no-unsafe-finally` is deliberately absent: the driver throws from a `finally` on
       // purpose (an unrestorable node-bin setting must outrank whatever error is in flight,

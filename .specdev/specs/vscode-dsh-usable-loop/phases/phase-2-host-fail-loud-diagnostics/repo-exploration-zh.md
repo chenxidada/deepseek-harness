@@ -667,7 +667,7 @@ function shouldRegisterTestHooks(vscodeArg?: VsCodeLike): boolean {
 |---|---|---|---|
 | **DEBT-008** | 4 处引用/来源句失真，零行为影响；行号 `extension.ts:224` / `:2173`、`session-host.ts:43`、`auto-start-orchestrator.ts:36` | **四个行号今天仍然准确。** `extension.ts:224` = `* Read this extension's settings (AD-10).`；`extension.ts:2173` = `* Read the \`dsh.nodeBin\` Node executable setting (AD-10).`；`session-host.ts:43` = `* Class of a failed {@link IdeSessionHost.start}, identical to the`；`auto-start-orchestrator.ts:36` = `* the \`HostStartErrorKind\` vocabulary \`IdeSessionHost.start\` throws with, so a` | ✅ **描述属实**。目标 Phase 已是 `phase-2-host-fail-loud-diagnostics`（用户裁定并入）。两个文件都在 `primary_files` 内 → 在本 Phase 修 |
 | **DEBT-009** | `phases/phase-1-node-env-preflight/implementation.md` §2.3 把 `.cursor/skills/project-build/SKILL.md` 归类失实；该工具树故意不入库 | 属产物侧债务（一个 `.specdev` 文档），**不在**本 Phase 的 `primary_files` 内；`.cursor/skills/project-build/SKILL.md` **确实**在当前工作区被修改（`git status -s` 第 1 行）✅ CONFIRMED | ✅ **不是本 Phase 的义务** —— 不要在这里尝试修它；也**不要** `git add` `.cursor/` 树（§7.8 / `AGENTS.md`：Phase 提交惯例上几乎不含 `.cursor/`） |
-| **DEBT-004** | ide profile 主会话不可写；用户裁定本工作流不修（route A 绕过） | 完全在 `apps/vscode-dsh` 与 `packages/sdk/client` 之外；该条目点名的文件都不在 `primary_files` 内 | ✅ **不在范围内** —— 必须在 Phase 4 / HG-3 汇报中保持可见，但不在此解决 |
+| **DEBT-004** | ide profile 主会话不可写；用户裁定本工作流不修（route A 绕过） | 完全在 `apps/vscode-dsh` 与 `packages/sdk/client` 之外；该条目点名的文件都不在 `primary_files` 内 | ✅ **不在范围内** —— 必须在 HG-3 汇报中保持可见，但不在此解决 |
 
 ### 9.2 DEBT-008 明细 —— 精确修复清单（F-3 落点，零行为变更）
 
@@ -727,7 +727,7 @@ function shouldRegisterTestHooks(vscodeArg?: VsCodeLike): boolean {
 
 | 项 | 描述 | 判定 | Phase 2 的动作 |
 |---|---|---|---|
-| DEBT-004 | ide profile 不可写；本工作流不修 | ✅ 不在范围 | 无（须在 Phase 4/HG-3 保持可见） |
+| DEBT-004 | ide profile 不可写；本工作流不修 | ✅ 不在范围 | 无（须在 HG-3 保持可见） |
 | DEBT-008 (E-1) | `extension.ts:224`、`:2173` 引 `(AD-10)`，应为 `(AD-9)` | ✅ **属实**，行号准确 | 修这两处引用 |
 | DEBT-008 (E-2) | `session-host.ts:43`、`auto-start-orchestrator.ts:36` 的来源句未覆盖 `StartHostPort` 层 | ✅ **属实**，行号准确 | 扩写两处来源句（并提到 Phase 2 成员） |
 | DEBT-009 | Phase 1 `implementation.md` §2.3 归类失实 | ✅ 真实但**不在本 Phase 范围** | 本 Phase 不做；不要提交 `.cursor/` |

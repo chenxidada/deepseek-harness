@@ -5,9 +5,9 @@
 | 工作流 slug | `vscode-dsh-usable-loop` |
 | 需求文档 | [`requirements.md`](./requirements.md) |
 | 设计文档 | [`design.md`](./design.md) / [`design-zh.md`](./design-zh.md) |
-| Phase 数量 | 4（串行） |
-| AC 总数 | 37（全部 `[Must]`，全部有归属，无遗漏无重复） |
-| 本轮修订 | **v7**：并入用户评审 **#3 / #4 / #9** 三项（均属"如何达成"层，**不改任何 AC 的语义与归属**）。(#3) `dsh.test.getDiagnosticsText` 契约加 `schemaVersion`（记录上的字面量 `1`、不可空、恒存在、单一常量 `HOST_DIAGNOSTIC_SCHEMA_VERSION` 为唯一真相源）→ 字段 **17 → 18**，驱动按版本决定断言口径（`=== 1` / `> 1` / 缺失），**任何**字段面改动**必须** +1 版本，Phase 2 增契约完整性用例、Phase 4 契约复核行按 18 字段与版本策略重述。(#4) 影子 preset 生成逻辑独立为 `apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh`（单一实现 + `--check-shadow-preset` 薄入口；生成前断言 shipped preset **第 28–29 行**原文，不符即 fail loud；退出码 `0`/`1`/`2`，主脚本调用失败 → `HARNESS_ERROR`），**新增该路径到 `phase-3-layer-v-smoke-loop.primary_files`**。(#9) 更正文档门禁口径——`docs/development.md` 与 `apps/vscode-dsh/README.md` **不在**预算表（仅 8 条）内，属 review governs 非预算层；**Phase 1 / Phase 3 本 Phase 内**跑文档门禁快速面 **`pnpm run test:docs`**（= `tsx scripts/run-gates.ts doc-quick`，即 `run-gates` 的 `doc-quick` 聚合模式；`doc-quick` **不是** pnpm script，其唯一 pnpm 入口是 `test:docs`）并解决全部失败，**Phase 4 只复核**（`pnpm run doc-sync` 退出 0）。**Phase ID / DAG `id` / `dependencies` / `acceptance_criteria` / Phase 数量零改动** |
+| Phase 数量 | 3（串行） |
+| AC 总数 | 33（全部 `[Must]`，全部有归属，无遗漏无重复） |
+| 本轮修订 | **v7**：并入用户评审 **#3 / #4 / #9** 三项（均属"如何达成"层，**不改任何 AC 的语义与归属**）。(#3) `dsh.test.getDiagnosticsText` 契约加 `schemaVersion`（记录上的字面量 `1`、不可空、恒存在、单一常量 `HOST_DIAGNOSTIC_SCHEMA_VERSION` 为唯一真相源）→ 字段 **17 → 18**，驱动按版本决定断言口径（`=== 1` / `> 1` / 缺失），**任何**字段面改动**必须** +1 版本，Phase 2 增契约完整性用例。(#4) 影子 preset 生成逻辑独立为 `apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh`（单一实现 + `--check-shadow-preset` 薄入口；生成前断言 shipped preset **第 28–29 行**原文，不符即 fail loud；退出码 `0`/`1`/`2`，主脚本调用失败 → `HARNESS_ERROR`），**新增该路径到 `phase-3-layer-v-smoke-loop.primary_files`**。(#9) 更正文档门禁口径——`docs/development.md` 与 `apps/vscode-dsh/README.md` **不在**预算表（仅 8 条）内，属 review governs 非预算层；**Phase 1 / Phase 3 本 Phase 内**跑文档门禁快速面 **`pnpm run test:docs`**（= `tsx scripts/run-gates.ts doc-quick`，即 `run-gates` 的 `doc-quick` 聚合模式；`doc-quick` **不是** pnpm script，其唯一 pnpm 入口是 `test:docs`）并解决全部失败。**Phase ID / DAG `id` / `dependencies` / `acceptance_criteria` 零改动** |
 | 历史修订 | v6：**Xvfb 已由用户安装**（2026-09-15 实测 `/usr/bin/Xvfb` 与 `/usr/bin/xvfb-run` 存在、`dpkg-query` → `xvfb 2:1.20.13-1ubuntu1~20.04.20 install ok installed`、`DISPLAY=:1` 上 X.Org 存活）→ AD-8 收敛为 `reuse → xvfb（已安装） → SKIPPED_NO_DISPLAY`，**删除**安装分支与 `sudo -n apt-get install -y xvfb` 要求，`DEBT-003` **撤销**；同时钉死 `SKIPPED_NO_DISPLAY` / `HARNESS_ERROR` / `LINK_FAILURE` 三者映射。AD-11 **强化**为脚本**必须显式清除**继承的 `DSH_NODE_BIN`（仅"不导出"不足）。AD-12 **强化**为 step4 首步写入**未被拒绝**即**立即**判 `LINK_FAILURE`（**不等待任何超时**）并落盘模型返回内容与工具调用参数。v5：route A 已在**真机 EDH 内验证通过**（V1/V2/V3）；`toolCount` 由 26 **更正为 25**（来源 `request/header.header.tools`）；每步场景**必须**从干净沙箱状态起且 `replay` 即判 `LINK_FAILURE`；step4 拒绝目标改为 `/var/tmp/...`（不得 `$HOME`）；step5 目标文件钉死为「忽略规则由 Phase 3 交付」的探针路径（`apps/vscode-dsh/test-artifacts/layer-v/step-5-target.txt`，`git check-ignore` 命中且规则来自仓库根）；影子 preset 生成禁止空白归一化（`diff` 严格 2 行删除）；原"`HOME` 沙箱未验证"与"step4 需在 25 工具面重验"两条风险**关闭**。v4：AC-25 第 5 步定为 **route A**（`HOME` 沙箱 + 影子 preset，零仓库改动，原生 `meta.diffs`，AD-15）；`DEBT-002` 撤销、新增 `DEBT-004`（出厂 `ide` profile 主会话不可写，只登记不修） |
 
 ## 总体策略
@@ -17,17 +17,16 @@
 1. **最内层**（Phase 1）先保证「spawn 之前就 fail loud」。这一层的失败是 Phase 2 诊断通道要承载的第一类输入，因此必须先落地 Node 失败分类与五要素诊断文本；本轮同时落地 `dsh.nodeBin` 设置面（该 app 首次引入 settings surface）与三级解析链。
 2. **中间层**（Phase 2）把 Node 门槛 / bridge listen / spawn / `initialize` 握手 / 子进程退出 / 缺凭据六类失败的诊断出口与连接区终态统一起来。Phase 1 + Phase 2 合起来消灭「UI 停在正在连接到 Host…」这个症状。
 3. **最外层**（Phase 3）在真机上把可用闭环脚本化：脚本要锁定 Phase 1 的 Node 门槛（并作为 AC-10 设置来源的真机证据）、读取 Phase 2 的诊断通道内容作为断言，并在同一次真机运行中为 AC-11 的两个覆盖面分别取证，因此必须排在两者之后。
-4. **收口**（Phase 4）对合并结果断言累积不回归，并完成文档、Agent Note、技术债注册表的交付收口。
 
 ### 与 requirements 的 Phase 拆分方向对比（请 HG-2 注意）
 
 | 项 | requirements 的拆分方向 | 本计划 | 理由 |
 |---|---|---|---|
-| P3 范围 | AC-23 – AC-33（AC-31/32/26/33 另立 P4） | AC-11、AC-12、AC-23 – AC-33 全部放在 Phase 3 | 五步链路、逐步截图与产物索引属于**同一次真机运行**的原子交付物。若拆出「脚本骨架先交付、链路断言后交付」的中间 Phase，那个 Phase 自己的验收运行必须报出非 PASS 结论（脚本在链路未实现前不能输出通过），会直接违反 AC-27 的诚实性要求，也会让该 Phase 的 HG-3 必然落到 PARTIAL。相反，把 D 组不回归（AC-34 – AC-37）单独成 Phase 4 是成立的：它们是对**合并后**工作区整体的累积断言，且承载文档/Agent Note/债务收口。 |
+| P3 范围 | AC-23 – AC-33（AC-31/32/26/33 另立 P4） | AC-11、AC-12、AC-23 – AC-33 全部放在 Phase 3 | 五步链路、逐步截图与产物索引属于**同一次真机运行**的原子交付物。若拆出「脚本骨架先交付、链路断言后交付」的中间 Phase，那个 Phase 自己的验收运行必须报出非 PASS 结论（脚本在链路未实现前不能输出通过），会直接违反 AC-27 的诚实性要求，也会让该 Phase 的 HG-3 必然落到 PARTIAL。 |
 | AC-10 归属 | 归入 P1（AC-1 – AC-12） | 在 Phase 1，按 `[Must]` 实现设置面 | 与拆分方向一致：AC-10 已由用户 HG-2（D-4）升为 `[Must]`，语义为「**必须** 在 `contributes.configuration` 提供 Node 可执行文件路径设置项（默认空）」，并要求优先级链写入开发者文档、无效设置 fail loud、该来源同样过 AC-4 门槛。v1 的「以条件前件为假满足 AC-10」方案已被用户明确否决，`DEBT-001` 已撤销。 |
 | AC-11 归属 | 归入 P1（AC-1 – AC-12） | 在 Phase 3 | AC-11 的 `[责任侧: 本机环境]`，已按 HG-2（D-7）改写为**两个覆盖面独立判定**（终端侧 / 扩展子进程侧）。仓库侧唯一可判定的证据是冒烟脚本本次真机运行的报告（是否锁定合格 Node、两侧是否各自给出 ✅/❌），放在 Phase 3 可与 AC-12 同一次运行取证。AC-3 的**文档结构**仍在 Phase 1，作为 AC-11 判定的锚点。 |
 
-串行而非并行：四者两两之间都存在真实依赖（Phase 2 消费 Phase 1 的 Node 失败分类；Phase 3 同时消费 Phase 1 的 Node 门槛/设置面与 Phase 2 的诊断通道；Phase 4 断言累积结果）。DAG 中没有任何一对 Phase 的依赖集为空，因此**不提出并行分支**，也不存在可并行的 Phase 对。
+串行而非并行：三者两两之间都存在真实依赖（Phase 2 消费 Phase 1 的 Node 失败分类；Phase 3 同时消费 Phase 1 的 Node 门槛/设置面与 Phase 2 的诊断通道）。DAG 中没有任何一对 Phase 的依赖集为空，因此**不提出并行分支**，也不存在可并行的 Phase 对。
 
 ## Phase DAG
 
@@ -35,7 +34,6 @@
 graph TD
   P1["Phase 1<br/>phase-1-node-env-preflight<br/>Node 环境契约 + 设置面 + spawn 前校验<br/>AC-1 … AC-10"] --> P2["Phase 2<br/>phase-2-host-fail-loud-diagnostics<br/>启动失败 fail-loud 诊断<br/>AC-13 … AC-22"]
   P2 --> P3["Phase 3<br/>phase-3-layer-v-smoke-loop<br/>真机脚本化冒烟闭环<br/>AC-11, AC-12, AC-23 … AC-33"]
-  P3 --> P4["Phase 4<br/>phase-4-regression-closure<br/>全量回归与交付收口<br/>AC-34 … AC-37"]
 ```
 
 ## Phase 列表
@@ -45,7 +43,6 @@ graph TD
 | Phase 1 | `phase-1-node-env-preflight` | Node 环境契约、设置面与 spawn 前校验 | `.nvmrc`、`docs/development.md` 两张清单（本机环境侧按两覆盖面分列）、`dsh.nodeBin` 设置项、`node-env-guard`、SDK 侧单一解析源（三级来源） | 无 | 10 |
 | Phase 2 | `phase-2-host-fail-loud-diagnostics` | 启动失败 fail-loud 诊断 | Output Channel、六类边界的结构化记录与分类、连接区终态与重试、凭据脱敏、`dsh.test.getDiagnosticsText`（返回**结构化 JSON 记录数组**，**18 字段契约**（含 `schemaVersion`）+ 门禁 + 契约完整性用例）、`dsh.test.listPendingInteractions` 投影扩展 | Phase 1 | 10 |
 | Phase 3 | `phase-3-layer-v-smoke-loop` | 真机脚本化冒烟闭环 | 单命令脚本 + CJS 驱动扩展、五步断言（step4 两步式审批 + **首步未被拒绝即立即判失败**、**step5 按 route A 的 `HOME` 沙箱 + 影子 preset 产生原生 Diff**）、截图、显示环境 `reuse → xvfb（已安装） → SKIPPED_NO_DISPLAY`、资源回收（含 Crashpad）、产物索引、**影子 preset 生成器（`layer-v-shadow-preset.sh` + `--check-shadow-preset` 自检，可先于真机链路单独跑通）**、AC-11 两覆盖面与 AC-12 PATH 前置 + **显式清除继承 `DSH_NODE_BIN`** 取证 | Phase 2 | 13 |
-| Phase 4 | `phase-4-regression-closure` | 全量回归与交付收口 | `agent-loop` 未改动、entrypoints 门禁、全量构建/vitest、既有回归脚本、Agent Note 与文档收口 | Phase 3 | 4 |
 
 ## DAG 任务编排（JSON）
 
@@ -97,19 +94,6 @@ graph TD
         ".gitignore",
         "apps/vscode-dsh/README.md",
         ".specdev/specs/vscode-dsh-usable-loop/artifact-index.md"
-      ]
-    },
-    {
-      "id": "phase-4-regression-closure",
-      "ui": false,
-      "name": "全量回归与交付收口",
-      "dependencies": ["phase-3-layer-v-smoke-loop"],
-      "acceptance_criteria": ["AC-34", "AC-35", "AC-36", "AC-37"],
-      "primary_files": [
-        ".agents/notes/",
-        "docs/wiki/VS Code IDE 集成/",
-        "apps/vscode-dsh/README.md",
-        "docs/development.md"
       ]
     }
   ]
@@ -177,27 +161,13 @@ graph TD
   - step5（Diff）按 **AD-15 route A** 构造：模型用 `edit`/覆盖写修改**编辑前已存在**的探针文件 `apps/vscode-dsh/test-artifacts/layer-v/step-5-target.txt`（**忽略规则由本工作流 Phase 3 交付、且非应用源码路径**；prompt **必须**称其为探针/scratch 文件）→ 断言 `meta.diffs` 非空且含 `oldText`/`newText` → `dsh.reviewWorkspaceDiffs` → 真实 `TabInputTextDiff`；证据**必须**标注 `diffSource:"native-meta-diffs"` 与全部环境事实字段。**硬限制**：新建文件不产生 Diff、`str_replace_editor` 永不产生 Diff、`edit` 仅在内容真正变化时附 meta。**禁止**使用 `dsh.test.openHistory` 注入（v1–v3 的注入构造已删除）。**若目标文件落在应用源码路径或未被忽略 → `HARNESS_ERROR`。**
   - 影子 preset **必须**由 `layer-v-shadow-preset.sh` 以行级过滤生成（**禁止任何空白归一化**，**禁止**主脚本二次实现），`diff` **必须**恰为 2 行删除且零新增，越界即 `HARNESS_ERROR`（AD-15 决策 3/4）。
   - **影子 preset 生成器可在真机链路之前单独验收（AD-15 决策 4）**：implementer **必须**在接入真机链路**之前**先让 `pnpm`-无关的 `apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh --check-shadow-preset` 通过并留证（实际 `diff` 文本 + 两次生成的哈希 + 退出码，记入状态 JSON 或产物索引）；该命令**必须**在不启动 VS Code、不需要 `DISPLAY`、不需要凭据、不需要模型时可运行；`verifier` 与 `reviewer` **必须**能独立复跑该命令（无需真机环境）。
-  - **文档门禁早期评估（v7，用户评审 #9）**：写完 `apps/vscode-dsh/README.md`(+`.zh.md`) 后**必须在本 Phase 内**跑 **`pnpm run test:docs`**（或与 Phase 1 spec 逐字一致的显式并列命令）并**在本 Phase 内**解决全部失败（含重录 `.i18n.yaml`）；**不得**把文档门禁首次暴露推迟到 Phase 4（AD-10 取舍）。
+  - **文档门禁早期评估（v7，用户评审 #9）**：写完 `apps/vscode-dsh/README.md`(+`.zh.md`) 后**必须在本 Phase 内**跑 **`pnpm run test:docs`**（或与 Phase 1 spec 逐字一致的显式并列命令）并**在本 Phase 内**解决全部失败（含重录 `.i18n.yaml`）；**不得**把文档门禁首次暴露推迟到后续 Phase（本 Phase 为最后一个 Phase，AD-10 取舍）。
   - step2 不得 `await dsh.newConversation`（无人值守 host 中会卡死，AD-16）；step1 **必须**先 `fireConversationVisibility` 再等 `started`（`triggerAutoReady` 恒 `gated`，属正常态，AD-16）。
   - 收尾必须显式回收 `chrome_crashpad_handler`（AD-16），并删除 `HOME` 沙箱与 `/var/tmp/<probe>` 探针文件、断言真实 `~/.dsh` 的 mtime/sha256 与运行前一致。
   - **step4 的模型行为核查**：若首步（默认权限）对 `/var/tmp/<probe>` 的写入**未被拒绝**，驱动**必须立即**判 `LINK_FAILURE`（**不得**轮询到审批超时上限、**不得**等待任何超时）并落盘模型返回内容、工具调用参数（含 `sandbox_permissions`）与首步命令结果（AD-12 决策 5/6）。**反向用例必须同时保留**：审批在 120s 内未被作答 → `LINK_FAILURE`。`/var/tmp` 目标、两步式构造与 120s 上限**均不变**。
   - **Xvfb 已安装，脚本内不存在安装动作**：2026-09-15 实测 `/usr/bin/Xvfb` 与 `/usr/bin/xvfb-run` 均存在、`dpkg-query` → `xvfb 2:1.20.13-1ubuntu1~20.04.20 install ok installed`、`DISPLAY=:1` 上 X.Org 存活（AD-8）。脚本**必须不**调用 `apt`/`sudo` 安装 Xvfb（AC-28 明文禁止），**必须**先验证 Xvfb 可用才能走 `xvfb` 分支；验证失败即 `SKIPPED_NO_DISPLAY`（退出码 2）+ 输出跳过原因，**不得**报 PASS、**不得**判为 `LINK_FAILURE` 或 `HARNESS_ERROR`。
   - **继承的 `DSH_NODE_BIN` 必须被显式清除**：脚本**必须**在拉起源进程前 `unset DSH_NODE_BIN`（或 `env -u DSH_NODE_BIN` 包裹启动）并断言 `printenv DSH_NODE_BIN` 为空，且把该清理动作记入状态 JSON——**仅"不导出"不足**；未清除或清除后非空即判 `HARNESS_ERROR`（AD-11，AC-10 真机证据的前提）。
 - **债务动作**：`DEBT-002` **撤销**（原生 Diff 已可达，AD-15）；`DEBT-003` **撤销且不适用**（Xvfb 已由用户安装，触发条件（脚本内安装失败）已不存在；AD-8、§6）。本 Phase **不登记任何债务**。
-
-### Phase 4: `phase-4-regression-closure` — 全量回归与交付收口
-
-- **目标**：对合并后的工作区整体断言不回归，并完成文档 / Agent Note / 技术债注册表的交付收口。
-- **输入**：`requirements.md` §AC-34 – §AC-37，以及 Phase 1–3 的全部产出。
-- **产出**：
-  - `pnpm run build:lib:host`、`pnpm run test`（apps + SDK）、`pnpm run typecheck`、`pnpm run lint`、`pnpm run hygiene`、`pnpm run doc-sync` 的全绿记录
-  - **文档门禁只复核、不首修（v7，用户评审 #9）**：Phase 4 重跑 `pnpm run doc-sync` 并**要求退出 0**；预算 / 双语配对 / 引用类修复**必须**已在其产出 Phase（Phase 1 的 `docs/development.md`(+`.zh.md`)、Phase 3 的 `apps/vscode-dsh/README.md`(+`.zh.md`)）完成，**不得**在本 Phase 才首次修复（AD-10 取舍）
-  - `apps/vscode-dsh/test-scripts/run-chat-ready-regression.sh` 退出 0
-  - Agent Note（`.agents/notes/implemented/{architecture|process|testing}/`）+ 中文版 + sidecar（本工作流为非平凡改动）
-  - `docs/wiki/VS Code IDE 集成/` 受影响页面更新（由 `wiki` agent 在 Phase 收口时执行）
-  - `tech-debt-registry.md` 收口（`DEBT-001` 已解决归档 + `DEBT-002` 撤销说明 + `DEBT-003` **撤销**说明 + `DEBT-004` 活跃条目），并**必须**在 `verification.md` / HG-3 汇报中显式呈现 `DEBT-004`（出厂 `ide` profile 主会话不可写文件；含已定位的窄口径修法与目标工作流）；收口后活跃表**只**有 `DEBT-004`
-- **验收**：见 `phases/phase-4-regression-closure/spec.md`。
-- **Phase Entry Gate**：读取 `tech-debt-registry.md`，逐条复核 Phase 1–3 是否留下债务；已知缺口不得写成 known gap 后仍判 PASS。
 
 ## 技术债登记计划
 
@@ -214,7 +184,7 @@ graph TD
 >
 > **`DEBT-003` 撤销说明（v6）**：该条目在 v5 中仅为"**条件性登记**"（仅在脚本内 `sudo -n apt-get install -y xvfb` 非 0 时才登记，从未落入活跃表）。用户已于 2026-09-15 在本机安装 Xvfb（实测证据见上表），脚本内**不存在**安装动作（AC-28 明确要求脚本**必须不**尝试通过 `apt`/`sudo` 安装），触发条件（脚本内安装失败）**已不存在**，故该条件性债务**不再可能成立且无需登记**——处置为**撤销**，并同步在 `tech-debt-registry.md`「已解决」表登记撤销说明。活跃表**必须**只保留 `DEBT-004`。
 >
-> **`DEBT-004` 说明（v4 新增）**：这是**产品缺口**，不是本工作流的实现缺陷。证据：真机实测的工具集（`spikes/native-diff-feasibility.md` §P1.4/G1.4，5 → 25 对比；计数以 `request/header.header.tools` 实测的 25 为准）+ `tool-policy.ts` 的 `ORCHESTRATOR_ALLOW` / `ORCHESTRATOR_WRITE_BLOCK`（模块级 const、plugin 无 `Config`）。**用户明确决定不在本工作流内修**——AC-25 第 5 步已在测试内经 route A 绕过。本债务**必须**在 Phase 4 的 `verification.md` 与 HG-3 汇报中可见。
+> **`DEBT-004` 说明（v4 新增）**：这是**产品缺口**，不是本工作流的实现缺陷。证据：真机实测的工具集（`spikes/native-diff-feasibility.md` §P1.4/G1.4，5 → 25 对比；计数以 `request/header.header.tools` 实测的 25 为准）+ `tool-policy.ts` 的 `ORCHESTRATOR_ALLOW` / `ORCHESTRATOR_WRITE_BLOCK`（模块级 const、plugin 无 `Config`）。**用户明确决定不在本工作流内修**——AC-25 第 5 步已在测试内经 route A 绕过。本债务**必须**在 Phase 3 的 `verification.md` 与 HG-3 汇报中可见。
 >
 > 除上述四条（其中 `DEBT-001`/`DEBT-002`/`DEBT-003` 均已撤销归档、活跃表**只**保留 `DEBT-004`）外，本工作流**不登记任何技术债**。特别地：
 >

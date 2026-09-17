@@ -90,14 +90,14 @@ PNPM="pnpm --config.verify-deps-before-run=false"
 - `apps/` 下**无任何** `contributes.configuration`；仓库**没有任何**门禁校验 `contributes`（`verify-package-invariants` 不覆盖），其正确性只能靠运行时用例证明。
 - `apps/vscode-dsh` **不在**覆盖率门禁内；`packages/sdk/client` **是** per-file 100%（`vitest.config.ts:198`）。
 
-**「文档门禁早期评估（v7，用户评审 #9；必须在本 Phase 内完成，不得推迟到 Phase 4）」：**
+**「文档门禁早期评估（v7，用户评审 #9；必须在本 Phase 内完成，不得推迟到后续 Phase）」：**
 
 - 写完 `docs/development.md`(+`.zh.md`) 后**必须**在**本 Phase 内**执行 **`pnpm run test:docs`**（该聚合即"快速面"；等价形态 `tsx scripts/run-gates.ts doc-quick`）；若该聚合在本机不可用或过重，**必须**改为下条列出的显式并列命令，并在 `implementation.md` 写明实际执行的命令原文（**禁止**静默跳过）：
   - `pnpm run verify-doc-budgets`、`pnpm run verify-translation-pairing`、`pnpm run verify-doc-refs`（三者显式并列，逐条要求退出 0）
-- **必须**在**本 Phase 内**解决本 Phase **改动所引入的**全部失败，含双语成对与 `.i18n.yaml` 重录（`verify-translation-pairing` 对 `docs/development.md` / `docs/development.zh.md` 这一对失败即重录，重录命令 `pnpm run verify-translation-pairing --write <pair>`，不是留到 Phase 4）。
+- **必须**在**本 Phase 内**解决本 Phase **改动所引入的**全部失败，含双语成对与 `.i18n.yaml` 重录（`verify-translation-pairing` 对 `docs/development.md` / `docs/development.zh.md` 这一对失败即重录，重录命令 `pnpm run verify-translation-pairing --write <pair>`，不是留到后续 Phase）。
 - **已核实基线的既有失败不属本 Phase 义务（v8）**：`test:docs` 基线即为 10 passed / 5 failed，成因包括既有 `docs/wiki/**` 中文页缺英文配对（约 16 处）、`packages/README.md` 与 `packages/sdk/server/README.md` 的 `.i18n.yaml` 失同步、`snapshots/acp/image-compaction/system-prompt.expected.md` 符号链接导致的 `verify-md-wrap` `ENOTDIR`、既有 agent note 头部缺失、`packages/bundle/ide/README.zh.md:18` 失效锚点。这些**均与本 Phase 无关**；本 Phase **不得**被要求修复它们，**不得**把它们当作本 Phase 的通过条件，也**不得**因为"整体仍为红"而放弃对**自己改动引入的失败**的修复。
 - **文档预算门禁的事实口径（v7 更正）**：`docs/development.md`(+`.zh.md`) **不在** `scripts/doc-budgets.manifest.json`（当前仅 8 条）内，属 `docs/AGENTS.md:57` 的 "Review governs unbudgeted tiers." 非预算层；预算门禁**只当**改动落在该 8 个预算文件之一或预算文件本身被动到时才被本工作流触到。**若**确实触到且变红，处置顺序**固定**为 **Relocate → Condense → Raise**（`docs/AGENTS.md:51-55`）：`Raise`（上调 `scripts/doc-budgets.manifest.json` 的 ceiling）**仅当**内容确实需要该篇幅时才允许，**必须**在同一 Phase 内改该文件并在 `implementation.md` 记录理由；**禁止**把"上调预算"当作第一手段，**禁止**为迁就预算删减本 spec（AC-2 / AC-3）要求的必需内容。
-- 本条**不得**被解读为"文档门禁首次暴露可以推迟到 Phase 4"：Phase 4 **只复核**（`pnpm run doc-sync` 退出 0），不承担首次修复（`design.md` AD-10 取舍、Phase 4 spec）。
+- 本条**不得**被解读为"文档门禁首次暴露可以推迟"：后续工作流**只复核**（`pnpm run doc-sync` 退出 0），不承担首次修复（`design.md` AD-10 取舍）。
 
 **AC-10(f) 的跨 Phase 说明（必须写入 `verification.md`，不得省略）**：AC-10 的"设置项在真机上被解析链消费"这一分支需要真机 Extension Development Host，由 Phase 3 的冒烟脚本提供证据（`design.md` AD-11）。Phase 1 的判定范围是 (a)–(e)（manifest、文档、三来源优先级、无效设置 fail loud、扩展读取并显式传入）。**不得** 因此把 AC-10 记为 known gap 后判 PASS，也**不得** 声称真机分支已在 Phase 1 验证——`verification.md` 必须原文写明「AC-10 真机消费分支由 Phase 3 提供证据（跨 Phase 依赖）」，Phase 3 的对应补充证据行（见 Phase 3 spec「AC-10 真机消费（补充证据）」）失败则整条 AC-10 不成立。
 
@@ -115,7 +115,7 @@ PNPM="pnpm --config.verify-deps-before-run=false"
 - 不得引入新依赖（探测只用 `node:child_process` + `node:fs`）。
 - 静态检查不得作为 AC-4 / AC-7 / AC-8 / AC-9 / AC-10 的唯一验证手段。
 - **禁止** 在本 Phase 引入任何"若…则降级/回退/跳过"的分支：三个来源只有"命中即使用"与"命中但无效即 fail loud"两种结局。
-- 本 Phase 属非平凡改动，Phase 4 需补 Agent Note；本 Phase 不修改 `packages/core/agent-loop`。
+- 本 Phase 属非平凡改动，需补 Agent Note；本 Phase 不修改 `packages/core/agent-loop`。
 
 ## 产出清单
 

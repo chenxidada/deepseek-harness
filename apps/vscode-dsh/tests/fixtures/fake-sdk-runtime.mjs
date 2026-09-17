@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Minimal JSON-RPC SDK runtime stand-in for IdeSessionHost unit/integration tests.
  * Answers `initialize` / `session/prompt` / `shutdown` on stdio; ignores argv.

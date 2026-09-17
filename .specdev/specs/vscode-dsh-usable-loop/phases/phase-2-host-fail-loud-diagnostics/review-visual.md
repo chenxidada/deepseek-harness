@@ -40,9 +40,8 @@
 | `phase-1-node-env-preflight` | `:56` | `:57` | `false` |
 | `phase-2-host-fail-loud-diagnostics` | `:73` | `:74` | `false` |
 | `phase-3-layer-v-smoke-loop` | `:88` | `:89` | `false` |
-| `phase-4-regression-closure` | `:103` | `:104` | `false` |
 
-All four Phases of this workflow are `ui: false`.
+All three Phases of this workflow are `ui: false`.
 
 ### 2. Independent judgment — this Phase delivers no visual surface
 
@@ -108,7 +107,7 @@ Per my independent judgement, Output Channel **text format is a data-plane conce
 
 ### 🟢 Observations
 
-- All four Phases of `vscode-dsh-usable-loop` are `ui: false` (`phase-plan.md:57, 74, 89, 104`); no `visual-baseline.md`, `design-system/`, `ui-spec.md`, `hg1_5`, or prototype marker exists anywhere in the workflow. Consistent.
+- All three Phases of `vscode-dsh-usable-loop` are `ui: false` (`phase-plan.md:57, 74, 89`); no `visual-baseline.md`, `design-system/`, `ui-spec.md`, `hg1_5`, or prototype marker exists anywhere in the workflow. Consistent.
 - The Output Channel keeps technical fragments in English (`host-diagnostics.ts:432-453`), matching `spec.md:75`; user-visible command copy follows the existing `"DeepSeek Harness: <English Title>"` convention (`package.json:143`).
 - `dsh.showHostDiagnostics` reveals a channel rather than composing one — the least visually invasive way to satisfy AC-13, and it adds zero extension-owned chrome.
 - If a later workflow intends interface polishing, it needs its own workflow scope plus `ui-spec.md` + `visual-baseline.md` + HG-1.5; this Phase's `ui: false` should not be reinterpreted as a baseline that was skipped.

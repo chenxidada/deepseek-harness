@@ -236,7 +236,7 @@ AC-1(b) 耗时 53 ms 本身就是证据：它确实 spawn 了定位到的解释�
 ## 6. 未决事项与风险
 
 1. **AC-10(f)**（真实 Extension Development Host 消费预置 `settings.json`）按 spec 要求仍是 Phase 3 的义务。不得据此判定 Phase 1 完成或不完成。
-2. **未运行 `$PNPM run doc-sync`**：spec 把首次 `test:docs` 归本 Phase，把 `doc-sync` 留给 Phase 4 复查。
+2. **未运行 `$PNPM run doc-sync`**：spec 把首次 `test:docs` 归本 Phase，把 `doc-sync` 留给后续工作流复查。
 3. **红色 `lint` 基线按设计未触碰。** 其成分是树内构建残留（未跟踪的 `packages/**/src/*.d.ts` 与 map）以及 `apps/vscode-dsh/tests/**` 中既有的 `no-unsafe-*` / `no-unnecessary-*` 类问题，其结构性成因是 `apps/vscode-dsh/tsconfig.json` 只 include 了 `src`，使这些测试文件落在任何 TypeScript program 之外。修复该类问题会改变本 Phase 必须保持绿色的 `typecheck` 基线。
 4. **`apps/vscode-dsh` 没有覆盖率门禁**，而 `packages/sdk/client` 保留逐文件 100% 要求。本 Phase 未给 SDK 增加未覆盖分支。
 5. **`unusable` 是唯一依赖子进程行为的分类**（退出码、输出、超时），因此也是「仅靠单测的回归」可能藏身处。它由真实非零退出的替身与 `electronRunAsNode` 用例覆盖；超时分支未单独演练，因为诱导它需要一个长运行 fixture。

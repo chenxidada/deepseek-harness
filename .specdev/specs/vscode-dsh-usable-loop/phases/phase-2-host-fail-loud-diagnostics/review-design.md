@@ -288,7 +288,7 @@ grep -n 'child-exited' implementation.md          → only :25 (an ASCII boundar
 member") to be written into `implementation.md`; it lives only in code (the total mapping function plus its
 JSDoc). The condition is **unchanged** from round 2 — §8.9/§8.10/§8.12 cover adjacent topics but none of
 them is this ruling. It is now registered as **`DEBT-012`** (`tech-debt-registry.md:30`, source column
-`review-design 🟡① ≡ review.md SF-C`, target "Phase 4 交付收口", 🟡非阻塞), which is the user's ruling and
+`review-design 🟡① ≡ review.md SF-C`, target "后续工作流", 🟡非阻塞), which is the user's ruling and
 therefore the correct current state. This round neither fixed nor worsened it, and I am not asking for it to
 be fixed here.
 

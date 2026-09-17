@@ -55,5 +55,11 @@
     "created": "2026-09-14T05:52:00Z",
     "completed": "2026-09-14T12:46:46Z",
     "description": "修复根 build:lib:host 统一命令被 specdev/specdev-gate/sdk/server/ide-bridge 等包的预先存在类型错误及 dsh-command-specdev 缺 tsdown entry 阻断的问题"
+  },
+  "vscode-dsh-usable-loop": {
+    "status": "completed",
+    "created": "2026-09-15T01:53:53Z",
+    "completed": "2026-09-17T13:48:11Z",
+    "description": "让 vscode-dsh 的真机可用闭环可重复执行：修复 Node 版本矩阵/环境一致性导致的运行期失败，补齐扩展侧启动失败的 fail-loud 诊断，建立层 V（VS Code 真机 EDH）脚本化冒烟闭环（Xvfb + code CLI，产出截图）。UI 视觉美化不在本工作流范围。"
   }
 }

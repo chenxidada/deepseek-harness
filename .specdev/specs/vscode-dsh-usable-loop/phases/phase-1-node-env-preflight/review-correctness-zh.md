@@ -363,7 +363,7 @@ $ grep -nE "@STUB|TODO|FIXME|XXX|not implemented|placeholder" \
 - **`unusable` 的超时分支**（构造 10 s 探测超时需要一个长运行 fixture）。`implementation.md` §6.5 记录了同样的限制。
 - **真机 Extension Development Host 第 3 级**（无设置、无 `DSH_NODE_BIN` 时的 `process-exec-path`）——属 Phase 3
   范围，原样结转。
-- **`$PNPM run doc-sync`** 未运行：`spec.md:100` 把首次 `test:docs` 归本 Phase、把 `doc-sync` 留给 Phase 4。
+- **`$PNPM run doc-sync`** 未运行：`spec.md:100` 把首次 `test:docs` 归本 Phase、把 `doc-sync` 留给后续工作流。
   `test:docs` 已运行且计数与基线一致。
 
 ## 与 `implementation.md` 的出入（第 3 轮）
