@@ -11,7 +11,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolveNodeExecutableSpec, type ResolvedNodeExecutable } from '@deepseek-ai/dsh-sdk-client'
 import {
   DSH_NODE_BIN_VARIABLE,
@@ -577,7 +577,21 @@ describe('extension reads dsh.nodeBin (AC-10 e)', () => {
   const commands = new Map<string, (...args: unknown[]) => unknown>()
   const configurationReads: string[] = []
 
+  /**
+   * `DSH_NODE_BIN` outranks `dsh.nodeBin`, so an inherited value would answer for
+   * the setting and these cases would pass or fail on the shell they ran in. The
+   * block is about the setting, so the variable is pinned to absent; cases that
+   * need it set their own value for the duration of the case.
+   */
+  const inheritedNodeBin = process.env.DSH_NODE_BIN
+
+  beforeEach(() => {
+    delete process.env.DSH_NODE_BIN
+  })
+
   afterEach(async () => {
+    if (inheritedNodeBin === undefined) delete process.env.DSH_NODE_BIN
+    else process.env.DSH_NODE_BIN = inheritedNodeBin
     await deactivate()
     commands.clear()
     configurationReads.length = 0

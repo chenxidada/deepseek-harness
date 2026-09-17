@@ -306,6 +306,10 @@ function ciSharedStaticGates(): Gate[] {
     pnpmScript('client-ui-i18n', 'verify-client-ui-i18n', { label: 'client UI i18n' }),
     pnpmScript('no-bare-dispatcher', 'verify-no-bare-dispatcher', { label: 'proxy-aware dispatchers' }),
     pnpmScript('issue-management', 'test:issue-management', { label: 'Issue management policy' }),
+    // Oxlint cannot read `.sh` at all, so the shell assets this repository ships for link
+    // tests were previously unchecked by every gate (DEBT-018). `bash -n` is the real
+    // parser, and the script pins the assets it must not silently stop covering.
+    pnpmScript('test-scripts-syntax', 'check:test-scripts-syntax', { label: 'test-scripts shell syntax' }),
   ]
 }
 

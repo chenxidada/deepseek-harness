@@ -1098,6 +1098,20 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         () => host?.interactions.listPending() ?? [],
       ),
       /**
+       * Answer a pending approval by id, without a UI round trip (AD-12).
+       *
+       * Registered inside {@link shouldRegisterTestHooks}, so it is unreachable
+       * unless the harness was started as a test host. The outcome vocabulary is
+       * the coordinator's, so an unattended driver gets the same answer the
+       * QuickPick would have produced.
+       */
+      vscode.commands.registerCommand('dsh.test.answerApproval', (id?: unknown, outcome?: unknown) => {
+        if (typeof id !== 'string' || id === '') return { ok: false as const, reason: 'invalid-id' as const }
+        const interactions = host?.interactions
+        if (interactions === undefined) return { ok: false as const, reason: 'no-host' as const }
+        return interactions.resolveApproval(id, outcome)
+      }),
+      /**
        * Structured Host diagnostic records (AC-13). The name is inherited from the
        * planned text surface — it is a historical label, not a description of the
        * value: this returns the `HostDiagnosticRecord[]` array and never text, so
@@ -1211,8 +1225,11 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       }),
       vscode.commands.registerCommand('dsh.test.hostCreateCount', () => ({ count: hostCreateCount })),
       vscode.commands.registerCommand('dsh.test.lastCopiedText', () => ({ text: lastCopiedText })),
-      vscode.commands.registerCommand('dsh.test.injectDisconnect', () => {
-        orchestrator?.onUnexpectedDisconnect()
+      vscode.commands.registerCommand('dsh.test.injectDisconnect', async () => {
+        // AC-6a's trigger: make the live runtime connection die. The FSM is not
+        // poked directly — the Host's own status watch owns that transition, so
+        // this path exercises the same wiring a real runtime crash does.
+        await host?.injectRuntimeDeath()
         return orchestrator?.getSnapshot()
       }),
       vscode.commands.registerCommand('dsh.test.openActivityBar', async () => {

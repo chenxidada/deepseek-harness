@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HarnessClient, TransportClosedError } from '@deepseek-ai/dsh-sdk-client'
 import { IDE_BRIDGE_SOCK_ENV } from '@deepseek-ai/dsh-ide-bridge'
 import { AutoStartOrchestrator } from '../src/auto-start-orchestrator.ts'
@@ -15,6 +15,24 @@ import { redactSecrets } from '../src/redact.ts'
 import { IdeSessionHost } from '../src/session-host.ts'
 
 const fakeSdkRuntime = fileURLToPath(new URL('./fixtures/fake-sdk-runtime.mjs', import.meta.url))
+
+/**
+ * `DSH_NODE_BIN` outranks `dsh.nodeBin` and the Extension Host's own Node, so an
+ * inherited value would re-source the executable out from under every case here
+ * and their field assertions would describe that input instead of the setting.
+ * This file drives the Host through explicit options, so the variable is pinned
+ * to absent for its duration.
+ */
+const inheritedNodeBin = process.env.DSH_NODE_BIN
+
+beforeEach(() => {
+  delete process.env.DSH_NODE_BIN
+})
+
+afterEach(() => {
+  if (inheritedNodeBin === undefined) delete process.env.DSH_NODE_BIN
+  else process.env.DSH_NODE_BIN = inheritedNodeBin
+})
 
 describe('buildIdeChildEnv', () => {
   it('re-injects DSH_IDE_BRIDGE_SOCK after scrubbing DSH_* (AC-18 env contract)', () => {
@@ -425,4 +443,101 @@ describe('IdeSessionHost start-failure diagnostics (AC-14 – AC-20)', () => {
     expect(records[1].retryOfSeq).toBe(records[0].seq)
     expect(records[1].seq).toBeGreaterThan(records[0].seq)
   })
+
+  /**
+   * DEBT-010: the runtime dying *after* `initialize` succeeded is the boundary
+   * that used to leave no record at all — the only `record()` call site sat in
+   * `start()`'s catch, which a post-handshake death never reaches. The record it
+   * now writes is also the field-level evidence AC-10 / AC-11(b) read: it keeps
+   * the executable and source the Host resolved and spawned, so a reader can
+   * tell which Node the dead connection was running on.
+   */
+  it('DEBT-010: a runtime death after the handshake records phase `post-handshake` with the resolved executable', async () => {
+    const dir = await workspace()
+    const recorder = new HostDiagnosticRecorder()
+    const host = new IdeSessionHost(recorder)
+    // The runtime answers `initialize`, then exits on its own; the death is
+    // therefore strictly after the handshake, not a failed start step.
+    await host.start({
+      cwd: dir,
+      dshHome: join(dir, '.dsh'),
+      bridgeSockPath: join(dir, 'bridge.sock'),
+      dshBin: fakeSdkRuntime,
+      initializeTimeoutMs: 10_000,
+      // A real Node executable selected through the setting, so the recorded
+      // `source` is the one an IDE-configured Host reports (`vscode-setting`).
+      nodeBinSetting: process.execPath,
+      credentials: {
+        DEEPSEEK_API_KEY: 'keyless-post-handshake-probe',
+        DSH_TELEMETRY_DISABLED: '1',
+        FAKE_EXIT_AFTER_MS: '4000',
+      },
+    })
+    expect(host.status).toBe('connected')
+    const connectedRecords = recorder.records()
+    expect(connectedRecords).toEqual([])
+
+    await waitFor(() => host.status === 'error', 20_000)
+    const records = recorder.records()
+    // One death is one record: the start catch did not also write one.
+    expect(records).toHaveLength(1)
+    const [death] = records
+    expect(death).toMatchObject({
+      kind: 'child-exited',
+      phase: 'post-handshake',
+      retryOfSeq: null,
+      resolvedExecutable: process.execPath,
+      source: 'vscode-setting',
+      exitCode: 1,
+    })
+    expect(death.detail).not.toBe('')
+    expect(death.hint).not.toBe('')
+    expect(Object.keys(death)).toHaveLength(18)
+    // The record is redacted like every other one, and its detail names the runtime.
+    expect(death.detail).not.toContain('keyless-post-handshake-probe')
+    // A death that opens the chain is not a phase-2 retry of an earlier failure.
+    expect(death.phase).not.toBe('retry')
+  })
+
+  it('DEBT-010: a death while the start is still in flight is recorded once, by the start sequence', async () => {
+    // Here the runtime dies *before* answering `initialize`, so `start()`'s catch
+    // owns the failure. The transport-death edge must not write a second record
+    // for the same attempt (AC-22).
+    const dir = await workspace()
+    const recorder = new HostDiagnosticRecorder()
+    await failStart({
+      dir,
+      recorder,
+      credentials: { FAKE_EXIT_AFTER_MS: '150', FAKE_PENDING_INIT: '1' },
+      initializeTimeoutMs: 5_000,
+    })
+
+    const records = recorder.records()
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ kind: 'child-exited', phase: 'start', retryOfSeq: null })
+  })
 })
+
+/**
+ * Poll until `predicate` holds; the transport death is asynchronous, so the
+ * assertion has to wait for it rather than read the state once.
+ * @param predicate - condition to wait for.
+ * @param timeoutMs - bound before the wait is failed.
+ */
+function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs
+    const poll = (): void => {
+      if (predicate()) {
+        resolve()
+        return
+      }
+      if (Date.now() >= deadline) {
+        reject(new Error('timed out waiting for the condition'))
+        return
+      }
+      setTimeout(poll, 25)
+    }
+    poll()
+  })
+}

@@ -148,7 +148,7 @@ dsh.test.hostCreateCount     dsh.test.lastCopiedText        dsh.test.injectDisco
 dsh.test.openActivityBar
 ```
 
-本 Phase 的**允许调用命令集 = 上表白名单 69 条 + `dsh.test.answerApproval`（本 Phase 新增，AD-12）+ `dsh.test.getDiagnosticsText`（Phase 2 交付，AD-14）**。**任何** 其它命令名**不得**出现在驱动源码中。
+本 Phase 的**允许调用命令集 = 上表白名单 69 条 + `dsh.test.answerApproval`（本 Phase 新增，AD-12）+ `dsh.test.getDiagnosticsText`（Phase 2 交付，AD-14）+ `dsh.showHostDiagnostics`（HEAD 既有的只读诊断面；下文 AC-13 / AC-14 行明文要求驱动断言并执行它，本行为该处的消解）**。**任何** 其它命令名**不得**出现在驱动源码中。
 
 **skip / 非 PASS 条件（不得伪报通过）**：
 
@@ -173,7 +173,7 @@ dsh.test.openActivityBar
 
 | AC | 验证类型 | 验证方法 | 预期结果 |
 |---|---|---|---|
-| AC-11 | 运行时验证（两覆盖面**独立**判定 + 文档锚点） | 脚本在拉起源进程前解析合格 Node，并在报告与 `layer-v-status.json.node` 中写出**两个覆盖面各自**的结论：(a) `terminalSide`：本 shell 解析到的默认 `node` 绝对路径、版本、是否过 AC-4 门槛、以及「终端侧需执行的动作」+ `docs/development.md` 责任清单锚点（AC-3 已交付）；(b) `extensionSubprocessSide`：子进程实际使用的 Node 路径/版本/来源（**必须**取自 `dsh.test.getDiagnosticsText` 返回记录的 `resolvedExecutable` 与 `source` 字段，`source ∈ {dsh-node-bin, vscode-setting, process-exec-path}`；两条字段至少一条必须存在，若返回空数组则判 `HARNESS_ERROR`）。断言两个覆盖面**各自**给出 ✅/❌，且**不存在**把二者合并为单一结论的输出字段 | 两侧独立判定、互不替代；本机默认 `node` 为 v20.16.0 → `terminalSide` 为 ❌ 并给出动作，`extensionSubprocessSide` 为 ✅ 且来源为 `vscode-setting`；断言报告**不得**由一侧的 ✅ 推导另一侧 |
+| AC-11 | 运行时验证（两覆盖面**独立**判定 + 文档锚点） | 脚本在拉起源进程前解析合格 Node，并在报告与 `layer-v-status.json.node` 中写出**两个覆盖面各自**的结论：(a) `terminalSide`：本 shell 解析到的默认 `node` 绝对路径、版本、是否过 AC-4 门槛、以及「终端侧需执行的动作」+ `docs/development.md` 责任清单锚点（AC-3 已交付）；(b) `extensionSubprocessSide`：子进程实际使用的 Node 路径/版本/来源（**必须**取自 `dsh.test.getDiagnosticsText` 返回记录的 `resolvedExecutable` 与 `source` 字段，`source ∈ {dsh-node-bin, vscode-setting, process-exec-path}`；两条字段至少一条必须存在；**`[]` 的处置按文末「修订段 R1」**——按 R1 完成取证构造后读取为 `[]` 判 `HARNESS_ERROR`，未构造时 `[]` 不判错（与 AD-14 决策 5 一致））。断言两个覆盖面**各自**给出 ✅/❌，且**不存在**把二者合并为单一结论的输出字段 | 两侧独立判定、互不替代；本机默认 `node` 为 v20.16.0 → `terminalSide` 为 ❌ 并给出动作，`extensionSubprocessSide` 为 ✅ 且来源为 `vscode-setting`；断言报告**不得**由一侧的 ✅ 推导另一侧 |
 | AC-12 | 运行时验证（端到端，含反向构造） | (a) 正常运行：断言 `layer-v-status.json.node.path` 落在脚本自行前置的候选目录下，且 `!= "$(which node)"`（本机默认 v20.16.0 不满足门槛）；(b) 反向构造：以 `PATH=<fake-node-dir>:$PATH`（fake node 为 v20 语义替身，脚本应判定其不合格）运行 → 断言脚本仍使用自己解析的合格 Node，而不是 `PATH` 默认项；(c) 断言脚本源码在 `code` 启动之前有显式 `PATH` 前置语句（静态辅助，非唯一证据） | (a) 路径不等于默认 node；(b) 未静默使用不合格默认项；(c) 前置语句存在 |
 | AC-23 | 运行时验证（单命令、无交互） | 在 TTY 之外执行 `bash apps/vscode-dsh/test-scripts/run-layer-v-smoke.sh`（无参数、无 stdin 重定向；脚本不得读取 stdin）：断言脚本从启动到结束无任何 `read`/交互提示；结束后退出码属于 §skip 表枚举值；断言脚本位于 `apps/vscode-dsh/test-scripts/` 下 | 单命令完成，无人工输入 |
 | AC-24 | 运行时验证（真机 argv + 驱动自证） | (a) 脚本启动 `code` 后，用 `ps -eo args` 断言进程树中存在含 `--extensionDevelopmentPath=<repo>/apps/vscode-dsh` 的进程（绝对路径且指向本仓库）；(b) 断言**同时**存在第二条 `--extensionDevelopmentPath` 指向驱动的进程（双 flag 是唯一加载通道）；(c) 断言该进程 argv **不含** `--no-sandbox` / `--disable-gpu` / `--skip-welcome` / `--skip-release-notes`；(d) 驱动扩展自身断言其扩展 id 为仓库的 vscode-dsh 扩展并写入状态 JSON | (a)(b)(c)(d) 全过 |
@@ -184,17 +184,17 @@ dsh.test.openActivityBar
 | AC-25 step5 | 运行时验证（**AD-15 route A 的原生 Diff**） | **前置（脚本，会话开始前）**：建立 `HOME` 沙箱并从干净状态起，投放 overlay 与影子 preset（构造与硬约束见上节，含影子 preset 的 **2 行删除** `diff` 断言），记录真实 `~/.dsh` 的 mtime/sha256 快照。<br/>**构造**：(1) 脚本**预先创建**目标文件 `apps/vscode-dsh/test-artifacts/layer-v/step-5-target.txt` 并写入初始内容（**必须**是"编辑前已存在"的文件；该路径**的忽略规则由本工作流 Phase 3 交付（根 `.gitignore` 显式规则，`git check-ignore` 命中且规则来自仓库根）且非应用源码**，prompt **必须**明确称其为探针 / scratch 文件）；(2) 模型用 **`edit`**（或**覆盖写**）修改它——`old_string` **必须**在文件中真实存在且替换后内容确实不同；(3) 断言该次 `tool/result` 的 `meta.diffs` **非空且同时含 `oldText` 与 `newText`**；(4) 执行 `dsh.reviewWorkspaceDiffs` → 断言 `vscode.window.tabGroups` 出现真实 `TabInputTextDiff` 页签、Diff 路径等于该文件、且磁盘内容与 `newText` 一致（该命令走 timeline，`apps/vscode-dsh/src/extension.ts:812`，**不**受 `ChangeAttributor` 的 ignore 过滤影响，故忽略路径不影响 Diff 产生）。<br/>**证据标注（全部必须）**：`diffSource:"native-meta-diffs"`、`agentPreset:"specdev-orchestrator"`（影子版）、`toolPolicy:"removed-orchestrator-tool-policy"`、`toolCount`（**预期 25**，来源 `request/header.header.tools`）、`homeSandbox`（沙箱路径）、`realDshHomeUntouched:true`（附运行前后 mtime/sha256 一致的证据）。<br/>**硬限制（不得违反）**：**必须**编辑已存在文件（新建文件的 `write` 返回 `diffs: []`）；**必须**走 `tool-fs` 的 `write`（覆盖）或 `edit`（`str_replace_editor` 永不产生可恢复 Diff）；**禁止**使用 `dsh.test.openHistory` 或任何等价注入（v1–v3 的注入构造已删除）；**目标文件不得位于应用源码路径下、不得位于未被忽略的路径下**（否则判 `HARNESS_ERROR`） | `status:"ok"` 且 `meta.diffs` 非空、真机 `TabInputTextDiff` 打开、证据字段齐全；**不得**出现任何注入/回放标注；**反向用例**：目标文件位于应用源码路径或未被忽略 → `HARNESS_ERROR` |
 | AC-25（命令面） | 静态检查（辅助） | 断言驱动扩展源码只出现白名单内的命令字面量（上表 69 条 + `dsh.test.answerApproval` + `dsh.test.getDiagnosticsText`），且**不出现** `dsh.test.openHistory`；断言不存在 UI 自动化（`xdotool` 等）引用 | 无白名单外命令、无 `dsh.test.openHistory`、无 UI 自动化 |
 | **影子 preset 生成器自检（AD-15 决策 4；属"如何达成"层，不改变任何 AC 的归属）** | 运行时验证（**无真机依赖**，可在接入真机链路之前单独验收） | 独立执行 `bash apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh --check-shadow-preset`（**不设置 `DISPLAY`、不启动 VS Code、无凭据、无模型**）：(a) 退出码**必须**为 `0`（`1` = 检查失败、`2` = 用法/环境错误，均**不得**视为通过）；(b) 输出含实际 `diff`，且恰为 **2 行删除且零新增**（`- id: orchestrator-tool-policy` 与其下一行 `  name: '@deepseek-ai/dsh-specdev-presets/orchestrator-tool-policy'`）；(c) 连续两次生成的内容 `sha256sum` **相同**（确定性）；(d) shipped preset 文件前后哈希**相同**（未被修改）；(e) 生成器的前置漂移断言存在且对**行号或原文不符**的输入 fail loud。**证据必须**（实际 `diff` 文本 + 两次生成的哈希 + 退出码）落入 `layer-v-status.json` 或 `artifact-index.md`；另有静态断言：主脚本源码中**不得**存在第二处影子 preset 生成实现（只允许调用该脚本） | 自检退出码 `0` 且 (b)–(e) 全部成立；证据可复核；**verifier 与 reviewer 必须能独立复跑该命令而无需真机环境**；implementer **必须**在接入真机链路**之前**先跑通并留证 |
-| AC-26 | 运行时验证（产物）+ ignore 断言 | (a) 断言 `apps/vscode-dsh/test-artifacts/layer-v/` 下存在 5 张截图，文件名与链路步骤一一对应且稳定（约定 `step-<n>-<name>.png`，n=1..5，name 取固定 slug）；(b) 断言每张 PNG 非空且为合法 PNG（magic bytes + 文件大小下限）；(c) `git check-ignore -v apps/vscode-dsh/test-artifacts/layer-v/<任一文件>` 退出码 0，且命中规则来自**仓库根 `.gitignore`**（规则路径以仓库根为前缀，不得来自 `core.excludesFile`）；(d) `git status --porcelain` 输出不含该目录 | 5 张 + 稳定命名 + 仓库根规则命中 |
+| AC-26 | 运行时验证（产物）+ ignore 断言 | (a) 断言 `apps/vscode-dsh/test-artifacts/layer-v/` 下存在 5 张截图，文件名与链路步骤一一对应且稳定（约定 `step-<n>-<name>.png`，n=1..5，name 取固定 slug）；(b) 断言每张 PNG 非空且为合法 PNG（magic bytes + 文件大小下限）；(c) `git check-ignore -v apps/vscode-dsh/test-artifacts/layer-v/<任一文件>` 退出码 0，且命中规则来自**仓库根 `.gitignore`**（规则路径以仓库根为前缀，不得来自 `core.excludesFile`）；(d) `git status --porcelain` 输出不含该目录；**(e)〔修订段 R2〕断言同一次运行内 5 张截图的 md5 不得全部相同（硬下限 **≥ 3** 个不同 md5；2026-09-17 由 ≥ 2 收紧，见 `scope-amendment-02.md` §8.1 第 6 项），并把实际不同 md5 数记入运行产物** | 5 张 + 稳定命名 + 仓库根规则命中 + **不同 md5 数 ≥ 3（R2，2026-09-17 收紧）** |
 | AC-27 | 运行时验证（负向，真实链路失败注入） | (a) 凭据在场但 `DEEPSEEK_BASE_URL` 指向不可达地址使 step3 失败 → 退出码 1 且输出失败步骤名 `step-3`；(b) 用一个**故障注入开关**使 step5 必然失败（例如把 `dsh.reviewWorkspaceDiffs` 替换为不存在的命令；**该开关只制造失败，不得伪造或注入 `meta.diffs`**）→ 退出码 1 且输出 `step-5`；(c) 两次运行的 stdout/stderr 均**不含** PASS 结论行、也不含「全部通过」类措辞。**不得** 用「缺凭据」充当本条的注入源（缺凭据属 AC-32，见下表与 AC-32 行） | 非零退出 + 失败步骤名 + 无通过结论 |
-| AC-28 | 运行时验证（两分支 + 跳过分支，实测） | (a) `DISPLAY=:1` 可达 → `display.mode === 'reuse'`；(b) 构造 `DISPLAY=`（空）且 `xvfb-run`/`Xvfb` 不在 `PATH`（即"显示类不可用"）→ 退出码 `2`、`conclusion === 'SKIPPED_NO_DISPLAY'`、输出含跳过原因、**无** PASS；**(xvfb 分支)** `DISPLAY=`（空）但**本机已安装**的 Xvfb 可用（优先 `xvfb-run`，否则自行拉起 `Xvfb`）→ 脚本自启 Xvfb → 运行成功且 `display.mode === 'xvfb'`；**静态断言**脚本源码中不存在 `apt`/`sudo` 安装动作。**不得** 挂起等待输入、**不得** 报 PASS | (a)(xvfb)(b) 实测通过；**(b) 同时覆盖"Xvfb 不可用"的跳过语义**；**无显示绝不报 PASS** 且跳过原因必须输出；脚本**必须不**尝试安装；显示类不可用**必须不**计为 `LINK_FAILURE` 或 `HARNESS_ERROR` |
+| AC-28 | 运行时验证（两分支 + 跳过分支，实测） | (a) `DISPLAY=:1` 可达 → `display.mode === 'reuse'`（**〔修订段 R2〕该分支新增前件：仅在能产出满足 AC-26(e) 的有效界面证据时采用；实测退化（5 张 md5 全同）时必须改走 `xvfb` 分支**）；(b) 构造 `DISPLAY=`（空）且 `xvfb-run`/`Xvfb` 不在 `PATH`（即"显示类不可用"）→ 退出码 `2`、`conclusion === 'SKIPPED_NO_DISPLAY'`、输出含跳过原因、**无** PASS；**(xvfb 分支)** `DISPLAY=`（空）但**本机已安装**的 Xvfb 可用（优先 `xvfb-run`，否则自行拉起 `Xvfb`）→ 脚本自启 Xvfb → 运行成功且 `display.mode === 'xvfb'`；**静态断言**脚本源码中不存在 `apt`/`sudo` 安装动作。**不得** 挂起等待输入、**不得** 报 PASS | (a)(xvfb)(b) 实测通过；**(b) 同时覆盖"Xvfb 不可用"的跳过语义**；**无显示绝不报 PASS** 且跳过原因必须输出；脚本**必须不**尝试安装；显示类不可用**必须不**计为 `LINK_FAILURE` 或 `HARNESS_ERROR` |
 | AC-29 | 运行时验证（资源回收，含 Crashpad handler） | 脚本在 `trap` 中记录自己拉起的进程组：运行结束后断言 (i) 记录到的每个 PID `kill -0` 失败（进程已不存在）；(ii) `pgrep -f 'extensionDevelopmentPath=.*apps/vscode-dsh'` 无输出；(iii) **必须** `pgrep -af '/usr/share/code/'` 无输出——该检查覆盖 `chrome_crashpad_handler`（实测它**不带** `--user-data-dir`，只带 `--database=<UD>/Crashpad`，按 `--user-data-dir` 匹配的朴素收尾会漏杀）；脚本**必须**另有按 `<UD>/Crashpad` 匹配的显式回收；(iv) 断言脚本使用 `setsid`/进程组终止（源码断言 + 运行时验证结合） | 无残留进程；四项断言全过 |
 | AC-30 | 运行时验证（临时 socket） | 断言 (i) 运行期间脚本在 `mktemp -d` 创建的临时目录中提供 bridge socket（状态 JSON 或 stdout 记录其路径）；(ii) 运行结束后该路径 `test ! -e`（已释放）；(iii) 临时目录被清理；(iv) `pgrep -f 'dsh-ide-bridge-'` 无输出 | socket 路径已释放且无残留持有者 |
 | AC-31 | 运行时验证（真实模型往返） | (a) 运行前预检 `DEEPSEEK_API_KEY` 非空，并断言 Extension Host 内 `detectCredentialsFromEnv()` 能读到（Host 进入 `started` 态为证）；(b) step3 的 assistant 文本非空且由真实往返产生：状态 JSON 记 `model.mode:"real"`、`steps[2].evidence` 含响应长度与耗时；(c) 断言脚本与驱动源码**不含** fixture/替身引用（`grep -L 'fake-sdk-runtime'`、不得引用 `packages/test-support/llm-mock-server`）；(d) 脚本 stdout 明确标注该步骤使用了真实模型 | 报告标注真实模型 + 响应非空 + 无 fixture |
 | AC-32 | 运行时验证（负向，与 AC-27 交叉验证） | 以缺凭据环境运行（unset `DEEPSEEK_API_KEY`，且 cwd 的 `.env` 不含该键，避免子进程从 `.env` 读到）：断言退出码 3、`conclusion === 'SKIPPED_NO_CREDENTIALS'`（**不等于** `LINK_FAILURE`）、输出措辞为「缺凭据」而非「链路失败」、且不产生 PASS 结论 | 两种结论可区分 |
 | AC-33 | 静态检查 + 运行时验证 | (a) 断言 `apps/vscode-dsh/README.md` 与 `README.zh.md` 各含四节：产物目录路径、截图命名规则、跳过条件、退出码含义；(b) 断言脚本每次运行后 `.specdev/specs/vscode-dsh-usable-loop/artifact-index.md` 被追加一条记录（含运行时间、产物目录、结论、步骤→文件名映射），且内容与本次实际产物一致；(c) 断言该文件被 git 追踪：`git ls-files --error-unmatch .specdev/specs/vscode-dsh-usable-loop/artifact-index.md` 成功，且 `git check-ignore` 对其**不**命中 | 文档四节 + 索引更新且被追踪、与实际产物一致 |
-| AC-10 真机消费（补充证据，AC-10 归属 Phase 1） | 运行时验证（真机） | 脚本在临时 `--user-data-dir` 的 `User/settings.json` 预置 `"dsh.nodeBin": "<合格 Node 绝对路径>"`，**不导出**并**显式清除继承的** `DSH_NODE_BIN`（`unset DSH_NODE_BIN` 或 `env -u DSH_NODE_BIN` 包裹 `code` 启动命令；**必须**断言"清除后 `printenv DSH_NODE_BIN` 为空"并把该清理动作记入状态 JSON——这是本分支证据成立的**前提**，未清除或清除后非空即判 `HARNESS_ERROR`）；断言 `dsh.test.getDiagnosticsText` 返回记录中存在 `source === 'vscode-setting'` 且其 `resolvedExecutable` 等于预置路径（同时把该结论写入 `layer-v-status.json.node`）。**若该断言失败，脚本必须判为 `LINK_FAILURE`（或 `HARNESS_ERROR`）——不得降级为提示** | 真机证据显示设置来源被解析链消费（**字段级**证据）+ `DSH_NODE_BIN` 已被显式清除（空值断言通过）；该证据由 Phase 3 报告交叉引用给 Phase 1 的 AC-10 |
+| AC-10 真机消费（补充证据，AC-10 归属 Phase 1） | 运行时验证（真机） | 脚本在临时 `--user-data-dir` 的 `User/settings.json` 预置 `"dsh.nodeBin": "<合格 Node 绝对路径>"`，**不导出**并**显式清除继承的** `DSH_NODE_BIN`（`unset DSH_NODE_BIN` 或 `env -u DSH_NODE_BIN` 包裹 `code` 启动命令；**必须**断言"清除后 `printenv DSH_NODE_BIN` 为空"并把该清理动作记入状态 JSON——这是本分支证据成立的**前提**，未清除或清除后非空即判 `HARNESS_ERROR`）；断言 `dsh.test.getDiagnosticsText` 返回记录中存在 `source === 'vscode-setting'` 且其 `resolvedExecutable` 等于预置路径（同时把该结论写入 `layer-v-status.json.node`）。**该记录必须由文末「修订段 R1」的受控运行期断线构造产出**（成功启动不产生任何记录）。**若该断言失败，脚本必须判为 `LINK_FAILURE`（或 `HARNESS_ERROR`）——不得降级为提示** | 真机证据显示设置来源被解析链消费（**字段级**证据）+ `DSH_NODE_BIN` 已被显式清除（空值断言通过）；该证据由 Phase 3 报告交叉引用给 Phase 1 的 AC-10 |
 | AC-13 / AC-14 真机补充证据（归属 Phase 2） | 运行时验证（真机） | 驱动断言 `vscode.commands.getCommands()` 含 `dsh.showHostDiagnostics` 且可无异常执行；`dsh.test.getDiagnosticsText()` **必须**返回结构化 JSON 记录数组，逐字段断言：`Array.isArray(records) === true`、**当 `schemaVersion === 1` 时**每条记录字段集**恰好**等于 AD-14 的 **18 字段**清单（`> 1` 时只断言其依赖的 v1 子集并把观测到的版本号记入状态 JSON；缺失 / `null` / 非整数 / `< 1` 判 `HARNESS_ERROR`；返回 `[]` 合法且不对版本断言）、存在 `kind === 'node-environment'` 且 `resolvedExecutable` 为绝对路径的记录。**不得**以"文本非空/含关键字"的方式断言 | 真机通道可用且为 JSON 契约、断言口径按 `schemaVersion` 分流；证据交叉引用给 Phase 2 |
-| 回归 | 运行时验证 | `pnpm run test -- apps/vscode-dsh` 全绿（新增脚本不得破坏既有 spec）；`apps/vscode-dsh/test-scripts/run-chat-ready-regression.sh` 仍退出 0；`pnpm run lint` 不因新增 `test-scripts/**` 或新增 hooks 失败 | 全部 0 退出 |
+| 回归 | 运行时验证 | `pnpm run test -- apps/vscode-dsh` 全绿（新增脚本不得破坏既有 spec）；`apps/vscode-dsh/test-scripts/run-chat-ready-regression.sh` 仍退出 0；`pnpm run lint` 不因新增 `test-scripts/**` 或新增 hooks 失败（**〔修订段 R2〕量程限定**：该子项**只覆盖可 lint 资产（`.ts`/`.tsx`）**；`test-scripts/**` 下的 `.sh` / `.cjs` / `.json` **不在 oxlint 量程内** —— `.sh` 不是可 lint 扩展名、`.cjs` 无任何规则 override 匹配且本机未安装 `shellcheck`/`shfmt`。对这两类资产的语法/质量保障**不由本子项承担**，改由 `DEBT-018` 另行跟踪。授权见 `scope-amendment-02.md` §4.1） | 全部 0 退出 |
 
 **边界与反向用例清单（必须全部存在）**：`VSCODE_DSH_TEST` 未设置时脚本判 `HARNESS_ERROR`（不得静默继续）；**根 `.gitignore` 的 `apps/vscode-dsh/test-artifacts/` 显式规则缺失（`git check-ignore` 未命中、或命中的规则不来自仓库根）却创建 step5 探针文件 → 判 `HARNESS_ERROR`**（顺序约束：**先落地规则、再创建探针文件**，**不得**颠倒；该规则同时是 AC-26 的判定对象）；**继承的 `DSH_NODE_BIN` 未被显式清除、或清除后 `printenv DSH_NODE_BIN` 非空、或状态 JSON 缺该清理记录（是否检测到继承值 / 被清除原值（脱敏）/ 空值断言结果）时判 `HARNESS_ERROR`**；`dsh.test.answerApproval` 未注册时判 `HARNESS_ERROR`；审批在 120s 内未被作答时判 `LINK_FAILURE`（不得算通过）；pending 观察超过上限且从未出现时判 `LINK_FAILURE`；**`/var/tmp/<probe>` 首步写入未被拒绝（即第一步命令成功）时**立即**判 `LINK_FAILURE` 并在报告中标注"沙箱未按预期拒绝"**（**不得**轮询到审批超时上限才算失败、**不得**等待任何超时、**不得**改用 `$HOME` 重试、**不得**静默把 step4 降级为"无需审批"），且**必须**落盘该情形的证据（模型返回内容、工具调用参数（含 `sandbox_permissions` 等字段）、首步命令的实际结果）；被提权命令创建的 `/var/tmp` 探针文件在收尾时被删除（断言 `test ! -e`）；**`dsh.test.sendPrompt` 返回任何 `ok:false`（尤其 `reason === "replay"`）即判 `LINK_FAILURE`**（不得只看外层 `ok:true`、不得把该信封当成功、不得在 `replay` 时重试同一会话）；**每步开始前沙箱产品状态为空**（`<sandbox>/.dsh/sessions`、`<sandbox>/.dsh/storages`、`--user-data-dir` 无历史会话；断言失败即判 `HARNESS_ERROR`）；**`dsh.test.triggerAutoReady` 返回 `{"applied":false,"reason":"gated"}` 属正常态**（把它判为失败即为错误用例）；step1 若在未触发 `dsh.test.fireConversationVisibility` 前就等待 `started` 并超时，判 `HARNESS_ERROR`（顺序颠倒）；**Xvfb 可执行文件缺失 / Xvfb 启动失败 / 权限不足导致无法启动时判 `SKIPPED_NO_DISPLAY`（退出码 2）并输出跳过原因**（**不得**报 PASS、**不得**判为 `LINK_FAILURE` 或 `HARNESS_ERROR`）；**脚本源码中出现 `apt`/`sudo` 安装动作即判 `HARNESS_ERROR`**（AC-28 明文禁止安装）；**route A**：影子 preset 与 shipped preset 的 `diff` **必须**恰为 `orchestrator-tool-policy` 该 row 的 **2 行删除且零行新增**（多删/少删/改行/出现尾随空白归一化即判 `HARNESS_ERROR`；生成**不得**经过任何 formatter / YAML 重排，且**必须**由 `layer-v-shadow-preset.sh` 单一实现生成——主脚本内含第二处生成实现即判 `HARNESS_ERROR`）；**shipped preset 第 28–29 行与预期原文不符时生成器必须 fail loud**（**不得**按模式模糊删除、**不得**继续生成）；**`layer-v-shadow-preset.sh --check-shadow-preset` 退出码不为 `0`（即 `1` 或 `2`）即判 `HARNESS_ERROR`**；overlay 的 `config` **必须**含全部四个键且 `roots` **必须**为「影子根在先、`specdev-presets/presets` 在后」（缺失或顺序颠倒即判 `HARNESS_ERROR`）；step5 **必须**编辑已存在的文件（对新建文件断言 `meta.diffs` 非空即判 `LINK_FAILURE`）；step5 **必须**产生非空 `meta.diffs`（为空即判 `LINK_FAILURE`，**不得**改用注入补齐）；**step5 目标文件位于应用源码路径或未被 `git check-ignore` 命中时判 `HARNESS_ERROR`**；收尾后真实 `~/.dsh` 的 mtime/sha256 **必须**与运行前一致（不一致即判 `LINK_FAILURE` 并在报告中标注）。
 
@@ -236,3 +236,87 @@ dsh.test.openActivityBar
 | 运行期产物（不入库，沙箱内） | `<sandboxHome>/.dsh/profiles/ide/cordis.patch.yml`（overlay 全文见 design.md AD-15 决策 2）、`<shadowRoot>/specdev-orchestrator/agent.cordis.yml`（由 `layer-v-shadow-preset.sh` 从 shipped preset 行级过滤派生、仅移除 `orchestrator-tool-policy` 该 row，`diff` 严格 2 行删除）；两者随 `HOME` 沙箱在收尾时删除 |
 | 运行期产物（不入库，探针） | `apps/vscode-dsh/test-artifacts/layer-v/step-5-target.txt`（step5 的既有文件探针，**其忽略规则由本工作流 Phase 3 交付**，见产出清单 `.gitignore` 项）、`/var/tmp/<probe-name>`（step4 的必然被拒探针，收尾**必须**删除） |
 | 过程 | `phases/phase-3-layer-v-smoke-loop/implementation.md`、`repo-exploration.md`、`review.md`、`verification.md`（后者**必须**显式呈现 `DEBT-004`（出厂 `ide` profile 主会话不可写文件）与 `DEBT-002`、`DEBT-003` 的撤销结论） |
+
+---
+
+## 修订段 R1 — 成功启动不产生诊断记录（2026-09-16，用户裁定）
+
+> **本节只追加，不改动上文任何一行**：`phase-plan.md` 与 `tech-debt-registry.md` 逐行引用 `spec.md:13` 与 `spec.md:52`，插入行会破坏这些引用（`DEBT-008` 的教训）。上文 `:176` 与 `:195` 已就地补入指向本节的**同线**指引（零行数变化）。
+>
+> 完整授权与下游约束见 `phases/phase-3-layer-v-smoke-loop/scope-amendment-01.md`。
+
+### R1.0 冲突事实（已由调度者逐处核实，非推测）
+
+- `apps/vscode-dsh/src/host-diagnostics.ts:341-343` 的 `onStartSucceeded()` **只**重置失败链（`chainStartSeq = null`），**不写入任何记录**。
+- `apps/vscode-dsh/src/host-diagnostics.ts:385-387` 的 `records()` 只返回 `record()` 推入过的内容；全应用 `record()` 调用点仅 3 处，**全在失败路径**（`session-host.ts:451`、`host-diagnostics.ts:293`、`extension.ts:2368`）。
+- `apps/vscode-dsh/src/extension.ts:1108` 的 `dsh.test.getDiagnosticsText` = `hostDiagnostics?.records() ?? []`。
+- ⇒ **成功启动的运行必然返回 `[]`**，而 `:176`（AC-11(b)）原文把 `[]` 判为 `HARNESS_ERROR`、`:195`（AC-10 补充证据）要求记录中**存在** `source === 'vscode-setting'` —— 两者按字面**永远无法同时满足**。
+- 且：**握手前**的拒绝路径（`host-diagnostics.ts:293`、`extension.ts:2368`）**只写 `kind` / `detail`，不含 `resolvedExecutable` 与 `source`** —— 故「靠缺凭据触发一次 pre-handshake 记录来取证」的做法**不可行**（该结论推翻了调研报告的首选方案）。
+- 会填这两个字段的**唯一**路径是 `apps/vscode-dsh/src/session-host.ts:134-179` 的 `describeStartFailure`（其 `located` 取自 `context.nodeExecutable`，而它由 `:408` 的 `resolveNodeExecutableSpec({ nodeBinSetting })` 产出）—— 即失败**必须发生在 resolve 成功之后的边界**。
+
+### R1.1 裁定（用户选定 B′）
+
+**AC-11(b) 与 AC-10 补充证据的字段级证据，必须取自「五步链路完成后的一次受控运行期断线」所产生的记录**，走 `scope-amendment-01.md` 修订 01 新增的记录边（`DEBT-010` 的修复）：
+
+1. 驱动在**五步链路全部完成之后**，调用白名单内既有的 `dsh.test.injectDisconnect`（`apps/vscode-dsh/src/extension.ts:1214-1217`）诱发一次运行期断线。
+2. 该断线产生的 `HostDiagnosticRecord` **必须携带** `resolvedExecutable` 与 `source`（`source` 应等于 `vscode-setting`，`resolvedExecutable` 等于脚本预置的绝对路径）—— 这是**修订 01 新增的硬要求**，实现方**必须**在新的记录边上保留 Host 启动时已解析的 `ResolvedNodeExecutable`。
+3. 驱动读取该记录作为 AC-11(b) `extensionSubprocessSide` 的字段级证据，并同时满足 AC-10 补充证据（`source === 'vscode-setting'` + `resolvedExecutable` 等于预置路径）。
+
+**该构造的语义**：Host 已到达 `connected`（**证明 AC-4 预检已通过、且所用解释器来自设置项**），随后被受控断线；记录中的 `resolvedExecutable` / `source` 因此是对**该次成功解析**的字段级陈述，而非对一次失败的解释。
+
+### R1.2 `[]` 的最终口径（消除 `:176` / `:195` / `:196` 与 AD-14 决策 5 的表面矛盾）
+
+| 时点 | `[]` 的处置 |
+|---|---|
+| **按 R1.1 完成取证构造之后**读取（驱动读取 AC-11(b) / AC-10 证据的这一次读取） | **判 `HARNESS_ERROR`**（构造失败或记录边未携带两个字段） |
+| **未做 R1.1 构造时**的任何读取（如 AC-13 / AC-14 行的契约读取、启动窗口内无失败时） | **合法空数组**，且**不得**对版本做任何断言（与 `design.md` AD-14 决策 5、`:196` 一致） |
+
+### R1.3 实施前置实测（implementer 必须先做，不得假设）
+
+`dsh.test.injectDisconnect` 调用的是 `orchestrator.onUnexpectedDisconnect()`，**其实际落点未经实测**：
+- 若落到 `IdeSessionHost.onTransportDeath`（`session-host.ts:727-757`）→ 需在此处的记录边携带两个字段；
+- 若落到编排器自行合成的 `failed` 快照（`auto-start-orchestrator.ts:225-229`）→ 需在该边携带两个字段；
+- 若**两者都**可达，**必须**保证同一次断线**只产生一条**记录（不得重复计数，`DEBT-011` 的教训）。
+
+implementer **必须**以真机或集成用例实测其落点，并在 `implementation.md` 记录：落点边界、记录条数、两个字段的取值来源。**若该构造无法产出带两个字段的记录**（例如该边在结构上拿不到已解析的解释器），**不得**静默降级为 `[]` 合法或改写为「无需字段证据」——**必须**按 `LINK_FAILURE` / `HARNESS_ERROR` 带证据升级给调度者。
+
+### R1.4 本修订**未**改变的事项
+
+13 条 AC 的归属与语义、五步链路与各步断言、退出码 / 结论分类契约、`ui: false` 标记、DAG `id` / `dependencies`、`DSH_NODE_BIN` 的显式清除要求、route A（`HOME` 沙箱 + 影子 preset + 2 行删除断言）、`schemaVersion` 的分流读法（修订 01 后走 `> 1` 分支）。
+
+---
+
+## 修订段 R2 — 截图有效性判据改为「运行内不同 md5 数」（2026-09-17，用户裁定）
+
+> **完整授权见 `scope-amendment-02.md`**（同目录）。本段只写落入 `spec.md` 的口径变更。
+
+### R2.0 缺口事实（`verifier` 独立复现，非推测）
+
+AC-26 只要求「5 张截图 + 稳定命名 + 合法 PNG + 被 ignore」，**不判画面内容**；AC-28 又要求**优先** `reuse`。
+⇒ 一次**完全合规的 PASS 运行**可产出 **5 张逐字节相同**的桌面帧（实测：`reuse` 模式下 5 张均为 3840×1080 桌面壁纸，md5 全同），**不构成任何界面证据**；`xvfb` 模式则产出真实 EDH 窗口截图（1600×1000，md5 互异）。
+
+### R2.1 裁定（用户选定）
+
+**以「同一次运行内不同 md5 的数量」为截图有效性判据**，并**同步修订 AC-26 / AC-28 措辞**。
+
+### R2.2 追加到 AC-26 的硬要求（子项 (e)）
+
+同一次运行产出的 5 张截图，**其 md5 不得全部相同** —— 硬下限 **≥ 3 个不同 md5**（2026-09-17 由 ≥ 2 收紧，见 `scope-amendment-02.md` §8.1 第 6 项）；实际的不同 md5 数量**必须**记入运行产物（证据可复核）。
+
+> **阈值理由**：≥ 3 **否定已观测退化形态**（全部为同一张桌面帧），且不再接受「五帧里只有一帧不同」（那等于其中 4 帧不是界面证据）；仍**不会**因「两步画面相近」误报（真实界面运行必然 ≥ 3）。
+> 调度者**未**取 5/5 全异（可能对合理情形产生脆性失败）。该阈值已按此路径**收紧过一次**（2 → 3），用户**可**再次收紧。
+
+### R2.3 追加到 AC-28 的前件（`reuse` 的可用性条件）
+
+`reuse` **仅在能产出满足 AC-26(e) 的证据时**可被采用。若复用的 `DISPLAY` 无法产出有效界面证据（实测为退化帧），脚本**必须**改走 `xvfb`（`display.mode === 'xvfb'`），**不得**以退化帧作为 PASS 的依据。
+
+**不得静默降级**：`reuse` 退化且 `xvfb` 亦不可用/亦无法产出有效证据时，**必须**按既有跳过语义（`SKIPPED_NO_DISPLAY` / 退出码 2）或带证据升级，**不得**报 PASS。
+
+### R2.4 与 `design.md` AD-8 的关系
+
+AD-8 的顺序 `reuse → xvfb → SKIPPED_NO_DISPLAY` **本身不变**，新增的是 `reuse` 的**可用性前件**（见 R2.3）。
+`design.md` **不被改写**，本段以「叠加层」生效（与 `scope-amendment-01` 对 AD-14 的处理一致）。
+
+### R2.5 本修订**未**改变的事项
+
+AC-26 的 (a)–(d) 子项（张数 / 稳定命名 / 合法 PNG / 仓库根 ignore）；AC-28 的 `apt`/`sudo` 禁令与 `SKIPPED_NO_DISPLAY` 语义；退出码 / 结论分类契约；13 条 AC 的归属；`ui: false`。

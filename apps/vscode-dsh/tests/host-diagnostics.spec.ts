@@ -9,7 +9,7 @@ import Module from 'node:module'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { resolveNodeExecutableSpec } from '@deepseek-ai/dsh-sdk-client'
 import {
   HOST_DIAGNOSTIC_RECORD_LIMIT,
@@ -51,7 +51,7 @@ const RECORD_FIELDS: ReadonlyArray<{
   { name: 'schemaVersion', type: 'number', nullable: false },
   { name: 'seq', type: 'number', nullable: false },
   { name: 'time', type: 'number', nullable: false },
-  { name: 'phase', type: 'string', nullable: false, enum: ['start', 'retry'] },
+  { name: 'phase', type: 'string', nullable: false, enum: ['start', 'retry', 'post-handshake'] },
   { name: 'retryOfSeq', type: 'number', nullable: true },
   {
     name: 'kind',
@@ -136,9 +136,9 @@ describe('HostDiagnosticRecord contract (AD-14 / AC-13)', () => {
     expect(Object.keys(produced).sort()).toEqual(RECORD_FIELDS.map(field => field.name).sort())
     for (const field of RECORD_FIELDS) expectFieldShape(produced, field)
 
-    // (c) The version is the literal v1 and it comes from the product constant:
+    // (c) The version is the literal v2 and it comes from the product constant:
     // bumping the constant without moving the field table fails right here.
-    expect(HOST_DIAGNOSTIC_SCHEMA_VERSION).toBe(1)
+    expect(HOST_DIAGNOSTIC_SCHEMA_VERSION).toBe(2)
     expect(record.schemaVersion).toBe(HOST_DIAGNOSTIC_SCHEMA_VERSION)
 
     // (d) No rendered-text field exists, by name and by value.
@@ -174,14 +174,14 @@ describe('HostDiagnosticRecord contract (AD-14 / AC-13)', () => {
     expect(record.resolvedExecutable).toBeNull()
   })
 
-  it('AD-14: the version is the v1 literal sourced from the single product constant', () => {
+  it('AD-14: the version is the v2 literal sourced from the single product constant', () => {
     const recorder = new HostDiagnosticRecorder()
     const record = recorder.record({ kind: 'other' })
 
     // Literal assertion: bumping the constant must fail here, which is what
     // forces the field table and the version to move together.
-    expect(HOST_DIAGNOSTIC_SCHEMA_VERSION).toBe(1)
-    expect(record.schemaVersion).toBe(1)
+    expect(HOST_DIAGNOSTIC_SCHEMA_VERSION).toBe(2)
+    expect(record.schemaVersion).toBe(2)
     expect(record.schemaVersion).toBe(HOST_DIAGNOSTIC_SCHEMA_VERSION)
   })
 
@@ -195,10 +195,10 @@ describe('HostDiagnosticRecord contract (AD-14 / AC-13)', () => {
 })
 
 /**
- * Reading policy of AD-14 decisions 9–12: assert the field set exactly for v1,
- * restrict to the v1 subset for a newer version, and treat an absent or
- * malformed version as a harness error. This mirrors what a driver of
- * `dsh.test.getDiagnosticsText` must do with the array it reads back.
+ * Reading policy of AD-14 decisions 9–12: assert the field set exactly for the
+ * version this reader knows, restrict to that version's subset for a newer one,
+ * and treat an absent or malformed version as a harness error. This mirrors what
+ * a driver of `dsh.test.getDiagnosticsText` must do with the array it reads back.
  */
 function readRecords(raw: unknown): { version: number | null; records: readonly Record<string, unknown>[] } {
   if (!Array.isArray(raw)) throw new Error('HARNESS_ERROR: diagnostics hook did not return an array')
@@ -209,22 +209,22 @@ function readRecords(raw: unknown): { version: number | null; records: readonly 
     throw new Error(`HARNESS_ERROR: unusable schemaVersion ${JSON.stringify(version)}`)
   }
   for (const record of records) {
-    if (version === 1) {
+    if (version === HOST_DIAGNOSTIC_SCHEMA_VERSION) {
       expect(Object.keys(record).sort()).toEqual(RECORD_FIELDS.map(field => field.name).sort())
       for (const field of RECORD_FIELDS) expectFieldShape(record, field)
       continue
     }
-    // A newer contract: only the v1 subset this reader depends on, so a field
-    // a later version added is not a failure.
+    // A newer contract: only the subset this reader depends on, so a field a
+    // later version added is not a failure.
     for (const name of ['seq', 'phase', 'retryOfSeq', 'kind', 'stderrTail', 'detail', 'hint']) {
-      expect(record[name], `v1 subset field ${name} must survive a version bump`).toBeDefined()
+      expect(record[name], `${name} must survive a version bump`).toBeDefined()
     }
   }
   return { version, records }
 }
 
 describe('diagnostics reading policy (AD-14 version split)', () => {
-  const v1 = new HostDiagnosticRecorder().record({ kind: 'other' }) as unknown as Record<string, unknown>
+  const known = new HostDiagnosticRecorder().record({ kind: 'other' }) as unknown as Record<string, unknown>
 
   it('accepts an empty store without asserting any version', () => {
     const read = readRecords([])
@@ -232,36 +232,36 @@ describe('diagnostics reading policy (AD-14 version split)', () => {
     expect(read.version).toBeNull()
   })
 
-  it('asserts the exact field set for a v1 record', () => {
-    const read = readRecords([{ ...v1 }])
-    expect(read.version).toBe(1)
+  it('asserts the exact field set for a record of the version the reader knows', () => {
+    const read = readRecords([{ ...known }])
+    expect(read.version).toBe(HOST_DIAGNOSTIC_SCHEMA_VERSION)
     expect(Object.keys(read.records[0])).toHaveLength(18)
   })
 
-  it('accepts a future version and only checks the v1 subset it depends on', () => {
-    const future = { ...v1, schemaVersion: 2, futureField: 'added by a later schema' }
+  it('accepts a future version and only checks the subset it depends on', () => {
+    const future = { ...known, schemaVersion: HOST_DIAGNOSTIC_SCHEMA_VERSION + 1, futureField: 'added later' }
     const read = readRecords([future])
     // The observed version is evidence a driver records, not a failure.
-    expect(read.version).toBe(2)
+    expect(read.version).toBe(HOST_DIAGNOSTIC_SCHEMA_VERSION + 1)
     expect(read.records[0].kind).toBe('other')
-    expect(read.records[0].futureField).toBe('added by a later schema')
+    expect(read.records[0].futureField).toBe('added later')
   })
 
   it('treats a missing, null, zero, or non-integer version as a harness error', () => {
-    const { schemaVersion: _dropped, ...withoutVersion } = v1
+    const { schemaVersion: _dropped, ...withoutVersion } = known
     const unusable = [
       withoutVersion,
-      { ...v1, schemaVersion: null },
-      { ...v1, schemaVersion: 0 },
-      { ...v1, schemaVersion: '1' },
-      { ...v1, schemaVersion: 1.5 },
+      { ...known, schemaVersion: null },
+      { ...known, schemaVersion: 0 },
+      { ...known, schemaVersion: String(HOST_DIAGNOSTIC_SCHEMA_VERSION) },
+      { ...known, schemaVersion: 1.5 },
     ]
     for (const bad of unusable) expect(() => readRecords([bad])).toThrow(/HARNESS_ERROR/)
   })
 
   it('treats a non-array payload as a harness error', () => {
     expect(() => readRecords(undefined)).toThrow(/HARNESS_ERROR/)
-    expect(() => readRecords({ schemaVersion: 1, records: [] })).toThrow(/HARNESS_ERROR/)
+    expect(() => readRecords({ schemaVersion: 2, records: [] })).toThrow(/HARNESS_ERROR/)
   })
 })
 
@@ -399,6 +399,24 @@ describe('HostDiagnosticRecorder store (AC-21 / AC-22)', () => {
     recorder.onStartSucceeded()
     const fourth = recorder.record({ kind: 'spawn' })
     expect(fourth).toMatchObject({ seq: 4, phase: 'start', retryOfSeq: null })
+  })
+
+  it('DEBT-010: a post-handshake death is its own phase and opens the chain a retry joins', () => {
+    const recorder = new HostDiagnosticRecorder()
+    // A start that reached `connected` closes any earlier chain...
+    recorder.record({ kind: 'other' })
+    recorder.onStartSucceeded()
+
+    // ...so the death that follows is not a retry of that start, and it says so
+    // through the third `phase` member instead of a field of its own.
+    const death = recorder.record({ kind: 'child-exited', phase: 'post-handshake' })
+    expect(death).toMatchObject({ phase: 'post-handshake', retryOfSeq: null })
+    expect(Object.keys(death)).toHaveLength(18)
+
+    // A retry driven by that death still pairs with the record that ended the
+    // previous connection, so AC-22's chain survives the new boundary.
+    const retry = recorder.record({ kind: 'spawn' })
+    expect(retry).toMatchObject({ phase: 'retry', retryOfSeq: death.seq })
   })
 
   it('keeps the store bounded, dropping the oldest records first', () => {
@@ -653,6 +671,66 @@ describe('start-failure listener attempt boundary (AC-22)', () => {
     expect(records[1]).toMatchObject({ phase: 'retry', retryOfSeq: records[0].seq })
     expect(records[1].seq).toBeGreaterThan(records[0].seq)
   })
+
+  /**
+   * The second record edge DEBT-010 located. `AutoStartOrchestrator.runStart`
+   * synthesises a `failed` snapshot with `errorKind: 'process-failed'` when a
+   * start resolves without leaving a live connection; no Host boundary speaks
+   * for that state, so before this edge it left no record at all. The two cases
+   * below are the whole decision: unrecorded → one record; already recorded →
+   * none, because recording it again would count one attempt twice (AC-22).
+   */
+  it('records a start that resolved without a live connection, once, as `other`', async () => {
+    // A port that violates the start contract in exactly the way the
+    // orchestrator's else-branch covers: `start` resolves, nothing is connected.
+    const port: StartHostPort = {
+      isConnected: () => false,
+      hasCredentials: () => true,
+      async start() {},
+    }
+    const recorder = new HostDiagnosticRecorder()
+    const orchestrator = new AutoStartOrchestrator(port)
+    const listener = createStartFailureListener(recorder)
+    orchestrator.onChange(listener)
+
+    await orchestrator.request('command-start')
+    expect(orchestrator.getSnapshot()).toMatchObject({
+      state: 'failed',
+      errorKind: 'process-failed',
+      errorMessage: 'Host start completed without a live connection',
+    })
+
+    const records = recorder.records()
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ kind: 'other', phase: 'start', retryOfSeq: null })
+    expect(records[0].detail).toBe('Host start completed without a live connection')
+
+    // The snapshot can settle more than once within one attempt; the record does not.
+    orchestrator.onChange(listener)()
+    expect(recorder.records()).toHaveLength(1)
+  })
+
+  it('leaves a `process-failed` failure alone when a Host boundary already recorded it', async () => {
+    // The Host's own `child-exited`/`other` boundary maps onto `process-failed`
+    // and records through the same store, so the mark moves during the attempt.
+    const port: StartHostPort = {
+      isConnected: () => false,
+      hasCredentials: () => true,
+      async start() {
+        recorder.record({ kind: 'child-exited', detail: 'runtime stopped before the handshake' })
+        throw new HostStartError('process-failed', 'runtime stopped before the handshake')
+      },
+    }
+    const recorder = new HostDiagnosticRecorder()
+    const orchestrator = new AutoStartOrchestrator(port)
+    orchestrator.onChange(createStartFailureListener(recorder))
+
+    await orchestrator.request('command-start')
+    expect(orchestrator.getSnapshot()).toMatchObject({ state: 'failed', errorKind: 'process-failed' })
+    const records = recorder.records()
+    expect(records).toHaveLength(1)
+    expect(records[0].kind).toBe('child-exited')
+  })
 })
 
 describe('ConnectionUi terminal states (AC-19 / AC-20)', () => {
@@ -895,7 +973,21 @@ describe('Extension Host diagnostic surfaces (AC-13 / AC-14 / AC-19 / AC-21 / AC
   const dirs: string[] = []
   const secretRestores: Array<() => void> = []
 
+  /**
+   * `DSH_NODE_BIN` outranks `dsh.nodeBin` in the resolution chain, so an inherited
+   * value would re-source the executable out from under the starts below and the
+   * field assertions would describe that input instead of the setting. Every case
+   * in this block drives the setting path, so the variable is pinned to absent.
+   */
+  const inheritedNodeBin = process.env.DSH_NODE_BIN
+
+  beforeEach(() => {
+    delete process.env.DSH_NODE_BIN
+  })
+
   afterEach(async () => {
+    if (inheritedNodeBin === undefined) delete process.env.DSH_NODE_BIN
+    else process.env.DSH_NODE_BIN = inheritedNodeBin
     await deactivate()
     commands.clear()
     channels.length = 0
@@ -1035,6 +1127,17 @@ describe('Extension Host diagnostic surfaces (AC-13 / AC-14 / AC-19 / AC-21 / AC
     activateWith(makeVscode())
     expect(commands.has('dsh.test.getDiagnosticsText')).toBe(true)
     expect(records()).toEqual([])
+  })
+
+  it('AC-21(e): the approval hook is registered in the same gate and refuses without a Host', () => {
+    activateWith(makeVscode())
+    expect(commands.has('dsh.test.answerApproval')).toBe(true)
+    const answer = commands.get('dsh.test.answerApproval')!
+    // A driver must be able to tell "gate open, nothing to answer" from "command
+    // absent": the refusal is a value, never a throw.
+    expect(answer('call-1', 'allowed-once')).toEqual({ ok: false, reason: 'no-host' })
+    expect(answer('', 'allowed-once')).toEqual({ ok: false, reason: 'invalid-id' })
+    expect(answer(undefined, undefined)).toEqual({ ok: false, reason: 'invalid-id' })
   })
 
   it('AC-13(d): with the test gate closed the hook is never registered', async () => {

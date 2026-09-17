@@ -45,3 +45,8 @@ worktrees/
 # Spec-driven workflow local state (do not commit)
 .specdev/kb-pending/
 .specdev/active-workflow
+
+# Layer-V smoke run outputs (screenshots, status JSON, the step-5 edit probe).
+# The probe lives here so the model can edit it without touching application
+# source; both it and the captures are run artifacts, never deliverables.
+apps/vscode-dsh/test-artifacts/
