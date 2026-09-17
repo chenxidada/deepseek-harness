@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ConversationController } from '../src/conversation-controller.ts'
 import { IdeSessionHost } from '../src/session-host.ts'
+import { SnapshotStore } from '../src/change/snapshot-store.ts'
 import type { WorkspaceStateLike } from '../src/extension-index.ts'
 
 const fakeSdkRuntime = fileURLToPath(new URL('./fixtures/fake-sdk-runtime.mjs', import.meta.url))
@@ -87,6 +88,38 @@ describe('recoverable close vs delete (AC-23/26 / VP-1-close / VP-1-delete)', ()
     expect(controller.messages.hasContent(keep.sessionId)).toBe(false)
 
     await host.shutdown()
+  })
+
+  it('delete during a settling turn leaves no projections for the deleted session (AC-36b)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-delete-race-'))
+    dirs.push(dir)
+    const disposed: string[] = []
+    const host = {
+      status: 'connected',
+      interactions: { failClosedSession() {}, listPending() { return [] } },
+      setConversationRegistry() {},
+      onNotification() { return () => {} },
+      async disposeSession(sessionId: string) { disposed.push(sessionId) },
+      async prompt() { return 'mid' },
+    } as unknown as IdeSessionHost
+    // Fast clear keeps the delete's awaits microtask-only while the settle below still has a
+    // change-index write in flight, so the interleaving under test is deterministic rather
+    // than dependent on relative I/O timing.
+    const snapshotStore = new SnapshotStore({ storageRoot: join(dir, 'changes') })
+    snapshotStore.clearSession = async () => {}
+    const controller = new ConversationController(host, undefined, dir, { snapshotStore })
+    const tab = controller.newConversation('race')
+    await controller.promptTab(tab.tabId, 'hi')
+
+    // Turn settling (detached `enqueueSettle`) while the user deletes the conversation.
+    controller.injectAssistantMessage(tab.sessionId, 'reply')
+    const deleted = await controller.deleteConversation(tab.tabId, { confirmed: true })
+    expect(deleted.outcome).toBe('deleted')
+    expect(disposed).toContain(tab.sessionId)
+
+    await controller.flushChangeSettles(tab.sessionId)
+    expect(controller.index.isDeleted(tab.sessionId)).toBe(true)
+    expect(controller.messages.hasContent(tab.sessionId)).toBe(false)
   })
 
   it('empty Tab close skips openTabSet and dispose (VP-1-empty)', async () => {

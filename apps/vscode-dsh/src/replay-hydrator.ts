@@ -14,11 +14,22 @@ import {
   type ActivityItem,
 } from './chat-panel/activity-types.ts'
 
+/**
+ * Surface placement of one logged message event, structurally narrowed to the
+ * members this fold consumes. Mirrors `SurfaceOp` in
+ * `packages/core/session/src/types.ts`: appends are the string `'append'`,
+ * positional replacements are the object `{ op, start, end }`. A bare
+ * `'replace'` string is not a member of that union and no producer emits one.
+ */
+export type HydratorSurfaceOp =
+  | 'append'
+  | { op: 'replace'; start: number; end: number }
+
 /** Minimal session event shape accepted by the hydrator (structural). */
 export interface HydratorSessionEvent {
   type: string
   seq?: number | string
-  surfaceOp?: string
+  surfaceOp?: HydratorSurfaceOp
   data?: unknown
 }
 
@@ -111,7 +122,7 @@ export function hydrateFromAuthoritativeLog(
       incomplete: true,
     })
   }
-  const timelineItems = foldedTimeline.map(row => {
+  const timelineItems = foldedTimeline.map((row) => {
     const base: Omit<TimelineItem, 'id' | 'sessionId'> = {
       kind: row.kind,
       label: row.label,
@@ -230,7 +241,7 @@ export function foldMessages(events: readonly HydratorSessionEvent[]): FoldedMes
     const id = typeof message.id === 'string' ? message.id : undefined
     const text = textFromContent(message.content)
     const surfaceOp = event.surfaceOp
-    if (surfaceOp === 'replace' && id !== undefined) {
+    if (isReplaceSurfaceOp(surfaceOp) && id !== undefined) {
       for (let i = bars.length - 1; i >= 0; i -= 1) {
         if (bars[i]?.id === id) bars.splice(i, 1)
       }
@@ -406,4 +417,19 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined
+}
+
+/**
+ * Whether one event's surface marker is a positional replacement.
+ * Structural counterpart of the module-private `isReplaceOp` behind
+ * `isReplacementSurfaceEvent` in `packages/core/session/src/surface.ts`, kept
+ * local because this app takes no runtime dependency on `dsh-session`. The
+ * marker arrives as a persisted event row, so the discriminant is re-read
+ * instead of trusted from the declared type.
+ * @param surfaceOp - surface marker of one log event.
+ * @returns true when the marker is the replace object form.
+ */
+function isReplaceSurfaceOp(surfaceOp: HydratorSurfaceOp | undefined): boolean {
+  if (typeof surfaceOp !== 'object' || surfaceOp === null) return false
+  return (surfaceOp as Record<string, unknown>)['op'] === 'replace'
 }

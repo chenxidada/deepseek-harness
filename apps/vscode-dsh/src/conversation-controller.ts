@@ -248,7 +248,7 @@ export class ConversationController {
       changeStore: this.changes,
       snapshotStore: this.snapshotStore,
       getIgnoreOptions: () => this.getIgnoreOptions(),
-      readWorkspaceText: (path) => this.readWorkspaceText(path),
+      readWorkspaceText: path => this.readWorkspaceText(path),
     })
     this.host.setConversationRegistry?.(this.registry)
     this.stopNotifications = this.host.onNotification((notification) => {
@@ -477,7 +477,7 @@ export class ConversationController {
 
     this.pendingRestoreLatch = false
     this.openTabPersistSuspended = true
-    let hydrated: Array<{ tabId: string; sessionId: string; mode: 'replay'; messageCount: number }> = []
+    const hydrated: Array<{ tabId: string; sessionId: string; mode: 'replay'; messageCount: number }> = []
     let strippedSessionIds: string[] = []
     try {
       // Probe content for each persisted row (hydrate once into a cache).
@@ -508,7 +508,7 @@ export class ConversationController {
         openTabSet,
         snap.activeSessionId,
         snap.ui.restoreUiLimit,
-        sessionId => {
+        (sessionId) => {
           if (loadFailed.has(sessionId)) return true
           const cached = contentCache.get(sessionId)
           // Notice-only incomplete markers still count as content; require user/assistant.
@@ -528,7 +528,8 @@ export class ConversationController {
       while (uiSet.length < limit) {
         const idx = deferred.findIndex(tab => !loadFailed.has(tab.sessionId))
         if (idx < 0) break
-        uiSet.push(deferred.splice(idx, 1)[0]!)
+        const row = deferred.splice(idx, 1)[0]
+        if (row !== undefined) uiSet.push(row)
       }
 
       // Write-back sanitized index immediately (AD-CU-3/4): drop empties; force replay mode.
@@ -614,20 +615,24 @@ export class ConversationController {
    */
   async restoreMoreTabs(all = false): Promise<RestoreOpenTabsResult> {
     if (this.deferredRestore.length === 0) {
+      const active = this.registry.getActive()
       return {
         outcome: 'restored',
         hydrated: [],
         deferredSessionIds: [],
         strippedSessionIds: [],
-        ...this.registry.getActive() === undefined
+        ...active === undefined
           ? {}
-          : {
-            activeSessionId: this.registry.getActive()!.sessionId,
-            activeTabId: this.registry.getActive()!.tabId,
-          },
+          : { activeSessionId: active.sessionId, activeTabId: active.tabId },
       }
     }
-    const take = all ? this.deferredRestore.splice(0) : [this.deferredRestore.shift()!]
+    let take: OpenTabRecord[]
+    if (all) {
+      take = this.deferredRestore.splice(0)
+    } else {
+      const head = this.deferredRestore.shift()
+      take = head === undefined ? [] : [head]
+    }
     const hydrated: Array<{ tabId: string; sessionId: string; mode: 'replay'; messageCount: number }> = []
     for (const record of take) {
       if (this.registry.getBySessionId(record.sessionId) !== undefined) continue
@@ -999,8 +1004,9 @@ export class ConversationController {
     if (target.role === 'user') userText = target.text
     if (inferredTurn === undefined) {
       for (let i = messages.length - 1; i >= 0; i -= 1) {
-        if (typeof messages[i]?.turn === 'number') {
-          inferredTurn = messages[i]!.turn
+        const message = messages[i]
+        if (message !== undefined && typeof message.turn === 'number') {
+          inferredTurn = message.turn
           break
         }
       }
@@ -1313,7 +1319,9 @@ export class ConversationController {
     let mutated = false
     for (const [turn, turnRecords] of byTurn) {
       if (messages.some(m => m.kind === 'change-list' && m.turn === turn)) continue
-      const sourceMessageId = turnRecords[0]!.sourceMessageId
+      const [firstRecord] = turnRecords
+      if (firstRecord === undefined) continue
+      const sourceMessageId = firstRecord.sourceMessageId
       const payload = this.changes.toListPayload(sessionId, turn, sourceMessageId)
       const listMessage: ChatMessage = {
         id: randomUUID(),
@@ -1461,14 +1469,7 @@ export class ConversationController {
       `conversation deleted (${tabId})`,
     )
     // Dispose before registry close so a failed dispose leaves the Tab for retry (GAP-003).
-    await this.host.disposeSession(tab.sessionId)
-    this.messages.clearSession(tab.sessionId)
-    this.timeline.clearSession(tab.sessionId)
-    this.attributor.clearSession(tab.sessionId)
-    this.changes.clearSession(tab.sessionId)
-    this.pathSessionIndex.removeSession(tab.sessionId)
-    await this.snapshotStore.clearSession(tab.sessionId)
-    this.index.markDeleted(tab.sessionId)
+    await this.teardownDeletedSession(tab.sessionId)
     this.registry.close(tabId)
     this.persistOpenTabs()
     this.panelHost?.pushFullState()
@@ -1500,16 +1501,31 @@ export class ConversationController {
       }
     }
     this.host.interactions.failClosedSession(sessionId, `conversation deleted (${sessionId})`)
+    await this.teardownDeletedSession(sessionId)
+    this.persistOpenTabs()
+    return { outcome: 'deleted', tabId: '', sessionId }
+  }
+
+  /**
+   * Dispose a session and drop every projection it owns (AC-26 / AC-36b).
+   *
+   * Every await runs before the clear block, and `markDeleted` sits in that same synchronous
+   * block: a turn that settles while the session is being torn down appends to these stores from
+   * a detached `turn/end` handler, so clearing first let that append resurrect content for a
+   * session the user had just deleted. `settleChangeListProjection` additionally refuses to run
+   * against a tombstoned session.
+   * @param sessionId - session being deleted.
+   */
+  private async teardownDeletedSession(sessionId: string): Promise<void> {
     await this.host.disposeSession(sessionId)
+    await this.snapshotStore.clearSession(sessionId)
+    // No await below this line — nothing can interleave with this clear + tombstone.
     this.messages.clearSession(sessionId)
     this.timeline.clearSession(sessionId)
     this.attributor.clearSession(sessionId)
     this.changes.clearSession(sessionId)
     this.pathSessionIndex.removeSession(sessionId)
-    await this.snapshotStore.clearSession(sessionId)
     this.index.markDeleted(sessionId)
-    this.persistOpenTabs()
-    return { outcome: 'deleted', tabId: '', sessionId }
   }
 
   /**
@@ -2071,9 +2087,14 @@ export class ConversationController {
     turn: number,
   ): Promise<void> {
     await this.attributor.settleTurn(sessionId, sourceMessageId, turn)
+    // AC-36b: this settle is detached (`void enqueueSettle` from turn/end), so a delete can land
+    // at any await below. Each write re-checks the tombstone: a deleted session must not regain
+    // change-index files on disk or change-list bubbles in the projection.
+    if (this.index.isDeleted(sessionId)) return
     await this.persistChangeIndex(sessionId)
     // AD-CCD-6: best-effort soft-budget prune after snapshot write; never block settle.
     void this.pruneChangeSnapshots().catch(() => {})
+    if (this.index.isDeleted(sessionId)) return
     const payload = this.changes.toListPayload(sessionId, turn, sourceMessageId)
     // Replace prior change-list / diff-summary for this turn (multi-assistant re-anchor).
     this.messages.removeWhere(

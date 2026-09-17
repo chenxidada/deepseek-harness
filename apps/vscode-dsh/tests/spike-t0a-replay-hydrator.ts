@@ -4,7 +4,7 @@
  * Phase-2 may promote or replace this module; keep fold semantics documented in spike-report.
  */
 
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, SurfaceOp } from '@deepseek-ai/dsh-session'
 
 /** One folded chat-bar message for replay UI hydration. */
 export interface FoldedMessage {
@@ -69,7 +69,7 @@ export function foldMessages(events: readonly SessionEvent[]): FoldedMessage[] {
     const id = typeof message.id === 'string' ? message.id : undefined
     const text = textFromContent(message.content)
     const surfaceOp = 'surfaceOp' in event ? event.surfaceOp : undefined
-    if (surfaceOp === 'replace' && id !== undefined) {
+    if (isReplaceSurfaceOp(surfaceOp) && id !== undefined) {
       for (let i = bars.length - 1; i >= 0; i -= 1) {
         if (bars[i]?.id === id) bars.splice(i, 1)
       }
@@ -77,6 +77,19 @@ export function foldMessages(events: readonly SessionEvent[]): FoldedMessage[] {
     bars.push({ id, role, text, seq: Number(event.seq) })
   }
   return bars
+}
+
+/**
+ * Whether one event's surface marker is a positional replacement.
+ * Mirror of the product guard in `apps/vscode-dsh/src/replay-hydrator.ts` and
+ * of the module-private `isReplaceOp` behind `isReplacementSurfaceEvent` in
+ * `packages/core/session/src/surface.ts`.
+ * @param surfaceOp - surface marker of one session event.
+ * @returns true when the marker is the replace object form.
+ */
+function isReplaceSurfaceOp(surfaceOp: SurfaceOp | undefined): boolean {
+  if (typeof surfaceOp !== 'object' || surfaceOp === null) return false
+  return (surfaceOp as Record<string, unknown>)['op'] === 'replace'
 }
 
 /**

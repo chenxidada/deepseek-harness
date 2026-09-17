@@ -104,7 +104,14 @@ describe('verifier Layer-A RTL (independent DOM contract)', () => {
 
   it('V-A4: tabs chrome contract + unread/running badges + select posts ui/tab-select', async () => {
     render(<App bridge={bridge} />)
-    expect(screen.getByTestId('tab-chrome').style.height).toContain('--dsh-chrome-height')
+    // UI-AC-10 / AC-50: chrome height must stay token-driven (≤40px), not a literal.
+    // The token sits on the tab row inside the header — `phase-2` made the header itself a
+    // column container, so asserting on the header's own inline height pinned a layout detail
+    // that no longer exists (the value is still applied, one level down).
+    const chrome = screen.getByTestId('tab-chrome')
+    const tokenDrivenRow = chrome.querySelector<HTMLElement>('[style*="--dsh-chrome-height"]')
+    expect(tokenDrivenRow?.style.height).toBe('var(--dsh-chrome-height)')
+    expect(Number.parseInt(tokenDrivenRow?.style.maxHeight ?? '9999', 10)).toBeLessThanOrEqual(40)
     await act(async () => {
       applyHostFrame({
         type: 'panel/tabs',

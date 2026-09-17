@@ -50,7 +50,7 @@ describe('DEBT-002 dual-running status does not cross Tabs (AC-21)', () => {
       messages: controller.messages,
       interactions: host.interactions as never,
       isHostReady: () => true,
-      acceptSend: (text) => controller.promptActive(text),
+      acceptSend: text => controller.promptActive(text),
     })
     controller.setPanelHost(panel)
     const fake = new FakeWebviewPort()
@@ -109,7 +109,7 @@ describe('AD-CU-7 serial soft-priority queue (AC-20/58)', () => {
     const ui: InteractionUi = {
       async presentApproval(request, signal) {
         presented.push(request.id)
-        return await new Promise(resolve => {
+        return await new Promise((resolve) => {
           const onAbort = (): void => {
             resolve('unavailable')
           }
@@ -237,7 +237,7 @@ describe('ReplayHydrator product oracle (DEBT-001 / AC-30/47)', () => {
       {
         type: 'assistant/message',
         seq: 4,
-        surfaceOp: 'replace',
+        surfaceOp: { op: 'replace' as const, start: 3, end: 3 },
         data: {
           message: {
             id: 'a1',
@@ -341,7 +341,7 @@ describe('VP-2-history / replay reject (AC-30/31/64/65)', () => {
       registry: controller.registry,
       messages: controller.messages,
       isHostReady: () => true,
-      acceptSend: (text) => controller.promptActive(text),
+      acceptSend: text => controller.promptActive(text),
     })
     controller.setPanelHost(panel)
     const fake = new FakeWebviewPort()
