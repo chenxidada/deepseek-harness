@@ -1,5 +1,7 @@
 # @deepseek-ai/dsh-vscode-dsh
 
+English | [中文](README.zh.md)
+
 VS Code Extension host for `dsh --profile ide`.
 
 ## Summary
@@ -36,6 +38,107 @@ Equivalent vitest file list (from repo root):
 ```
 
 Matrix documentation also lives in `tests/chat-ready-regression.spec.ts`. Delivery summary: `.specdev/specs/vscode-dsh-chat-ready/feature-delivery-summary.md`.
+
+## Layer V smoke loop (real Extension Development Host)
+
+One command drives a real `code` Extension Development Host through the five-step link — Host started → new conversation → real model round trip → approval → native Diff — and leaves machine-readable evidence behind:
+
+```bash
+bash apps/vscode-dsh/test-scripts/run-layer-v-smoke.sh
+```
+
+No arguments, no stdin, no interactive prompt. The script resolves its own Node, its own display, and a `HOME` sandbox, then reads the in-host driver's verdict.
+
+### Artifact directory
+
+Every run writes into `apps/vscode-dsh/test-artifacts/layer-v/` — an ignored directory matched by an explicit rule in the repository-root `.gitignore` (so `git check-ignore` resolves it from the root, not from a global excludes file):
+
+| File | Contents |
+|---|---|
+| `layer-v-status.json` | Machine-readable run record: per-step verdicts and evidence, Node and display facts |
+| `layer-v-plan.json` | The shell → driver contract (markers, paths, probe targets, timeouts) |
+| `layer-v-journal.jsonl` | Append-only driver journal (step start / ok / failure) |
+| `layer-v-log-evidence.json` | Evidence extracted from the product's own session log |
+| `layer-v-corroboration.json` | The script's independent re-check of the driver's PASS |
+| `run-summary.json` | Consolidated run metadata, conclusion and exit code |
+| `shadow-preset-check.txt` | Shadow preset generator output (diff, hashes, exit code) |
+| `step-5-target.txt` | The scratch file the model edits in step 5 |
+| `step-<n>-<slug>.png` | The five step screenshots |
+
+Each run also appends one row to `.specdev/specs/vscode-dsh-usable-loop/artifact-index.md`, which is **git-tracked**: the index is a spec artifact, so it must never live in an ignored directory.
+
+### Screenshot naming
+
+Screenshots are named `step-<n>-<slug>.png`, with `n` from 1 to 5 and one fixed slug per link step:
+
+| File | Step |
+|---|---|
+| `step-1-host-started.png` | Host reached `started` with a connected session |
+| `step-2-new-conversation.png` | A new conversation Tab exists |
+| `step-3-model-round-trip.png` | Assistant text carrying the run's unique marker |
+| `step-4-approval.png` | Approval answered through `dsh.test.answerApproval` |
+| `step-5-native-diff.png` | Native `TabInputTextDiff` opened from `meta.diffs` |
+
+The capture tool is chosen by measurement rather than assumption, in this order: `ffmpeg` at the **measured full-screen geometry**, `ffmpeg` at the plan's crop, `ffmpeg` at `x11grab`'s own default, then `gnome-screenshot -f` as the stated backup. A step whose screenshot is missing or is not a valid PNG (magic bytes plus a size floor) fails as `HARNESS_ERROR` — a step is never reported ok without its evidence.
+
+Two facts behind that order were measured on this host (2026-09-16, `DISPLAY=:1`, screen `3840x1080`):
+
+- **`-video_size` is required for evidence that is worth anything.** `x11grab`'s default region is 640x480 anchored at the top-left, so a capture without `-video_size` is a silent crop: it yields a valid PNG of real UI, but the conversation panel lives in the editor area, outside the crop. The size is not guessed — `ffmpeg` exposes no query for it and this host has no `xdpyinfo`/`xrandr`/`xwininfo`, so the driver asks for an area that cannot fit (`4096x2160`) and reads the real size out of `x11grab`'s refusal (`outside the screen size 3840x1080`). A request *larger* than the screen is a hard error rather than a clamp, which is why the measurement is taken instead of a fixed constant being assumed.
+- **`-update 1` is part of the command.** Without it the image2 muxer is asked to write a second image to a fixed filename, so `ffmpeg` exits non-zero *after* writing a perfectly good frame — a capture that looks broken in the status JSON while the artifact on disk is fine.
+
+The chosen mode, the measured screen size, and every candidate attempt are recorded in `layer-v-status.json` under `driver.screenshot`, so a crop can never be mistaken for a full-screen capture.
+
+### Skip conditions
+
+A skip is a first-class outcome, never a quiet pass:
+
+| Condition | Conclusion | Exit |
+|---|---|:--:|
+| No usable display, and no `Xvfb` to start one (`reuse` → `xvfb` → skip) | `SKIPPED_NO_DISPLAY` | 2 |
+| The product's own credential gate refuses to start (`DEEPSEEK_API_KEY` absent from both the environment and the working directory's `.env`) | `SKIPPED_NO_CREDENTIALS` | 3 |
+
+The script installs nothing. When no display is reachable it does **not** try a package manager; `xvfb-run` or `Xvfb` must already be installed, otherwise the run is `SKIPPED_NO_DISPLAY` with the reason printed. Missing credentials are **not** a link failure — the two conclusions stay distinguishable, and neither one may print a pass.
+
+### Exit codes
+
+| Code | Conclusion | Meaning |
+|:--:|---|---|
+| 0 | `PASS` | The five-step link ran end to end and the script's own corroboration agreed |
+| 1 | `LINK_FAILURE` | The product link itself failed — a step assertion did not hold |
+| 2 | `SKIPPED_NO_DISPLAY` | No display and no `Xvfb` to start |
+| 3 | `SKIPPED_NO_CREDENTIALS` | The product refused to start without credentials |
+| 4 | `HARNESS_ERROR` | This script's own contract was violated (missing rule or precondition, unclassifiable driver report) |
+
+Only code 0 is a pass. The script never downgrades a `LINK_FAILURE` or a `HARNESS_ERROR` into a skip, and never reports a pass on any other code.
+
+### Fault injection (negative runs, AC-27)
+
+The script takes no arguments, so the switches that make a step fail on purpose are environment variables. They are off by default, none of them fabricates or injects `meta.diffs` — they only make a step fail — and every active one is echoed on stderr and recorded in the status JSON's `faults` block so a faulted run cannot be mistaken for a normal one:
+
+```bash
+LAYER_V_FAULT_STEP5_DIFF_COMMAND=dsh.thisCommandDoesNotExist \
+  bash apps/vscode-dsh/test-scripts/run-layer-v-smoke.sh   # → LINK_FAILURE, failed step step-5
+LAYER_V_FAULT_SKIP_REVIEW_COMMAND=1  # step 5 never runs its diff command
+LAYER_V_FAULT_ANSWER_DELAY_MS=130000 # answers past the 120s window → step-4 LINK_FAILURE
+```
+
+A malformed value (a non-numeric delay, a switch that is neither `0` nor `1`) is a `HARNESS_ERROR`: a fault switch that silently did nothing would turn a negative run into a false pass.
+
+### Inherited `DSH_NODE_BIN` is cleared explicitly
+
+The run is also the evidence that the `dsh.nodeBin` setting is what the extension's resolution chain consumes. So the script **unsets** an inherited `DSH_NODE_BIN` (merely not exporting it is not enough), asserts that `printenv DSH_NODE_BIN` is empty afterwards, and records that cleanup — whether a value was inherited, its redacted original, and the empty-value assertion — in `layer-v-status.json`. It then seeds `dsh.nodeBin` in the throwaway `--user-data-dir` settings with the absolute path of the Node it resolved itself.
+
+A non-empty value after clearing, or a missing cleanup record, is a `HARNESS_ERROR`: without the cleanup the run would not prove the setting was consumed.
+
+### Shadow preset generator
+
+```bash
+bash apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh --check-shadow-preset
+```
+
+Step 5 has to produce the model's own `meta.diffs`, and the shipped orchestrator tool policy masks the tools that emit them. The generator derives a shadowed copy of the `specdev-orchestrator` preset — the shipped preset minus the two `orchestrator-tool-policy` rows, removed by line number after asserting those lines are still what the design says they are — into a caller-named shadow root. The smoke script places that root first in a profile overlay inside its `HOME` sandbox, so the shipped file stays byte-identical and the real `~/.dsh` is never written.
+
+`--check-shadow-preset` self-tests the generator with no VS Code, no display, no credentials and no model: it generates twice (both hashes must match), diffs against the shipped preset (exactly two deletions, zero insertions), and re-hashes the shipped file (unchanged). Exit `0` means the derivation holds, `1` means the check failed — including a drifted shipped preset, `2` means usage or environment error. The generator is the only implementation of that derivation; the smoke script calls it instead of re-deriving anything.
 
 ## Library
 
@@ -126,6 +229,8 @@ Registered **only** when `VSCODE_DSH_TEST=1` or when `activate` receives an inje
 | `dsh.test.requestStart` | Direct orchestrator `request(reason)` |
 | `dsh.test.hostCreateCount` | Host construct count (AC-5) |
 | `dsh.test.injectDisconnect` | Fire unexpected disconnect (AC-6a) |
+| `dsh.test.answerApproval` | Answer a pending approval by id (`allow-once` / …) without a UI round trip (AD-12) |
+| `dsh.test.getDiagnosticsText` | Structured `HostDiagnosticRecord[]` — fields, not prose (AD-14) |
 
 ## Views
 

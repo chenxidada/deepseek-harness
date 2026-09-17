@@ -326,6 +326,59 @@
       }
     },
     {
+      // Every other override targets `*.{ts,tsx}`, so Oxlint parsed the Layer V driver
+      // (`apps/vscode-dsh/test-scripts/layer-v-driver/extension.cjs`) with no matching rule
+      // set and reported zero diagnostics no matter what the file contained — the `pnpm run
+      // lint` half of the AC-25 regression claim was therefore unfailable for this asset
+      // (DEBT-018). The rules below are syntax/semantics only: `*.cjs` has no TypeScript
+      // program, so the type-aware rules used elsewhere cannot apply to it.
+      //
+      // `no-unsafe-finally` is deliberately absent: the driver throws from a `finally` on
+      // purpose (an unrestorable node-bin setting must outrank whatever error is in flight,
+      // see `runNodeEnvironmentConstruction`), and removing that precedence to satisfy the
+      // rule would change link-failure attribution.
+      "files": [
+        "apps/vscode-dsh/test-scripts/**/*.cjs"
+      ],
+      "rules": {
+        "no-array-constructor": "error",
+        "no-async-promise-executor": "error",
+        "no-cond-assign": "error",
+        "no-constant-binary-expression": "error",
+        "no-constant-condition": "error",
+        "no-debugger": "error",
+        "no-delete-var": "error",
+        "no-dupe-else-if": "error",
+        "no-dupe-keys": "error",
+        "no-duplicate-case": "error",
+        "no-empty": [
+          "error",
+          {
+            "allowEmptyCatch": true
+          }
+        ],
+        "no-fallthrough": "error",
+        "no-irregular-whitespace": "error",
+        "no-obj-calls": "error",
+        "no-redeclare": "error",
+        "no-regex-spaces": "error",
+        "no-self-assign": "error",
+        "no-self-compare": "error",
+        "no-sparse-arrays": "error",
+        "no-unreachable": "error",
+        "no-unused-vars": [
+          "error",
+          {
+            "argsIgnorePattern": "^_",
+            "varsIgnorePattern": "^_",
+            "caughtErrorsIgnorePattern": "^_"
+          }
+        ],
+        "prefer-const": "error",
+        "valid-typeof": "error"
+      }
+    },
+    {
       "files": [
         "packages/experimental/webworker-runtime/src/node/**/*.ts",
         "packages/experimental/webworker-runtime/src/storage/memory.ts",

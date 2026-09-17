@@ -16,8 +16,14 @@ import { redactSecrets } from './redact.ts'
  * version: a change to the record field set increments this constant in the same
  * change, and a reader switches its assertions on the value it read back rather
  * than on assumptions about the producer.
+ *
+ * v2 added the `post-handshake` member of {@link HostDiagnosticPhase} (DEBT-010),
+ * so a record can say that the runtime died after the handshake rather than while
+ * a start step was running. The field set is unchanged at 18 fields: the new
+ * boundary is expressed through the existing `phase` member, not through a
+ * second record surface.
  */
-export const HOST_DIAGNOSTIC_SCHEMA_VERSION = 1
+export const HOST_DIAGNOSTIC_SCHEMA_VERSION = 2
 
 /** Stable name of the VS Code Output Channel carrying Host start diagnostics (AC-13). */
 export const HOST_DIAGNOSTICS_CHANNEL_NAME = 'DeepSeek Harness'
@@ -30,7 +36,8 @@ export const HOST_DIAGNOSTIC_RECORD_LIMIT = 200
  * pre-flight refusing the spawn (`node-environment`), the ide-bridge socket
  * refusing to listen (`bridge-listen`), the runtime subprocess not launching
  * (`spawn`), `initialize` exceeding its bound (`handshake-timeout`), the runtime
- * process being reaped before the handshake completed (`child-exited`), no
+ * process being reaped (`child-exited`, before the handshake or after it — the
+ * record's `phase` says which), no
  * provider credentials for the Extension Host (`missing-credentials`), and a
  * failure no boundary claims (`other`, e.g. dsh entry resolution).
  *
@@ -50,8 +57,17 @@ export type HostFailureKind =
   | 'missing-credentials'
   | 'other'
 
-/** Whether a record belongs to the first failing attempt or to a retry of it (AC-22). */
-export type HostDiagnosticPhase = 'start' | 'retry'
+/**
+ * Which failure boundary a record belongs to (AC-22, DEBT-010).
+ *
+ * `start` and `retry` describe a failure raised while the start sequence itself
+ * was running: the first attempt to fail, and each later attempt within the same
+ * failure chain. `post-handshake` describes the third boundary: the runtime
+ * connection was already established (`initialize` succeeded) and then died. A
+ * record of that boundary is not part of a start chain, so it carries no
+ * `retryOfSeq`, and a start retried after it pairs with it as the chain's opener.
+ */
+export type HostDiagnosticPhase = 'start' | 'retry' | 'post-handshake'
 
 /**
  * One Host start failure, structured field by field (AD-14). Every field is
@@ -107,6 +123,12 @@ export interface HostDiagnosticRecord {
 export interface HostDiagnosticInput {
   /** Which boundary failed. */
   kind: HostFailureKind
+  /**
+   * Set to `post-handshake` when the boundary is the runtime connection dying
+   * after `initialize` succeeded. Omitted means a start-step failure, which the
+   * store places in the chain as its opener or as the next retry link (AC-22).
+   */
+  phase?: 'post-handshake'
   /** Why it failed, redacted by the store; omitted means the kind's own sentence. */
   detail?: string
   /** What to change, redacted by the store; omitted means the kind's own remedy. */
@@ -163,6 +185,14 @@ export interface HostFailureRecorder {
    * @returns the stored record.
    */
   record(input: HostDiagnosticInput): HostDiagnosticRecord
+  /**
+   * `seq` of the newest record, when the store can report one. It is the
+   * high-water mark a caller reads before and after an attempt to tell "a
+   * boundary already recorded this failure" apart from "none did" (AC-22,
+   * DEBT-010). Optional: a recorder that retains nothing has no mark to report.
+   * @returns the newest `seq`, or `null` while nothing has been recorded.
+   */
+  lastSeq?(): number | null
 }
 
 /** Constructor options of {@link HostDiagnosticRecorder}. */
@@ -184,7 +214,7 @@ const FAILURE_DETAILS: Readonly<Record<HostFailureKind, string>> = {
   'bridge-listen': 'The Host could not listen on its ide-bridge socket.',
   spawn: 'The dsh runtime subprocess could not be launched.',
   'handshake-timeout': 'The dsh runtime did not answer initialize within its bound.',
-  'child-exited': 'The dsh runtime process was reaped before the handshake completed.',
+  'child-exited': 'The dsh runtime process was reaped: before the handshake completed, or after it while the Host held the connection live.',
   'missing-credentials': 'No provider credentials were found for the Extension Host.',
   other: 'The Host start failed without a boundary that classified it.',
 }
@@ -272,25 +302,48 @@ export function hostFailureKindForStartError(kind: StartErrorKind | undefined): 
  * therefore recorded as the next link of the chain even when the failure never
  * reached `started` — the pre-Host refusals — which is exactly the state whose
  * retry entry AC-22(c) requires to produce a paired record.
+ *
+ * `process-failed` is the one class the Host owns that can also arrive with no
+ * record behind it: the orchestrator synthesises that state itself when a start
+ * resolves without leaving a live connection (`auto-start-orchestrator.ts`, the
+ * `isConnected()` else-branch), and nothing else speaks for it (DEBT-010). The
+ * store's high-water mark tells the two apart without reading the message: a
+ * Host boundary that spoke for the failure moved it, and a failure nobody
+ * recorded left it where the attempt began. The unrecorded case is written here
+ * in the bucket for a failure no boundary claims, so the attempt is never
+ * invisible; the recorded case is left alone, because recording it again would
+ * count one attempt twice.
  * @param recorder - sink for orchestrator-side start failures.
  * @returns listener for the orchestrator's snapshot stream.
  */
 export function createStartFailureListener(
   recorder: HostFailureRecorder,
 ): (snapshot: StartOrchestratorSnapshot) => void {
+  /** The store's mark, when the recorder retains records at all. */
+  const mark = (): number | null => recorder.lastSeq?.() ?? null
+  let attemptMark = mark()
   let recorded: string | undefined
   return (snapshot: StartOrchestratorSnapshot): void => {
     if (snapshot.state !== 'failed') {
       recorded = undefined
+      attemptMark = mark()
       return
     }
     const kind = hostFailureKindForStartError(snapshot.errorKind)
-    if (kind === null) return
     const detail = snapshot.errorMessage ?? ''
-    const signature = `${kind}\u0000${detail}`
+    const signature = `${kind ?? `unowned:${String(snapshot.errorKind)}`}\u0000${detail}`
     if (signature === recorded) return
+    if (kind !== null) {
+      recorded = signature
+      recorder.record(detail === '' ? { kind } : { kind, detail })
+      return
+    }
+    if (snapshot.errorKind !== 'process-failed') return
+    // A Host boundary that recorded this failure moved the mark during the
+    // attempt; a mark that never moved means no boundary spoke for it at all.
+    if (mark() !== attemptMark) return
     recorded = signature
-    recorder.record(detail === '' ? { kind } : { kind, detail })
+    recorder.record(detail === '' ? { kind: 'other' } : { kind: 'other', detail })
   }
 }
 
@@ -349,12 +402,15 @@ export class HostDiagnosticRecorder implements HostFailureRecorder {
    */
   record(input: HostDiagnosticInput): HostDiagnosticRecord {
     const kind = input.kind
+    const afterHandshake = input.phase === 'post-handshake'
     const record: HostDiagnosticRecord = {
       schemaVersion: HOST_DIAGNOSTIC_SCHEMA_VERSION,
       seq: ++this.serial,
       time: this.nextTime(),
-      phase: this.chainStartSeq === null ? 'start' : 'retry',
-      retryOfSeq: this.chainStartSeq,
+      phase: afterHandshake ? 'post-handshake' : this.chainStartSeq === null ? 'start' : 'retry',
+      // A death after the handshake is not a retry of a failed start, so it opens
+      // its own chain instead of extending one (DEBT-010).
+      retryOfSeq: afterHandshake ? null : this.chainStartSeq,
       kind,
       resolvedExecutable: this.text(input.resolvedExecutable),
       source: input.source ?? null,
@@ -369,6 +425,8 @@ export class HostDiagnosticRecorder implements HostFailureRecorder {
       detail: this.redact(this.fallback(input.detail, FAILURE_DETAILS[kind])),
       hint: this.redact(this.fallback(input.hint, FAILURE_HINTS[kind])),
     }
+    // A post-handshake death opens the chain it may be retried from, so the retry
+    // that follows keeps a `retryOfSeq` pointing at the boundary that ended it.
     this.chainStartSeq ??= record.seq
     this.store.push(record)
     if (this.store.length > HOST_DIAGNOSTIC_RECORD_LIMIT) {

@@ -4,8 +4,28 @@
  * @module @deepseek-ai/dsh-vscode-dsh/interaction-coordinator
  */
 
-import type { ApprovalOutcome, AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-ide-bridge'
+import {
+  isApprovalOutcome,
+  type ApprovalOutcome,
+  type AskUserQuestionAnswer,
+  type AskUserQuestionItem,
+} from '@deepseek-ai/dsh-ide-bridge'
 import type { ConversationRegistry } from './conversation-registry.ts'
+
+/**
+ * Why a programmatic approval answer was refused (AD-12).
+ *
+ * One vocabulary for the whole `dsh.test.answerApproval` surface, so a driver reads
+ * a single shape whether the refusal came from the argument boundary
+ * (`invalid-id` / `no-host`) or from the coordinator (`unknown-id` /
+ * `invalid-outcome`).
+ */
+export type ApprovalRefusalReason = 'invalid-id' | 'no-host' | 'unknown-id' | 'invalid-outcome'
+
+/** Result of answering an approval by id, without a UI round trip (AD-12). */
+export type ApprovalResolution =
+  | { ok: true; id: string; outcome: ApprovalOutcome }
+  | { ok: false; reason: ApprovalRefusalReason }
 
 /** Inbound approval request from the runtime bridge. */
 export interface HostApprovalRequest {
@@ -247,6 +267,37 @@ export class InteractionCoordinator {
    */
   resolveTabId(sessionId: string): string | undefined {
     return this.registry?.getBySessionId(sessionId)?.tabId
+  }
+
+  /**
+   * Answer one approval by id without a UI round trip (AD-12).
+   *
+   * The unattended smoke driver cannot depend on QuickPick focus in a headless
+   * Extension Development Host, so this settles the same wait the UI would have
+   * settled, with the same {@link ApprovalOutcome} vocabulary — the bridge cannot
+   * tell the two paths apart. A popup already on screen is dismissed through the
+   * entry's own abort signal.
+   *
+   * @param id - interaction id the runtime asked approval for.
+   * @param outcome - a legal `ApprovalOutcome`; validated here so no caller can put
+   *   a value outside the vocabulary on the wire.
+   * @returns the answer that was sent, or why none was sent. `unknown-id` covers
+   *   both ids that never existed and ids already failed closed (Host shutdown /
+   *   Tab close) — an aborted wait is not answerable, and saying so is the point.
+   */
+  resolveApproval(id: string, outcome: unknown): ApprovalResolution {
+    const entry = this.queue.find(
+      (candidate): candidate is ApprovalEntry =>
+        candidate.id === id && candidate.kind === 'approval',
+    )
+    if (entry === undefined) return { ok: false, reason: 'unknown-id' }
+    if (!isApprovalOutcome(outcome)) return { ok: false, reason: 'invalid-outcome' }
+    // Settle first, then dismiss: `abort` also resolves the presentation loop's
+    // race with `unavailable`, and that path must find this entry already settled
+    // or it would answer the runtime a second time.
+    this.finishApproval(entry, outcome)
+    entry.abort.abort()
+    return { ok: true, id, outcome }
   }
 
   /**

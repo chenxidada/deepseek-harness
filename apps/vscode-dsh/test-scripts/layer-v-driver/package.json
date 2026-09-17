@@ -1,0 +1,16 @@
+{
+  "name": "layer-v-driver",
+  "displayName": "Layer V smoke driver (test-only)",
+  "description": "Dev-path VS Code extension that walks the layer V smoke link inside a real Extension Development Host",
+  "publisher": "deepseek-ai",
+  "version": "0.0.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./extension.cjs",
+  "activationEvents": [
+    "*",
+    "onStartupFinished"
+  ]
+}

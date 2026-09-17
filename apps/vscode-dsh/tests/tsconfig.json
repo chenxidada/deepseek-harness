@@ -1,0 +1,44 @@
+{
+  // Owning TypeScript program for the specs listed in `include`: the ones whose `no-unsafe-*`
+  // diagnostics this Phase cleared. Without a matching project, tsgolint reports
+  // `Got tsconfig for file ...: <none>` / `Total programs: 0`, and every Node builtin
+  // (`node:fs/promises`, `node:path`, ...) and `process` access in an unmatched spec resolves to an
+  // `error` typed value — which is what the type-aware `no-unsafe-*` rules then flag.
+  //
+  // The list is explicit rather than a glob because the directory is not clean as a program:
+  // `pnpm exec tsc -p apps/vscode-dsh/tests/tsconfig.json --noEmit` reports 170 errors for the nine
+  // files below, while a probe of the same base over the whole directory (the file
+  // `{"extends": "../../../tsconfig.base.json", "include": ["**/*.ts"]}` written into this
+  // directory) reports 460. This program is private to the lint contract — no `references` graph in
+  // the repository names it — so the rest of the directory's lint baseline stays with the
+  // repository-wide debt (DEBT-019) and is deliberately absent here.
+  //
+  // It is not a claim about the directory: the criterion is "a Phase-3 spec whose `no-unsafe-*`
+  // diagnostics were cleared by giving it a program", not "every clean spec" and not "every
+  // Phase-3 spec". `interaction-approval-resolution.spec.ts` is a Phase-3 spec that stays out
+  // because it already reports zero diagnostics without a program (probe:
+  // `npx tsx scripts/run-oxlint.ts apps/vscode-dsh/tests/interaction-approval-resolution.spec.ts`),
+  // and several other specs in this directory are also clean without one (`auto-start-orchestrator`,
+  // `timeline-projector`, `conversation-registry`, ...) — reproducible check:
+  // `npx tsx scripts/run-oxlint.ts apps/vscode-dsh/tests` lists every file that still has any.
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "noEmit": true,
+    "rewriteRelativeImportExtensions": false
+  },
+  "include": [
+    "host-diagnostics.spec.ts",
+    "node-env-guard.spec.ts",
+    "session-host.spec.ts",
+    "layer-v-inject-disconnect.spec.ts",
+    "sandbox-clean-state.spec.ts",
+    "build-freshness.spec.ts",
+    "artifact-index.spec.ts",
+    "display-evidence.spec.ts",
+    "display-evidence-shell.spec.ts"
+  ]
+}

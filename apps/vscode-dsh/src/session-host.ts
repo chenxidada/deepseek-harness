@@ -227,6 +227,13 @@ export class IdeSessionHost {
   private bridgeHello = false
   /** Credentials bag for this session; used only for diagnostic redaction. */
   private credentials: NodeJS.ProcessEnv | undefined
+  /**
+   * Node executable the last successful resolution produced (AD-1, DEBT-010).
+   * Retained past the handshake so a record of the runtime dying *after* it can
+   * carry the same executable and source the spawn used, instead of reporting a
+   * boundary with fewer facts than the start itself had.
+   */
+  private nodeExecutable: ResolvedNodeExecutable | undefined
   private disposeTimeoutMs = 5_000
   private cancelTimeoutMs = 5_000
   private forkTimeoutMs = 5_000
@@ -408,6 +415,7 @@ export class IdeSessionHost {
       nodeExecutable = options.nodeExecutable ?? resolveNodeExecutableSpec(
         options.nodeBinSetting === undefined ? {} : { nodeBinSetting: options.nodeBinSetting },
       )
+      this.nodeExecutable = nodeExecutable
       stage = 'preflight'
       await assertNodeExecutable(nodeExecutable)
       stage = 'bridge-listen'
@@ -695,6 +703,31 @@ export class IdeSessionHost {
     if (this.status !== 'error') this.status = 'disconnected'
   }
 
+  /**
+   * Make the live runtime connection die, the way an unexpected runtime exit
+   * makes it die (test hook behind `dsh.test.injectDisconnect`, AC-6a).
+   *
+   * A crash cannot be requested from the runtime, and the client owns the child,
+   * so this asks the client to tear that child down without the user-stop
+   * bookkeeping (`shutdownInternal`) that marks the watcher stopped. The
+   * transport subscription then fails exactly as it does after a runtime exit,
+   * and {@link onTransportDeath} records the boundary with the executable and
+   * source the start resolved (DEBT-010). Status transitions to `error` as it
+   * does for any unexpected death, which is what drives the orchestrator's
+   * retry-once path.
+   * @returns settlement of the runtime teardown; a no-op unless a live
+   *   connection is held, so a call cannot manufacture a death to record.
+   */
+  async injectRuntimeDeath(): Promise<void> {
+    const client = this.client
+    if (this.status !== 'connected' || client === undefined) return
+    try {
+      await client.close()
+    } catch {
+      // The death edge is the signal; a teardown error adds no fact to it.
+    }
+  }
+
   private watchTransport(client: HarnessClient): void {
     this.transportWatch?.()
     const subscription = client.subscribe()
@@ -711,9 +744,9 @@ export class IdeSessionHost {
             }
           }
         }
-      } catch {
+      } catch (error) {
         if (!stopped) {
-          void this.onTransportDeath('SDK transport closed or child process exited')
+          void this.onTransportDeath(error)
         }
       }
     }
@@ -724,10 +757,40 @@ export class IdeSessionHost {
     }
   }
 
-  private async onTransportDeath(reason: string): Promise<void> {
+  /**
+   * The runtime connection died while the Host held it live.
+   *
+   * Two cases reach here, and only one of them is a record boundary of its own.
+   * A death while the start is still in flight is already spoken for by the
+   * awaited `initialize()`, whose rejection `start()` classifies and records, so
+   * recording it here too would count one attempt twice (AC-22). A death *after*
+   * the handshake has no such owner, so this is where that boundary is recorded
+   * (DEBT-010): it carries the executable and source the Host resolved and
+   * spawned, plus whatever process end state the transport could report.
+   *
+   * The record is written before the status transition, so the record exists
+   * before any status listener (the orchestrator's retry-once path) can react to
+   * the death and start an attempt of its own.
+   * @param error - value the transport subscription failed with.
+   */
+  private async onTransportDeath(error: unknown): Promise<void> {
     if (this.status !== 'connected' && this.status !== 'starting') return
-    this.status = 'error'
+    const afterHandshake = this.status === 'connected'
+    const reason = error instanceof Error ? error.message : String(error)
     this.errorMessage = redactSecrets(reason, this.credentials)
+    if (afterHandshake) {
+      // The boundary is asserted, but it must not be able to skip the teardown below: a Host
+      // left believing it is connected after its transport died is a worse failure than a
+      // diagnostic that says why it could not be written. A violation therefore becomes the
+      // failure text — the record is then absent, which the run's own assertions report.
+      try {
+        this.recordTransportDeath(reason, error)
+      } catch (violation) {
+        const message = violation instanceof Error ? violation.message : String(violation)
+        this.errorMessage = `${this.errorMessage} — host diagnostic invariant violated: ${message}`
+      }
+    }
+    this.status = 'error'
     this.interactions.failClosedAll(reason)
     for (const [id, pending] of this.pendingDispose) {
       this.pendingDispose.delete(id)
@@ -754,6 +817,41 @@ export class IdeSessionHost {
       pending.reject(new Error(reason))
     }
     this.notifyError(this.errorMessage)
+  }
+
+  /**
+   * Record the runtime connection dying after the handshake (DEBT-010).
+   *
+   * The record keeps the executable and source the Host resolved and spawned, so
+   * the post-handshake boundary reports the same launch facts the start would
+   * have reported had it failed; the transport's process end state is carried
+   * when it could report one. The kind is `child-exited`: the runtime stopped
+   * talking to the Host, which for this transport is the process being gone.
+   * @param reason - redacted-ready failure text from the transport.
+   * @param error - value the transport subscription failed with.
+   */
+  private recordTransportDeath(reason: string, error: unknown): void {
+    const recorder = this.diagnostics
+    if (recorder === undefined) return
+    const details = error instanceof TransportClosedError ? error.details : undefined
+    // The post-handshake boundary exists only after a start succeeded, and `start` assigns
+    // `nodeExecutable` before it can succeed, so both fields are always available here. They
+    // are asserted rather than spread conditionally because a record missing them would still
+    // parse and still pass a field-*set* check: the launch facts the post-handshake boundary
+    // exists to report would simply be absent, and nothing downstream could tell.
+    const resolved = this.requireNodeExecutable()
+    recorder.record({
+      kind: 'child-exited',
+      phase: 'post-handshake',
+      detail: reason,
+      resolvedExecutable: resolved.path,
+      source: resolved.source,
+      ...details?.exitCode === null || details?.exitCode === undefined ? {} : { exitCode: details.exitCode },
+      ...details?.terminationSignal === null || details?.terminationSignal === undefined
+        ? {}
+        : { terminationSignal: details.terminationSignal },
+      ...details === undefined || details.stderrTail.length === 0 ? {} : { stderrTail: details.stderrTail },
+    })
   }
 
   private notifyError(message: string): void {
@@ -911,6 +1009,19 @@ export class IdeSessionHost {
       throw new Error('IdeSessionHost is not connected')
     }
     return this.client
+  }
+
+  /**
+   * The resolved Node executable, asserted rather than optional: every failure boundary past
+   * `resolve` reports it as a launch fact, and a boundary that silently dropped it would make
+   * the launch unidentifiable in exactly the records that exist to identify it.
+   */
+  private requireNodeExecutable(): ResolvedNodeExecutable {
+    const resolved = this.nodeExecutable
+    if (resolved === undefined) {
+      throw new Error('IdeSessionHost has no resolved Node executable; a start never reached its pre-flight')
+    }
+    return resolved
   }
 
   private async shutdownInternal(reason: string): Promise<void> {

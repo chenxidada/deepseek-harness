@@ -827,3 +827,19 @@ v5 不改任何既定决策，只把 EDH route-A verification 的实测结论与
 | `dsh.test.getDiagnosticsText` 的 **18 字段**契约与 sink 记录结构漂移（含 `schemaVersion` 未同步递增） | 低 | `HostDiagnosticRecord` 是 sink 与契约的**唯一**类型真相源；`schemaVersion` 由单一常量 `HOST_DIAGNOSTIC_SCHEMA_VERSION` 提供（**不得**散落字面量）；单元测试断言**当 `schemaVersion === 1` 时**返回数组的字段集**恰好**等于 AD-14 的 18 字段清单（多字段/少字段/改名/类型或可空性不符均判失败，v7 AD-14 决策 10/12）；**任何**字段面改动**必须**同一次改动 +1 版本，否则契约用例即失败（AD-14 决策 11） |
 
 > **v5 已从本表移除的风险**：原「`HOME` 沙箱对真机 EDH 的影响未验证」（高）已由真机 EDH 验证消解并**从风险清单删除**（证据：§7 F6、AD-15 依据段 V1）。仅保留其后果约束一句：**若该能力日后失效（EDH 不能在非默认 `HOME` 下运行），属阻塞问题，必须升级交用户裁定，禁止静默回退到写用户真实 `~/.dsh`。**
+
+---
+
+## 12. 修订记录（HG-2 之后）
+
+> 本节**只追加**，不改动上文任何一行 —— 因为 `design.md` 的行号被 `DEBT-008`（`:225` 的 AD-9、`:243` 的 AD-10）等其它文档逐行引用，中间插行会破坏这些引用。
+
+### 修订 01 — 2026-09-16：`DEBT-010` 在本工作流 `phase-3-layer-v-smoke-loop` 内修复（用户裁定）
+
+- **来源**：Phase 3 的 Phase Entry Gate（实施之前）。调度者以三选项（只评估留痕 / **在本 Phase 内修复** / 关闭）呈现 `DEBT-010` 的处置，**用户选择「在本 Phase 内修复」**。
+- **对 AD-14 的影响**：
+  - `HostDiagnosticRecord.phase` 由 `'start' | 'retry'` **增加第三成员**以覆盖「握手之后」的失败边界。**字段集仍为 18 个字段**（不增字段、不改名、不改可空性）。
+  - `HOST_DIAGNOSTIC_SCHEMA_VERSION` 由 `1` 升为 `2`（AD-14 决策 11 要求的「同一次改动内 +1」）。版本号仍**只有**该常量一个真相源。
+  - AD-14 决策 10 的断言三口径**完全不变**：`=== 1` → 18 字段精确断言；`> 1` → 只断 v1 子集并把观测版本记入证据；缺失 / `null` / 非整数 / `< 1` → `HARNESS_ERROR`；`[]` 合法且不对版本断言。因版本现为 2，**Phase 3 的驱动与 reviewer / verifier 一律走 `> 1` 分支**。
+- **历史口径保留**：上文 AD-14 正文（两成员 / 版本 1）保持原样以留痕，其效力**已被本节修订 01 覆盖**；行号未变动。
+- **完整范围、下游约束与不变量**：见 `.specdev/specs/vscode-dsh-usable-loop/phases/phase-3-layer-v-smoke-loop/scope-amendment-01.md`（对 Phase 3 全部下游 agent 有约束力）。
