@@ -63,8 +63,11 @@
     "description": "让 vscode-dsh 的真机可用闭环可重复执行：修复 Node 版本矩阵/环境一致性导致的运行期失败，补齐扩展侧启动失败的 fail-loud 诊断，建立层 V（VS Code 真机 EDH）脚本化冒烟闭环（Xvfb + code CLI，产出截图）。UI 视觉美化不在本工作流范围。"
   },
   "vscode-dsh-e2e-closure": {
-    "status": "active",
+    "status": "descoped",
     "created": "2026-09-18T02:19:29Z",
+    "closed": "2026-09-18T16:09:45Z",
+    "closure_mode": "descoped",
+    "closure_note": "Phase 1/2 完整通过。Phase 3 以范围缩减关闭：14 项能力已在 manifest 声明，其中 6 项（§12.4/§12.7/§12.10）真机 PASS 并留有截图取证；8 项（§12.5/§12.6/§12.11）已写 steps 但从未执行 → 登记为 DEBT-4 / DEBT-5。用户决定终止本 Phase 的 review/verify，故未写 hg3=passed。",
     "description": "为 vscode-dsh 完整能力链建立真机端到端闭环验证：复用 usable-loop 层 V 冒烟闭环，补齐缺失的层 V 真机驱动代码与视觉证据，处理审计遗留偏差（lib 陈旧 chunk、FiberState 债登记）"
   }
 }

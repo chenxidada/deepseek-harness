@@ -91,7 +91,9 @@ import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import {
   askAboutSelection,
+  extractAtPathTokens,
   planReferenceOpen,
+  resolveAtPathInWorkspace,
   SelectionMetaStore,
   type TextEditorLike,
 } from './code-context/index.ts'
@@ -1315,15 +1317,226 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         if (controller === undefined) return { outcome: 'missing' as const }
         if (typeof opts !== 'object' || opts === null) return { outcome: 'missing' as const }
         const phase = (opts as { phase?: unknown }).phase
-        const parentSessionId = (opts as { parentSessionId?: unknown }).parentSessionId
+        const rawParent = (opts as { parentSessionId?: unknown }).parentSessionId
         const childSessionId = (opts as { childSessionId?: unknown }).childSessionId
         if (phase !== 'started' && phase !== 'finished') return { outcome: 'missing' as const }
-        if (typeof parentSessionId !== 'string' || typeof childSessionId !== 'string') {
-          return { outcome: 'missing' as const }
-        }
+        if (typeof childSessionId !== 'string') return { outcome: 'missing' as const }
+        // The active tab is the default parent, so the manifest can inject a child
+        // without round-tripping a live session id through the harness.
+        const parentSessionId = typeof rawParent === 'string'
+          ? rawParent
+          : controller.registry.getActive()?.sessionId
+        if (typeof parentSessionId !== 'string') return { outcome: 'missing' as const }
         await controller.applyTestSubagentNotification(phase, parentSessionId, childSessionId)
         panelHost?.pushFullState()
         return { outcome: 'injected' as const }
+      }),
+      /**
+       * §12.6 change-list: list the active session's attributed ChangeRecords (AC-10).
+       * The full record list (changeId / path / kind / status) lets a driver assert the
+       * complete "change produced → listed → reverted" path, not just a count.
+       */
+      vscode.commands.registerCommand('dsh.test.listChanges', () => {
+        const controller = conversations
+        const active = controller?.registry.getActive()
+        if (controller === undefined || active === undefined) {
+          return { sessionId: '' as const, changes: [] as const }
+        }
+        return {
+          sessionId: active.sessionId,
+          changes: controller.changes.list(active.sessionId),
+        }
+      }),
+      /**
+       * §12.6 change-list: revert one change by id, auto-confirming every gate.
+       * The unattended driver cannot click QuickPick confirmations, so the gate is
+       * answered here exactly as the product UI does after a user accepts it. The
+       * active-session default keeps this manifest-driveable without variable capture.
+       */
+      vscode.commands.registerCommand('dsh.test.revertChange', async (changeId?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { ok: false as const, reason: 'no-host' as const }
+        if (typeof changeId !== 'string' || changeId === '') {
+          return { ok: false as const, reason: 'missing-change-id' as const }
+        }
+        const result = await controller.revertChange(changeId, { confirmGate: async () => true })
+        return result
+      }),
+      /**
+       * §12.6 change-list: revert every non-reverted change in the active session
+       * (AC-18 batch path). The response is a flattened summary for assertions plus
+       * the raw results for the complete data-path check.
+       */
+      vscode.commands.registerCommand('dsh.test.revertAllChanges', async () => {
+        const controller = conversations
+        const active = controller?.registry.getActive()
+        if (controller === undefined || active === undefined) {
+          return { ok: false as const, reason: 'no-host' as const, reverted: 0 as const, results: [] as const }
+        }
+        const changeIds = controller.changes.list(active.sessionId)
+          .filter(record => record.status !== 'reverted')
+          .map(record => record.changeId)
+        if (changeIds.length === 0) {
+          return { ok: true as const, reverted: 0 as const, results: [] as const }
+        }
+        const results = await controller.revertChanges(changeIds, { confirmGate: async () => true })
+        const reverted = results.filter(result => result.ok).length
+        return { ok: reverted === changeIds.length, reverted, results }
+      }),
+      /**
+       * §12.7 search: gated access to {@link ConversationController.searchSessions}.
+       * The product command `dsh.searchSessions` blocks on QuickPick when it yields
+       * hits in a headed EDH, so this hook returns the structured hits without a UI
+       * round-trip (AC-50/51/53).
+       */
+      vscode.commands.registerCommand('dsh.test.searchSessions', (query?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { outcome: 'host-not-ready' as const, hits: [] as const }
+        const text = typeof query === 'string'
+          ? query
+          : typeof query === 'object' && query !== null && typeof (query as { text?: unknown }).text === 'string'
+            ? (query as { text: string }).text
+            : undefined
+        const path = typeof query === 'object' && query !== null && typeof (query as { path?: unknown }).path === 'string'
+          ? (query as { path: string }).path
+          : undefined
+        const hasText = text !== undefined && text.trim() !== ''
+        const hasPath = path !== undefined && path.trim() !== ''
+        if (!hasText && !hasPath) return { outcome: 'empty-query' as const, hits: [] as const }
+        const hits = controller.searchSessions({
+          ...hasText ? { text } : {},
+          ...hasPath ? { path } : {},
+        })
+        return { outcome: hits.length === 0 ? 'empty' as const : 'listed' as const, hits }
+      }),
+      /**
+       * §12.11 interaction: inject an inbound approval request (AD-12 / AC-16).
+       * `handleApproval` is only reachable via runtime bridge frames, so this hook is
+       * the driver's only unattended way to enqueue an approval that
+       * `dsh.test.answerApproval` then resolves. The request is fire-and-forget: the
+       * returned `id` is what the driver answers.
+       */
+      vscode.commands.registerCommand('dsh.test.injectApproval', (payload?: unknown) => {
+        const interactions = host?.interactions
+        if (interactions === undefined) return { ok: false as const, reason: 'no-host' as const }
+        if (typeof payload !== 'object' || payload === null) {
+          return { ok: false as const, reason: 'invalid-payload' as const }
+        }
+        const id = (payload as { id?: unknown }).id
+        const toolName = (payload as { toolName?: unknown }).toolName
+        if (typeof id !== 'string' || id === '') return { ok: false as const, reason: 'invalid-payload' as const }
+        if (typeof toolName !== 'string' || toolName === '') {
+          return { ok: false as const, reason: 'invalid-payload' as const }
+        }
+        const rawSessionId = (payload as { sessionId?: unknown }).sessionId
+        const sessionId = typeof rawSessionId === 'string'
+          ? rawSessionId
+          : conversations?.registry.getActive()?.sessionId ?? ''
+        if (sessionId === '') return { ok: false as const, reason: 'no-active-session' as const }
+        const rawReason = (payload as { reason?: unknown }).reason
+        void interactions.handleApproval({
+          id,
+          sessionId,
+          toolName,
+          ...typeof rawReason === 'string' ? { reason: rawReason } : {},
+        }).catch(() => undefined)
+        return { ok: true as const, id }
+      }),
+      /**
+       * §12.5 code-context: extract + workspace-resolve `@path` tokens (AC-10).
+       * `extractAtPathTokens` / `resolveAtPathInWorkspace` are pure functions with no
+       * command surface of their own; this hook exposes the real token → path → abs
+       * resolution chain so a driver can assert it instead of only `prefillComposer`'s
+       * `{ok:true}` side effect.
+       */
+      vscode.commands.registerCommand('dsh.test.resolveAtPath', (text?: unknown) => {
+        const source = typeof text === 'string' ? text : ''
+        const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath)
+        const tokens = extractAtPathTokens(source)
+        return {
+          tokens: tokens.length,
+          resolved: tokens.map(token => ({
+            token: token.token,
+            path: token.path,
+            result: resolveAtPathInWorkspace(token.path, { workspaceFolders: folders }),
+          })),
+        }
+      }),
+      /**
+       * §12.5 code-context: open a workspace file and place a non-empty selection (R6).
+       * `askAboutSelection` reads the active editor's selection, which a fresh headless
+       * EDH has none of; this hook opens a file via `openTextDocument` + `showTextDocument`
+       * and selects its first two lines so `dsh.test.askAboutSelection` finds a real editor.
+       */
+      vscode.commands.registerCommand('dsh.test.openEditorWithSelection', async (opts?: unknown) => {
+        const pathArg = typeof opts === 'string'
+          ? opts
+          : typeof opts === 'object' && opts !== null && typeof (opts as { path?: unknown }).path === 'string'
+            ? (opts as { path: string }).path
+            : undefined
+        if (pathArg === undefined || pathArg === '') {
+          return { ok: false as const, reason: 'missing-path' as const }
+        }
+        const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath)
+        if (folders.length === 0) return { ok: false as const, reason: 'no-workspace' as const }
+        const abs = resolveWorkspacePath(pathArg, folders)
+        if (abs === undefined) return { ok: false as const, reason: 'not-found' as const }
+        const uri = vscode.Uri?.file(abs) ?? abs
+        try {
+          if (typeof vscode.workspace.openTextDocument === 'function'
+            && typeof vscode.window.showTextDocument === 'function') {
+            const doc = await vscode.workspace.openTextDocument(uri)
+            await vscode.window.showTextDocument(doc, {
+              selection: editorSelection(vscode),
+              preview: false,
+            })
+            return { ok: true as const, path: pathArg, abs }
+          }
+          await vscode.commands.executeCommand?.('vscode.open', uri)
+          return { ok: true as const, path: pathArg, abs }
+        } catch (error) {
+          return {
+            ok: false as const,
+            reason: 'open-failed' as const,
+            error: redactSecrets(error instanceof Error ? error.message : String(error)),
+          }
+        }
+      }),
+      /**
+       * §12.6 change-list: materialise a deterministic scratch file the model can edit (R8).
+       * Change attribution needs a real `edit` tool call on a workspace file, and the
+       * manifest cannot run shell commands, so this hook writes the probe file into the
+       * gitignored `test-artifacts/` tree before `dsh.test.sendPrompt` steers the model to
+       * edit it. The content pins an `alpha` sentinel so the prompt's old/new strings are
+       * stable, and the returned workspace-relative path is what the edit prompt names.
+       */
+      vscode.commands.registerCommand('dsh.test.ensureProbeFile', async (opts?: unknown) => {
+        const name = typeof opts === 'string'
+          ? opts
+          : typeof opts === 'object' && opts !== null && typeof (opts as { name?: unknown }).name === 'string'
+            ? (opts as { name: string }).name
+            : undefined
+        if (name === undefined || name === '') {
+          return { ok: false as const, reason: 'missing-name' as const }
+        }
+        if (!/^[a-z0-9-]+$/.test(name)) {
+          return { ok: false as const, reason: 'invalid-name' as const }
+        }
+        const roots = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath)
+        const root = roots[0] ?? process.cwd()
+        const relativePath = `apps/vscode-dsh/test-artifacts/layer-v-probes/${name}.txt`
+        const abs = join(root, ...relativePath.split('/'))
+        try {
+          await mkdir(dirname(abs), { recursive: true })
+          await writeFile(abs, 'line one alpha\nline two beta\nline three gamma', 'utf8')
+        } catch (error) {
+          return {
+            ok: false as const,
+            reason: 'write-failed' as const,
+            error: redactSecrets(error instanceof Error ? error.message : String(error)),
+          }
+        }
+        return { ok: true as const, path: relativePath, abs }
       }),
     )
   }
@@ -1877,6 +2090,25 @@ function resolveWorkspacePath(path: string, roots: readonly string[]): string | 
     if (existsSync(abs)) return abs
   }
   return roots[0] === undefined ? undefined : resolve(roots[0], path)
+}
+
+/**
+ * Selection for `dsh.test.openEditorWithSelection` (R6).
+ *
+ * `askAboutSelection` rejects an empty selection, so the harness needs a non-empty
+ * one. A real `Range` is what `TextDocumentShowOptions.selection` documents; the
+ * plain object only feeds the injected Node stub, which never reads it as an API
+ * type. Reading the constructor off the injected module keeps both callers working.
+ * @param vscode - duck-typed vscode module.
+ * @returns a two-line selection from the document start.
+ */
+function editorSelection(vscode: VsCodeLike): { start: { line: number; character: number }; end: { line: number; character: number } } {
+  const rangeCtor = (vscode as unknown as {
+    Range?: new (startLine: number, startCharacter: number, endLine: number, endCharacter: number) => unknown
+  }).Range
+  const plain = { start: { line: 0, character: 0 }, end: { line: 1, character: 1 } }
+  if (rangeCtor === undefined) return plain
+  return new rangeCtor(0, 0, 1, 1) as typeof plain
 }
 
 /**

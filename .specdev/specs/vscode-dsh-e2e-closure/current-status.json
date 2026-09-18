@@ -22,10 +22,31 @@
       "verifier": "completed"
     },
     "phase-3-remaining-capabilities": {
-      "implementer": "pending",
-      "reviewer": "pending",
-      "verifier": "pending"
+      "implementer": "completed",
+      "reviewer": "skipped",
+      "verifier": "skipped"
     }
   },
-  "last_update": "2026-09-18T13:06:00Z"
+  "closure": {
+    "mode": "descoped",
+    "closed_at": "2026-09-18T16:09:45Z",
+    "closed_by": "user decision",
+    "reason": "用户决定终止本 Phase 的 review / verifier，并以范围缩减方式关闭 Phase 3。hg3 保持 pending —— 门禁对 hg3=passed 要求 implementation.md / review.md / verification.md 齐备且判决为 PASS，本次未走该流程，故不声称验收通过。",
+    "declared_capabilities": 14,
+    "verified_capabilities": 6,
+    "verified_scope": "§12.4 子会话（2 项）、§12.7 搜索（2 项）、§12.10 历史（2 项）— 均 conclusion=PASS、exit=0，截图取证齐全",
+    "unverified_capabilities": [
+      "cap-at-path-token",
+      "cap-workspace-path-resolve",
+      "cap-selection-ask",
+      "cap-change-index-store",
+      "cap-snapshot-revert",
+      "cap-change-diff-render",
+      "cap-interaction-coordinator",
+      "cap-interaction-ui"
+    ],
+    "unverified_note": "这 8 项的 steps/断言已写入 manifest，但从无机运行取证（test-artifacts 下匹配文件数为 0）。已登记为 DEBT-4（§12.6，3 项）与 DEBT-5（§12.5 + §12.11，5 项）。",
+    "debts": ["DEBT-4", "DEBT-5"]
+  },
+  "last_update": "2026-09-18T16:09:45Z"
 }

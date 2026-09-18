@@ -335,8 +335,13 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1758 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "open-subagent", "command": "dsh.test.openSubagent", "args": ["__child__"] },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "inject-child-started", "command": "dsh.test.injectSubagent", "args": [{ "phase": "started", "childSessionId": "sub-cap-22" }], "expect": { "outcome": "injected" } },
+        { "kind": "assert", "step": "enter-child-context", "command": "dsh.test.openSubagent", "args": ["sub-cap-22"], "expect": { "outcome": "opened-context", "childSessionId": "sub-cap-22", "mode": "readonly-live", "tabId": "$string" } },
+        { "kind": "assert", "step": "panel-projects-child-context", "command": "dsh.test.panelSnapshot", "expect": { "mode": "readonly-live", "sessionId": "sub-cap-22", "contextSessionId": "sub-cap-22", "tabStatus": "running" } },
         { "kind": "screenshot", "step": "open-subagent-context", "file": "cap-open-subagent-context.png" }
       ]
     },
@@ -349,8 +354,15 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1831 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "pin-subagent", "command": "dsh.test.pinSubagent" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "inject-child-started", "command": "dsh.test.injectSubagent", "args": [{ "phase": "started", "childSessionId": "sub-cap-23" }], "expect": { "outcome": "injected" } },
+        { "kind": "assert", "step": "pin-creates-child-tab", "command": "dsh.test.pinSubagent", "args": ["sub-cap-23"], "expect": { "outcome": "pinned", "childSessionId": "sub-cap-23", "tabId": "$string", "parentTabId": "$string" } },
+        { "kind": "assert", "step": "pin-keeps-parent-active", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" } },
+        { "kind": "assert", "step": "pinned-tab-is-in-registry", "command": "dsh.test.pinSubagent", "args": ["sub-cap-23"], "expect": { "outcome": "activated", "childSessionId": "sub-cap-23", "tabId": "$string", "parentTabId": "$string" } },
+        { "kind": "assert", "step": "panel-projects-pinned-child", "command": "dsh.test.panelSnapshot", "expect": { "mode": "readonly-live", "sessionId": "sub-cap-23", "tabId": "$string", "tabStatus": "idle" } },
         { "kind": "screenshot", "step": "pin-subagent-tab", "file": "cap-pin-subagent-tab.png" }
       ]
     },
@@ -362,7 +374,8 @@
       "requiresModel": false,
       "evidence": [{ "path": "apps/vscode-dsh/src/code-context/at-path.ts", "line": 54 }],
       "steps": [
-        { "kind": "command", "step": "prefill-at-path", "command": "dsh.test.prefillComposer", "args": ["@README.md"] },
+        { "kind": "assert", "step": "extract-plain-token", "command": "dsh.test.resolveAtPath", "args": ["@apps/vscode-dsh/package.json"], "expect": { "tokens": 1, "resolved.0.token": "@apps/vscode-dsh/package.json", "resolved.0.path": "apps/vscode-dsh/package.json" } },
+        { "kind": "assert", "step": "extract-quoted-token", "command": "dsh.test.resolveAtPath", "args": ["@\"apps/vscode-dsh/package.json\""], "expect": { "tokens": 1, "resolved.0.path": "apps/vscode-dsh/package.json" } },
         { "kind": "screenshot", "step": "at-path-token", "file": "cap-at-path-token.png" }
       ]
     },
@@ -374,7 +387,8 @@
       "requiresModel": false,
       "evidence": [{ "path": "apps/vscode-dsh/src/code-context/at-path.ts", "line": 110 }],
       "steps": [
-        { "kind": "command", "step": "prefill-at-path", "command": "dsh.test.prefillComposer", "args": ["@apps/vscode-dsh/package.json"] },
+        { "kind": "assert", "step": "resolve-in-workspace", "command": "dsh.test.resolveAtPath", "args": ["@apps/vscode-dsh/package.json"], "expect": { "tokens": 1, "resolved.0.result.ok": true, "resolved.0.result.path": "apps/vscode-dsh/package.json" } },
+        { "kind": "assert", "step": "resolve-missing-rejects", "command": "dsh.test.resolveAtPath", "args": ["@no-such-file-zzz.txt"], "expect": { "tokens": 1, "resolved.0.result.ok": false } },
         { "kind": "screenshot", "step": "workspace-path-resolve", "file": "cap-workspace-path-resolve.png" }
       ]
     },
@@ -382,13 +396,19 @@
       "id": "cap-selection-ask",
       "group": "code-context",
       "title": "选区提问",
-      "ac": ["AC-9", "AC-10"],
+      "ac": ["AC-7", "AC-9", "AC-10"],
       "requiresModel": true,
       "evidence": [{ "path": "apps/vscode-dsh/src/code-context/selection-ask.ts", "line": 143 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "ask-about-selection", "command": "dsh.test.askAboutSelection" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "open-editor-selection", "command": "dsh.test.openEditorWithSelection", "args": ["apps/vscode-dsh/package.json"], "expect": { "ok": true } },
+        { "kind": "assert", "step": "ask-about-selection", "command": "dsh.test.askAboutSelection", "expect": { "ok": true, "path": "apps/vscode-dsh/package.json" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-26-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-26-OK", "timeoutMs": 300000 },
         { "kind": "screenshot", "step": "selection-ask", "file": "cap-selection-ask.png" }
       ]
     },
@@ -396,7 +416,7 @@
       "id": "cap-change-index-store",
       "group": "change-list",
       "title": "变更索引/存储/归属",
-      "ac": ["AC-7", "AC-10"],
+      "ac": ["AC-7", "AC-9", "AC-10"],
       "requiresModel": true,
       "evidence": [
         { "path": "apps/vscode-dsh/src/change/change-index.ts", "line": 24 },
@@ -405,8 +425,14 @@
       ],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "changed-file-count", "command": "dsh.test.changedFileCount" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "ensure-probe-file", "command": "dsh.test.ensureProbeFile", "args": ["layer-v-probe-27"], "expect": { "ok": true } },
+        { "kind": "assert", "step": "send-edit-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的探针文件编辑任务，不是业务源码，用户已明确授权修改。\n请使用 edit 工具对已存在的探针文件 apps/vscode-dsh/test-artifacts/layer-v-probes/layer-v-probe-27.txt 做一次最小修改：old_string = \"alpha\"，new_string = \"omega\"。\n约束：不要使用 bash、不要使用 write、不要使用 str_replace_editor，不要创建任何新文件，不要修改任何应用源码，只做这一次 edit。\n完成后只回复一行：LAYER-V-CAP-27-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-27-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "list-changes", "command": "dsh.test.listChanges", "expect": { "changes": "$array:1", "changes.0.status": "unreviewed", "changes.0.changeId": "$string" } },
         { "kind": "screenshot", "step": "change-index-store", "file": "cap-change-index-store.png" }
       ]
     },
@@ -414,7 +440,7 @@
       "id": "cap-snapshot-revert",
       "group": "change-list",
       "title": "快照与回退",
-      "ac": ["AC-7", "AC-10"],
+      "ac": ["AC-7", "AC-9", "AC-10"],
       "requiresModel": true,
       "evidence": [
         { "path": "apps/vscode-dsh/src/change/snapshot-store.ts", "line": 71 },
@@ -422,8 +448,17 @@
       ],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "diff-availability", "command": "dsh.test.diffAvailability" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "ensure-probe-file", "command": "dsh.test.ensureProbeFile", "args": ["layer-v-probe-28"], "expect": { "ok": true } },
+        { "kind": "assert", "step": "send-edit-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的探针文件编辑任务，不是业务源码，用户已明确授权修改。\n请使用 edit 工具对已存在的探针文件 apps/vscode-dsh/test-artifacts/layer-v-probes/layer-v-probe-28.txt 做一次最小修改：old_string = \"beta\"，new_string = \"sigma\"。\n约束：不要使用 bash、不要使用 write、不要使用 str_replace_editor，不要创建任何新文件，不要修改任何应用源码，只做这一次 edit。\n完成后只回复一行：LAYER-V-CAP-28-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-28-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "list-changes", "command": "dsh.test.listChanges", "expect": { "changes": "$array:1" } },
+        { "kind": "assert", "step": "diff-available-before-revert", "command": "dsh.test.diffAvailability", "expect": { "available": true } },
+        { "kind": "assert", "step": "revert-all", "command": "dsh.test.revertAllChanges", "expect": { "ok": true, "reverted": "$number" } },
+        { "kind": "assert", "step": "revert-marks-status", "command": "dsh.test.listChanges", "expect": { "changes.0.status": "reverted" } },
         { "kind": "screenshot", "step": "snapshot-revert", "file": "cap-snapshot-revert.png" }
       ]
     },
@@ -431,7 +466,7 @@
       "id": "cap-change-diff-render",
       "group": "change-list",
       "title": "变更 Diff 渲染",
-      "ac": ["AC-7", "AC-10"],
+      "ac": ["AC-7", "AC-9", "AC-10"],
       "requiresModel": true,
       "evidence": [
         { "path": "apps/vscode-dsh/src/chat-panel/render/change-diff-dom.ts", "line": 35 },
@@ -439,8 +474,15 @@
       ],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "diff-availability", "command": "dsh.test.diffAvailability" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "ensure-probe-file", "command": "dsh.test.ensureProbeFile", "args": ["layer-v-probe-29"], "expect": { "ok": true } },
+        { "kind": "assert", "step": "send-edit-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的探针文件编辑任务，不是业务源码，用户已明确授权修改。\n请使用 edit 工具对已存在的探针文件 apps/vscode-dsh/test-artifacts/layer-v-probes/layer-v-probe-29.txt 做一次最小修改：old_string = \"gamma\"，new_string = \"delta\"。\n约束：不要使用 bash、不要使用 write、不要使用 str_replace_editor，不要创建任何新文件，不要修改任何应用源码，只做这一次 edit。\n完成后只回复一行：LAYER-V-CAP-29-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-29-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "changed-file-count", "command": "dsh.test.changedFileCount", "expect": { "count": 1 } },
+        { "kind": "assert", "step": "diff-available", "command": "dsh.test.diffAvailability", "expect": { "available": true, "reason": "ok" } },
         { "kind": "screenshot", "step": "change-diff-render", "file": "cap-change-diff-render.png" }
       ]
     },
@@ -449,11 +491,17 @@
       "group": "search",
       "title": "会话搜索 searchSessions",
       "ac": ["AC-7", "AC-10"],
-      "requiresModel": false,
+      "requiresModel": true,
       "evidence": [{ "path": "apps/vscode-dsh/src/search/session-search.ts", "line": 46 }],
       "steps": [
-        { "kind": "command", "step": "list-history", "command": "dsh.test.listHistory" },
-        { "kind": "assert", "step": "history-rows", "command": "dsh.test.listHistory", "expect": "$array" },
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的搜索字段匹配提示词，请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-30-OK"] },
+        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-30-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "search-lists-indexed-session", "command": "dsh.test.searchSessions", "args": ["LAYER-V-CAP-30-OK"], "expect": { "outcome": "listed", "hits": "$array:1", "hits.0.sessionId": "$string", "hits.0.matchField": "firstUserPreview", "hits.0.firstUserPreview": "$contains:LAYER-V-CAP-30-OK" } },
         { "kind": "screenshot", "step": "session-search", "file": "cap-session-search.png" }
       ]
     },
@@ -462,11 +510,19 @@
       "group": "search",
       "title": "Tier-1 字段匹配",
       "ac": ["AC-7", "AC-10"],
-      "requiresModel": false,
+      "requiresModel": true,
       "evidence": [{ "path": "apps/vscode-dsh/src/search/session-search.ts", "line": 116 }],
       "steps": [
-        { "kind": "command", "step": "list-history", "command": "dsh.test.listHistory" },
-        { "kind": "assert", "step": "history-rows", "command": "dsh.test.listHistory", "expect": "$array" },
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["分层V能力验证提示词 LAYER-V-CAP-31-OK 这是索引字段标记，请只回复下面这一行正文标记，不要调用任何工具，也不要输出任何其它内容、不要解释、不要重复索引标记：LAYER-V-CAP-31BODY-OK"] },
+        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-31BODY-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "assistant-echoes-the-body-only-token", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-31BODY-OK" },
+        { "kind": "assert", "step": "tier1-matches-index-field-only", "command": "dsh.test.searchSessions", "args": ["LAYER-V-CAP-31-OK"], "expect": { "outcome": "listed", "hits": "$array:1", "hits.0.matchField": "firstUserPreview", "hits.0.matchTiers.0": 1 } },
+        { "kind": "assert", "step": "no-body-scan", "command": "dsh.test.searchSessions", "args": ["LAYER-V-CAP-31BODY-OK"], "expect": { "outcome": "empty", "hits": [] } },
         { "kind": "screenshot", "step": "tier1-field-match", "file": "cap-tier1-field-match.png" }
       ]
     },
@@ -576,11 +632,17 @@
       "group": "history",
       "title": "从索引列历史",
       "ac": ["AC-7", "AC-10"],
-      "requiresModel": false,
+      "requiresModel": true,
       "evidence": [{ "path": "apps/vscode-dsh/src/history-view.ts", "line": 133 }],
       "steps": [
-        { "kind": "command", "step": "list-history", "command": "dsh.test.listHistory" },
-        { "kind": "assert", "step": "history-rows", "command": "dsh.test.listHistory", "expect": "$array" },
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的搜索字段匹配提示词，请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-37-OK"] },
+        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-37-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "history-lists-the-real-session", "command": "dsh.test.listHistory", "expect": { "0.sessionId": "$string", "0.firstUserPreview": "$contains:LAYER-V-CAP-37-OK", "0.continueHint": "$string" } },
         { "kind": "screenshot", "step": "history-list", "file": "cap-history-list.png" }
       ]
     },
@@ -589,11 +651,19 @@
       "group": "history",
       "title": "从历史打开会话",
       "ac": ["AC-7", "AC-10"],
-      "requiresModel": false,
+      "requiresModel": true,
       "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 389 }],
       "steps": [
-        { "kind": "command", "step": "list-history", "command": "dsh.test.listHistory" },
-        { "kind": "command", "step": "open-history", "command": "dsh.test.openHistory", "args": [""] },
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的搜索字段匹配提示词，请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-38-OK"] },
+        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-38-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "live-tab-before-reopen", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live", "tabId": "$string" } },
+        { "kind": "replay", "step": "reopen-from-history", "command": "dsh.test.panelSnapshot", "expect": { "outcome": "opened", "mode": "replay" } },
+        { "kind": "assert", "step": "panel-restored-and-closed", "command": "dsh.test.panelSnapshot", "expect": { "mode": "replay", "sessionId": "$string", "tabId": "$string" } },
         { "kind": "screenshot", "step": "open-from-history", "file": "cap-open-from-history.png" }
       ]
     },
@@ -601,27 +671,40 @@
       "id": "cap-interaction-coordinator",
       "group": "interaction",
       "title": "交互协调器（InteractionCoordinator）",
-      "ac": ["AC-9", "AC-10"],
-      "requiresModel": true,
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
       "evidence": [{ "path": "apps/vscode-dsh/src/interaction-coordinator.ts", "line": 136 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "assert", "step": "pending-interactions", "command": "dsh.test.listPendingInteractions", "expect": "$array" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "inject-approval", "command": "dsh.test.injectApproval", "args": [{ "id": "layer-v-approval-30", "toolName": "bash", "reason": "Layer V interaction probe" }], "expect": { "ok": true, "id": "layer-v-approval-30" } },
+        { "kind": "assert", "step": "approval-listed-pending", "command": "dsh.test.listPendingInteractions", "expect": { "0.kind": "approval", "0.id": "layer-v-approval-30", "0.toolName": "bash", "0.reason": "Layer V interaction probe" } },
+        { "kind": "assert", "step": "answer-approval", "command": "dsh.test.answerApproval", "args": ["layer-v-approval-30", "allowed-once"], "expect": { "ok": true, "id": "layer-v-approval-30", "outcome": "allowed-once" } },
+        { "kind": "assert", "step": "unknown-id-fail-closed", "command": "dsh.test.answerApproval", "args": ["no-such-id-zzz", "allowed-once"], "expect": { "ok": false, "reason": "unknown-id" } },
         { "kind": "screenshot", "step": "interaction-coordinator", "file": "cap-interaction-coordinator.png" }
       ]
     },
     {
       "id": "cap-interaction-ui",
       "group": "interaction",
-      "title": "交互 UI",
-      "ac": ["AC-9", "AC-10"],
-      "requiresModel": true,
+      "title": "交互 UI（fail-closed 队列）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
       "evidence": [{ "path": "apps/vscode-dsh/src/interaction-ui.ts", "line": 72 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "assert", "step": "pending-interactions", "command": "dsh.test.listPendingInteractions", "expect": "$array" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "inject-approval-for-ui", "command": "dsh.test.injectApproval", "args": [{ "id": "layer-v-approval-31", "toolName": "write", "reason": "Layer V interaction UI probe" }], "expect": { "ok": true, "id": "layer-v-approval-31" } },
+        { "kind": "assert", "step": "ui-presented", "command": "dsh.test.listPendingInteractions", "expect": { "0.kind": "approval", "0.id": "layer-v-approval-31", "0.state": "presented", "0.toolName": "write" } },
+        { "kind": "assert", "step": "close-tab", "command": "dsh.test.closeConversation", "expect": { "outcome": "closed" } },
+        { "kind": "assert", "step": "fail-closed-drains-queue", "command": "dsh.test.listPendingInteractions", "expect": [] },
+        { "kind": "assert", "step": "answer-after-fail-closed", "command": "dsh.test.answerApproval", "args": ["layer-v-approval-31", "allowed-once"], "expect": { "ok": false, "reason": "unknown-id" } },
         { "kind": "screenshot", "step": "interaction-ui", "file": "cap-interaction-ui.png" }
       ]
     },
