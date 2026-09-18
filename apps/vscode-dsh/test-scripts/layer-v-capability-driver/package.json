@@ -1,0 +1,16 @@
+{
+  "name": "layer-v-capability-driver",
+  "displayName": "Layer V capability driver (test-only)",
+  "description": "Dev-path VS Code extension that drives the multi-capability orchestration inside a real Extension Development Host",
+  "publisher": "deepseek-ai",
+  "version": "0.0.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./extension.cjs",
+  "activationEvents": [
+    "*",
+    "onStartupFinished"
+  ]
+}

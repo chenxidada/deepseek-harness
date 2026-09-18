@@ -1,0 +1,580 @@
+{
+  "schemaVersion": 1,
+  "source": ".specdev/specs/vscode-dsh-e2e-closure/repo-exploration.md §12 (workflow-level code-explorer)",
+  "note": "The 41 real functional capabilities of apps/vscode-dsh, one entry per §12 row. requiresModel marks capabilities whose verification needs a real DEEPSEEK_API_KEY round-trip (AC-9); those fail closed with SKIPPED_NO_CREDENTIALS (exit 3) when no key is present. Steps are EDH operation sequences (command / wait / assert / screenshot); this Phase pilots §12.1 and §12.2, the remaining groups are driven in Phase 2/3.",
+  "capabilities": [
+    {
+      "id": "cap-react-spa-root",
+      "group": "react-spa-main",
+      "title": "React SPA 根组件 App（data-testid=\"editor-chat-root\"）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [
+        { "path": "apps/vscode-dsh/webview/src/App.tsx", "line": 19 },
+        { "path": "apps/vscode-dsh/webview/src/App.tsx", "line": 64 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "viewId": "dsh.editorChat", "panelOpen": true } },
+        { "kind": "screenshot", "step": "react-spa-root", "file": "cap-react-spa-root.png" }
+      ]
+    },
+    {
+      "id": "cap-tab-chrome",
+      "group": "react-spa-main",
+      "title": "顶栏多 Tab（TabChrome）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/webview/src/components/TabChrome.tsx", "line": 36 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "screenshot", "step": "tab-chrome", "file": "cap-tab-chrome.png" }
+      ]
+    },
+    {
+      "id": "cap-history-panel",
+      "group": "react-spa-main",
+      "title": "历史窗口（HistoryPanel）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/webview/src/components/HistoryPanel.tsx", "line": 30 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "screenshot", "step": "history-panel", "file": "cap-history-panel.png" }
+      ]
+    },
+    {
+      "id": "cap-message-list-streaming",
+      "group": "react-spa-main",
+      "title": "消息列表 + 流式呈现（MessageList）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/webview/src/components/MessageList.tsx", "line": 25 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "screenshot", "step": "message-list", "file": "cap-message-list-streaming.png" }
+      ]
+    },
+    {
+      "id": "cap-composer",
+      "group": "react-spa-main",
+      "title": "输入 Composer（含 Continue chrome）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/webview/src/components/Composer.tsx", "line": 17 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "screenshot", "step": "composer", "file": "cap-composer.png" }
+      ]
+    },
+    {
+      "id": "cap-delete-confirm-modal",
+      "group": "react-spa-main",
+      "title": "删除确认弹窗（DeleteConfirmModal）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/webview/src/components/DeleteConfirmModal.tsx", "line": 14 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "screenshot", "step": "delete-confirm-modal", "file": "cap-delete-confirm-modal.png" }
+      ]
+    },
+    {
+      "id": "cap-chat-ui-store",
+      "group": "react-spa-main",
+      "title": "UI 状态 store（chat-ui-store）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/webview/src/store/chat-ui-store.ts", "line": 277 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "screenshot", "step": "chat-ui-store", "file": "cap-chat-ui-store.png" }
+      ]
+    },
+    {
+      "id": "cap-message-bridge",
+      "group": "react-spa-main",
+      "title": "host↔webview bridge（message-bridge）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/webview/src/bridge/message-bridge.ts", "line": 64 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "screenshot", "step": "message-bridge", "file": "cap-message-bridge.png" }
+      ]
+    },
+    {
+      "id": "cap-editor-panel-viewtype",
+      "group": "editor-panel",
+      "title": "编辑器 Panel 视图类型 dsh.editorChat",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/editor-chat-panel.ts", "line": 89 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "view-type", "command": "dsh.showPanel", "expect": { "viewId": "dsh.editorChat" } },
+        { "kind": "screenshot", "step": "editor-panel-viewtype", "file": "cap-editor-panel-viewtype.png" }
+      ]
+    },
+    {
+      "id": "cap-react-spa-html-builder",
+      "group": "editor-panel",
+      "title": "React SPA HTML 构建器（buildEditorChatSpaHtml）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/editor-chat-panel.ts", "line": 116 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "spa-mounted", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "screenshot", "step": "react-spa-html-builder", "file": "cap-react-spa-html-builder.png" }
+      ]
+    },
+    {
+      "id": "cap-editor-panel-singleton",
+      "group": "editor-panel",
+      "title": "单例控制器（模块级 panel 变量）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/editor-chat-panel.ts", "line": 161 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "singleton-open", "command": "dsh.showPanel", "expect": { "viewId": "dsh.editorChat", "panelOpen": true } },
+        { "kind": "command", "step": "re-reveal-no-duplicate", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "still-single-panel", "command": "dsh.showPanel", "expect": { "viewId": "dsh.editorChat", "panelOpen": true } },
+        { "kind": "screenshot", "step": "editor-panel-singleton", "file": "cap-editor-panel-singleton.png" }
+      ]
+    },
+    {
+      "id": "cap-webview-html-injection",
+      "group": "editor-panel",
+      "title": "注入 webview.html",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/editor-chat-panel.ts", "line": 218 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "assert", "step": "webview-mounted", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "screenshot", "step": "webview-html-injection", "file": "cap-webview-html-injection.png" }
+      ]
+    },
+    {
+      "id": "cap-extension-activate",
+      "group": "session-main-path",
+      "title": "扩展激活 activate",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/extension.ts", "line": 374 }],
+      "steps": [
+        { "kind": "assert", "step": "startup-hook-responsive", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true } },
+        { "kind": "screenshot", "step": "extension-activate", "file": "cap-extension-activate.png" }
+      ]
+    },
+    {
+      "id": "cap-auto-start-orchestrator",
+      "group": "session-main-path",
+      "title": "自动启动编排（AutoStartOrchestrator）",
+      "ac": ["AC-7", "AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/auto-start-orchestrator.ts", "line": 101 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "screenshot", "step": "auto-start-orchestrator", "file": "cap-auto-start-orchestrator.png" }
+      ]
+    },
+    {
+      "id": "cap-auto-ready-coordinator",
+      "group": "session-main-path",
+      "title": "自动就绪协调（AutoReadyCoordinator）",
+      "ac": ["AC-7", "AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/auto-ready-coordinator.ts", "line": 44 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "trigger-auto-ready", "command": "dsh.test.triggerAutoReady" },
+        { "kind": "screenshot", "step": "auto-ready-coordinator", "file": "cap-auto-ready-coordinator.png" }
+      ]
+    },
+    {
+      "id": "cap-conversation-controller",
+      "group": "session-main-path",
+      "title": "对话控制器（ConversationController）",
+      "ac": ["AC-7", "AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 205 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "live-projection", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" } },
+        { "kind": "screenshot", "step": "conversation-controller", "file": "cap-conversation-controller.png" }
+      ]
+    },
+    {
+      "id": "cap-prompt-active",
+      "group": "session-main-path",
+      "title": "发起提示 promptActive",
+      "ac": ["AC-7", "AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1617 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "send-prompt", "command": "dsh.test.sendPrompt", "args": ["Reply with the single word: pong"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" }, "timeoutMs": 300000 },
+        { "kind": "screenshot", "step": "prompt-active", "file": "cap-prompt-active.png" }
+      ]
+    },
+    {
+      "id": "cap-message-store-stream-patch",
+      "group": "session-main-path",
+      "title": "消息存储 + 流式 patch（patchMessage）",
+      "ac": ["AC-7", "AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/message-store.ts", "line": 69 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "send-prompt", "command": "dsh.test.sendPrompt", "args": ["Say exactly: stream-ok"] },
+        { "kind": "wait", "step": "streamed-message", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" }, "timeoutMs": 300000 },
+        { "kind": "screenshot", "step": "message-store-stream-patch", "file": "cap-message-store-stream-patch.png" }
+      ]
+    },
+    {
+      "id": "cap-push-full-state",
+      "group": "session-main-path",
+      "title": "全量状态推送 pushFullState",
+      "ac": ["AC-7", "AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/chat-panel-host.ts", "line": 392 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "push-full-state", "command": "dsh.test.openPanel" },
+        { "kind": "assert", "step": "full-state-pushed", "command": "dsh.test.openPanel", "expect": { "ok": true } },
+        { "kind": "screenshot", "step": "push-full-state", "file": "cap-push-full-state.png" }
+      ]
+    },
+    {
+      "id": "cap-messages-protocol",
+      "group": "session-main-path",
+      "title": "messages/append 与 messages/patch 协议",
+      "ac": ["AC-7", "AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [
+        { "path": "apps/vscode-dsh/src/chat-panel/protocol.ts", "line": 114 },
+        { "path": "apps/vscode-dsh/src/chat-panel/protocol.ts", "line": 123 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "panel-projection", "command": "dsh.test.panelSnapshot", "expect": { "mode": "$string" } },
+        { "kind": "screenshot", "step": "messages-protocol", "file": "cap-messages-protocol.png" }
+      ]
+    },
+    {
+      "id": "cap-host-send-stream",
+      "group": "session-main-path",
+      "title": "Host 侧消息发送/流式处理",
+      "ac": ["AC-7", "AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/chat-panel-host.ts", "line": 565 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "send-prompt", "command": "dsh.test.sendPrompt", "args": ["Reply: host-send-ok"] },
+        { "kind": "wait", "step": "host-streamed", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" }, "timeoutMs": 300000 },
+        { "kind": "screenshot", "step": "host-send-stream", "file": "cap-host-send-stream.png" }
+      ]
+    },
+    {
+      "id": "cap-open-subagent-context",
+      "group": "subagent",
+      "title": "打开子会话上下文",
+      "ac": ["AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1758 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "open-subagent", "command": "dsh.test.openSubagent", "args": ["__child__"] },
+        { "kind": "screenshot", "step": "open-subagent-context", "file": "cap-open-subagent-context.png" }
+      ]
+    },
+    {
+      "id": "cap-pin-subagent-tab",
+      "group": "subagent",
+      "title": "钉住子会话 Tab",
+      "ac": ["AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1831 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "pin-subagent", "command": "dsh.test.pinSubagent" },
+        { "kind": "screenshot", "step": "pin-subagent-tab", "file": "cap-pin-subagent-tab.png" }
+      ]
+    },
+    {
+      "id": "cap-at-path-token",
+      "group": "code-context",
+      "title": "@path token 提取",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/code-context/at-path.ts", "line": 54 }],
+      "steps": [
+        { "kind": "command", "step": "prefill-at-path", "command": "dsh.test.prefillComposer", "args": ["@README.md"] },
+        { "kind": "screenshot", "step": "at-path-token", "file": "cap-at-path-token.png" }
+      ]
+    },
+    {
+      "id": "cap-workspace-path-resolve",
+      "group": "code-context",
+      "title": "workspace 内路径解析",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/code-context/at-path.ts", "line": 110 }],
+      "steps": [
+        { "kind": "command", "step": "prefill-at-path", "command": "dsh.test.prefillComposer", "args": ["@apps/vscode-dsh/package.json"] },
+        { "kind": "screenshot", "step": "workspace-path-resolve", "file": "cap-workspace-path-resolve.png" }
+      ]
+    },
+    {
+      "id": "cap-selection-ask",
+      "group": "code-context",
+      "title": "选区提问",
+      "ac": ["AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/code-context/selection-ask.ts", "line": 143 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "ask-about-selection", "command": "dsh.test.askAboutSelection" },
+        { "kind": "screenshot", "step": "selection-ask", "file": "cap-selection-ask.png" }
+      ]
+    },
+    {
+      "id": "cap-change-index-store",
+      "group": "change-list",
+      "title": "变更索引/存储/归属",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": true,
+      "evidence": [
+        { "path": "apps/vscode-dsh/src/change/change-index.ts", "line": 24 },
+        { "path": "apps/vscode-dsh/src/change/change-store.ts", "line": 11 },
+        { "path": "apps/vscode-dsh/src/change/change-attributor.ts", "line": 47 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "changed-file-count", "command": "dsh.test.changedFileCount" },
+        { "kind": "screenshot", "step": "change-index-store", "file": "cap-change-index-store.png" }
+      ]
+    },
+    {
+      "id": "cap-snapshot-revert",
+      "group": "change-list",
+      "title": "快照与回退",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": true,
+      "evidence": [
+        { "path": "apps/vscode-dsh/src/change/snapshot-store.ts", "line": 71 },
+        { "path": "apps/vscode-dsh/src/change/revert.ts", "line": 187 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "diff-availability", "command": "dsh.test.diffAvailability" },
+        { "kind": "screenshot", "step": "snapshot-revert", "file": "cap-snapshot-revert.png" }
+      ]
+    },
+    {
+      "id": "cap-change-diff-render",
+      "group": "change-list",
+      "title": "变更 Diff 渲染",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": true,
+      "evidence": [
+        { "path": "apps/vscode-dsh/src/chat-panel/render/change-diff-dom.ts", "line": 35 },
+        { "path": "apps/vscode-dsh/src/chat-panel/render/ref-cards.ts", "line": 50 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "diff-availability", "command": "dsh.test.diffAvailability" },
+        { "kind": "screenshot", "step": "change-diff-render", "file": "cap-change-diff-render.png" }
+      ]
+    },
+    {
+      "id": "cap-session-search",
+      "group": "search",
+      "title": "会话搜索 searchSessions",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/search/session-search.ts", "line": 46 }],
+      "steps": [
+        { "kind": "command", "step": "list-history", "command": "dsh.test.listHistory" },
+        { "kind": "assert", "step": "history-rows", "command": "dsh.test.listHistory", "expect": "$array" },
+        { "kind": "screenshot", "step": "session-search", "file": "cap-session-search.png" }
+      ]
+    },
+    {
+      "id": "cap-tier1-field-match",
+      "group": "search",
+      "title": "Tier-1 字段匹配",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/search/session-search.ts", "line": 116 }],
+      "steps": [
+        { "kind": "command", "step": "list-history", "command": "dsh.test.listHistory" },
+        { "kind": "assert", "step": "history-rows", "command": "dsh.test.listHistory", "expect": "$array" },
+        { "kind": "screenshot", "step": "tier1-field-match", "file": "cap-tier1-field-match.png" }
+      ]
+    },
+    {
+      "id": "cap-fork-boundary-parse",
+      "group": "fork",
+      "title": "闭合轮次边界解析",
+      "ac": ["AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/fork/fork-orchestrator.ts", "line": 78 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "send-prompt", "command": "dsh.test.sendPrompt", "args": ["Reply: fork-seed"] },
+        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" }, "timeoutMs": 300000 },
+        { "kind": "screenshot", "step": "fork-boundary-parse", "file": "cap-fork-boundary-parse.png" }
+      ]
+    },
+    {
+      "id": "cap-fork-from-closed-turn",
+      "group": "fork",
+      "title": "从闭合轮分叉",
+      "ac": ["AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 866 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "send-prompt", "command": "dsh.test.sendPrompt", "args": ["Reply: fork-me"] },
+        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" }, "timeoutMs": 300000 },
+        { "kind": "screenshot", "step": "fork-from-closed-turn", "file": "cap-fork-from-closed-turn.png" }
+      ]
+    },
+    {
+      "id": "cap-continue-capability-probe",
+      "group": "continue",
+      "title": "Continue 能力探测",
+      "ac": ["AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/continue-capability.ts", "line": 77 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "continue", "command": "dsh.test.continue" },
+        { "kind": "screenshot", "step": "continue-capability-probe", "file": "cap-continue-capability-probe.png" }
+      ]
+    },
+    {
+      "id": "cap-continue-chrome",
+      "group": "continue",
+      "title": "Continue chrome 生成",
+      "ac": ["AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/continue-capability.ts", "line": 93 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "continue-chrome", "command": "dsh.test.panelSnapshot", "expect": { "continue": "$object" } },
+        { "kind": "screenshot", "step": "continue-chrome", "file": "cap-continue-chrome.png" }
+      ]
+    },
+    {
+      "id": "cap-continue-conversation",
+      "group": "continue",
+      "title": "继续会话",
+      "ac": ["AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 715 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "continue", "command": "dsh.test.continue" },
+        { "kind": "screenshot", "step": "continue-conversation", "file": "cap-continue-conversation.png" }
+      ]
+    },
+    {
+      "id": "cap-history-list",
+      "group": "history",
+      "title": "从索引列历史",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/history-view.ts", "line": 133 }],
+      "steps": [
+        { "kind": "command", "step": "list-history", "command": "dsh.test.listHistory" },
+        { "kind": "assert", "step": "history-rows", "command": "dsh.test.listHistory", "expect": "$array" },
+        { "kind": "screenshot", "step": "history-list", "file": "cap-history-list.png" }
+      ]
+    },
+    {
+      "id": "cap-open-from-history",
+      "group": "history",
+      "title": "从历史打开会话",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 389 }],
+      "steps": [
+        { "kind": "command", "step": "list-history", "command": "dsh.test.listHistory" },
+        { "kind": "command", "step": "open-history", "command": "dsh.test.openHistory", "args": [""] },
+        { "kind": "screenshot", "step": "open-from-history", "file": "cap-open-from-history.png" }
+      ]
+    },
+    {
+      "id": "cap-interaction-coordinator",
+      "group": "interaction",
+      "title": "交互协调器（InteractionCoordinator）",
+      "ac": ["AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/interaction-coordinator.ts", "line": 136 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "pending-interactions", "command": "dsh.test.listPendingInteractions", "expect": "$array" },
+        { "kind": "screenshot", "step": "interaction-coordinator", "file": "cap-interaction-coordinator.png" }
+      ]
+    },
+    {
+      "id": "cap-interaction-ui",
+      "group": "interaction",
+      "title": "交互 UI",
+      "ac": ["AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [{ "path": "apps/vscode-dsh/src/interaction-ui.ts", "line": 72 }],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "pending-interactions", "command": "dsh.test.listPendingInteractions", "expect": "$array" },
+        { "kind": "screenshot", "step": "interaction-ui", "file": "cap-interaction-ui.png" }
+      ]
+    },
+    {
+      "id": "cap-test-hooks",
+      "group": "test-hooks",
+      "title": "dsh.test.* 命令注册（仅测试模式）",
+      "ac": ["AC-10"],
+      "requiresModel": false,
+      "evidence": [{ "path": "apps/vscode-dsh/src/extension.ts", "line": 1011 }],
+      "steps": [
+        { "kind": "assert", "step": "test-hooks-registered", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true } },
+        { "kind": "screenshot", "step": "test-hooks", "file": "cap-test-hooks.png" }
+      ]
+    }
+  ]
+}
