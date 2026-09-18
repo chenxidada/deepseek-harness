@@ -291,12 +291,14 @@ export class HarnessSdkJsonRpcServer {
         'INVALID_BOUNDARY',
       )
     }
-    const parent = this.ctx.sessions.get(brandString<SessionId>(parentSessionId))
-    if (parent === undefined) {
+    const parentRecord = this.sessions.get(parentSessionId)
+    if (parentRecord === undefined) {
       throw new SessionForkError(`session "${parentSessionId}" not found`, 'SESSION_NOT_FOUND')
     }
+    const parentAgent = parentRecord.handle.agent
+    const parent = parentAgent.session
     const childSessionId = options?.childSessionId ?? randomUUID()
-    if (this.sessions.has(childSessionId) || this.ctx.sessions.get(brandString<SessionId>(childSessionId)) !== undefined) {
+    if (this.sessions.has(childSessionId)) {
       throw new SessionForkError(`session "${childSessionId}" already exists`, 'SESSION_ALREADY_EXISTS')
     }
     const pending = this.sessionCreations.get(childSessionId)
@@ -304,7 +306,7 @@ export class HarnessSdkJsonRpcServer {
       await pending
       return childSessionId
     }
-    const creation = this.createForkedSession(parent, childSessionId, {
+    const creation = this.createForkedSession(parent, parentAgent, childSessionId, {
       ...options?.emptySeed === true ? { emptySeed: true as const } : {},
       ...options?.boundarySeq === undefined ? {} : { boundarySeq: options.boundarySeq },
     })
@@ -459,10 +461,16 @@ export class HarnessSdkJsonRpcServer {
    */
   private async createForkedSession(
     parent: Session,
+    parentAgent: Agent,
     childSessionId: string,
     cut?: { emptySeed?: boolean; boundarySeq?: number },
   ): Promise<SessionRecord> {
     const { seed, inheritedEventCount } = forkSeedFromParent(parent, cut)
+    const presets = this.ctx.get('agentPresets') as {
+      composeFrom(agentCtx: Context, parentCtx: Context): string | undefined
+      composedPreset(agentCtx: Context): string | undefined
+    } | undefined
+    const parentPreset = presets?.composedPreset(parentAgent.ctx)
     const handle = await this.ctx.agents.create({
       sessionId: brandString<SessionId>(childSessionId),
       seed,
@@ -471,6 +479,7 @@ export class HarnessSdkJsonRpcServer {
         ...parent.header.cwd === undefined ? {} : { cwd: parent.header.cwd },
         parentSession: parent.id,
         isSeeded: true,
+        ...parentPreset === undefined ? {} : { agentPreset: parentPreset },
       },
       agentOptions: {
         provider: this.provider,
@@ -478,6 +487,13 @@ export class HarnessSdkJsonRpcServer {
         ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
         ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
       },
+      ...presets === undefined
+        ? {}
+        : {
+          setup: (childCtx: Context) => {
+            presets.composeFrom(childCtx, parentAgent.ctx)
+          },
+        },
     })
     const rec: SessionRecord = { handle }
     this.sessions.set(childSessionId, rec)

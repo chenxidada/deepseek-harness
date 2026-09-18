@@ -3,8 +3,8 @@
   "description": "为 vscode-dsh 完整能力链（ide → conversation-ui → chat-ready → code-context-diff → chat-ux → editor-chat-panel）建立真机端到端闭环验证：复用 usable-loop 的层 V 冒烟闭环（Xvfb + code CLI + 截图），补齐缺失的层 V 真机驱动代码与视觉证据，并处理审计遗留偏差（lib 陈旧 chunk、FiberState 债登记）。",
   "created": "2026-09-18T02:19:29Z",
   "current_stage": "phase-implementation",
-  "current_phase": "phase-1-driver-framework-pilot",
-  "loop_count": 1,
+  "current_phase": "phase-2-session-main-path-llm",
+  "loop_count": 0,
   "human_gates": {
     "hg1": "passed",
     "hg2": "passed",
@@ -14,8 +14,13 @@
     "phase-1-driver-framework-pilot": {
       "implementer": "completed",
       "reviewer": "completed",
-      "verifier": "in_progress"
+      "verifier": "completed"
+    },
+    "phase-2-session-main-path-llm": {
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "pending"
     }
   },
-  "last_update": "2026-09-18T05:08:00Z"
+  "last_update": "2026-09-18T12:25:00Z"
 }

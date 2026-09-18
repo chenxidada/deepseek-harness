@@ -459,6 +459,93 @@ describe('HarnessSdkJsonRpcServer', () => {
     }
   })
 
+  it('forks a live parent into a prompt-ready child session', { timeout: 15_000 }, async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-fork-'))
+    const llmServer = await mockCompletionServer()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
+    const ctx = await makeHarness(storageDir)
+    try {
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+
+      await server.initialize({ cwd: storageDir, provider: 'deepseek-official', model: 'fork-model' })
+      await server.prompt({ sessionId: 'parent', contentBlocks: [{ type: 'text', text: 'first' }] })
+      await vi.waitFor(() => { expect(llmServer.requests).toHaveLength(1) })
+
+      const childId = await server.forkSession('parent', { emptySeed: true })
+      expect(childId).toBeTypeOf('string')
+      expect(childId).not.toBe('parent')
+
+      await server.prompt({ sessionId: childId, contentBlocks: [{ type: 'text', text: 'child prompt' }] })
+      await vi.waitFor(() => { expect(llmServer.requests).toHaveLength(2) })
+
+      await server.shutdown()
+    } finally {
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a fork whose parent was never created', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-fork-miss-'))
+    const ctx = await makeHarness(storageDir)
+    try {
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+      await expect(server.forkSession('ghost', { emptySeed: true })).rejects.toThrow(/not found/)
+      await server.shutdown()
+    } finally {
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('inherits the parent agentPreset when forking a live parent', async () => {
+    const composedPreset = vi.fn(() => 'specdev-orchestrator')
+    const composeFrom = vi.fn()
+    const create = vi.fn(async (options: {
+      sessionId: string
+      meta?: { agentPreset?: string; parentSession?: string; cwd?: string; isSeeded?: boolean }
+      setup?: (agentCtx: Context) => void
+    }) => {
+      if (options.setup !== undefined) options.setup({} as Context)
+      return {
+        agent: { id: options.sessionId, session: { id: options.sessionId, header: {} } } as unknown as Agent,
+        dispose: async () => undefined,
+      }
+    })
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, get: () => undefined },
+      get: (name: string) => (name === 'agentPresets' ? { composedPreset, composeFrom } : undefined),
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    const parentCtx = {} as Context
+    const parentAgent = {
+      id: SessionId('parent'),
+      session: { id: 'parent', header: { cwd: '/tmp' } },
+      ctx: parentCtx,
+    } as unknown as Agent
+    ;(server as unknown as { sessions: Map<string, { handle: AgentHandle }> }).sessions.set('parent', {
+      handle: { agent: parentAgent, dispose: async () => undefined },
+    })
+
+    const childId = await server.forkSession('parent', { emptySeed: true })
+
+    expect(childId).toBeTypeOf('string')
+    expect(composedPreset).toHaveBeenCalledWith(parentCtx)
+    expect(composeFrom).toHaveBeenCalledWith({}, parentCtx)
+    expect(create).toHaveBeenCalledOnce()
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      meta: {
+        cwd: '/tmp',
+        parentSession: 'parent',
+        isSeeded: true,
+        agentPreset: 'specdev-orchestrator',
+      },
+    })
+    await server.shutdown()
+  })
+
   it('notifies the host when a subagent run settles', async () => {
     const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-subagent-end-'))
     const ctx = await makeHarness(storageDir)

@@ -172,7 +172,7 @@
       "requiresModel": false,
       "evidence": [{ "path": "apps/vscode-dsh/src/extension.ts", "line": 374 }],
       "steps": [
-        { "kind": "assert", "step": "startup-hook-responsive", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true } },
+        { "kind": "assert", "step": "startup-hook-responsive", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "$string" } },
         { "kind": "screenshot", "step": "extension-activate", "file": "cap-extension-activate.png" }
       ]
     },
@@ -185,7 +185,12 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/auto-start-orchestrator.ts", "line": 101 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-14-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-14-OK", "timeoutMs": 300000 },
         { "kind": "screenshot", "step": "auto-start-orchestrator", "file": "cap-auto-start-orchestrator.png" }
       ]
     },
@@ -198,8 +203,13 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/auto-ready-coordinator.ts", "line": 44 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
         { "kind": "command", "step": "trigger-auto-ready", "command": "dsh.test.triggerAutoReady" },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-15-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-15-OK", "timeoutMs": 300000 },
         { "kind": "screenshot", "step": "auto-ready-coordinator", "file": "cap-auto-ready-coordinator.png" }
       ]
     },
@@ -212,8 +222,13 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 205 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
         { "kind": "assert", "step": "live-projection", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-16-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-16-OK", "timeoutMs": 300000 },
         { "kind": "screenshot", "step": "conversation-controller", "file": "cap-conversation-controller.png" }
       ]
     },
@@ -226,9 +241,12 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1617 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "send-prompt", "command": "dsh.test.sendPrompt", "args": ["Reply with the single word: pong"] },
-        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" }, "timeoutMs": 300000 },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-17-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-17-OK", "timeoutMs": 300000 },
         { "kind": "screenshot", "step": "prompt-active", "file": "cap-prompt-active.png" }
       ]
     },
@@ -241,9 +259,12 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/message-store.ts", "line": 69 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "send-prompt", "command": "dsh.test.sendPrompt", "args": ["Say exactly: stream-ok"] },
-        { "kind": "wait", "step": "streamed-message", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" }, "timeoutMs": 300000 },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返，用于验证流式（增量）呈现。请严格按下面四行逐行输出，每行一个独立段落，逐段生成、不要一次性合并输出，也不要调用任何工具：\n第一行：我已收到指令，开始分段落输出。\n第二行：本行用于让流式回复足够长，便于轮询捕获中间态。\n第三行：下面回显本次验证的唯一标记。\n第四行：LAYER-V-CAP-18-OK"] },
+        { "kind": "stream", "step": "streamed-message", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-18-OK", "timeoutMs": 300000, "intervalMs": 150, "requireIncrement": true },
         { "kind": "screenshot", "step": "message-store-stream-patch", "file": "cap-message-store-stream-patch.png" }
       ]
     },
@@ -256,9 +277,13 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/chat-panel-host.ts", "line": 392 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
         { "kind": "command", "step": "push-full-state", "command": "dsh.test.openPanel" },
-        { "kind": "assert", "step": "full-state-pushed", "command": "dsh.test.openPanel", "expect": { "ok": true } },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-19-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-19-OK", "timeoutMs": 300000 },
         { "kind": "screenshot", "step": "push-full-state", "file": "cap-push-full-state.png" }
       ]
     },
@@ -274,8 +299,12 @@
       ],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "assert", "step": "panel-projection", "command": "dsh.test.panelSnapshot", "expect": { "mode": "$string" } },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返，用于验证流式（增量）呈现。请严格按下面四行逐行输出，每行一个独立段落，逐段生成、不要一次性合并输出，也不要调用任何工具：\n第一行：我已收到指令，开始分段落输出。\n第二行：本行用于让流式回复足够长，便于轮询捕获中间态。\n第三行：下面回显本次验证的唯一标记。\n第四行：LAYER-V-CAP-20-OK"] },
+        { "kind": "stream", "step": "streamed-message", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-20-OK", "timeoutMs": 300000, "intervalMs": 150, "requireIncrement": true },
         { "kind": "screenshot", "step": "messages-protocol", "file": "cap-messages-protocol.png" }
       ]
     },
@@ -288,9 +317,12 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/chat-panel-host.ts", "line": 565 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "send-prompt", "command": "dsh.test.sendPrompt", "args": ["Reply: host-send-ok"] },
-        { "kind": "wait", "step": "host-streamed", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" }, "timeoutMs": 300000 },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返，用于验证流式（增量）呈现。请严格按下面四行逐行输出，每行一个独立段落，逐段生成、不要一次性合并输出，也不要调用任何工具：\n第一行：我已收到指令，开始分段落输出。\n第二行：本行用于让流式回复足够长，便于轮询捕获中间态。\n第三行：下面回显本次验证的唯一标记。\n第四行：LAYER-V-CAP-21-OK"] },
+        { "kind": "stream", "step": "host-streamed", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-21-OK", "timeoutMs": 300000, "intervalMs": 150, "requireIncrement": true },
         { "kind": "screenshot", "step": "host-send-stream", "file": "cap-host-send-stream.png" }
       ]
     },
@@ -447,9 +479,13 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/fork/fork-orchestrator.ts", "line": 78 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "send-prompt", "command": "dsh.test.sendPrompt", "args": ["Reply: fork-seed"] },
-        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" }, "timeoutMs": 300000 },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-32-OK"] },
+        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-32-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "fork-branch-boundary", "command": "dsh.test.forkBranch", "args": [{ "turn": 1 }], "expect": { "ok": true, "presentation": "branch-mark", "childSessionId": "$string" } },
         { "kind": "screenshot", "step": "fork-boundary-parse", "file": "cap-fork-boundary-parse.png" }
       ]
     },
@@ -462,9 +498,14 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 866 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "send-prompt", "command": "dsh.test.sendPrompt", "args": ["Reply: fork-me"] },
-        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live" }, "timeoutMs": 300000 },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-33-OK"] },
+        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-33-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "fork-retry", "command": "dsh.test.forkRetry", "args": [{ "turn": 1 }], "expect": { "ok": true, "presentation": "continue-switch", "childSessionId": "$string", "promptText": "$string" } },
+        { "kind": "wait", "step": "child-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-33-OK", "timeoutMs": 300000 },
         { "kind": "screenshot", "step": "fork-from-closed-turn", "file": "cap-fork-from-closed-turn.png" }
       ]
     },
@@ -477,8 +518,14 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/continue-capability.ts", "line": 77 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "continue", "command": "dsh.test.continue" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-34-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-34-OK", "timeoutMs": 300000 },
+        { "kind": "replay", "step": "reopen-as-replay", "command": "dsh.test.panelSnapshot" },
+        { "kind": "assert", "step": "continue-capability-probed", "command": "dsh.test.panelSnapshot", "expect": { "mode": "replay", "continue.capability": "same-id" } },
         { "kind": "screenshot", "step": "continue-capability-probe", "file": "cap-continue-capability-probe.png" }
       ]
     },
@@ -491,8 +538,14 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/continue-capability.ts", "line": 93 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "assert", "step": "continue-chrome", "command": "dsh.test.panelSnapshot", "expect": { "continue": "$object" } },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-35-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-35-OK", "timeoutMs": 300000 },
+        { "kind": "replay", "step": "reopen-as-replay", "command": "dsh.test.panelSnapshot" },
+        { "kind": "assert", "step": "continue-chrome-enabled", "command": "dsh.test.panelSnapshot", "expect": { "mode": "replay", "continue.visibility": "enabled" } },
         { "kind": "screenshot", "step": "continue-chrome", "file": "cap-continue-chrome.png" }
       ]
     },
@@ -505,8 +558,16 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 715 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "wait", "step": "host-started", "command": "dsh.test.getStartState", "expect": { "state": "started" }, "timeoutMs": 240000 },
-        { "kind": "command", "step": "continue", "command": "dsh.test.continue" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-36-OK"] },
+        { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-36-OK", "timeoutMs": 300000 },
+        { "kind": "replay", "step": "reopen-as-replay", "command": "dsh.test.panelSnapshot" },
+        { "kind": "assert", "step": "continue-resumed", "command": "dsh.test.continue", "expect": { "outcome": "continued", "mode": "live" } },
+        { "kind": "assert", "step": "send-prompt-after-continue", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-36B-OK"] },
+        { "kind": "wait", "step": "assistant-replied-after-continue", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-36B-OK", "timeoutMs": 300000 },
         { "kind": "screenshot", "step": "continue-conversation", "file": "cap-continue-conversation.png" }
       ]
     },

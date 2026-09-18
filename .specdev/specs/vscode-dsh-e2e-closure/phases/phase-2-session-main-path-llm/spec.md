@@ -35,6 +35,16 @@
 - **AC-7 范围**：本 Phase 覆盖 §12.3 + §12.8 + §12.9；§12.4–§12.11 由 Phase 3 覆盖；§12.1/§12.2 由 Phase 1 打样覆盖。
 - **过时功能**：thin HTML（`chat-panel-provider.ts:190` `@deprecated`）、Tier-3 全文搜索（`session-search.ts:136`）不覆盖。
 
+## Scope 决策（用户确认，2026-09-18）
+
+- **§12.8 分叉驱动缺口**：`forkFromClosedTurn` 仅经 Webview→Host 消息（`requestRetry`/`requestEditResend`/`requestBranch`）可达，独立驱动扩展无法触发。用户已确认在 `src/extension.ts` 的 `shouldRegisterTestHooks` 块（`:1009-1264`）内新增 `dsh.test.forkRetry` / `dsh.test.forkBranch` 测试钩子，走 `controller.forkFromClosedTurn`，`VSCODE_DSH_TEST` 门控。这是「扩展测试基础设施」而非「修改产品业务逻辑」，符合 design.md「复用 dsh.test.* 测试钩子」的既有意图。
+- **Continue 前置编排**：`continueConversation` 仅对 `replay` 模式 Tab 有意义，可用 `dsh.test.restoreOpenTabs`/`dsh.test.openHistory` 注入 events 造 replay Tab（注入仅作辅助造状态，非模型往返等价验收，AC-9 允许）。
+
+## 实施后追加决策（用户确认，2026-09-18）
+
+- **`packages/sdk/server/src/server.ts` 的 `forkSession` 产品代码改动（保留）**：implementer 为拿到 `AgentHandle` 以继承父 `agentPreset`，将 `forkSession` 从 `this.ctx.sessions.get()`（SessionStore，仅返回 `Session`）切换到 `this.sessions.get()`（server 私有 Map，返回 `SessionRecord`，含 `handle.agent`），并新增 `composedPreset`/`composeFrom`/`setup` 让分叉子会话继承父 agentPreset。这是越出「仅测试钩子」scope 的产品代码改动，但本身是合理的产品改进。**用户确认保留**，交由 reviewer 一并审查（correctness/design/connectivity）。注意：此改动**未解决** #33 超时（见 DEBT-2）。
+- **`cap-fork-from-closed-turn`（#33）的 `child-replied` 超时（接受 DEBT-2 推后）**：根因是 emptySeed 分叉 + shadow preset `specdev-orchestrator` 自主编排语义（子 Agent 在收到 retry 提示词前自启动），属产品级行为，非测试基础设施缺陷。**用户确认接受 13/14 交付**，DEBT-2（目标 phase-5）如实登记，HG-3 时 #33 标注「fork-retry 分叉成功但 marker 回显断言未达成」。
+
 ## 产出清单
 
 ```

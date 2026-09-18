@@ -7,6 +7,7 @@
 import { ConversationController } from './conversation-controller.ts'
 import { ConversationRegistry } from './conversation-registry.ts'
 import { MessageStore } from './message-store.ts'
+import type { ForkBoundary, ForkIntent, ForkRequest } from './fork/fork-orchestrator.ts'
 import {
   canRegisterConversationTabBar,
   conversationTreeItems,
@@ -1163,6 +1164,54 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
           ? (opts as { tabId: string }).tabId
           : undefined
         return controller.continueConversation(tabId)
+      }),
+      vscode.commands.registerCommand('dsh.test.newConversation', async () => {
+        const controller = conversations
+        if (controller === undefined) return { outcome: 'waiting-host' as const }
+        const tab = controller.newConversationOrReuseEmpty(EMPTY_LIVE_TITLE)
+        panelHost?.pushFullState()
+        const snapshot = controller.panelSnapshot()
+        return {
+          outcome: 'created' as const,
+          sessionId: tab.sessionId,
+          tabId: tab.tabId,
+          mode: snapshot.mode,
+          messageCount: snapshot.messages.length,
+        }
+      }),
+      /**
+       * Unattended fork reach (AC-34/61 / §12.8): the product path is Webview→Host only, so
+       * these hooks are the driver's only way to exercise `forkFromClosedTurn` end-to-end.
+       * `retry`/`edit-resend` auto-prompt the child (a real model round-trip); `branch` is a
+       * pure SDK fork with no generation — the manifest asserts the returned `ForkResult`
+       * accordingly. Registered inside `shouldRegisterTestHooks` (VSCODE_DSH_TEST gated).
+       */
+      vscode.commands.registerCommand('dsh.test.forkRetry', (opts?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) {
+          return { ok: false as const, error: 'Host 连接后可分叉', reason: 'host-unavailable' as const }
+        }
+        const parsed = parseForkTestRequest('retry', opts, controller.registry.getActive()?.sessionId)
+        if (!parsed.ok) return { ok: false as const, error: parsed.error, reason: 'invalid-boundary' as const }
+        return controller.forkFromClosedTurn(parsed.req)
+      }),
+      vscode.commands.registerCommand('dsh.test.forkBranch', (opts?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) {
+          return { ok: false as const, error: 'Host 连接后可分叉', reason: 'host-unavailable' as const }
+        }
+        const parsed = parseForkTestRequest('branch', opts, controller.registry.getActive()?.sessionId)
+        if (!parsed.ok) return { ok: false as const, error: parsed.error, reason: 'invalid-boundary' as const }
+        return controller.forkFromClosedTurn(parsed.req)
+      }),
+      vscode.commands.registerCommand('dsh.test.forkEditResend', (opts?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) {
+          return { ok: false as const, error: 'Host 连接后可分叉', reason: 'host-unavailable' as const }
+        }
+        const parsed = parseForkTestRequest('edit-resend', opts, controller.registry.getActive()?.sessionId)
+        if (!parsed.ok) return { ok: false as const, error: parsed.error, reason: 'invalid-boundary' as const }
+        return controller.forkFromClosedTurn(parsed.req)
       }),
       vscode.commands.registerCommand('dsh.test.restoreMoreTabs', async (all?: unknown) => {
         const controller = conversations
@@ -2567,6 +2616,48 @@ async function runNewConversationFromCommand(vscode: VsCodeLike): Promise<void> 
 /** Webview chrome New (no toast; same Start→New/reuse→reveal path). */
 async function runNewConversationFromPanel(vscode: VsCodeLike): Promise<void> {
   await runNewConversationShared(vscode, { announce: false })
+}
+
+/**
+ * Resolve a `dsh.test.fork*` argument into a product `ForkRequest` (AD-CUX-5 / AC-34/61).
+ * The test hooks are the only unattended reach to `forkFromClosedTurn` (the production path is
+ * Webview→Host), so they accept the same selector the driver can supply without a live UI: an
+ * optional `parentSessionId` (defaults to the active Tab) and an optional boundary (`turn` or
+ * `seq`, defaulting to turn 1 — the first closed turn of a fresh session).
+ * @param intent - retry | edit-resend | branch.
+ * @param opts - raw `dsh.test.fork*` argument (`{ parentSessionId?, turn?, seq?, editedText? }`).
+ * @param activeSessionId - the active Tab's session id, used when opts carries none.
+ */
+function parseForkTestRequest(
+  intent: ForkIntent,
+  opts: unknown,
+  activeSessionId: string | undefined,
+): { ok: true; req: ForkRequest } | { ok: false; error: string } {
+  const record = typeof opts === 'object' && opts !== null ? opts as Record<string, unknown> : {}
+  const parentSessionId = typeof record.parentSessionId === 'string' && record.parentSessionId !== ''
+    ? record.parentSessionId
+    : activeSessionId
+  if (typeof parentSessionId !== 'string' || parentSessionId === '') {
+    return { ok: false, error: '无活动会话可分叉' }
+  }
+  let boundary: ForkBoundary
+  if (typeof record.seq === 'number') {
+    boundary = { kind: 'seq', seq: record.seq }
+  } else if (typeof record.turn === 'number') {
+    boundary = { kind: 'closed-turn', turn: record.turn }
+  } else {
+    boundary = { kind: 'closed-turn', turn: 1 }
+  }
+  const seedUserMessageId = record.seedUserMessageId
+  const editedText = record.editedText
+  const req: ForkRequest = {
+    parentSessionId,
+    boundary,
+    intent,
+    ...typeof seedUserMessageId === 'string' ? { seedUserMessageId } : {},
+    ...typeof editedText === 'string' ? { editedText } : {},
+  }
+  return { ok: true, req }
 }
 
 /**

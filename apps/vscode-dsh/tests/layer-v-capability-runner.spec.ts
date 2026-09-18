@@ -43,6 +43,8 @@ const runner = require('../test-scripts/layer-v-capability-driver/capability-run
   MATCHERS: Record<string, { name: string; test: (value: unknown) => boolean }>
   resolveMatcher: (pred: string) => (value: unknown) => boolean
   typePredicate: (value: unknown, pred: string) => boolean
+  assistantText: (snapshot: unknown) => string
+  assistantStreamingActive: (snapshot: unknown) => boolean
   matchesExpect: (actual: unknown, expect: unknown) => { ok: boolean; path?: string; expected?: unknown; actual?: unknown }
   selectCapabilities: (manifest: unknown, selector?: { only?: string[] }) => Array<{ id: string; group: string }>
   runManifest: (
@@ -66,6 +68,8 @@ const {
   MATCHERS,
   resolveMatcher,
   typePredicate,
+  assistantText,
+  assistantStreamingActive,
   linkFailure,
 } = runner
 
@@ -269,5 +273,149 @@ describe('resolvePath / deepEqual / typePredicate primitives', () => {
     expect(resolveMatcher('$array:2')([1, 2])).toBe(true)
     expect(resolveMatcher('$array:2')([1])).toBe(false)
     expect(resolveMatcher('$not-a-matcher')({})).toBe(false)
+  })
+})
+
+describe('marker / streaming helpers (Phase 2 real-model round-trips)', () => {
+  it('$contains matches a substring anywhere in a string', () => {
+    expect(matchesExpect('the marker LAYER-V-OK is here', '$contains:LAYER-V-OK').ok).toBe(true)
+    expect(matchesExpect('no marker here', '$contains:LAYER-V-OK').ok).toBe(false)
+    expect(matchesExpect(12345, '$contains:LAYER-V-OK').ok).toBe(false)
+  })
+
+  it('$assistantContains matches assistant text but never the user bubble echo', () => {
+    const snapshot = {
+      mode: 'live',
+      messages: [
+        { role: 'user', text: 'LAYER-V-OK echoed by user' },
+        { role: 'assistant', text: 'real reply LAYER-V-OK' },
+      ],
+    }
+    expect(matchesExpect(snapshot, '$assistantContains:LAYER-V-OK').ok).toBe(true)
+    const userOnly = { mode: 'live', messages: [{ role: 'user', text: 'LAYER-V-OK in user bubble only' }] }
+    expect(matchesExpect(userOnly, '$assistantContains:LAYER-V-OK').ok).toBe(false)
+  })
+
+  it('$assistantClosed gates on a settled turn, rejecting a marker that is still streaming', () => {
+    const settled = { mode: 'live', messages: [{ role: 'assistant', text: 'real reply LAYER-V-OK' }] }
+    const streaming = { mode: 'live', messages: [{ role: 'assistant', text: 'real reply LAYER-V-OK', streaming: true }] }
+    const noMarker = { mode: 'live', messages: [{ role: 'assistant', text: 'other reply' }] }
+    expect(matchesExpect(settled, '$assistantClosed:LAYER-V-OK').ok).toBe(true)
+    expect(matchesExpect(streaming, '$assistantClosed:LAYER-V-OK').ok).toBe(false)
+    expect(matchesExpect(noMarker, '$assistantClosed:LAYER-V-OK').ok).toBe(false)
+  })
+
+  it('assistantText joins assistant bubbles in order and ignores user bubbles', () => {
+    expect(assistantText({ messages: [{ role: 'assistant', text: 'a' }, { role: 'user', text: 'u' }, { role: 'assistant', text: 'b' }] })).toBe('ab')
+    expect(assistantText({ messages: [{ role: 'user', text: 'u' }] })).toBe('')
+    expect(assistantText(null)).toBe('')
+  })
+
+  it('assistantStreamingActive reads the streaming flag off an assistant bubble', () => {
+    expect(assistantStreamingActive({ messages: [{ role: 'assistant', text: 'x', streaming: true }] })).toBe(true)
+    expect(assistantStreamingActive({ messages: [{ role: 'assistant', text: 'x', streaming: false }] })).toBe(false)
+    expect(assistantStreamingActive({ messages: [{ role: 'assistant', text: 'x' }] })).toBe(false)
+    expect(assistantStreamingActive({ messages: [] })).toBe(false)
+  })
+})
+
+describe('stream step kind (real streaming increment gate, AC-10)', () => {
+  it('passes when the marker settles and streaming + growth were both observed', async () => {
+    const snapshots = [
+      { mode: 'live', messages: [{ role: 'assistant', text: 'par', streaming: true }] },
+      { mode: 'live', messages: [{ role: 'assistant', text: 'partial', streaming: true }] },
+      { mode: 'live', messages: [{ role: 'assistant', text: 'DONE' }] },
+    ]
+    let call = 0
+    const host = {
+      executeCommand: async (id: string) => {
+        if (id !== 'dsh.test.panelSnapshot') throw new Error(`unexpected ${id}`)
+        return snapshots[Math.min(call++, snapshots.length - 1)]
+      },
+      capture: async () => ({ ok: true, file: 'p.png' }),
+    }
+    const manifest = {
+      capabilities: [
+        {
+          id: 'cap-stream',
+          group: 'session',
+          title: 'stream',
+          requiresModel: false,
+          steps: [
+            { kind: 'stream', step: 's', command: 'dsh.test.panelSnapshot', expect: '$assistantContains:DONE', intervalMs: 5, requireIncrement: true, timeoutMs: 500 },
+          ],
+        },
+      ],
+    }
+    const result = await runManifest(manifest, host, { hasCredential: false })
+    expect(result.conclusion).toBe('PASS')
+    expect(result.capabilities[0].conclusion).toBe('PASS')
+  })
+
+  it('fails the increment gate when only the settled marker is seen (no streaming, no growth)', async () => {
+    const host = {
+      executeCommand: async () => ({ mode: 'live', messages: [{ role: 'assistant', text: 'DONE' }] }),
+      capture: async () => ({ ok: true, file: 'p.png' }),
+    }
+    const manifest = {
+      capabilities: [
+        {
+          id: 'cap-stream',
+          group: 'session',
+          title: 'stream',
+          requiresModel: false,
+          steps: [
+            { kind: 'stream', step: 's', command: 'dsh.test.panelSnapshot', expect: '$assistantContains:DONE', intervalMs: 5, requireIncrement: true, timeoutMs: 500 },
+          ],
+        },
+      ],
+    }
+    const result = await runManifest(manifest, host, { hasCredential: false })
+    expect(result.conclusion).toBe('LINK_FAILURE')
+    expect(result.capabilities[0].conclusion).toBe('LINK_FAILURE')
+  })
+})
+
+describe('replay step kind (continue precondition)', () => {
+  it('reopens the active session as a replay tab', async () => {
+    const host = {
+      executeCommand: async (id: string) => {
+        if (id === 'dsh.test.panelSnapshot') return { sessionId: 'sess-1', mode: 'live' }
+        if (id === 'dsh.test.closeConversation') return { outcome: 'closed' }
+        if (id === 'dsh.test.openHistory') return { outcome: 'opened', sessionId: 'sess-1', mode: 'replay' }
+        throw new Error(`unexpected ${id}`)
+      },
+      capture: async () => ({ ok: true, file: 'p.png' }),
+    }
+    const manifest = {
+      capabilities: [
+        {
+          id: 'cap-replay',
+          group: 'continue',
+          title: 'replay',
+          requiresModel: false,
+          steps: [{ kind: 'replay', step: 'r', command: 'dsh.test.panelSnapshot', expect: { outcome: 'opened' } }],
+        },
+      ],
+    }
+    const result = await runManifest(manifest, host, { hasCredential: false })
+    expect(result.conclusion).toBe('PASS')
+  })
+
+  it('link-fails when the snapshot carries no sessionId', async () => {
+    const host = {
+      executeCommand: async (id: string) => {
+        if (id === 'dsh.test.panelSnapshot') return { mode: 'live' }
+        throw new Error(`unexpected ${id}`)
+      },
+      capture: async () => ({ ok: true, file: 'p.png' }),
+    }
+    const manifest = {
+      capabilities: [
+        { id: 'cap-replay', group: 'continue', title: 'replay', requiresModel: false, steps: [{ kind: 'replay', step: 'r', command: 'dsh.test.panelSnapshot' }] },
+      ],
+    }
+    const result = await runManifest(manifest, host, { hasCredential: false })
+    expect(result.conclusion).toBe('LINK_FAILURE')
   })
 })

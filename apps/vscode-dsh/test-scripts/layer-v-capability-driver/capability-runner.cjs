@@ -172,6 +172,51 @@ async function poll(description, probe, options) {
   }
 }
 
+/**
+ * Poll a snapshot probe for a streamed round-trip: it succeeds only when `step.expect` holds
+ * (the settled assistant text carries the marker) and, while polling, it observes the
+ * intermediate streaming state — `streaming: true` on any assistant message, or growth in the
+ * joined assistant text length between polls. Those two flags are returned as evidence; the
+ * `stream` step uses them for the `requireIncrement` gate (AD-4 / AC-10).
+ * @param {string} description - label for timeout evidence.
+ * @param {() => Promise<unknown>} probe - returns an unwrapped snapshot.
+ * @param {object} step - the `stream` step record (`command`, `expect`, `timeoutMs`, `intervalMs`).
+ * @param {{stepTimeoutMs?:number}} opts
+ * @returns {Promise<{ok:true, value:unknown, sawStreaming:boolean, sawGrowth:boolean}>}
+ */
+async function pollForStream(description, probe, step, opts) {
+  const timeoutMs = typeof step.timeoutMs === 'number' ? step.timeoutMs : (opts.stepTimeoutMs ?? 30000)
+  const intervalMs = typeof step.intervalMs === 'number' ? step.intervalMs : 250
+  const deadline = Date.now() + timeoutMs
+  let sawStreaming = false
+  let sawGrowth = false
+  let prevLen = -1
+  for (;;) {
+    const value = await probe()
+    if (matchesExpect(value, step.expect).ok) {
+      return { ok: true, value, sawStreaming, sawGrowth }
+    }
+    const len = assistantText(value).length
+    if (prevLen >= 0 && len > prevLen) sawGrowth = true
+    prevLen = len
+    if (assistantStreamingActive(value)) sawStreaming = true
+    if (Date.now() >= deadline) {
+      throw new StageError('LINK_FAILURE', {
+        reason: `stream timed out at "${step.step}" (${step.command})`,
+        evidence: {
+          description,
+          timeoutMs,
+          sawStreaming,
+          sawGrowth,
+          expect: step.expect,
+          lastObserved: safeJson(value),
+        },
+      })
+    }
+    await sleep(intervalMs)
+  }
+}
+
 // --- AD-4 assertion primitives ----------------------------------------------------------
 
 /** True when `pred` is a `$...` type predicate rather than a literal expectation. */
@@ -199,6 +244,43 @@ function resolvePath(value, fieldPath) {
     }
   }
   return current
+}
+
+/**
+ * Concatenate assistant message text from a panel snapshot. The user bubble echoes the
+ * prompt (which carries the marker instruction), so only `role === 'assistant'` text counts:
+ * this is what keeps a marker assertion from passing against the prompt itself.
+ * @param {unknown} snapshot - `dsh.test.panelSnapshot()` result.
+ * @returns {string} joined assistant text.
+ */
+function assistantText(snapshot) {
+  const messages = Array.isArray(snapshot?.messages) ? snapshot.messages : []
+  let out = ''
+  for (const message of messages) {
+    if (message !== null && typeof message === 'object'
+      && message.role === 'assistant' && typeof message.text === 'string') {
+      out += message.text
+    }
+  }
+  return out
+}
+
+/**
+ * True when a panel snapshot still shows an assistant message mid-stream (`streaming: true`).
+ * This is the observable sign of an incremental `messages/append` + `messages/patch` turn,
+ * as opposed to a single settled `assistant/message`.
+ * @param {unknown} snapshot - `dsh.test.panelSnapshot()` result.
+ * @returns {boolean}
+ */
+function assistantStreamingActive(snapshot) {
+  const messages = Array.isArray(snapshot?.messages) ? snapshot.messages : []
+  for (const message of messages) {
+    if (message !== null && typeof message === 'object'
+      && message.role === 'assistant' && message.streaming === true) {
+      return true
+    }
+  }
+  return false
 }
 
 /** Deep equality across the JSON-ish values a command result can carry. */
@@ -260,6 +342,28 @@ function resolveMatcher(pred) {
   if (match !== null) {
     const minimum = Number(match[1])
     return value => Array.isArray(value) && value.length >= minimum
+  }
+  // Parameterised forms are resolved inline (like `$array:N`), not as registry entries, so
+  // the `MATCHERS` registry stays the exact shipped set and a substring matcher can carry an
+  // arbitrary marker without escaping rules. `$contains:` tests a string field; the
+  // `$assistantContains:` form tests the joined assistant text of a panel snapshot, so a
+  // marker assertion cannot pass against the user bubble that echoed the prompt.
+  if (typeof pred === 'string' && pred.startsWith('$contains:')) {
+    const needle = pred.slice('$contains:'.length)
+    return value => typeof value === 'string' && value.includes(needle)
+  }
+  if (typeof pred === 'string' && pred.startsWith('$assistantContains:')) {
+    const needle = pred.slice('$assistantContains:'.length)
+    return value => assistantText(value).includes(needle)
+  }
+  // `$assistantClosed:` is `$assistantContains:` plus the turn-closed gate: the marker must be
+  // present in the joined assistant text AND no assistant message may still be streaming. A
+  // `$assistantContains` match can land while the final token is still streaming, which is too
+  // early to fork a "closed turn" — `forkFromClosedTurn` then rejects `parent-running` /
+  // `open-turn`. Fork capabilities wait on this form before calling `dsh.test.fork*`.
+  if (typeof pred === 'string' && pred.startsWith('$assistantClosed:')) {
+    const needle = pred.slice('$assistantClosed:'.length)
+    return value => assistantText(value).includes(needle) && !assistantStreamingActive(value)
   }
   return () => false
 }
@@ -497,6 +601,8 @@ function selectCapabilities(manifest, selector) {
  *   `command`    execute the command, record the (unwrapped) result, no assertion;
  *   `assert`     execute + assert the result against `expect` (AD-4);
  *   `wait`       poll the command until `expect` holds or the step times out;
+ *   `stream`     poll the command until `expect` holds, recording streaming increment evidence;
+ *   `replay`     snapshot the active session, close its Tab, reopen it as `mode='replay'`;
  *   `screenshot` capture a PNG and assert it is non-degenerate (`pngVerdict`).
  * A failing step throws a `StageError` carrying the step record; a clean run returns PASS.
  * Every step — success or failure — is journaled through `opts.journal` *before* control
@@ -563,7 +669,9 @@ async function runCapability(cap, host, opts = {}) {
           const v = unwrap(raw)
           const verdict = matchesExpect(v, step.expect)
           if (verdict.ok) return { ok: true, value: v }
-          return { ok: false }
+          // Carry the last projection so a timeout names what the probe kept
+          // seeing (a child that never replied must show its message list).
+          return { ok: false, value: v }
         }, {
           timeoutMs: typeof step.timeoutMs === 'number' ? step.timeoutMs : (opts.stepTimeoutMs ?? 30000),
           conclusion: 'LINK_FAILURE',
@@ -573,6 +681,74 @@ async function runCapability(cap, host, opts = {}) {
         record.value = safeJson(value)
         record.ok = true
         emit({ step: step.step, kind: step.kind, verdict: 'PASS', evidence: [], detail: `wait ${step.step} (${step.command}) satisfied` })
+      } else if (step.kind === 'stream') {
+        const value = await pollForStream(`cap-${cap.id}-${step.step}`, async () => {
+          const raw = await host.executeCommand(step.command, ...(step.args ?? []))
+          return unwrap(raw)
+        }, step, opts)
+        record.value = safeJson(value.value)
+        record.streaming = { sawStreaming: value.sawStreaming, sawGrowth: value.sawGrowth }
+        const incrementObserved = value.sawStreaming || value.sawGrowth
+        const requireIncrement = step.requireIncrement === true
+        record.ok = !requireIncrement || incrementObserved
+        if (!record.ok) {
+          emit({
+            step: step.step,
+            kind: step.kind,
+            verdict: 'LINK_FAILURE',
+            evidence: [],
+            detail: `stream settled but no incremental state was observed (sawStreaming=${value.sawStreaming}, sawGrowth=${value.sawGrowth}) at "${step.step}"`,
+          })
+          failEmitted = true
+          throw linkFailure(`no streaming increment observed at "${step.step}"`, record)
+        }
+        emit({ step: step.step, kind: step.kind, verdict: 'PASS', evidence: [], detail: `stream ${step.step} satisfied (sawStreaming=${value.sawStreaming}, sawGrowth=${value.sawGrowth})` })
+      } else if (step.kind === 'replay') {
+        // Continue precondition (AC-9): a replay Tab is built from the *real* session log, not
+        // injected events. Snapshot the active session for its id, close its Tab (the authority
+        // index row survives the close), then reopen it so `openFromHistory` hydrates
+        // `mode='replay'` from `readSessionLog` — the only unattended reach to a replay Tab.
+        const snapshotCommand = step.command ?? 'dsh.test.panelSnapshot'
+        const snapRaw = await host.executeCommand(snapshotCommand, ...(step.args ?? []))
+        const snapshot = unwrap(snapRaw)
+        const sessionId = snapshot !== null && typeof snapshot === 'object' && typeof snapshot.sessionId === 'string'
+          ? snapshot.sessionId
+          : undefined
+        if (typeof sessionId !== 'string' || sessionId === '') {
+          emit({
+            step: step.step,
+            kind: step.kind,
+            verdict: 'LINK_FAILURE',
+            evidence: [],
+            detail: `replay step "${step.step}" could not read an active sessionId (snapshot=${JSON.stringify(safeJson(snapshot))})`,
+          })
+          failEmitted = true
+          throw linkFailure(`replay step "${step.step}" could not read an active sessionId`, record)
+        }
+        record.sessionId = sessionId
+        const close = unwrap(await host.executeCommand('dsh.test.closeConversation'))
+        const opened = unwrap(await host.executeCommand('dsh.test.openHistory', sessionId))
+        record.closeResult = safeJson(close)
+        record.value = safeJson(opened)
+        const verdict = matchesExpect(opened, step.expect ?? { outcome: 'opened' })
+        record.ok = verdict.ok
+        if (!verdict.ok) {
+          record.mismatch = {
+            path: verdict.path ?? null,
+            expected: verdict.expected ?? null,
+            actual: verdict.actual ?? null,
+          }
+          emit({
+            step: step.step,
+            kind: step.kind,
+            verdict: 'LINK_FAILURE',
+            evidence: [],
+            detail: `replay step "${step.step}" did not reopen as replay (sessionId=${sessionId})${verdict.path === undefined ? '' : ` at ${verdict.path}`}`,
+          })
+          failEmitted = true
+          throw linkFailure(`replay step "${step.step}" did not reopen as replay`, record)
+        }
+        emit({ step: step.step, kind: step.kind, verdict: 'PASS', evidence: [sessionId], detail: `replay ${step.step} reopened ${sessionId} as replay` })
       } else if (step.kind === 'screenshot') {
         const shot = await host.capture(step.file)
         record.screenshot = safeJson(shot)
@@ -713,6 +889,9 @@ module.exports = {
   truncate,
   nowIso,
   poll,
+  pollForStream,
+  assistantText,
+  assistantStreamingActive,
   // AD-4 assertion primitives
   resolvePath,
   deepEqual,
