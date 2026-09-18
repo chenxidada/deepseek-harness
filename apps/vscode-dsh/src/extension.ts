@@ -1237,6 +1237,45 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         await onActivityBarOpened(vscode)
         return { ok: true as const, revealed, visible: conversationVisible }
       }),
+      vscode.commands.registerCommand('dsh.test.openSubagent', async (childSessionId?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { outcome: 'host-not-ready' as const }
+        if (typeof childSessionId !== 'string') return { outcome: 'missing' as const }
+        const result = await controller.openSubagentContext(childSessionId)
+        panelHost?.pushFullState()
+        return result
+      }),
+      vscode.commands.registerCommand('dsh.test.navBack', () => {
+        const controller = conversations
+        if (controller === undefined) return { outcome: 'noop' as const }
+        const result = controller.navBack()
+        panelHost?.pushFullState()
+        return result
+      }),
+      vscode.commands.registerCommand('dsh.test.pinSubagent', async (childSessionId?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { outcome: 'missing' as const }
+        const result = await controller.pinSubagent(
+          typeof childSessionId === 'string' ? childSessionId : undefined,
+        )
+        panelHost?.pushFullState()
+        return result
+      }),
+      vscode.commands.registerCommand('dsh.test.injectSubagent', async (opts?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { outcome: 'missing' as const }
+        if (typeof opts !== 'object' || opts === null) return { outcome: 'missing' as const }
+        const phase = (opts as { phase?: unknown }).phase
+        const parentSessionId = (opts as { parentSessionId?: unknown }).parentSessionId
+        const childSessionId = (opts as { childSessionId?: unknown }).childSessionId
+        if (phase !== 'started' && phase !== 'finished') return { outcome: 'missing' as const }
+        if (typeof parentSessionId !== 'string' || typeof childSessionId !== 'string') {
+          return { outcome: 'missing' as const }
+        }
+        await controller.applyTestSubagentNotification(phase, parentSessionId, childSessionId)
+        panelHost?.pushFullState()
+        return { outcome: 'injected' as const }
+      }),
     )
   }
 
@@ -1534,6 +1573,32 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     },
     resolveHostProbes: () => conversations?.hostProbesForActive(),
     resolveForkParentTitle: () => conversations?.forkParentTitleForActive(),
+    resolvePanelProjection: () => conversations?.resolvePanelProjection(),
+    requestOpenSubagent: async (childSessionId) => {
+      const controller = conversations
+      if (controller === undefined) return
+      const result = await controller.openSubagentContext(childSessionId)
+      panelHost?.pushFullState()
+      if (result.outcome === 'deleted') {
+        await vscode.window.showErrorMessage('子会话已删除，无法进入。')
+      }
+    },
+    requestNavBack: async () => {
+      const controller = conversations
+      if (controller === undefined) return
+      controller.navBack()
+      panelHost?.pushFullState()
+    },
+    requestPinSubagent: async (childSessionId) => {
+      const controller = conversations
+      if (controller === undefined) return
+      const result = await controller.pinSubagent(childSessionId)
+      tabBarRefresh?.()
+      panelHost?.pushFullState()
+      if (result.outcome === 'deleted') {
+        await vscode.window.showErrorMessage('子会话已删除，无法钉住。')
+      }
+    },
     requestOpenWorkspaceDiffs: async () => {
       await vscode.commands.executeCommand?.('dsh.reviewWorkspaceDiffs')
     },

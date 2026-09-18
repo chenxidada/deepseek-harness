@@ -170,6 +170,9 @@ function MessageBubble({
   readonly: boolean
   streamingGlobal: boolean
 }) {
+  if (msg.kind === 'subagent') {
+    return <SubagentCard msg={msg} bridge={bridge} />
+  }
   if (msg.kind === 'activity' || msg.activity) {
     return <ActivityRow msg={msg} bridge={bridge} />
   }
@@ -510,6 +513,65 @@ function ActivityRow({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge })
             .join(' · ')}
         </div>
       ) : null}
+    </article>
+  )
+}
+
+function SubagentCard({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge }) {
+  const status = msg.subagentStatus ?? 'ended'
+  const deleted = status === 'deleted'
+  const childSessionId = msg.childSessionId
+  const clickable = !deleted && typeof childSessionId === 'string' && childSessionId !== ''
+  const fallbackLabel = status === 'running'
+    ? '子代理运行中'
+    : status === 'deleted'
+      ? '子会话已删除'
+      : '子代理已结束'
+  return (
+    <article
+      data-testid="subagent-card"
+      data-message-id={msg.id}
+      data-child-session-id={childSessionId ?? ''}
+      data-status={status}
+      className="dsh-msg dsh-msg-subagent"
+      style={{
+        alignSelf: 'stretch',
+        padding: '8px 10px',
+        borderRadius: 'var(--dsh-radius-sm)',
+        border: '1px solid var(--dsh-border)',
+        background: 'var(--dsh-bubble-notice, var(--dsh-bg))',
+        opacity: deleted ? 0.6 : 1,
+      }}
+    >
+      <button
+        type="button"
+        data-testid="subagent-enter"
+        disabled={!clickable}
+        aria-disabled={!clickable}
+        onClick={() => {
+          if (!clickable) return
+          bridge.emitIntent({ type: 'nav/open-subagent', childSessionId: childSessionId as string })
+        }}
+        style={{
+          display: 'block',
+          width: '100%',
+          textAlign: 'left',
+          border: 'none',
+          background: 'transparent',
+          color: 'inherit',
+          font: 'inherit',
+          padding: 0,
+          cursor: clickable ? 'pointer' : 'default',
+        }}
+      >
+        <span style={{ marginRight: 6 }}>
+          {status === 'running' ? '●' : status === 'deleted' ? '✕' : '✓'}
+        </span>
+        {msg.text || fallbackLabel}
+        {clickable ? (
+          <span className="dsh-muted" style={{ marginLeft: 8 }}>进入 →</span>
+        ) : null}
+      </button>
     </article>
   )
 }

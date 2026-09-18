@@ -36,6 +36,9 @@ export type ChromeIntent =
   | { type: 'change/get-diff'; changeId: string }
   | { type: 'change/mark-reviewed'; changeId: string }
   | { type: 'change/revert'; changeId: string }
+  | { type: 'nav/open-subagent'; childSessionId: string }
+  | { type: 'nav/back' }
+  | { type: 'action/pin-subagent'; childSessionId: string }
 
 export interface MessageBridge {
   applyFrame(frame: unknown): void

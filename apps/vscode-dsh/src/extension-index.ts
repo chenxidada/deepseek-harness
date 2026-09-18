@@ -21,6 +21,12 @@ export interface OpenTabRecord {
   title?: string
   /** Optional: was live before last close; restore still presents replay. */
   liveIntent?: boolean
+  /**
+   * Optional pinned-subagent marker (phase-4 pin).
+   * A Tab with this flag is a promoted child, not a root conversation.
+   * Lineage is resolved via TimelineStore parent edges at restore time.
+   */
+  pinnedSubagent?: boolean
 }
 
 /** Session list entry — metadata only, never chat bodies (AC-45/46). */

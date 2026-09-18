@@ -12,6 +12,12 @@ bash "$SCRIPT_DIR/run-phase4-l2-l3.sh"
 echo "==> Verifier independent (V-IND-1..5)"
 ./node_modules/.bin/tsx "$SCRIPT_DIR/verifier-independent-phase4.mts"
 
+echo "==> Verifier independent e2e (V-IND-A..E + V-SF-1 closed)"
+./node_modules/.bin/tsx "$SCRIPT_DIR/verifier-e2e-phase4.mts"
+
+echo "==> Verifier SHOULD-FIX closure (V-FIX-1/2)"
+./node_modules/.bin/tsx "$SCRIPT_DIR/verifier-should-fix-phase4.mts"
+
 echo "==> Full apps/vscode-dsh vitest (regression)"
 ./node_modules/.bin/vitest run apps/vscode-dsh/tests
 

@@ -49,13 +49,15 @@ export function App({ bridge }: AppProps) {
     bridge,
   ])
 
-  const disabledReason = ui.composerState === 'readonly'
-    ? '只读回放 — 不可直接发送'
-    : ui.composerState === 'error'
-      ? (ui.connectionMessage || ui.banner || '出错 — 暂不可发送')
-      : ui.composerState === 'waiting'
-        ? '等待 Host 连接…'
-        : undefined
+  const disabledReason = ui.mode === 'readonly-live'
+    ? '子代理运行中 — 只读直播，不可直接发送'
+    : ui.composerState === 'readonly'
+      ? '只读回放 — 不可直接发送'
+      : ui.composerState === 'error'
+        ? (ui.connectionMessage || ui.banner || '出错 — 暂不可发送')
+        : ui.composerState === 'waiting'
+          ? '等待 Host 连接…'
+          : undefined
 
   return (
     <div
@@ -82,6 +84,8 @@ export function App({ bridge }: AppProps) {
         searchLoading={ui.searchLoading}
         overflowOpen={ui.overflowOpen}
         forkParentTitle={ui.forkParentTitle}
+        contextSessionId={ui.contextSessionId}
+        breadcrumb={ui.breadcrumb}
       />
       <HistoryPanel
         open={ui.historyOpen}
@@ -96,7 +100,7 @@ export function App({ bridge }: AppProps) {
         loading={ui.messagesLoading}
         emptyHint={ui.mode === 'empty' ? '点击 + 新建会话，或打开历史' : undefined}
         bridge={bridge}
-        readonly={ui.mode === 'replay' || ui.mode === 'empty'}
+        readonly={ui.mode === 'replay' || ui.mode === 'empty' || ui.mode === 'readonly-live'}
         streaming={ui.streaming}
         followState={ui.followState}
       />

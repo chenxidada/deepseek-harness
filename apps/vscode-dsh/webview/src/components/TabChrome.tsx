@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import type { MessageBridge } from '../bridge/message-bridge.ts'
-import type { SearchHit, TabChromeItem } from '../store/chat-ui-store.ts'
+import type { BreadcrumbState, SearchHit, TabChromeItem } from '../store/chat-ui-store.ts'
 import {
   openDeleteConfirm,
   setOverflowOpen,
@@ -23,6 +23,8 @@ export interface TabChromeProps {
   searchLoading: boolean
   overflowOpen: boolean
   forkParentTitle?: string
+  contextSessionId?: string
+  breadcrumb?: BreadcrumbState
 }
 
 interface TabContextMenuState {
@@ -44,6 +46,8 @@ export function TabChrome({
   searchLoading,
   overflowOpen,
   forkParentTitle,
+  contextSessionId,
+  breadcrumb,
 }: TabChromeProps) {
   const [tabContextMenu, setTabContextMenu] = useState<TabContextMenuState | null>(null)
 
@@ -323,6 +327,55 @@ export function TabChrome({
           style={{ padding: '4px 12px', fontSize: '0.85em', borderTop: '1px solid var(--dsh-border)' }}
         >
           {`分支自 ${forkParentTitle}`}
+        </div>
+      ) : null}
+      {contextSessionId !== undefined || breadcrumb !== undefined ? (
+        <div
+          data-testid="subagent-breadcrumb"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '4px 12px',
+            fontSize: '0.85em',
+            borderTop: '1px solid var(--dsh-border)',
+          }}
+        >
+          <button
+            type="button"
+            data-testid="btn-nav-back"
+            disabled={breadcrumb?.parentDeleted === true}
+            onClick={() => bridge.emitIntent({ type: 'nav/back' })}
+            style={chromeBtnStyle}
+          >
+            ← 返回
+          </button>
+          <span
+            className="dsh-muted"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {breadcrumb?.label ?? '子会话'}
+          </span>
+          {contextSessionId !== undefined ? (
+            <button
+              type="button"
+              data-testid="btn-pin-subagent"
+              title="钉住到 Tab"
+              onClick={() => bridge.emitIntent({
+                type: 'action/pin-subagent',
+                childSessionId: contextSessionId,
+              })}
+              style={chromeBtnStyle}
+            >
+              钉住
+            </button>
+          ) : null}
         </div>
       ) : null}
       {searchOpen ? (

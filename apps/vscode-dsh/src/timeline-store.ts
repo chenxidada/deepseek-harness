@@ -181,7 +181,8 @@ export class TimelineStore {
     const items = this.items.get(sessionId) ?? []
     let startIdx = 0
     for (let i = items.length - 1; i >= 0; i -= 1) {
-      const item = items[i]!
+      const item = items[i]
+      if (item === undefined) continue
       if (item.kind === 'turn' && item.label.includes('start')) {
         startIdx = i
         break
@@ -213,6 +214,15 @@ export class TimelineStore {
    */
   isDescendantOf(sessionId: string, rootSessionId: string): boolean {
     return this.collectTree(rootSessionId).has(sessionId)
+  }
+
+  /**
+   * Parent session id for a subagent child (phase-4 breadcrumb lineage).
+   * @param sessionId - child session identity.
+   * @returns parent session id, or undefined when no parent edge is known.
+   */
+  getParent(sessionId: string): string | undefined {
+    return this.parents.get(sessionId)
   }
 
   /**
@@ -370,7 +380,8 @@ export class TimelineStore {
     const out = new Set<string>([rootSessionId])
     const stack = [rootSessionId]
     while (stack.length > 0) {
-      const current = stack.pop()!
+      const current = stack.pop()
+      if (current === undefined) break
       const kids = this.children.get(current)
       if (kids === undefined) continue
       for (const child of kids) {

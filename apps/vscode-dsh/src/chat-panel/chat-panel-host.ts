@@ -15,6 +15,7 @@ import {
   parseWebviewToHostMessage,
   type ConnectionPhase,
   type HostToWebviewMessage,
+  type PanelBreadcrumb,
   type PanelMode,
   type PanelStatus,
   type RejectSendReason,
@@ -31,6 +32,30 @@ export interface WebviewMessagePort {
 export type SendGateResult =
   | { ok: true; messageId: string; sessionId: string; tabId: string }
   | { ok: false; reason: RejectSendReason }
+
+/**
+ * Host-decision projection for the active panel (phase-4 subagent context).
+ * The panel projects either the Tab root session, or an in-panel child context.
+ * Webview must mirror this projection — never derive it locally.
+ */
+export interface PanelProjection {
+  /** Panel chrome mode for this projection. */
+  mode: PanelMode
+  /** Session id whose messages/status the panel displays. */
+  sessionId: string
+  /** Tab id owning the projection. */
+  tabId: string
+  /** Optional title for the projected session. */
+  title?: string
+  /** Effective child context id (differs from sessionId when projecting a child). */
+  contextSessionId?: string
+  /** Parent→child lineage chrome, when a child context is open. */
+  breadcrumb?: PanelBreadcrumb
+  /** Messages already scoped to the projected session. */
+  messages: readonly ChatMessage[]
+  /** Run status for the projected session (drives status/set resolution). */
+  tabStatus: 'idle' | 'running' | 'error' | 'disconnected'
+}
 
 /** Dependencies the panel Host needs from the Extension / controller. */
 export interface ChatPanelHostDeps {
@@ -146,6 +171,25 @@ export interface ChatPanelHostDeps {
    * Optional「派生自 …」parent title for fork chrome (AC-63).
    */
   resolveForkParentTitle?: () => string | undefined
+  /**
+   * Host-decision panel projection (phase-4 subagent context).
+   * When omitted, the Host falls back to the active Tab root projection.
+   */
+  resolvePanelProjection?: () => PanelProjection | undefined
+  /**
+   * Enter a subagent child session in-panel (phase-4).
+   * @param childSessionId - child session id.
+   */
+  requestOpenSubagent?: (childSessionId: string) => Promise<unknown>
+  /**
+   * Leave the in-panel child context back to the Tab root (phase-4).
+   */
+  requestNavBack?: () => Promise<unknown>
+  /**
+   * Promote the in-panel child context into its own pinned Tab (phase-4).
+   * @param childSessionId - child session id to pin.
+   */
+  requestPinSubagent?: (childSessionId: string) => Promise<unknown>
   /**
    * Optional Timeline/Diff review path for 「本回合改了 N 个文件」(AC-30 secondary).
    * Typically `dsh.reviewWorkspaceDiffs`.
@@ -381,11 +425,45 @@ export class ChatPanelHost {
       return
     }
     // AC-22 / R1: while Start is in flight, never project sendable `live`.
+    // Phase-4: the projection may point at an in-panel child context (readonly-live / replay).
+    const projection = this.deps.resolvePanelProjection?.()
+    if (projection !== undefined) {
+      const continueChrome = this.deps.resolveContinueChrome?.()
+      const hostProbes = this.deps.resolveHostProbes?.()
+      const forkParentTitle = this.deps.resolveForkParentTitle?.()
+      this.post({
+        type: 'panel/state',
+        mode: projection.mode,
+        sessionId: projection.sessionId,
+        tabId: projection.tabId,
+        ...projection.title === undefined ? {} : { title: projection.title },
+        ...projection.contextSessionId === undefined
+          ? {}
+          : { contextSessionId: projection.contextSessionId },
+        ...projection.breadcrumb === undefined ? {} : { breadcrumb: projection.breadcrumb },
+        ...continueChrome === undefined ? {} : { continue: continueChrome },
+        ...newConversationChrome,
+        deferredRestoreCount: this.deps.resolveDeferredRestoreCount?.() ?? 0,
+        ...connectionFields,
+        ...forkParentTitle === undefined ? {} : { forkParentTitle },
+        ...hostProbes === undefined ? {} : { probes: hostProbes },
+      })
+      this.post({
+        type: 'messages/replace',
+        sessionId: projection.sessionId,
+        messages: projection.messages,
+      })
+      this.post({
+        type: 'status/set',
+        sessionId: projection.sessionId,
+        status: this.resolveStatus(projection.sessionId, projection.tabStatus),
+      })
+      this.pushHistoryFrame()
+      return
+    }
     const mode: PanelMode = this.connectionPhase === 'connecting'
       ? 'waiting-host'
-      : active.mode === 'replay'
-        ? 'replay'
-        : 'live'
+      : (active.mode === 'replay' ? 'replay' : 'live')
     const continueChrome = this.deps.resolveContinueChrome?.()
     const hostProbes = this.deps.resolveHostProbes?.()
     const forkParentTitle = this.deps.resolveForkParentTitle?.()
@@ -483,8 +561,7 @@ export class ChatPanelHost {
    * @param message - complete chat message.
    */
   pushAppend(message: ChatMessage): void {
-    const active = this.deps.registry.getActive()
-    if (active === undefined || active.sessionId !== message.sessionId) return
+    if (this.projectedSessionId() !== message.sessionId) return
     this.post({ type: 'messages/append', sessionId: message.sessionId, message })
   }
 
@@ -507,8 +584,7 @@ export class ChatPanelHost {
     },
   ): void {
     if (update.text !== undefined && update.appendText !== undefined) return
-    const active = this.deps.registry.getActive()
-    if (active === undefined || active.sessionId !== sessionId) return
+    if (this.projectedSessionId() !== sessionId) return
     this.post({
       type: 'messages/patch',
       sessionId,
@@ -564,6 +640,15 @@ export class ChatPanelHost {
    * Refresh status/set for the active Tab (running / waiting / idle).
    */
   pushStatus(): void {
+    const projection = this.deps.resolvePanelProjection?.()
+    if (projection !== undefined) {
+      this.post({
+        type: 'status/set',
+        sessionId: projection.sessionId,
+        status: this.resolveStatus(projection.sessionId, projection.tabStatus),
+      })
+      return
+    }
     const active = this.deps.registry.getActive()
     if (active === undefined) {
       this.post({
@@ -572,10 +657,11 @@ export class ChatPanelHost {
       })
       return
     }
+    const sessionId = active.contextSessionId ?? active.sessionId
     this.post({
       type: 'status/set',
-      sessionId: active.sessionId,
-      status: this.resolveStatus(active.sessionId, active.status),
+      sessionId,
+      status: this.resolveStatus(sessionId, active.status),
     })
   }
 
@@ -608,9 +694,20 @@ export class ChatPanelHost {
     if (!this.deps.isHostReady()) {
       return this.reject('no-host')
     }
+    const projection = this.deps.resolvePanelProjection?.()
+    if (projection !== undefined) {
+      if (projection.mode === 'replay') return this.reject('replay')
+      // A running child session is read-only live: streaming is mirror-only (AC-71).
+      if (projection.mode === 'readonly-live') return this.reject('readonly-live')
+      if (projection.mode !== 'live') return this.reject('no-active')
+    }
     const active = this.deps.registry.getActive()
     if (active === undefined) {
       return this.reject('no-active')
+    }
+    if (active.contextSessionId !== undefined) {
+      // Fallback gate when no projection resolver is wired (L2 fixtures).
+      return this.reject('readonly-live')
     }
     if (active.mode === 'replay') {
       return this.reject('replay')
@@ -719,6 +816,18 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/new-conversation') {
       await this.deps.requestNewConversation?.()
+      return
+    }
+    if (message.type === 'nav/open-subagent') {
+      await this.deps.requestOpenSubagent?.(message.childSessionId)
+      return
+    }
+    if (message.type === 'nav/back') {
+      await this.deps.requestNavBack?.()
+      return
+    }
+    if (message.type === 'action/pin-subagent') {
+      await this.deps.requestPinSubagent?.(message.childSessionId)
       return
     }
     if (message.type === 'action/restore-more') {
@@ -856,6 +965,18 @@ export class ChatPanelHost {
   private reject(reason: RejectSendReason): SendGateResult {
     this.post({ type: 'ui/reject-send', reason })
     return { ok: false, reason }
+  }
+
+  /**
+   * Session id the panel is currently projecting, accounting for in-panel child contexts.
+   * @returns projected session id, or undefined when no active Tab.
+   */
+  private projectedSessionId(): string | undefined {
+    const projection = this.deps.resolvePanelProjection?.()
+    if (projection !== undefined) return projection.sessionId
+    const active = this.deps.registry.getActive()
+    if (active === undefined) return undefined
+    return active.contextSessionId ?? active.sessionId
   }
 
   private resolveStatus(

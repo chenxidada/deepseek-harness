@@ -9,6 +9,9 @@ import type { ActivityItem, ActivityStatus } from './chat-panel/activity-types.t
 
 export type { ActivityItem, ActivityStatus } from './chat-panel/activity-types.ts'
 
+/** Lifecycle status projected onto a `kind:'subagent'` card (phase-4). */
+export type SubagentCardStatus = 'running' | 'ended' | 'deleted'
+
 /** One projected chat bubble for the Conversation Webview. */
 export interface ChatMessage {
   /** Stable message id within the session projection. */
@@ -39,6 +42,10 @@ export interface ChatMessage {
   sourceMessageId?: string
   /** Conversation-inline tool/step activity payload (phase-3). */
   activity?: ActivityItem
+  /** Subagent child session identity for `kind:'subagent'` cards (phase-4). */
+  childSessionId?: string
+  /** Subagent card lifecycle status (phase-4). */
+  subagentStatus?: SubagentCardStatus
 }
 
 /** Incremental patch for a projected message (AD-CUX-10). `text` XOR `appendText`. */
@@ -99,7 +106,8 @@ export class MessageStore {
     if (list === undefined) return undefined
     const idx = list.findIndex(m => m.id === messageId)
     if (idx === -1) return undefined
-    const current = list[idx]!
+    const current = list[idx]
+    if (current === undefined) return undefined
     const next: ChatMessage = { ...current }
     if (update.text !== undefined) next.text = update.text
     else if (update.appendText !== undefined) next.text = `${current.text}${update.appendText}`
@@ -129,6 +137,37 @@ export class MessageStore {
     if (next.length === list.length) return
     this.messages.set(sessionId, next)
     this.emit()
+  }
+
+  /**
+   * Patch every message matching a predicate (phase-4 subagent card transitions).
+   * Applies the same update to each match; returns the number of patched rows.
+   * @param sessionId - SDK session identity.
+   * @param predicate - return true to patch the message.
+   * @param update - patch fields (text / incomplete / streaming / subagentStatus).
+   */
+  patchWhere(
+    sessionId: string,
+    predicate: (message: ChatMessage) => boolean,
+    update: MessagePatch & { subagentStatus?: SubagentCardStatus },
+  ): number {
+    const list = this.messages.get(sessionId)
+    if (list === undefined) return 0
+    let patched = 0
+    for (let i = 0; i < list.length; i += 1) {
+      const current = list[i]
+      if (current === undefined) continue
+      if (!predicate(current)) continue
+      const next: ChatMessage = { ...current }
+      if (update.text !== undefined) next.text = update.text
+      if (update.incomplete !== undefined) next.incomplete = update.incomplete
+      if (update.streaming !== undefined) next.streaming = update.streaming
+      if (update.subagentStatus !== undefined) next.subagentStatus = update.subagentStatus
+      list[i] = next
+      patched += 1
+    }
+    if (patched > 0) this.emit()
+    return patched
   }
 
   /**

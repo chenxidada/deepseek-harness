@@ -7,6 +7,7 @@ export {
   ChatPanelHost,
   FakeWebviewPort,
   type ChatPanelHostDeps,
+  type PanelProjection,
   type SendGateResult,
   type WebviewMessagePort,
 } from './chat-panel-host.ts'
@@ -36,6 +37,7 @@ export {
   parseWebviewToHostMessage,
   type ConnectionPhase,
   type HostToWebviewMessage,
+  type PanelBreadcrumb,
   type PanelMode,
   type PanelStatus,
   type RejectSendReason,

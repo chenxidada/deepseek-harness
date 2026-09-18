@@ -29,6 +29,16 @@ export interface ConversationTab {
   unread: boolean
   /** Session has pending/presented Host interactions (AC-20). */
   approvalBadge: boolean
+  /**
+   * In-panel child-session context (phase-4 subagent enter).
+   * When set, this Tab projects the child session, not its root `sessionId`.
+   */
+  contextSessionId?: string
+  /**
+   * Whether this Tab is a pinned subagent child promoted from an in-panel context.
+   * Lineage (parent session id) is resolved via TimelineStore, not stored here (phase-4).
+   */
+  pinnedSubagent?: boolean
 }
 
 /** Immutable snapshot for Tab bar rendering and tests. */
@@ -160,9 +170,9 @@ export class ConversationRegistry {
    * @returns Tab copies.
    */
   list(): ConversationTab[] {
-    return this.order.map(id => {
-      const tab = this.tabs.get(id)!
-      return { ...tab }
+    return this.order.flatMap((id) => {
+      const tab = this.tabs.get(id)
+      return tab === undefined ? [] : [{ ...tab }]
     })
   }
 
@@ -212,6 +222,32 @@ export class ConversationRegistry {
     if (tab === undefined) throw new Error(`unknown conversation Tab: ${tabId}`)
     if (tab.unread === unread) return
     tab.unread = unread
+    this.emit()
+  }
+
+  /**
+   * Set the in-panel child-session context for a Tab (phase-4 subagent enter).
+   * A `undefined` value clears the context back to the Tab root.
+   * @param tabId - Tab to update.
+   * @param sessionId - child session id, or undefined to clear.
+   */
+  setContextSessionId(tabId: string, sessionId: string | undefined): void {
+    const tab = this.tabs.get(tabId)
+    if (tab === undefined) throw new Error(`unknown conversation Tab: ${tabId}`)
+    if (sessionId === undefined) delete tab.contextSessionId
+    else tab.contextSessionId = sessionId
+    this.emit()
+  }
+
+  /**
+   * Set whether a Tab is a pinned subagent child (phase-4 pin).
+   * @param tabId - Tab to update.
+   * @param pinned - whether the Tab is a pinned subagent child.
+   */
+  setPinnedSubagent(tabId: string, pinned: boolean): void {
+    const tab = this.tabs.get(tabId)
+    if (tab === undefined) throw new Error(`unknown conversation Tab: ${tabId}`)
+    tab.pinnedSubagent = pinned
     this.emit()
   }
 

@@ -1,103 +1,140 @@
-# Phase 4 验证报告
+# Phase 4 验证报告（SHOULD-FIX 闭合复审 · 独立重跑）
 
 ## 判决：PASS
 
-债务清扫后重验：Must AC + DEBT-007…013 关闭证据齐全；L2+L3 exit 0；独立 V-IND-1..6 failed=0；活跃债务表为空。
+独立重跑确认：上一轮合并判决的 2 条 SHOULD-FIX 均**真实闭合**且无回归。SHOULD-FIX-1（钉运行中子 Tab 投影 `readonly-live`）经静态读体 + 独立协议层端到端 + **变异测试**三重核实生效；SHOULD-FIX-2（删除 `childrenOf()` 死 API）经全仓 grep + 独立 TimelineStore 边回归测试核实，`getParent`/私有 `children` map/`clearSession` 级联删除均不回归。全量套件 **0 失败**、Host tsc 干净、无未登记 `@STUB`。本 Phase `ui: false`，无视觉验证维度。
+
+---
 
 ## 测试执行矩阵
 
 | 场景 | 来源 | 命令 | 结果 | 证据 |
 |------|:--:|------|:--:|------|
-| AC-35/37 进入子会话不占 Tab | spec | `run-phase4-l2-l3.sh` + V-IND-1 | ✅ | phase4 17/17；V-IND-1 Tab 数不变 + contextSessionId=child |
-| AC-36 面包屑返回父 | spec | L2 + V-IND-2 | ✅ | `nav/back` 清 context；再删后拒绝进入 |
-| AC-39 子运行 banner / 结束清除 | spec | L2 phase4 | ✅ | 17/17 含 banner / finished 卡片文案 |
-| AC-40/71 只读实时→回放 | spec | L2 + V-IND-5 | ✅ | mode=readonly-live；append 到 FakeWebview；composer reject |
-| AC-38/78/79 钉 Tab | spec | L2 + V-IND-1 | ✅ | pin +1 Tab；pinnedSubagent；恢复父 active |
-| AC-74 子已删不可进入 | spec | L2 + V-IND-2/6 | ✅ | outcome=deleted；文案「子会话已删除」 |
-| AC-75 父已删面包屑禁用 | spec | L2 DEBT-011 | ✅ | `parentDeleted` / navDisabled |
-| AC-54/84 L2+L3 VP-4-sub | spec | `bash .../run-phase4-l2-l3.sh` | ✅ | Tests 17 passed；tsc --noEmit exit 0 |
-| DEBT-007 Continue chrome 对齐 | debt | vitest `-t DEBT-007` + V-IND-3/6 | ✅ | panel/state.continue=enabled === Host |
-| DEBT-008 context Continue 绑子 id | debt | vitest DEBT-008 + V-IND-6 | ✅ | `action/continue` → resumeCalls=[childId] |
-| DEBT-009 删子即时父卡 | debt | vitest DEBT-009 + V-IND-6 | ✅ | deleteConversation 后 card.subagentStatus=deleted |
-| DEBT-010 restore 钉态 | debt | vitest DEBT-010（含于 L2 17） | ✅ | setPinnedSubagent after restore |
-| DEBT-011 父未开面包屑禁用 | debt | vitest DEBT-011（含于 L2 17） | ✅ | parentDeleted=true |
-| DEBT-012 phase2 冷读 | debt | vitest phase2 `-t DEBT-012` | ✅ | 2 passed / 8 skipped |
-| DEBT-013 phase3 persist suspend | debt | vitest phase3 `-t DEBT-013` | ✅ | 1 passed / 13 skipped |
-| 全量回归 | verifier | `vitest run apps/vscode-dsh/tests` | ✅ | 20 files / 100 tests passed |
+| AC-35/36/37/38/39/40/71/74/75/78/79/84 L2/L3 | spec | `vitest run apps/vscode-dsh/tests/phase4-subagent-enter-pin.spec.ts` | ✅ | `Test Files 1 passed (1)` / `Tests 12 passed (12)`，exit 0 |
+| 全量回归（无回归） | verifier | `vitest run apps/vscode-dsh/tests` | ✅ | `Test Files 59 passed (59)` / `Tests 523 passed | 1 skipped (524)`，exit 0（**0 失败**） |
+| Host 类型检查 | spec/impl | `tsc -p apps/vscode-dsh/tsconfig.json --noEmit` | ✅ | exit 0，无输出 |
+| 独立 SHOULD-FIX 验证（本次新写） | verifier | `tsx .../test-scripts/verifier-should-fix-phase4.mts` | ✅ | `done failed=0`（25 项断言，V-FIX-1/2） |
+| 既有独立 e2e（V-IND-A~E + V-SF-1 闭合） | verifier | `tsx .../test-scripts/verifier-e2e-phase4.mts` | ✅ | `done failed=0`（36 项断言） |
+| 既有独立验证（V-IND-1~6） | verifier | `tsx .../test-scripts/verifier-independent-phase4.mts` | ✅ | `done failed=0`（42 项断言） |
 
-## 独立验证场景（verifier 自设）
+---
 
-| 场景 | 命令 | 结果 |
+## SHOULD-FIX 独立结论（本次重跑核心）
+
+### SHOULD-FIX-1：钉「运行中」子会话 Tab 投影 `readonly-live` —— **已真实闭合 ✅**
+
+**修复落点（读体核实）**：`conversation-controller.ts:1911-1925`，`resolvePanelProjection` 根分支：
+
+```ts
+// A pinned running child Tab stays read-only live until it ends (AD-CU-11),
+// mirroring the in-panel context path — no writable live seam for a running child.
+const pinnedRunning = active.pinnedSubagent === true
+  && this.childRunState.get(active.sessionId) === 'running'
+return {
+  mode: pinnedRunning
+    ? 'readonly-live'
+    : active.mode === 'replay' ? 'replay' : 'live',
+  ...
+}
+```
+
+**发送门禁（读体核实）**：`chat-panel-host.ts:697-703`，`sendPrompt` 对 `projection.mode === 'readonly-live'` 返回 `reject('readonly-live')`，与上下文进入路径同门禁。
+
+**结束翻转（读体核实）**：`onSubagentFinished`（`conversation-controller.ts:2027-2054`）先 `childRunState.set('ended')`（`:2028`，使 `pinnedRunning` 变 false）→ 钉 Tab 分支 `childTab.mode === 'live'` → `setMode('replay')`（`:2049-2050`）→ 投影翻 `replay`。时序原子：`ended` 先于 `setMode('replay')`，中间无 `pushFullState` 介入，无「ended 但 mode 仍 live」的瞬时可写窗口。
+
+**独立端到端证据（V-FIX-1，走真实协议帧，不照抄 implementer 测试）**：
+
+| 步骤 | 断言 | 结果 |
 |------|------|:--:|
-| V-IND-1 进入→钉 连续 e2e | `tsx .../verifier-independent-phase4.mts` | ✅ |
-| V-IND-2 进入后删子再拒进 | 同上 | ✅ |
-| V-IND-3 Continue chrome **硬对齐**（DEBT-007 关闭后不得 hidden） | 同上 | ✅ |
-| V-IND-4 参数变化 open A/B | 同上 | ✅ |
-| V-IND-5 readonly-live FakeWebview append | 同上 | ✅ |
-| **V-IND-6 债务清扫组合**（DEBT-007 chrome + Webview Continue 绑子 id + 删子即时父卡；implementer 拆测） | 同上 | ✅ failed=0 |
+| 上下文进入（不钉） | `resolvePanelProjection().mode === 'readonly-live'` | ✅ |
+| 钉成 Tab | `pinnedSubagent === true` + 父恢复 active | ✅ |
+| 重新进入已钉 Tab | `outcome === 'activated-tab'` + active 为子 Tab | ✅ |
+| **修复核心断言** | 钉运行中子 Tab 投影 `readonly-live`（非可写 `live`） | ✅ |
+| 双层模型 | registry `mode` 仍为 `'live'`（`OpenTabMode` 不扩展 `readonly-live`） | ✅ |
+| 真实协议帧发送 | `composer/send` → FakeWebview 收到 `ui/reject-send` reason=`readonly-live` | ✅ |
+| `sendPrompt` 直接调用 | `{ ok: false, reason: 'readonly-live' }` | ✅ |
+| 结束翻转 | 投影翻 `replay` + registry `mode` 翻 `replay` | ✅ |
+| 结束后再发送 | `{ ok: false, reason: 'replay' }` | ✅ |
 
-## Reviewer 建议的验证场景
+**变异测试（证明修复真实、测试真能测到缺陷）**：把 `pinnedRunning` 临时改回 `false`（还原修复前行为）→ 我的 V-FIX-1 脚本 **3 红**（`pinned RUNNING child projects readonly-live` / `ui/reject-send reason=readonly-live` / `sendPrompt reject readonly-live`）、implementer 新用例 **1 红**（`pinned running child Tab projects readonly-live and rejects send until finished`）→ 复原后复跑 **全绿**。证明：该修复非「测试写得松、恒过」的假闭合，测试对缺陷真实敏感。
 
-| 场景 | 命令 | 结果 |
-|------|------|:--:|
-| phase4 L2/L3 + tsc | `bash .../run-phase4-l2-l3.sh` | ✅ 17/17 + tsc 0 |
-| DEBT-007…011 抽测 | vitest phase4 `-t 'DEBT-00[7-9]\|DEBT-01[0-1]'` | ✅ 5 passed |
-| DEBT-012 / DEBT-013 | phase2/3 `-t DEBT-012/013` | ✅ |
-| 活跃债空 | 读 `tech-debt-registry.md` §活跃债务 | ✅ 仅「（无）」占位行 |
+### SHOULD-FIX-2：删除 `TimelineStore.childrenOf()` 死 API —— **已真实闭合 ✅**
 
-## 端到端验证
+**全仓 grep**：`childrenOf` 在 `apps/vscode-dsh` 下**零匹配**；全仓仅剩 `packages/client/connection/src/client/fixture.ts:1953` 一处同名**局部闭包**（fixture 路径遍历，与 `TimelineStore` 方法无关），属已知无关项。
+
+**独立边回归测试（V-FIX-2，直接实例化 `TimelineStore`）**：
+
+| 断言 | 结果 |
+|------|:--:|
+| 运行时确认 `childrenOf` 方法已删除（`(store).childrenOf === undefined`） | ✅ |
+| `getParent(child) === parent`（面包屑族谱） | ✅ |
+| `getParent(grandchild) === child`（三代链） | ✅ |
+| `isDescendantOf(grandchild, parent) === true` | ✅ |
+| `itemsForSessionTree(parent)` 经私有 `children` map 遍历到三代（sessionId 集合 = parent/child/grandchild） | ✅ |
+| `clearSession(parent)` 级联删除：`getParent(child/grandchild)` 均清空、`isDescendantOf` 归 false、树归空 | ✅ |
+
+结论：删除公开 `childrenOf` 未破坏私有 `children` map 驱动的内部边维护（`linkChild` / `collectTree` / `clearSession` / `isDescendantOf` / `depthOf`），`getParent` 及其 3 处消费方（`navBack` / `resolvePanelProjection` 面包屑 / `teardownDeletedSession`）仍连通。
+
+---
+
+## 端到端验证（数据路径表）
 
 | 数据路径 | 结果 | 证据 |
 |----------|:--:|------|
-| FakeWebview `nav/open-subagent` → `panel/state` + `messages/replace` → `action/pin-subagent` | ✅ | V-IND-1 |
-| FakeWebview context replay → `action/continue` → `resumeOverride(childId)` → live Tab | ✅ | V-IND-6（DEBT-007/008） |
-| `deleteConversation(confirmed)` → 父 MessageStore 卡片立即 `deleted` → `openSubagentContext` refuse | ✅ | V-IND-6（DEBT-009） |
-| running child → `session.event` → FakeWebview `messages/append`（无子 Tab） | ✅ | V-IND-5 |
+| Webview `nav/open-subagent` → `parseWebviewToHostMessage`（fail-closed）→ `openSubagentContext` → `resolvePanelProjection` → `panel/state`(contextSessionId/mode) + `messages/replace` | ✅ | V-IND-A / V-FIX-1 |
+| running 子 `sendPrompt`/`composer/send` → 投影 `readonly-live` → `reject('readonly-live')` → `ui/reject-send` | ✅ | V-IND-C / V-FIX-1（含真实协议帧） |
+| `subagent.finished` → `onSubagentFinished` → 卡片 running→ended + 投影翻转 `replay`（含钉 Tab registry `setMode('replay')` 兜底） | ✅ | V-FIX-1 + phase4 vitest |
+| 钉 Tab `action/pin-subagent` → `registry.create` + `setPinnedSubagent` + `persistOpenTabs` → 父恢复 active | ✅ | V-IND-D / V-IND-1 |
+| 已钉再进入 → `getBySessionId` 命中 → `switchTo` → `outcome:'activated-tab'` | ✅ | V-IND-D / V-FIX-1 |
+| 删子 `deleteSession` → `markSubagentCardDeleted` → 再进入 `outcome:'deleted'` | ✅ | V-IND-E / V-IND-2 |
+| 删父 `deleteSession` → `buildBreadcrumb` `parentDeleted:true` → `navBack` `outcome:'disabled'` | ✅ | V-IND-E |
+| running 子 `session.event` → `isProjectedSession` → `messages/append`（子上下文仍推 webview） | ✅ | V-IND-5 |
 
-## DEBT-007…013 关闭证据摘要
-
-| ID | 独立/抽测证据 | 判定 |
-|----|---------------|:--:|
-| DEBT-007 | V-IND-3/6：Host 与 panel/state.continue 均为 enabled；代码 `pushFullState` 始终 `resolveContinueChrome` | ✅ |
-| DEBT-008 | V-IND-6：Webview Continue 仅 resume 子 id 并 promote live | ✅ |
-| DEBT-009 | V-IND-6：删子后父卡立即「子会话已删除」 | ✅ |
-| DEBT-010 | L2 DEBT-010 + `restore*` → `setPinnedSubagent` | ✅ |
-| DEBT-011 | L2 DEBT-011 `parentDeleted` | ✅ |
-| DEBT-012 | phase2 vitest 2/2 | ✅ |
-| DEBT-013 | phase3 vitest 1/1 | ✅ |
-
-**活跃债务：空**（registry §活跃债务仅「（无）」行；DEBT-007…013 均在 §已解决）。
+---
 
 ## 残余风险
 
-| 风险 | 严重性 | 说明 |
-|------|:-----:|------|
-| 无真实 VS Code Webview 渲染（L4） | 🟢 LOW | Spec L3 明确不要求 HTML/CSP；FakeWebview 协议已覆盖 |
-| 无真实 SDK resume 网络往返 | 🟢 LOW | resume 经 installTestHooks / Host stub；产品路径接线已存在 |
+| 风险 | 严重性 | 阻塞 HG-3 | 说明 |
+|------|:-----:|:--:|------|
+| 钉运行中子 Tab 的 `tabStatus` 投影与 context 路径不对称（registry `active.status` 默认 `idle` vs context 派生 `running`） | 🟢 LOW | 否 | review 已记 Observation；仅状态指示器，不影响 `sendPrompt` 门控（`readonly-live` mode 独立拒绝）、不破坏任何 AC、非本轮修复引入 |
+| `panel/tabs` 帧报 registry `mode`（`live`）而非投影 `readonly-live` | 🟢 LOW | 否 | design.md 双层模型（`OpenTabMode` 无 `readonly-live`）的自然结果，不构成可写缝隙（发送门禁走投影 mode） |
+| `buildBreadcrumb` 把「父已删」与「父未打开」统一折叠进 `parentDeleted` 字段 | 🟢 LOW | 否 | 连通性正确（`navBack` 同步返回 `disabled`），字段名语义观察项，非缺陷 |
 
-无 CRITICAL / MEDIUM 残余风险。
+残余风险全部为 LOW（🟢），无阻塞项；本 Phase `ui: false`，无 `visual-blocking`。
+
+---
+
+## 技术债校验
+
+- **未登记 `@STUB`**：`rg "@STUB|@stub|@TODO|@FIXME" apps/vscode-dsh/src` → **0 命中**。
+- **活跃债务表**：`tech-debt-registry.md` §活跃债务为空（仅「（无）」占位行），无新增债。
+
+---
 
 ## Pipeline 合规检查
 
-- 当前分支：`impl-phase-4-subagent-enter-pin`
-- Pipeline compliance: ✅ 产品改动在 `impl-*` 分支工作区；未改 `packages/core/agent-loop`
-- 未执行 git commit（implementer/verifier 均不提交）
+- 当前分支：`impl-phase-4-subagent-enter-pin`（匹配 `impl-<phase-id>`）。
+- 产品改动全部落在 `apps/vscode-dsh/`（src 9 文件 + webview/src 7 文件 + tests 1 新增文件），无 `packages/core/agent-loop` 等外部改动。
+- Pipeline compliance: ✅ 所有变更在 `impl-*` 分支工作区；未执行 git commit（implementer/verifier 均不提交，待调度者 HG-3 统一提交）。
 
-## 验证脚本
+---
 
-- `test-scripts/run-phase4-l2-l3.sh`
-- `test-scripts/run-verifier-phase4.sh`
-- `test-scripts/verifier-independent-phase4.mts`（V-IND-1..6；本轮强化 V-IND-3 硬对齐 + 新增 V-IND-6）
+## 验证脚本（落盘）
+
+- `test-scripts/verifier-should-fix-phase4.mts`（**本次新写**：V-FIX-1 SHOULD-FIX-1 全协议端到端 + V-FIX-2 SHOULD-FIX-2 TimelineStore 边回归，25 项断言）
+- `test-scripts/verifier-e2e-phase4.mts`（V-IND-A~E + V-SF-1；**本轮更新** V-SF-1 断言从「复现旧 bug」改为「断言修复后 readonly-live」）
+- `test-scripts/verifier-independent-phase4.mts`（V-IND-1~6，未改动）
+- `test-scripts/run-verifier-phase4.sh`（**本轮更新**：追加 `verifier-e2e-phase4.mts` 与 `verifier-should-fix-phase4.mts` 两步）
+- `test-scripts/run-phase4-l2-l3.sh`（未改动）
 
 ### 复跑命令
 
 ```bash
 export PATH="/usr/local/n/versions/node/24.3.0/bin:$PATH"
-bash .specdev/specs/vscode-dsh-conversation-ui/phases/phase-4-subagent-enter-pin/test-scripts/run-verifier-phase4.sh
-# 或分步：
-bash .specdev/specs/vscode-dsh-conversation-ui/phases/phase-4-subagent-enter-pin/test-scripts/run-phase4-l2-l3.sh
-./node_modules/.bin/tsx .specdev/specs/vscode-dsh-conversation-ui/phases/phase-4-subagent-enter-pin/test-scripts/verifier-independent-phase4.mts
-./node_modules/.bin/vitest run apps/vscode-dsh/tests/phase2-multitab-history-replay.spec.ts -t DEBT-012
-./node_modules/.bin/vitest run apps/vscode-dsh/tests/phase3-restart-continue.spec.ts -t DEBT-013
+./node_modules/.bin/vitest run apps/vscode-dsh/tests/phase4-subagent-enter-pin.spec.ts
 ./node_modules/.bin/vitest run apps/vscode-dsh/tests
+./node_modules/.bin/tsc -p apps/vscode-dsh/tsconfig.json --noEmit
+./node_modules/.bin/tsx .specdev/specs/vscode-dsh-conversation-ui/phases/phase-4-subagent-enter-pin/test-scripts/verifier-should-fix-phase4.mts
+./node_modules/.bin/tsx .specdev/specs/vscode-dsh-conversation-ui/phases/phase-4-subagent-enter-pin/test-scripts/verifier-e2e-phase4.mts
+./node_modules/.bin/tsx .specdev/specs/vscode-dsh-conversation-ui/phases/phase-4-subagent-enter-pin/test-scripts/verifier-independent-phase4.mts
 ```

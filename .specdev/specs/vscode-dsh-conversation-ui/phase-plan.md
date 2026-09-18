@@ -68,18 +68,21 @@ phase-0b ───────────────┴───────�
     {
       "id": "phase-0a-spike-replay-rebuild",
       "name": "Spike：权威日志回放重建能力（T-0a）",
+      "ui": false,
       "dependencies": [],
       "acceptance_criteria": ["AC-80", "AC-30", "AC-47", "AC-76", "AC-77"]
     },
     {
       "id": "phase-0b-spike-continue-capability",
       "name": "Spike：同 id 续写 / 派生能力（T-0b）",
+      "ui": false,
       "dependencies": [],
       "acceptance_criteria": ["AC-68", "AC-32", "AC-66", "AC-67", "AC-28"]
     },
     {
       "id": "phase-1-panel-live-recoverable-close",
       "name": "对话面板 live + 可恢复关 Tab / 删除 + Timeline 弱化",
+      "ui": false,
       "dependencies": [],
       "acceptance_criteria": [
         "AC-1", "AC-2", "AC-3", "AC-4", "AC-5", "AC-6", "AC-7", "AC-9", "AC-10", "AC-11", "AC-12", "AC-13",
@@ -91,6 +94,7 @@ phase-0b ───────────────┴───────�
     {
       "id": "phase-2-multitab-history-replay",
       "name": "多 Tab 未读/审批串行 + 历史列表与回放重建",
+      "ui": false,
       "dependencies": ["phase-0a-spike-replay-rebuild", "phase-1-panel-live-recoverable-close"],
       "acceptance_criteria": [
         "AC-19", "AC-20", "AC-22", "AC-28", "AC-29", "AC-30", "AC-31",
@@ -100,6 +104,7 @@ phase-0b ───────────────┴───────�
     {
       "id": "phase-3-restart-continue",
       "name": "重启恢复未关 Tab + 回放 Diff/不完整 + 继续此会话",
+      "ui": false,
       "dependencies": ["phase-2-multitab-history-replay", "phase-0b-spike-continue-capability"],
       "acceptance_criteria": [
         "AC-33", "AC-34", "AC-69", "AC-70", "AC-76", "AC-77",
@@ -109,6 +114,7 @@ phase-0b ───────────────┴───────�
     {
       "id": "phase-4-subagent-enter-pin",
       "name": "Subagent 进入 / 钉 Tab / 父子已删导航",
+      "ui": false,
       "dependencies": ["phase-2-multitab-history-replay", "phase-3-restart-continue"],
       "acceptance_criteria": [
         "AC-35", "AC-36", "AC-37", "AC-38", "AC-39", "AC-40", "AC-71",

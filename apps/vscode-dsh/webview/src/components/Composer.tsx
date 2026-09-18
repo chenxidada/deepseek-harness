@@ -66,9 +66,9 @@ export function Composer({
         flexShrink: 0,
       }}
     >
-      {disabled && (disabledReason || composerReason(state)) ? (
+      {disabled && (disabledReason || composerReason(state, mode)) ? (
         <div data-testid="composer-disabled-reason" className="dsh-muted" style={{ fontSize: '0.85em' }}>
-          {disabledReason ?? composerReason(state)}
+          {disabledReason ?? composerReason(state, mode)}
         </div>
       ) : null}
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
@@ -76,7 +76,7 @@ export function Composer({
           data-testid="composer-input"
           value={value}
           disabled={disabled}
-          placeholder={disabled ? (disabledReason ?? composerPlaceholder(state)) : '输入消息…'}
+          placeholder={disabled ? (disabledReason ?? composerPlaceholder(state, mode)) : '输入消息…'}
           rows={2}
           onChange={(event) => {
             setLocal(event.target.value)
@@ -155,14 +155,16 @@ export function Composer({
   )
 }
 
-function composerPlaceholder(state: ComposerState): string {
+function composerPlaceholder(state: ComposerState, mode?: string): string {
+  if (mode === 'readonly-live') return '子代理运行中 — 只读直播'
   if (state === 'waiting') return '等待 Host 连接…'
   if (state === 'readonly') return '只读回放 — 不可发送'
   if (state === 'error') return '出错 — 暂不可发送'
   return '输入消息…'
 }
 
-function composerReason(state: ComposerState): string {
+function composerReason(state: ComposerState, mode?: string): string {
+  if (mode === 'readonly-live') return '子代理运行中 — 只读直播，不可直接发送'
   if (state === 'waiting') return '等待 Host 连接后可发送'
   if (state === 'readonly') return '只读回放 — 请使用 Continue 接续'
   if (state === 'error') return '出错 — 请检查连接后重试'

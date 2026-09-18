@@ -24,10 +24,12 @@ import {
 } from './chat-panel/activity-types.ts'
 import {
   ExtensionIndex,
+  type OpenTabMode,
   type OpenTabRecord,
   type WorkspaceStateLike,
 } from './extension-index.ts'
-import type { ChatPanelHost } from './chat-panel/chat-panel-host.ts'
+import type { ChatPanelHost, PanelProjection } from './chat-panel/chat-panel-host.ts'
+import type { PanelBreadcrumb, PanelMode } from './chat-panel/protocol.ts'
 import {
   hydrateFromAuthoritativeLog,
   type HydratorSessionEvent,
@@ -139,6 +141,35 @@ export type DeleteConversationResult =
   | { outcome: 'host-not-ready' }
   | { outcome: 'missing' }
 
+/** Outcome of entering a subagent child context (AD-CU-11 / AC-35/37/78). */
+export type OpenSubagentResult =
+  | {
+    outcome: 'opened-context' | 'activated-tab'
+    childSessionId: string
+    mode: PanelMode
+    tabId: string
+  }
+  | { outcome: 'deleted'; childSessionId: string }
+  | { outcome: 'missing' }
+  | { outcome: 'host-not-ready' }
+
+/** Outcome of pinning a subagent child into a Conversations Tab (AC-38/79). */
+export type PinSubagentResult =
+  | {
+    outcome: 'pinned' | 'activated'
+    childSessionId: string
+    tabId: string
+    parentTabId: string
+  }
+  | { outcome: 'deleted'; childSessionId: string }
+  | { outcome: 'missing' }
+
+/** Outcome of navigating back from an in-panel child context (AC-36/75). */
+export type NavBackResult =
+  | { outcome: 'restored' }
+  | { outcome: 'disabled' }
+  | { outcome: 'noop' }
+
 /** Options for {@link ConversationController.closeConversation}. */
 export interface CloseConversationOptions {
   /**
@@ -215,6 +246,8 @@ export class ConversationController {
   private stopStatusWatch: (() => void) | undefined
   /** Dedup concurrent auto-restore from Host status transitions. */
   private restoreInFlight: Promise<RestoreOpenTabsResult> | undefined
+  /** Child session run state for banner / readonly-live (no child Tab required). */
+  private readonly childRunState = new Map<string, 'running' | 'ended'>()
   /** sessionId → turn awaiting assistant before settle. */
   private pendingSettleTurn = new Map<string, number>()
   /** Serialize per-session settle to keep last-assistant anchoring stable. */
@@ -561,6 +594,9 @@ export class ConversationController {
           ?? `Replay ${record.sessionId.slice(0, 8)}`
         // AD-CU-5: cold restore mints a new tabId.
         const tab = this.registry.create(title, record.sessionId, 'replay')
+        if (record.pinnedSubagent === true) {
+          this.registry.setPinnedSubagent(tab.tabId, true)
+        }
         this.messages.replace(record.sessionId, cached.messages)
         this.timeline.replace(record.sessionId, cached.timeline)
         // AC-22: cold restore must hydrate change-list path/stats like openFromHistory.
@@ -642,6 +678,10 @@ export class ConversationController {
         overrideEvents === undefined ? {} : { events: overrideEvents },
       )
       if (opened.outcome === 'opened' || opened.outcome === 'activated') {
+        if (record.pinnedSubagent === true) {
+          const tab = this.registry.getBySessionId(record.sessionId)
+          if (tab !== undefined) this.registry.setPinnedSubagent(tab.tabId, true)
+        }
         hydrated.push({
           tabId: opened.tabId,
           sessionId: opened.sessionId,
@@ -689,11 +729,12 @@ export class ConversationController {
     }
     if (this.host.status !== 'connected') return { outcome: 'host-not-ready' }
 
+    const resumeSessionId = this.effectiveContinueSessionId(tab)
     try {
       if (this.resumeOverride !== undefined) {
-        await this.resumeOverride(tab.sessionId)
+        await this.resumeOverride(resumeSessionId)
       } else if (typeof this.host.resumeSession === 'function') {
-        await this.host.resumeSession(tab.sessionId)
+        await this.host.resumeSession(resumeSessionId)
       } else {
         return { outcome: 'disabled', tooltip: '暂不可用' }
       }
@@ -704,17 +745,39 @@ export class ConversationController {
       }
     }
 
-    this.registry.setMode(tab.tabId, 'live')
     const capability = chrome.capability ?? 'same-id'
+    let liveTab = tab
+    if (tab.contextSessionId !== undefined) {
+      // Promote context child into an editable live Tab (Continue implies live composer).
+      const childId = tab.contextSessionId
+      this.registry.setContextSessionId(tab.tabId, undefined)
+      const existing = this.registry.getBySessionId(childId)
+      if (existing === undefined) {
+        liveTab = this.registry.create(
+          this.index.read().sessions.find(s => s.sessionId === childId)?.title ?? 'Subagent',
+          childId,
+          'live',
+        )
+        this.registry.setPinnedSubagent(liveTab.tabId, true)
+      } else {
+        this.registry.setMode(existing.tabId, 'live')
+        liveTab = existing
+      }
+      this.registry.switchTo(liveTab.tabId)
+      this.host.interactions.onActiveSessionChange?.(liveTab.sessionId)
+    } else {
+      this.registry.setMode(tab.tabId, 'live')
+    }
+
     this.index.upsertSession({
-      sessionId: tab.sessionId,
-      title: tab.title ?? `Conversation ${tab.sessionId.slice(0, 8)}`,
+      sessionId: liveTab.sessionId,
+      title: liveTab.title ?? `Conversation ${liveTab.sessionId.slice(0, 8)}`,
       mtime: Date.now(),
       continueCapability: capability,
     })
     this.persistOpenTabs()
     const banner = capability === 'derive-only'
-      ? `新会话 · 接续自 ${tab.sessionId.slice(0, 8)}`
+      ? `新会话 · 接续自 ${resumeSessionId.slice(0, 8)}`
       : undefined
     if (banner !== undefined) {
       this.panelHost?.pushBanner(banner, 'continue-derive')
@@ -722,8 +785,8 @@ export class ConversationController {
     this.panelHost?.pushFullState()
     return {
       outcome: 'continued',
-      tabId: tab.tabId,
-      sessionId: tab.sessionId,
+      tabId: liveTab.tabId,
+      sessionId: liveTab.sessionId,
       mode: 'live',
       capability,
       ...banner === undefined ? {} : { banner },
@@ -741,16 +804,25 @@ export class ConversationController {
     if (tab === undefined) {
       return continueChromeFor(T0B_GATE_VERDICT, 'unknown', { hostReady })
     }
-    if (tab.mode !== 'replay') {
-      return continueChromeFor(T0B_GATE_VERDICT, 'unknown', { mode: 'live', hostReady })
+    const effectiveSessionId = this.effectiveContinueSessionId(tab)
+    const effectiveMode = this.effectiveContinueMode(tab)
+    if (effectiveMode !== 'replay') {
+      return continueChromeFor(T0B_GATE_VERDICT, 'unknown', {
+        mode: 'live',
+        hostReady,
+        continueSealed: this.continueSealedSessions.has(effectiveSessionId),
+      })
     }
-    const row = this.index.read().sessions.find(s => s.sessionId === tab.sessionId)
+    const row = this.index.read().sessions.find(s => s.sessionId === effectiveSessionId)
     const capability = row?.continueCapability
-      ?? this.resolveContinueCapability(tab.sessionId, this.messages.hasContent(tab.sessionId))
+      ?? this.resolveContinueCapability(
+        effectiveSessionId,
+        this.messages.hasContent(effectiveSessionId),
+      )
     return continueChromeFor(T0B_GATE_VERDICT, capability, {
       mode: 'replay',
       hostReady,
-      continueSealed: this.continueSealedSessions.has(tab.sessionId),
+      continueSealed: this.continueSealedSessions.has(effectiveSessionId),
     })
   }
 
@@ -1503,6 +1575,7 @@ export class ConversationController {
     this.host.interactions.failClosedSession(sessionId, `conversation deleted (${sessionId})`)
     await this.teardownDeletedSession(sessionId)
     this.persistOpenTabs()
+    this.panelHost?.pushFullState()
     return { outcome: 'deleted', tabId: '', sessionId }
   }
 
@@ -1517,6 +1590,9 @@ export class ConversationController {
    * @param sessionId - session being deleted.
    */
   private async teardownDeletedSession(sessionId: string): Promise<void> {
+    // Capture parent before clearing timeline links (AC-74/75 card → deleted marker).
+    const parentSessionId = this.timeline.getParent(sessionId)
+      ?? this.index.read().sessions.find(s => s.sessionId === sessionId)?.parentSessionId
     await this.host.disposeSession(sessionId)
     await this.snapshotStore.clearSession(sessionId)
     // No await below this line — nothing can interleave with this clear + tombstone.
@@ -1526,6 +1602,11 @@ export class ConversationController {
     this.changes.clearSession(sessionId)
     this.pathSessionIndex.removeSession(sessionId)
     this.index.markDeleted(sessionId)
+    // Clear in-panel contexts pointing at this session; do not cascade-close child Tabs (AC-61/75).
+    this.clearContextsReferencing(sessionId)
+    if (parentSessionId !== undefined && !this.index.isDeleted(parentSessionId)) {
+      this.markSubagentCardDeleted(parentSessionId, sessionId)
+    }
   }
 
   /**
@@ -1605,10 +1686,12 @@ export class ConversationController {
    * @returns active panel projection fields.
    */
   panelSnapshot(): {
-    mode: 'empty' | 'waiting-host' | 'live' | 'replay'
+    mode: PanelMode
     sessionId?: string
     tabId?: string
     title?: string
+    contextSessionId?: string
+    breadcrumb?: PanelBreadcrumb
     messages: readonly ChatMessage[]
     tabStatus?: ConversationTab['status']
     index: ReturnType<ExtensionIndex['read']>
@@ -1637,18 +1720,242 @@ export class ConversationController {
         pendingRestore: this.pendingRestoreLatch,
       }
     }
+    const projection = this.resolvePanelProjection()
+    if (projection === undefined) {
+      return {
+        mode: 'empty',
+        messages: [],
+        index: this.index.read(),
+        continue: { visibility: 'hidden' },
+        deferredRestoreCount: this.deferredRestore.length,
+        pendingRestore: this.pendingRestoreLatch,
+      }
+    }
     return {
-      mode: active.mode,
-      sessionId: active.sessionId,
-      tabId: active.tabId,
-      ...active.title === undefined ? {} : { title: active.title },
-      messages: this.messages.get(active.sessionId),
-      tabStatus: active.status,
+      mode: projection.mode,
+      sessionId: projection.sessionId,
+      tabId: projection.tabId,
+      ...projection.title === undefined ? {} : { title: projection.title },
+      ...projection.contextSessionId === undefined
+        ? {}
+        : { contextSessionId: projection.contextSessionId },
+      ...projection.breadcrumb === undefined ? {} : { breadcrumb: projection.breadcrumb },
+      messages: projection.messages,
+      tabStatus: projection.tabStatus,
       index: this.index.read(),
       continue: this.continueChromeForTab(active.tabId),
       deferredRestoreCount: this.deferredRestore.length,
       pendingRestore: this.pendingRestoreLatch,
     }
+  }
+
+  /**
+   * Enter a child session from a parent subagent card (AD-CU-11 / AC-35/37/78).
+   * Default path sets `contextSessionId` without minting a Tab; pinned children activate.
+   * @param childSessionId - child session from the card.
+   * @returns open outcome.
+   */
+  async openSubagentContext(childSessionId: string): Promise<OpenSubagentResult> {
+    if (this.host.status !== 'connected') return { outcome: 'host-not-ready' }
+    const active = this.registry.getActive()
+    if (active === undefined) return { outcome: 'missing' }
+
+    if (this.index.isDeleted(childSessionId)) {
+      this.markSubagentCardDeleted(active.sessionId, childSessionId)
+      this.panelHost?.pushFullState()
+      return { outcome: 'deleted', childSessionId }
+    }
+
+    const pinned = this.registry.getBySessionId(childSessionId)
+    if (pinned !== undefined) {
+      this.registry.setContextSessionId(active.tabId, undefined)
+      this.registry.switchTo(pinned.tabId)
+      this.host.interactions.onActiveSessionChange?.(pinned.sessionId)
+      this.panelHost?.pushFullState()
+      return {
+        outcome: 'activated-tab',
+        childSessionId,
+        mode: pinned.mode === 'replay' ? 'replay' : 'live',
+        tabId: pinned.tabId,
+      }
+    }
+
+    const run = this.childRunState.get(childSessionId)
+    if (run !== 'running') {
+      await this.ensureChildHydrated(childSessionId)
+    }
+    this.registry.setContextSessionId(active.tabId, childSessionId)
+    const mode: PanelMode = run === 'running' ? 'readonly-live' : 'replay'
+    this.panelHost?.pushFullState()
+    return {
+      outcome: 'opened-context',
+      childSessionId,
+      mode,
+      tabId: active.tabId,
+    }
+  }
+
+  /**
+   * Leave in-panel child context and restore the parent Tab stream (AC-36).
+   * No-op when parent is deleted on a pinned child Tab (AC-75).
+   * @returns navigation outcome.
+   */
+  navBack(): NavBackResult {
+    const active = this.registry.getActive()
+    if (active === undefined) return { outcome: 'noop' }
+
+    if (active.contextSessionId !== undefined) {
+      this.registry.setContextSessionId(active.tabId, undefined)
+      this.panelHost?.pushFullState()
+      return { outcome: 'restored' }
+    }
+
+    // Pinned child Tab: breadcrumb back to parent when parent still exists.
+    const parentSessionId = this.timeline.getParent(active.sessionId)
+      ?? this.index.read().sessions.find(s => s.sessionId === active.sessionId)?.parentSessionId
+    if (parentSessionId === undefined) return { outcome: 'noop' }
+    if (this.index.isDeleted(parentSessionId)) return { outcome: 'disabled' }
+    const parentTab = this.registry.getBySessionId(parentSessionId)
+    if (parentTab === undefined) return { outcome: 'disabled' }
+    this.registry.switchTo(parentTab.tabId)
+    this.host.interactions.onActiveSessionChange?.(parentTab.sessionId)
+    this.panelHost?.pushFullState()
+    return { outcome: 'restored' }
+  }
+
+  /**
+   * Promote the current child context (or given child) into a Conversations Tab (AC-38/79).
+   * @param childSessionId - optional; defaults to active contextSessionId.
+   * @returns pin outcome.
+   */
+  async pinSubagent(childSessionId?: string): Promise<PinSubagentResult> {
+    const active = this.registry.getActive()
+    if (active === undefined) return { outcome: 'missing' }
+    const childId = childSessionId ?? active.contextSessionId
+    if (childId === undefined) return { outcome: 'missing' }
+    if (this.index.isDeleted(childId)) {
+      this.markSubagentCardDeleted(active.sessionId, childId)
+      return { outcome: 'deleted', childSessionId: childId }
+    }
+
+    const existing = this.registry.getBySessionId(childId)
+    if (existing !== undefined) {
+      this.registry.setContextSessionId(active.tabId, undefined)
+      this.registry.switchTo(existing.tabId)
+      this.host.interactions.onActiveSessionChange?.(existing.sessionId)
+      this.panelHost?.pushFullState()
+      return {
+        outcome: 'activated',
+        childSessionId: childId,
+        tabId: existing.tabId,
+        parentTabId: active.tabId,
+      }
+    }
+
+    const parentTabId = active.tabId
+    const run = this.childRunState.get(childId)
+    const mode: OpenTabMode = run === 'running' ? 'live' : 'replay'
+    if (run !== 'running') await this.ensureChildHydrated(childId)
+
+    // Clear context first so parent view is restored after pin (AC-79).
+    this.registry.setContextSessionId(parentTabId, undefined)
+    const childTab = this.registry.create(
+      this.index.read().sessions.find(s => s.sessionId === childId)?.title ?? 'Subagent',
+      childId,
+      mode,
+    )
+    this.registry.setPinnedSubagent(childTab.tabId, true)
+    // Restore parent as active after minting the child Tab.
+    this.registry.switchTo(parentTabId)
+    this.host.interactions.onActiveSessionChange?.(active.sessionId)
+    this.persistOpenTabs()
+    this.panelHost?.pushFullState()
+    return {
+      outcome: 'pinned',
+      childSessionId: childId,
+      tabId: childTab.tabId,
+      parentTabId,
+    }
+  }
+
+  /**
+   * Resolve the effective panel projection for Host push (Tab root vs child context).
+   * @returns projection for the active Tab, or undefined when empty.
+   */
+  resolvePanelProjection(): PanelProjection | undefined {
+    const active = this.registry.getActive()
+    if (active === undefined) return undefined
+
+    const contextId = active.contextSessionId
+    if (contextId !== undefined) {
+      const run = this.childRunState.get(contextId)
+      const mode: PanelMode = run === 'running' ? 'readonly-live' : 'replay'
+      return {
+        mode,
+        sessionId: contextId,
+        tabId: active.tabId,
+        contextSessionId: contextId,
+        breadcrumb: this.buildBreadcrumb(active.sessionId),
+        messages: this.messages.get(contextId),
+        tabStatus: run === 'running' ? 'running' : 'idle',
+        ...active.title === undefined ? {} : { title: active.title },
+      }
+    }
+
+    const parentSessionId = this.timeline.getParent(active.sessionId)
+      ?? this.index.read().sessions.find(s => s.sessionId === active.sessionId)?.parentSessionId
+    const breadcrumb = parentSessionId === undefined
+      ? undefined
+      : this.buildBreadcrumb(parentSessionId)
+
+    // A pinned running child Tab stays read-only live until it ends (AD-CU-11),
+    // mirroring the in-panel context path — no writable live seam for a running child.
+    const pinnedRunning = active.pinnedSubagent === true
+      && this.childRunState.get(active.sessionId) === 'running'
+    return {
+      mode: pinnedRunning
+        ? 'readonly-live'
+        : active.mode === 'replay' ? 'replay' : 'live',
+      sessionId: active.sessionId,
+      tabId: active.tabId,
+      messages: this.messages.get(active.sessionId),
+      tabStatus: active.status,
+      ...active.title === undefined ? {} : { title: active.title },
+      ...breadcrumb === undefined ? {} : { breadcrumb },
+    }
+  }
+
+  /**
+   * L2 helper: synthesize `subagent.started` / `subagent.finished` into the controller.
+   * @param phase - started or finished.
+   * @param parentSessionId - parent session.
+   * @param childSessionId - child session.
+   */
+  async applyTestSubagentNotification(
+    phase: 'started' | 'finished',
+    parentSessionId: string,
+    childSessionId: string,
+  ): Promise<void> {
+    if (phase === 'started') {
+      this.timeline.apply({
+        method: 'subagent.started',
+        params: { parentSessionId, childSessionId },
+      })
+      this.onSubagentStarted(parentSessionId, childSessionId)
+      return
+    }
+    this.timeline.apply({
+      method: 'subagent.finished',
+      params: {
+        provider: 'test',
+        agentId: childSessionId,
+        parentSessionId,
+        childSessionId,
+        status: 'completed',
+        stopReason: 'end_turn',
+      },
+    })
+    await this.onSubagentFinished(parentSessionId, childSessionId)
   }
 
   /** Clear local Tabs on window shutdown (process teardown owns remote sessions). */
@@ -1671,10 +1978,162 @@ export class ConversationController {
     this.restoreInFlight = undefined
     this.eventOverrides.clear()
     this.resumeOverride = undefined
+    this.childRunState.clear()
     this.timeline.clear()
     this.messages.clear()
     this.changes.clear()
     this.registry.clear()
+  }
+
+  private onSubagentStarted(parentSessionId: string, childSessionId: string): void {
+    this.childRunState.set(childSessionId, 'running')
+    this.index.upsertSession({
+      sessionId: childSessionId,
+      title: `Subagent ${childSessionId.slice(0, 8)}`,
+      mtime: Date.now(),
+      parentSessionId,
+    })
+    const existing = this.messages.get(parentSessionId)
+      .find(m => m.kind === 'subagent' && m.childSessionId === childSessionId)
+    if (existing === undefined) {
+      const card: ChatMessage = {
+        id: randomUUID(),
+        sessionId: parentSessionId,
+        role: 'notice',
+        kind: 'subagent',
+        text: '子代理运行中 — 点击进入',
+        childSessionId,
+        subagentStatus: 'running',
+      }
+      this.messages.append(parentSessionId, card)
+      const active = this.registry.getActive()
+      if (active !== undefined && active.sessionId === parentSessionId && active.contextSessionId === undefined) {
+        this.panelHost?.pushAppend(card)
+      }
+    } else {
+      this.messages.patchWhere(
+        parentSessionId,
+        m => m.kind === 'subagent' && m.childSessionId === childSessionId,
+        { text: '子代理运行中 — 点击进入', subagentStatus: 'running' },
+      )
+    }
+
+    if (this.isParentCurrentContext(parentSessionId)) {
+      this.panelHost?.pushBanner('子代理运行中', 'subagent-running')
+    }
+    this.panelHost?.pushFullState()
+  }
+
+  private async onSubagentFinished(parentSessionId: string, childSessionId: string): Promise<void> {
+    this.childRunState.set(childSessionId, 'ended')
+    this.messages.patchWhere(
+      parentSessionId,
+      m => m.kind === 'subagent' && m.childSessionId === childSessionId,
+      { text: '已结束，可进入回放', subagentStatus: 'ended' },
+    )
+
+    if (this.isParentCurrentContext(parentSessionId)) {
+      this.panelHost?.pushBanner('', 'subagent-clear')
+    }
+
+    // Viewing this child in context → hydrate and flip to replay (AC-71).
+    const active = this.registry.getActive()
+    if (active?.contextSessionId === childSessionId) {
+      await this.ensureChildHydrated(childSessionId)
+      this.panelHost?.pushFullState()
+      return
+    }
+
+    // Pinned child Tab still open → force replay mode after finish.
+    const childTab = this.registry.getBySessionId(childSessionId)
+    if (childTab !== undefined && childTab.mode === 'live') {
+      this.registry.setMode(childTab.tabId, 'replay')
+      await this.ensureChildHydrated(childSessionId)
+    }
+    this.panelHost?.pushFullState()
+  }
+
+  private isParentCurrentContext(parentSessionId: string): boolean {
+    const active = this.registry.getActive()
+    if (active === undefined) return false
+    return active.sessionId === parentSessionId && active.contextSessionId === undefined
+  }
+
+  /**
+   * Whether the panel currently projects `sessionId` — either the active Tab's
+   * root session or its in-panel child context (Phase 4 subagent view).
+   */
+  private isProjectedSession(active: ConversationTab | undefined, sessionId: string): boolean {
+    if (active === undefined) return false
+    return active.sessionId === sessionId || active.contextSessionId === sessionId
+  }
+
+  private buildBreadcrumb(parentSessionId: string): PanelBreadcrumb {
+    const parentDeleted = this.index.isDeleted(parentSessionId)
+    const parentOpen = this.registry.getBySessionId(parentSessionId) !== undefined
+    // Align Webview clickability with Host navBack: no open parent Tab → disabled.
+    const navDisabled = parentDeleted || !parentOpen
+    return {
+      parentSessionId,
+      parentDeleted: navDisabled,
+      label: parentDeleted
+        ? '父会话已删除'
+        : !parentOpen
+          ? '父会话未打开'
+          : '返回父会话',
+    }
+  }
+
+  private effectiveContinueSessionId(tab: ConversationTab): string {
+    return tab.contextSessionId ?? tab.sessionId
+  }
+
+  private effectiveContinueMode(tab: ConversationTab): PanelMode | ConversationTab['mode'] {
+    if (tab.contextSessionId !== undefined) {
+      return this.childRunState.get(tab.contextSessionId) === 'running'
+        ? 'readonly-live'
+        : 'replay'
+    }
+    return tab.mode
+  }
+
+  private markSubagentCardDeleted(parentSessionId: string, childSessionId: string): void {
+    const patched = this.messages.patchWhere(
+      parentSessionId,
+      m => m.kind === 'subagent' && m.childSessionId === childSessionId,
+      { text: '子会话已删除', subagentStatus: 'deleted' },
+    )
+    if (patched === 0) {
+      this.messages.append(parentSessionId, {
+        id: randomUUID(),
+        sessionId: parentSessionId,
+        role: 'notice',
+        kind: 'subagent',
+        text: '子会话已删除',
+        childSessionId,
+        subagentStatus: 'deleted',
+      })
+    }
+  }
+
+  private async ensureChildHydrated(childSessionId: string): Promise<void> {
+    if (this.messages.hasContent(childSessionId)) return
+    try {
+      const events = await this.loadEvents(childSessionId)
+      if (events.length === 0) return
+      const hydrated = hydrateFromAuthoritativeLog(childSessionId, events)
+      this.messages.replace(childSessionId, hydrated.messages)
+    } catch {
+      // Missing child log leaves empty projection; enter still allowed for empty replay.
+    }
+  }
+
+  private clearContextsReferencing(sessionId: string): void {
+    for (const tab of this.registry.list()) {
+      if (tab.contextSessionId === sessionId) {
+        this.registry.setContextSessionId(tab.tabId, undefined)
+      }
+    }
   }
 
   /**
@@ -1695,6 +2154,7 @@ export class ConversationController {
         mode: tab.mode,
         ...tab.title === undefined ? {} : { title: tab.title },
         ...tab.mode === 'live' ? { liveIntent: true } : {},
+        ...tab.pinnedSubagent === true ? { pinnedSubagent: true } : {},
       })
     }
     for (const deferred of this.deferredRestore) {
@@ -1746,7 +2206,7 @@ export class ConversationController {
       })
       this.streamingAssistant.delete(sessionId)
       const active = this.registry.getActive()
-      if (active !== undefined && active.sessionId === sessionId) {
+      if (this.isProjectedSession(active, sessionId)) {
         this.panelHost?.pushPatch(sessionId, streaming.messageId, {
           text,
           streaming: false,
@@ -1773,7 +2233,7 @@ export class ConversationController {
     }
     this.messages.append(sessionId, message)
     const active = this.registry.getActive()
-    if (active !== undefined && active.sessionId === sessionId) {
+    if (this.isProjectedSession(active, sessionId)) {
       this.panelHost?.pushAppend(message)
     } else {
       const tab = this.registry.getBySessionId(sessionId)
@@ -1816,7 +2276,7 @@ export class ConversationController {
       this.streamingAssistant.set(sessionId, { messageId, ...turn === undefined ? {} : { turn } })
       streaming = { messageId, ...turn === undefined ? {} : { turn } }
       const active = this.registry.getActive()
-      if (active !== undefined && active.sessionId === sessionId) {
+      if (this.isProjectedSession(active, sessionId)) {
         this.panelHost?.pushAppend(message)
       } else {
         const tab = this.registry.getBySessionId(sessionId)
@@ -1837,7 +2297,7 @@ export class ConversationController {
       streaming: true,
     })
     const active = this.registry.getActive()
-    if (active !== undefined && active.sessionId === sessionId) {
+    if (this.isProjectedSession(active, sessionId)) {
       this.panelHost?.pushPatch(sessionId, streaming.messageId, {
         appendText: delta,
         streaming: true,
@@ -1863,7 +2323,7 @@ export class ConversationController {
         streaming: false,
       })
       const active = this.registry.getActive()
-      if (active !== undefined && active.sessionId === sessionId) {
+      if (this.isProjectedSession(active, sessionId)) {
         this.panelHost?.pushPatch(sessionId, streaming.messageId, {
           incomplete: true,
           streaming: false,
@@ -1880,7 +2340,7 @@ export class ConversationController {
       if (last !== undefined && last.incomplete !== true) {
         this.messages.patch(sessionId, last.id, { incomplete: true, streaming: false })
         const active = this.registry.getActive()
-        if (active !== undefined && active.sessionId === sessionId) {
+        if (this.isProjectedSession(active, sessionId)) {
           this.panelHost?.pushPatch(sessionId, last.id, { incomplete: true, streaming: false })
         }
       }
@@ -1900,7 +2360,7 @@ export class ConversationController {
       }
       this.messages.append(sessionId, notice)
       const active = this.registry.getActive()
-      if (active !== undefined && active.sessionId === sessionId) {
+      if (this.isProjectedSession(active, sessionId)) {
         this.panelHost?.pushAppend(notice)
       }
     }
@@ -1923,7 +2383,7 @@ export class ConversationController {
       const patched = this.messages.patch(sessionId, message.id, { activityStatus: 'aborted' })
       if (patched === undefined) continue
       const active = this.registry.getActive()
-      if (active !== undefined && active.sessionId === sessionId) {
+      if (this.isProjectedSession(active, sessionId)) {
         this.panelHost?.pushPatch(sessionId, message.id, { activityStatus: 'aborted' })
       }
     }
@@ -1973,7 +2433,7 @@ export class ConversationController {
     }
     this.messages.append(sessionId, message)
     const active = this.registry.getActive()
-    if (active !== undefined && active.sessionId === sessionId) {
+    if (this.isProjectedSession(active, sessionId)) {
       this.panelHost?.pushAppend(message)
     } else {
       const tab = this.registry.getBySessionId(sessionId)
@@ -2042,7 +2502,7 @@ export class ConversationController {
       }
       this.messages.append(sessionId, message)
       const active = this.registry.getActive()
-      if (active !== undefined && active.sessionId === sessionId) {
+      if (this.isProjectedSession(active, sessionId)) {
         this.panelHost?.pushAppend(message)
       }
       return
@@ -2050,7 +2510,7 @@ export class ConversationController {
     const patched = this.messages.patch(sessionId, target.id, { activityStatus: status })
     if (patched === undefined) return
     const active = this.registry.getActive()
-    if (active !== undefined && active.sessionId === sessionId) {
+    if (this.isProjectedSession(active, sessionId)) {
       this.panelHost?.pushPatch(sessionId, target.id, { activityStatus: status })
     }
   }
@@ -2065,7 +2525,7 @@ export class ConversationController {
       if (streaming === undefined) continue
       this.messages.patch(sessionId, streaming.messageId, { streaming: false })
       const active = this.registry.getActive()
-      if (active !== undefined && active.sessionId === sessionId) {
+      if (this.isProjectedSession(active, sessionId)) {
         this.panelHost?.pushPatch(sessionId, streaming.messageId, { streaming: false })
       }
       this.streamingAssistant.delete(sessionId)
@@ -2131,7 +2591,7 @@ export class ConversationController {
 
     // Full replace so removeWhere is reflected in the Webview (not append-only).
     const active = this.registry.getActive()
-    if (active !== undefined && active.sessionId === sessionId) {
+    if (this.isProjectedSession(active, sessionId)) {
       this.panelHost?.pushFullState()
     } else {
       const tab = this.registry.getBySessionId(sessionId)
@@ -2158,6 +2618,20 @@ export class ConversationController {
       if (tab === undefined) return
       this.registry.setStatus(tab.tabId, status === 'running' ? 'running' : 'idle')
       this.panelHost?.pushStatus()
+      return
+    }
+    if (notification.method === 'subagent.started') {
+      const parentSessionId = notification.params.parentSessionId
+      const childSessionId = notification.params.childSessionId
+      if (typeof parentSessionId !== 'string' || typeof childSessionId !== 'string') return
+      this.onSubagentStarted(parentSessionId, childSessionId)
+      return
+    }
+    if (notification.method === 'subagent.finished') {
+      const parentSessionId = notification.params.parentSessionId
+      const childSessionId = notification.params.childSessionId
+      if (typeof parentSessionId !== 'string' || typeof childSessionId !== 'string') return
+      void this.onSubagentFinished(parentSessionId, childSessionId)
       return
     }
     if (notification.method !== 'session.event') return

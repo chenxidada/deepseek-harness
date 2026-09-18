@@ -9,12 +9,26 @@
 import type { ChatMessage } from '../message-store.ts'
 
 /** Panel chrome mode pushed via panel/state. */
-export type PanelMode = 'empty' | 'waiting-host' | 'replay' | 'live' | 'error'
+export type PanelMode = 'empty' | 'waiting-host' | 'replay' | 'live' | 'readonly-live' | 'error'
+
+/**
+ * Parent→child lineage chrome pushed via panel/state (phase-4 subagent context).
+ * Decision state stays on Host; Webview mirrors the breadcrumb without deriving it.
+ */
+export interface PanelBreadcrumb {
+  /** Parent session id when known. */
+  parentSessionId?: string
+  /** True when the parent is tombstoned (back nav disabled). */
+  parentDeleted?: boolean
+  /** Display label for the back control. */
+  label?: string
+}
 
 /** Host reject reasons for composer/send (send gate lives on Host). */
 export type RejectSendReason =
   | 'empty'
   | 'replay'
+  | 'readonly-live'
   | 'no-host'
   | 'disconnected'
   | 'no-active'
@@ -74,6 +88,13 @@ export type HostToWebviewMessage =
     settingsDeepLinkAvailable?: boolean
     /** Parent title for fork lineage chrome (AC-63). */
     forkParentTitle?: string
+    /**
+     * In-panel child-session context (phase-4 subagent enter).
+     * When set, the panel is projecting this child session, not the Tab root.
+     */
+    contextSessionId?: string
+    /** Parent→child lineage chrome (back / pin / deleted banners). */
+    breadcrumb?: PanelBreadcrumb
     /**
      * Optional Host decision-mirror probe seats (AD-CUX-1).
      * Webview applies via probes.mirrorHostDecisions — must not invent locally.
@@ -265,6 +286,12 @@ export type WebviewToHostMessage =
   | { type: 'change/revert'; changeId: string }
   | { type: 'change/revert-many'; changeIds: string[] }
   | { type: 'scroll/reveal'; callId?: string }
+  /** Enter a subagent child session in-panel (phase-4). */
+  | { type: 'nav/open-subagent'; childSessionId: string }
+  /** Leave an in-panel child context back to the Tab root (phase-4). */
+  | { type: 'nav/back' }
+  /** Promote the in-panel child context into its own pinned Tab (phase-4). */
+  | { type: 'action/pin-subagent'; childSessionId: string }
 
 /**
  * Narrow an unknown postMessage payload to a Webview→Host frame.
@@ -408,6 +435,12 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
       ...typeof record.callId === 'string' ? { callId: record.callId } : {},
     }
   }
+  if (type === 'nav/open-subagent' || type === 'action/pin-subagent') {
+    // Fail-closed: a child context id must be a non-empty string, or the frame is dropped.
+    if (typeof record.childSessionId !== 'string' || record.childSessionId === '') return undefined
+    return { type, childSessionId: record.childSessionId }
+  }
+  if (type === 'nav/back') return { type: 'nav/back' }
   return undefined
 }
 

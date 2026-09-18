@@ -4,8 +4,15 @@
 
 export type ComposerState = 'live' | 'readonly' | 'waiting' | 'error'
 export type FollowState = 'on' | 'off'
-export type PanelMode = 'empty' | 'waiting-host' | 'replay' | 'live' | 'error'
+export type PanelMode = 'empty' | 'waiting-host' | 'replay' | 'live' | 'readonly-live' | 'error'
 export type PanelStatus = 'idle' | 'running' | 'waiting-interaction' | 'disconnected' | 'generating'
+
+/** Parent→child lineage chrome mirrored from Host `panel/state.breadcrumb` (phase-4). */
+export interface BreadcrumbState {
+  parentSessionId?: string
+  parentDeleted?: boolean
+  label?: string
+}
 
 export interface TabChromeItem {
   tabId: string
@@ -67,6 +74,10 @@ export interface UiMessage {
   changeList?: UiChangeList
   sourceMessageId?: string
   turn?: number
+  /** Subagent child session identity for `kind:'subagent'` cards (phase-4). */
+  childSessionId?: string
+  /** Subagent card lifecycle status (phase-4). */
+  subagentStatus?: 'running' | 'ended' | 'deleted'
 }
 
 export interface ContinueChrome {
@@ -120,6 +131,10 @@ export interface ChatUiState {
   stopping: boolean
   continueChrome?: ContinueChrome
   forkParentTitle?: string
+  /** In-panel child session context id mirrored from Host (phase-4). */
+  contextSessionId?: string
+  /** Parent→child lineage chrome mirrored from Host (phase-4). */
+  breadcrumb?: BreadcrumbState
   searchOpen: boolean
   searchQuery: string
   searchHits: SearchHit[]
@@ -171,7 +186,10 @@ function emit(): void {
 function deriveComposerState(next: ChatUiState): ComposerState {
   if (next.mode === 'waiting-host' || next.status === 'disconnected') return 'waiting'
   if (next.mode === 'error') return 'error'
-  if (next.mode === 'replay' || next.mode === 'empty') return 'readonly'
+  // A running child session is read-only live: streaming is mirror-only (AC-71).
+  if (next.mode === 'replay' || next.mode === 'empty' || next.mode === 'readonly-live') {
+    return 'readonly'
+  }
   if (next.mode === 'live') return 'live'
   return 'waiting'
 }
@@ -247,6 +265,10 @@ function mapMessage(m: unknown, index: number): UiMessage {
     incomplete: rec.incomplete === true,
     ...typeof rec.turn === 'number' ? { turn: rec.turn } : {},
     ...typeof rec.sourceMessageId === 'string' ? { sourceMessageId: rec.sourceMessageId } : {},
+    ...typeof rec.childSessionId === 'string' ? { childSessionId: rec.childSessionId } : {},
+    ...(rec.subagentStatus === 'running' || rec.subagentStatus === 'ended' || rec.subagentStatus === 'deleted')
+      ? { subagentStatus: rec.subagentStatus }
+      : {},
     ...mapActivity(rec.activity) ? { activity: mapActivity(rec.activity) } : {},
     ...mapChangeList(rec.changeList) ? { changeList: mapChangeList(rec.changeList) } : {},
   }
@@ -398,6 +420,21 @@ export function applyHostFrame(raw: unknown): void {
         }
       }
     }
+    const breadcrumbRaw = frame.breadcrumb
+    const breadcrumb: BreadcrumbState | undefined =
+      typeof breadcrumbRaw === 'object' && breadcrumbRaw !== null
+        ? {
+          ...typeof (breadcrumbRaw as Record<string, unknown>).parentSessionId === 'string'
+            ? { parentSessionId: (breadcrumbRaw as Record<string, unknown>).parentSessionId as string }
+            : {},
+          ...(breadcrumbRaw as Record<string, unknown>).parentDeleted === true
+            ? { parentDeleted: true }
+            : {},
+          ...typeof (breadcrumbRaw as Record<string, unknown>).label === 'string'
+            ? { label: (breadcrumbRaw as Record<string, unknown>).label as string }
+            : {},
+        }
+        : undefined
     state = {
       ...state,
       mode,
@@ -411,6 +448,10 @@ export function applyHostFrame(raw: unknown): void {
       messagesLoading: mode === 'waiting-host',
       continueChrome,
       forkParentTitle: typeof frame.forkParentTitle === 'string' ? frame.forkParentTitle : undefined,
+      contextSessionId: typeof frame.contextSessionId === 'string'
+        ? frame.contextSessionId
+        : undefined,
+      breadcrumb,
     }
   } else if (type === 'panel/tabs') {
     const tabs = Array.isArray(frame.tabs)
@@ -546,9 +587,11 @@ export function applyHostFrame(raw: unknown): void {
     const reason = String(frame.reason ?? 'unknown')
     const reasonCopy = reason === 'readonly' || reason === 'replay'
       ? '只读回放 — 不可直接发送'
-      : reason === 'waiting-host' || reason === 'disconnected'
-        ? 'Host 未就绪 — 请稍后重试'
-        : `无法发送（${reason}）`
+      : reason === 'readonly-live'
+        ? '子代理运行中 — 只读直播，不可直接发送'
+        : reason === 'waiting-host' || reason === 'disconnected'
+          ? 'Host 未就绪 — 请稍后重试'
+          : `无法发送（${reason}）`
     state = {
       ...state,
       banner: reasonCopy,

@@ -42,6 +42,6 @@
       "verifier": "completed"
     }
   },
-  "last_update": "2026-09-08T08:43:00Z",
-  "notes": "HG-3 passed: feature complete. Handoff: feature-delivery-summary.md (delivered vs gaps). Product commit awaits explicit 允许提交; then merge master + wiki."
+  "last_update": "2026-09-18T01:50:00Z",
+  "notes": "Re-run phase-4: 原实现未 commit 已丢失（仅剩 recovery patch）。基于当前 new/vscode-dsh 代码结构重新实现 subagent 进入/钉 Tab/父子已删导航；SHOULD-FIX 修复（钉运行中 readonly-live 口径 + 删 childrenOf）已闭环，hg3 passed。"
 }
