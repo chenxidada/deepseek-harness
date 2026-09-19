@@ -85,7 +85,7 @@ node node_modules/vitest/vitest.mjs run apps/vscode-dsh/tests/cap-test-harness.s
 | S-2：3 处漂移「选 runner 侧为真身」未回写 design.md 修订记录 | 🟢 LOW | 否 | reviewer-design 已判 SHOULD-FIX；`design.md:360-363` 修订记录为空。选择正确且已在 implementation.md 留档，仅架构层未沉淀，不影响 AC |
 | smoke 降级摘要路径 `ENOENT: open ''` + 「no usable Node interpreter for full report」 | 🟢 LOW | 否 | **预存问题**（implementation.md D-2 + reviewer-connectivity 均已确认）：发生在 build-freshness 失败降级摘要路径，本 Phase 未改动摘要模块，driver 未被加载。exit 仍 = 4，与基线一致，非本 Phase 引入 |
 
-无 CRITICAL / MEDIUM 残余风险。
+三项残余风险均为 🟢 LOW 且「阻塞 HG-3 = 否」；S-1/S-2 已通过修改 design.md 关闭（修订记录 R-1/R-2），仅剩 smoke 降级摘要路径为预存问题（非本 Phase 引入）。
 
 ---
 
