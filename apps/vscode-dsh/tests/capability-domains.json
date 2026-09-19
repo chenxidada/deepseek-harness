@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "groupMapping": {
+    "react-spa-main": "webview",
+    "editor-panel": "conversation",
+    "session-main-path": "session-host",
+    "subagent": "conversation",
+    "code-context": "code-context",
+    "change-list": "change-list",
+    "search": "search",
+    "fork": "timeline",
+    "continue": "timeline",
+    "history": "timeline",
+    "interaction": "interaction",
+    "test-hooks": "test-harness"
+  },
+  "domains": [
+    {
+      "id": "session-host",
+      "spec": "cap-session-host.spec.ts",
+      "scripts": [
+        "run-layer-v-smoke.sh",
+        "layer-v-shadow-preset.sh",
+        "layer-v-driver/extension.cjs",
+        "layer-v-driver/package.json"
+      ],
+      "absorbed": [
+        "session-host.spec.ts",
+        "session-host-preflight.spec.ts",
+        "node-env-guard.spec.ts",
+        "host-diagnostics.spec.ts",
+        "layer-v-inject-disconnect.spec.ts",
+        "auto-start-orchestrator.spec.ts",
+        "phase1-auto-start.spec.ts",
+        "phase2-auto-ready.spec.ts",
+        "verifier-phase1/layer-b-lifecycle.spec.ts",
+        "verifier-phase2/layer-b-host.spec.ts"
+      ],
+      "entryAssertions": [
+        {
+          "entrypoint": "activate",
+          "caps": []
+        }
+      ],
+      "verifierSources": null
+    },
+    {
+      "id": "conversation",
+      "spec": "cap-conversation.spec.ts",
+      "scripts": [],
+      "absorbed": [
+        "conversation-registry.spec.ts",
+        "multi-tab-session.integration.spec.ts",
+        "multi-tab-dispose.e2e.spec.ts",
+        "panel-close-delete.e2e.spec.ts",
+        "message-store-index.spec.ts",
+        "panel-l2-l3-protocol.spec.ts",
+        "editor-chat-panel.lifecycle.spec.ts",
+        "phase2-multitab-history-replay.spec.ts",
+        "phase4-subagent-enter-pin.spec.ts",
+        "phase4-new-conversation-chrome.spec.ts",
+        "gap-003-004-debt-fix.spec.ts"
+      ],
+      "entryAssertions": [
+        {
+          "entrypoint": "dsh.test.newConversation",
+          "caps": []
+        }
+      ],
+      "verifierSources": null
+    },
+    {
+      "id": "timeline",
+      "spec": "cap-timeline.spec.ts",
+      "scripts": [],
+      "absorbed": [
+        "timeline-projector.spec.ts",
+        "timeline-diff.e2e.spec.ts",
+        "timeline-diff.integration.spec.ts",
+        "spike-attribution-snapshot.spec.ts",
+        "phase2-history-delete-host.spec.ts",
+        "phase3-restart-continue.spec.ts",
+        "phase3-review-revert-replay.spec.ts",
+        "chat-ux-fork-retry-branch.spec.ts"
+      ],
+      "entryAssertions": [
+        {
+          "entrypoint": "dsh.test.listHistory",
+          "caps": []
+        }
+      ],
+      "verifierSources": null
+    },
+    {
+      "id": "interaction",
+      "spec": "cap-interaction.spec.ts",
+      "scripts": [],
+      "absorbed": [
+        "interaction-approval-resolution.spec.ts",
+        "interaction-fail-closed.e2e.spec.ts",
+        "interaction-fail-closed.integration.spec.ts",
+        "replaceability-interaction-ui.spec.ts",
+        "gap-005-009-debt-fix.spec.ts"
+      ],
+      "entryAssertions": [
+        {
+          "entrypoint": "dsh.test.injectApproval",
+          "caps": []
+        }
+      ],
+      "verifierSources": null
+    },
+    {
+      "id": "code-context",
+      "spec": "cap-code-context.spec.ts",
+      "scripts": [],
+      "absorbed": [
+        "phase1-code-context.spec.ts"
+      ],
+      "entryAssertions": [
+        {
+          "entrypoint": "dsh.test.resolveAtPath",
+          "caps": []
+        }
+      ],
+      "verifierSources": null
+    },
+    {
+      "id": "change-list",
+      "spec": "cap-change-list.spec.ts",
+      "scripts": [],
+      "absorbed": [
+        "phase2-change-list-display.spec.ts",
+        "chat-ux-refs-changes-diff.spec.ts",
+        "layer-a/refs-changes-diff.spec.ts"
+      ],
+      "entryAssertions": [
+        {
+          "entrypoint": "dsh.test.listChanges",
+          "caps": []
+        }
+      ],
+      "verifierSources": null
+    },
+    {
+      "id": "search",
+      "spec": "cap-search.spec.ts",
+      "scripts": [],
+      "absorbed": [
+        "chat-ux-session-search.spec.ts"
+      ],
+      "entryAssertions": [
+        {
+          "entrypoint": "dsh.test.searchSessions",
+          "caps": []
+        }
+      ],
+      "verifierSources": null
+    },
+    {
+      "id": "chat-panel",
+      "spec": "cap-chat-panel.spec.ts",
+      "scripts": [],
+      "absorbed": [
+        "chat-ux-activity-stream.spec.ts",
+        "chat-ux-streaming-cancel-follow.spec.ts",
+        "phase3-chat-ui-chassis.spec.ts",
+        "phase5-should-polish.spec.ts",
+        "layer-a/activity-stream.spec.ts",
+        "layer-a/streaming-cancel-follow.spec.ts",
+        "layer-a/foundation-render-probe.spec.ts",
+        "layer-a/protocol-decision-smoke.spec.ts"
+      ],
+      "entryAssertions": [
+        {
+          "entrypoint": "dsh.showPanel",
+          "caps": []
+        }
+      ],
+      "verifierSources": null
+    },
+    {
+      "id": "webview",
+      "spec": "cap-webview.spec.tsx",
+      "scripts": [],
+      "absorbed": [
+        "layer-a-rtl/editor-chat-shell.spec.tsx",
+        "layer-a-rtl/editor-chat-phase2.spec.tsx",
+        "verifier-phase1/layer-a-rtl.spec.tsx",
+        "verifier-phase2/layer-a-rtl.spec.tsx"
+      ],
+      "entryAssertions": [
+        {
+          "entrypoint": "message-bridge",
+          "caps": []
+        }
+      ],
+      "verifierSources": null
+    },
+    {
+      "id": "test-harness",
+      "spec": "cap-test-harness.spec.ts",
+      "scripts": [
+        "run-chat-ready-regression.sh",
+        "layer-v-support/layer-v-runtime.sh",
+        "layer-v-support/artifact-index.cjs",
+        "layer-v-support/build-freshness.cjs",
+        "layer-v-support/display-evidence.cjs",
+        "layer-v-support/display-evidence-shell.sh",
+        "layer-v-driver/sandbox-clean-state.cjs",
+        "run-layer-v-capabilities.sh",
+        "layer-v-capabilities.json",
+        "layer-v-capability-driver/extension.cjs",
+        "layer-v-capability-driver/capability-runner.cjs",
+        "layer-v-capability-driver/package.json"
+      ],
+      "absorbed": [
+        "artifact-index.spec.ts",
+        "display-evidence.spec.ts",
+        "display-evidence-shell.spec.ts",
+        "build-freshness.spec.ts",
+        "sandbox-clean-state.spec.ts",
+        "chat-ready-regression.spec.ts",
+        "layer-v-capabilities-phase3.spec.ts",
+        "layer-v-capability-runner.spec.ts",
+        "spike-t0a-replay-rebuild.spec.ts",
+        "spike-t0b-continue-capability.spec.ts"
+      ],
+      "entryAssertions": [
+        {
+          "entrypoint": "dsh.test.simulateStartupOnly",
+          "caps": []
+        }
+      ],
+      "verifierSources": null
+    }
+  ]
+}
