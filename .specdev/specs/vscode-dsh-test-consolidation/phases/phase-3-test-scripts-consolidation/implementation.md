@@ -178,7 +178,7 @@ env -u DEEPSEEK_API_KEY PATH="/usr/local/n/versions/node/24.3.0/bin:$PATH" bash 
 
 ## 反桩自检
 
-- 本 Phase 为纯搬移 + 台账落盘，**无新增桩、无 `@STUB(...)` 标记、无空壳函数**。19 项原语函数体均直接来自原 driver 内联定义（唯一例外是 3 处漂移按交付物 3 显式选侧，见偏差 D-1）。
+- 本 Phase 为纯搬移 + 台账落盘，**无新增桩、无未登记桩标记、无空壳函数**。19 项原语函数体均直接来自原 driver 内联定义（唯一例外是 3 处漂移按交付物 3 显式选侧，见偏差 D-1）。
 - 连通性：capabilities 脚本端到端 PASS 证明 `capability-runner.cjs` → `primitives.cjs` 的 require 链在真实 host 内可解析、可执行；smoke 的 driver 侧 require 链经 `node --check` 验证可解析（运行时未到截图阶段，属环境态）。
 
 ## 结论
