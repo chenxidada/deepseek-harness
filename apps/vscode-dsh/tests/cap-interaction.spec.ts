@@ -209,7 +209,7 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
         const applied = await controller.selectPermissionPreset('danger-full-access')
         expect(applied.preset).toBe('danger-full-access')
 
-        const lines = (await readFile(permissionLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+        const lines = (await readFile(permissionLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { kind: string; preset?: string })
         expect(lines.some(line => line.kind === 'list')).toBe(true)
         expect(lines.some(line => line.kind === 'select' && line.preset === 'danger-full-access')).toBe(true)
 
@@ -405,7 +405,7 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
           }
         }, 5_000)
 
-        const lines = (await readFile(approvalLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+        const lines = (await readFile(approvalLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { outcome: string })
         expect(lines.some(line => line.outcome === 'allowed-once')).toBe(true)
 
         await host.shutdown()
@@ -479,7 +479,7 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
         }, 5_000)
 
         expect(presenterLog.some(line => line.startsWith(`reject-once:${tab.sessionId}:`))).toBe(true)
-        const lines = (await readFile(approvalLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+        const lines = (await readFile(approvalLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { outcome: string })
         expect(lines.some(line => line.outcome === 'rejected')).toBe(true)
 
         await host.shutdown()
@@ -766,7 +766,7 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
           }
         }, 5_000)
 
-        const lines = (await readFile(questionsLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+        const lines = (await readFile(questionsLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { answer?: { answers?: Array<{ selected?: string[] }> } })
         expect(lines.some(line => line.answer?.answers?.[0]?.selected?.[0] === 'yes')).toBe(true)
 
         await host.shutdown()

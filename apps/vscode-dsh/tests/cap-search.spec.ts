@@ -92,6 +92,7 @@ describe('cap:search — session search and reverse path index', () => {
       const storageRoot = await mkdtemp(join(tmpdir(), 'dsh-phase6-search-'))
       const state = new Map<string, unknown>()
       const workspaceState = {
+        // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
         get<T>(key: string): T | undefined {
           return state.get(key) as T | undefined
         },

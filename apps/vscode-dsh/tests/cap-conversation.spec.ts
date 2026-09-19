@@ -1,5 +1,6 @@
 import { SnapshotStore } from '../src/change/snapshot-store.ts'
-import { ChatPanelHost, type EditorChatWebviewPanel, FakeWebviewPort, buildEditorChatSpaHtml, buildThinChatHtml, createEditorChatPanelController, parseWebviewToHostMessage } from '../src/chat-panel/index.ts'
+import { ChatPanelHost, FakeWebviewPort, buildEditorChatSpaHtml, buildThinChatHtml, createEditorChatPanelController, parseWebviewToHostMessage } from '../src/chat-panel/index.ts'
+import type { EditorChatWebviewPanel } from '../src/chat-panel/editor-chat-panel.ts'
 import { ConversationController } from '../src/conversation-controller.ts'
 import { ConversationRegistry, titleFromFirstMessage } from '../src/conversation-registry.ts'
 import { canRegisterConversationTabBar, conversationTreeItems, createConversationTabBar } from '../src/conversation-tab-bar.ts'
@@ -11,7 +12,6 @@ import { MessageStore } from '../src/message-store.ts'
 import { foldTimeline, hydrateFromAuthoritativeLog, recoverableDiffsFromMeta } from '../src/replay-hydrator.ts'
 import { IdeSessionHost } from '../src/session-host.ts'
 import { TimelineStore } from '../src/timeline-store.ts'
-import { type HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -139,12 +139,12 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(second.sessionId).toBe(tabB.sessionId)
         expect(second.sessionId).not.toBe(first.sessionId)
 
-        const lines = (await readFile(promptLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+        const lines = (await readFile(promptLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { sessionId: string; contentBlocks: Array<{ text: string }> })
         expect(lines).toHaveLength(2)
-        expect(lines[0].sessionId).toBe(tabA.sessionId)
-        expect(lines[1].sessionId).toBe(tabB.sessionId)
-        expect(lines[0].contentBlocks[0].text).toBe('message-for-A')
-        expect(lines[1].contentBlocks[0].text).toBe('message-for-B')
+        expect(lines[0]!.sessionId).toBe(tabA.sessionId)
+        expect(lines[1]!.sessionId).toBe(tabB.sessionId)
+        expect(lines[0]!.contentBlocks[0]!.text).toBe('message-for-A')
+        expect(lines[1]!.contentBlocks[0]!.text).toBe('message-for-B')
 
         // Titles from first messages (AC[vscode-dsh-usable-loop]-11).
         expect(controller.registry.get(tabA.tabId)?.title).toBe('message-for-A')
@@ -456,6 +456,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       it('CAP-CONVERSATION-014 writes workspaceState on every openTabSet change and excludes empty semantics', () => {
         const writes: unknown[] = []
         const state = {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
           get<T>(_key: string): T | undefined {
             return undefined
           },
@@ -687,7 +688,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
               },
             },
           },
-        } as HarnessNotification)
+        })
         const item = store.itemsForSession('s').find(row => row.kind === 'assistant')
         expect(item?.description).toBe('assistant turn')
         expect(item?.description?.includes(long)).toBe(false)
@@ -733,7 +734,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             get() { return undefined },
             update() {},
           },
-        }, vscode as never)
+        }, vscode)
 
         expect(panelRegistered).toBe(true)
         expect(getChatPanelHost()).toBeDefined()
@@ -785,7 +786,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             return { dispose() {} }
           },
           asWebviewUri(uri) {
-            return { toString: () => `webview:${String((uri as { fsPath?: string }).fsPath ?? '')}` }
+            return { toString: () => `webview:${(uri as { fsPath?: string }).fsPath ?? ''}` }
           },
         },
         reveal() {
@@ -949,7 +950,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         host.attach(fake)
         expect(fake.receivedFromHost.some(m => m.type === 'panel/tabs')).toBe(true)
         fake.emitFromWebview({ type: 'ui/history-open' })
-        expect(fake.receivedFromHost.some(m => m.type === 'panel/history' && m.open === true)).toBe(true)
+        expect(fake.receivedFromHost.some(m => m.type === 'panel/history' &&  m.open)).toBe(true)
       })
 
       it('CAP-CONVERSATION-026 buildEditorChatSpaHtml uses asWebviewUri for local assets (CSP smoke)', () => {
@@ -1165,7 +1166,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         const panel = new ChatPanelHost({
           registry: controller.registry,
           messages: controller.messages,
-          interactions: host.interactions as never,
+          interactions: host.interactions,
           isHostReady: () => true,
           acceptSend: text => controller.promptActive(text),
         })
@@ -1508,7 +1509,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
               return { dispose() {} }
             },
           },
-        } as never)
+        })
 
         for (const name of [
           'dsh.openHistory',
@@ -1555,6 +1556,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           subscriptions: [],
           extensionPath: '/tmp/dsh-phase2-ac63',
           workspaceState: {
+            // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
             get<T>(key: string): T | undefined {
               if (key === EXTENSION_INDEX_STATE_KEY) return stored as T | undefined
               return undefined
@@ -1597,7 +1599,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
               return { dispose() {} }
             },
           },
-        } as never)
+        })
 
         // No dsh.startSession — conversations stays undefined (AC[vscode-dsh-usable-loop]-63).
         const listed = await commands.get('dsh.test.listHistory')!() as Array<{ sessionId: string; title: string }>
@@ -1670,7 +1672,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         },
         setConversationRegistry(registry?: unknown) {
           if (registry !== undefined) {
-            ;(this.interactions as InteractionCoordinator).setRegistry(registry as never)
+            ;(this.interactions).setRegistry(registry as never)
           }
         },
         onNotification(listener: (notification: { method: string; params: Record<string, unknown> }) => void) {
@@ -2019,10 +2021,11 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             get() { return undefined },
             update() {},
           },
-        }, vscode as never)
+        }, vscode)
       }
 
       it('CAP-CONVERSATION-050 chrome HTML always exposes labeled 新建会话 + action/new-conversation', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('id="newConversationBtn"')
         expect(html).toContain('新建会话')
@@ -2040,10 +2043,11 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         const pkg = await import('../package.json', { with: { type: 'json' } })
         const bindings = pkg.default.contributes.keybindings
         expect(Array.isArray(bindings)).toBe(true)
-        expect(bindings!.some((b: { command?: string }) => b.command === 'dsh.newConversation')).toBe(true)
+        expect(bindings.some((b: { command?: string }) => b.command === 'dsh.newConversation')).toBe(true)
         expect(parseWebviewToHostMessage({ type: 'action/new-conversation' })).toEqual({
           type: 'action/new-conversation',
         })
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('id="newConversationBtn"')
         expect(html).toMatch(/id="newConversationBtn"[^>]*>[\s]*新建会话/)

@@ -1,9 +1,10 @@
 import { AutoReadyCoordinator } from '../src/auto-ready-coordinator.ts'
 import { AutoStartOrchestrator, type StartErrorKind, type StartHostPort, type StartOrchestratorSnapshot, type StartReason } from '../src/auto-start-orchestrator.ts'
-import { ChatPanelHost, type EditorChatWebviewPanel, FakeWebviewPort, buildEditorChatSpaHtml, createEditorChatPanelController } from '../src/chat-panel/index.ts'
+import { ChatPanelHost, FakeWebviewPort, buildEditorChatSpaHtml, createEditorChatPanelController } from '../src/chat-panel/index.ts'
+import type { EditorChatWebviewPanel } from '../src/chat-panel/editor-chat-panel.ts'
 import { decideFollowState } from '../src/chat-panel/render/follow-state.ts'
 import { ConnectionUiController, type StatusBarItemLike } from '../src/connection-ui.ts'
-import { ConversationController } from '../src/conversation-controller.ts'
+import { ConversationController, type ContinueConversationResult } from '../src/conversation-controller.ts'
 import { ConversationRegistry } from '../src/conversation-registry.ts'
 import { buildIdeChildEnv } from '../src/env.ts'
 import { EXTENSION_INDEX_STATE_KEY, type ExtensionIndexSnapshot } from '../src/extension-index.ts'
@@ -24,7 +25,7 @@ import Module from 'node:module'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
 function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -3408,7 +3409,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         activateWith(makeVscode())
         await commands.get('dsh.test.setCredentialPresence')!(true)
         await commands.get('dsh.test.requestStart')!('command-start')
-        const hostRef = startSpy.mock.instances[0] as unknown as IdeSessionHost | undefined
+        const hostRef = startSpy.mock.instances[0] as IdeSessionHost | undefined
         expect(getConversationController()).toBeDefined()
         expect(hostRef).toBeDefined()
 
@@ -3580,7 +3581,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
     describe('phase-2 auto-ready L2', () => {
       const commands = new Map<string, (...args: unknown[]) => unknown>()
       let mem: Map<string, unknown>
-      let continueSpy: ReturnType<typeof vi.spyOn> | undefined
+      let continueSpy: MockInstance<(tabIdArg?: string) => Promise<ContinueConversationResult>> | undefined
 
       afterEach(async () => {
         continueSpy?.mockRestore()
@@ -3635,10 +3636,11 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
           subscriptions: [],
           extensionPath: '/tmp/dsh-phase2-ready',
           workspaceState: {
+            // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
             get<T>(key: string) { return mem.get(key) as T | undefined },
             update(key: string, value: unknown) { mem.set(key, value) },
           },
-        }, vscode as never)
+        }, vscode)
       }
 
       function mockConnectedHost(opts?: {
@@ -3705,7 +3707,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         })
         const tabs = getConversationSnapshot().tabs
         expect(tabs[0]?.mode).toBe('live')
-        expect(tabs.every(t => t.unread !== true)).toBe(true)
+        expect(tabs.every(t => ! t.unread)).toBe(true)
 
         const sent = await commands.get('dsh.test.sendPrompt')!('hello phase2')
         expect(sent).toMatchObject({ ok: true })
@@ -3745,7 +3747,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         expect(trigger.applied).toBe(true)
 
         expect(continueSpy).not.toHaveBeenCalled()
-        expect(getConversationSnapshot().tabs.every(t => t.unread !== true)).toBe(true)
+        expect(getConversationSnapshot().tabs.every(t => ! t.unread)).toBe(true)
       })
 
       it('CAP-SESSION-HOST-123 empty openTabSet → New live; unread false; sendPrompt ok', async () => {
@@ -3757,7 +3759,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         await vi.waitFor(() => {
           expect(getConversationSnapshot().tabs.some(t => t.mode === 'live')).toBe(true)
         })
-        expect(getConversationSnapshot().tabs.every(t => t.unread !== true)).toBe(true)
+        expect(getConversationSnapshot().tabs.every(t => ! t.unread)).toBe(true)
 
         const sent = await commands.get('dsh.test.sendPrompt')!('ac4 prompt')
         expect(sent).toMatchObject({ ok: true })
@@ -3786,8 +3788,9 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         const host = new IdeSessionHost()
         host.status = 'connected'
         // Authoritative log must carry user/assistant content or restore strips the row.
-        host.readSessionLog = async () => userAssistantEvents('first enqueue', 'ac4a-asst') as never
+        host.readSessionLog = async () => userAssistantEvents('first enqueue', 'ac4a-asst')
         const cold = new ConversationController(host, {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
           get<T>(key: string) { return mem.get(key) as T | undefined },
           update(key: string, value: unknown) { mem.set(key, value) },
         }, '/tmp/dsh-phase2-ready')
@@ -3908,7 +3911,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         coord.onHostReadyChanged(true)
         expect(news).toEqual([])
         coord.onVisibilityChanged(true)
-        await vi.waitFor(() => expect(news).toEqual(['new']))
+        await vi.waitFor(() =>{  expect(news).toEqual(['new']) })
 
         coord.onVisibilityChanged(false)
         expect(coord.visibilityEpoch).toBe(1)
@@ -3947,7 +3950,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         coord.onHostReadyChanged(true)
         // First apply starts via visibility and blocks inside restoreOpenTabSet.
         coord.onVisibilityChanged(true)
-        await vi.waitFor(() => expect(restoreCalls).toHaveLength(1))
+        await vi.waitFor(() =>{  expect(restoreCalls).toHaveLength(1) })
 
         // Visibility flip while apply is in-flight: new epoch, readyApplied cleared.
         coord.onVisibilityChanged(false)
@@ -3958,7 +3961,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         releaseRestore()
 
         // New epoch must get its own apply (second restore → empty → New), not stall on in-flight.
-        await vi.waitFor(() => expect(restoreCalls.length).toBeGreaterThanOrEqual(2))
+        await vi.waitFor(() =>{  expect(restoreCalls.length).toBeGreaterThanOrEqual(2) })
         expect(coord.readyAppliedForVisibilityEpoch).toBe(true)
         expect(news.length).toBeGreaterThanOrEqual(2)
       })
@@ -3987,7 +3990,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
             return { dispose() {} }
           },
           asWebviewUri(uri) {
-            return { toString: () => `webview:${String((uri as { fsPath?: string }).fsPath ?? '')}` }
+            return { toString: () => `webview:${(uri as { fsPath?: string }).fsPath ?? ''}` }
           },
         },
         reveal() {
@@ -4163,7 +4166,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         expect(new Set(tabs.tabs!.map(t => t.title)).size).toBe(2)
 
         fake.emitFromWebview({ type: 'ui/history-open' })
-        const histFrames = fake.receivedFromHost.filter(m => m.type === 'panel/history' && m.open === true) as Array<{
+        const histFrames = fake.receivedFromHost.filter(m => m.type === 'panel/history' &&  m.open) as Array<{
           rows?: Array<{ sessionId: string; title: string }>
           loading?: boolean
         }>
@@ -4397,7 +4400,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
             return { dispose() {} }
           },
           asWebviewUri(uri) {
-            return { toString: () => `webview:${String((uri as { fsPath?: string }).fsPath ?? '')}` }
+            return { toString: () => `webview:${(uri as { fsPath?: string }).fsPath ?? ''}` }
           },
         },
         reveal() {},

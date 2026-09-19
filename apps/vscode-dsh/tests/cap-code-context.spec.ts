@@ -419,6 +419,7 @@ describe('cap:code-context — @path resolution, references, and selection conte
       })
 
       it('CAP-CODE-CONTEXT-019 thin chat HTML renders ref-cards and composer/prefill handler', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml('csp-nonce-test')
         expect(html).toContain('ref-card')
         expect(html).toContain('action/open-reference')

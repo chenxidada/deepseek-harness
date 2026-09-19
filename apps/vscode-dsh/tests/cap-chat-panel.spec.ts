@@ -1,5 +1,5 @@
 import { ChatPanelHost, FakeWebviewPort, type HostToWebviewMessage, buildThinChatHtml, parseWebviewToHostMessage, resolveComposerKeydown } from '../src/chat-panel/index.ts'
-import { type ContinueCapability, continueChromeFor } from '../src/continue-capability.ts'
+import { continueChromeFor } from '../src/continue-capability.ts'
 import { ConversationController } from '../src/conversation-controller.ts'
 import { ConversationRegistry } from '../src/conversation-registry.ts'
 import { UNREAD_INDICATOR, conversationTreeItems } from '../src/conversation-tab-bar.ts'
@@ -28,7 +28,7 @@ function sessionEvent(
       sessionId,
       event: { type, data },
     },
-  } as HarnessNotification
+  }
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
@@ -533,11 +533,11 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
 
         const result = await controller.cancelActiveTurn()
         expect(result.ok).toBe(false)
-        if (result.ok === false) {
+        if (!result.ok) {
           expect(result.error).toContain('timed out')
         }
         const banners = panel.getOutboundLog().filter(m => m.type === 'ui/banner')
-        expect(banners.some(b => b.type === 'ui/banner' && String(b.text).includes('中断失败'))).toBe(true)
+        expect(banners.some(b => b.type === 'ui/banner' && b.text.includes('中断失败'))).toBe(true)
         // Must not pretend stop succeeded.
         const assistant = controller.messages.get(tab.sessionId).find(m => m.role === 'assistant')
         expect(assistant?.incomplete).not.toBe(true)
@@ -627,6 +627,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
 
     describe('test:theme-tokens (VP-CR-6)', () => {
       it('CAP-CHAT-PANEL-013 HTML/CSS is driven by --vscode-* tokens, not a bare gray-box background', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml('vscode-csp')
         expect(html).toContain('--vscode-')
         expect(html).toContain('var(--vscode-sideBar-background')
@@ -639,6 +640,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
 
     describe('test:bubble-layers (VP-CR-6)', () => {
       it('CAP-CHAT-PANEL-014 user and assistant bubbles use distinguishable classes', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('.msg.bubble.user')
         expect(html).toContain('.msg.bubble.assistant')
@@ -649,6 +651,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
 
     describe('test:composer-contrast (VP-CR-6)', () => {
       it('CAP-CHAT-PANEL-015 composer is a fixed bottom bar with a themed Send button', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('data-testid="composer"')
         expect(html).toContain('position: sticky')
@@ -669,6 +672,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         const readme = resolve(screenshotsDir, 'README.md')
         expect(existsSync(readme)).toBe(true)
 
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('dsh-chat-chassis')
         expect(html).toContain('--vscode-')
@@ -679,6 +683,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
 
     describe('theme refresh (VP-CR-6a)', () => {
       it('CAP-CHAT-PANEL-017 Host pushThemeKind posts ui/theme and HTML consumes it', async () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain("msg.type === 'ui/theme'")
         expect(html).toContain('applyThemeKind')
@@ -709,6 +714,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
 
     describe('generating indicator', () => {
       it('CAP-CHAT-PANEL-018 status/set generating shows Generating…; idle clears', async () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('Generating…')
         expect(html).toContain('is-generating')
@@ -753,6 +759,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       })
 
       it('CAP-CHAT-PANEL-020 HTML wires keydown to resolveComposerKeydown and only posts send on Enter', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('resolveComposerKeydown')
         expect(html).toContain("action === 'send'")
@@ -800,6 +807,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       })
 
       it('CAP-CHAT-PANEL-023 Webview HTML embeds safeMarkdownBrowserSource helpers ( sync)', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml('csp')
         const src = safeMarkdownBrowserSource()
         expect(html).toContain('function escapeHtml')
@@ -889,7 +897,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
           },
           ColorThemeKind: { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 },
         }
-        activate({ subscriptions: [], extensionPath: '/tmp' }, vscode as never)
+        activate({ subscriptions: [], extensionPath: '/tmp' }, vscode)
         const result = await vscode.commands.executeCommand('dsh.copyToClipboard', 'fenced-body')
         expect(result).toEqual({ ok: true })
         expect(writes).toEqual(['fenced-body'])
@@ -1015,6 +1023,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
 
     describe('Host authority unchanged', () => {
       it('CAP-CHAT-PANEL-031 HTML does not invent local mode/session decisions beyond panel/state', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain("msg.type === 'panel/state'")
         expect(html).toContain('mode = msg.mode')
@@ -1116,7 +1125,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         expect(live.reasonText).toBeTruthy()
         expect(live.reasonText).not.toBe('暂不可用')
 
-        const cap = continueChromeFor('same-id', 'unknown' as ContinueCapability, {
+        const cap = continueChromeFor('same-id', 'unknown', {
           mode: 'replay',
           hostReady: true,
         })
@@ -1134,6 +1143,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       })
 
       it('CAP-CHAT-PANEL-037 L3 HTML shows continueReason beside Continue control', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('id="continueReason"')
         expect(html).toContain('continueReason')
@@ -1157,7 +1167,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         expect(liveChrome.reason).toBe('already-live')
         expect(liveChrome.reasonText).toBeTruthy()
 
-        host.status = 'disconnected' as 'connected'
+        host.status = 'disconnected'
         const hostChrome = controller.continueChromeForTab(liveTab.tabId)
         // Live still wins when mode is live.
         expect(hostChrome.reason).toBe('already-live')
@@ -1165,7 +1175,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         const opened = controller.registry.create('replay-sess')
         controller.registry.setMode(opened.tabId, 'replay')
         controller.registry.switchTo(opened.tabId)
-        host.status = 'disconnected' as 'connected'
+        host.status = 'disconnected'
         const offlineReplay = controller.continueChromeForTab(opened.tabId)
         expect(offlineReplay.visibility).toBe('disabled')
         expect(offlineReplay.reason).toBe('host-not-ready')
@@ -1254,6 +1264,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       })
 
       it('CAP-CHAT-PANEL-041 L3: diff-summary renders entry; reveal-change-list parses and reaches Host', async () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('diff-summary')
         expect(html).toContain('action/reveal-change-list')
@@ -1322,8 +1333,9 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         const pkg = await import('../package.json', { with: { type: 'json' } })
         const bindings = pkg.default.contributes.keybindings
         expect(Array.isArray(bindings)).toBe(true)
-        expect(bindings!.some((b: { command?: string }) => b.command === 'dsh.newConversation')).toBe(true)
+        expect(bindings.some((b: { command?: string }) => b.command === 'dsh.newConversation')).toBe(true)
 
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('id="newConversationBtn"')
         expect(html).toMatch(/id="newConversationBtn"[^>]*>[\s]*新建会话/)

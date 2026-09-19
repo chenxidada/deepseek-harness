@@ -541,7 +541,7 @@ describe('cap:webview — editor chat shell React rendering', () => {
       })
 
       it('CAP-WEBVIEW-015 follow-state turns on with stream and resumes via btn-follow-resume', async () => {
-        const { getFollowState } = mountDshProbes()
+        const probes = mountDshProbes()
         render(<App bridge={bridge} />)
         await act(async () => {
           applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
@@ -556,7 +556,7 @@ describe('cap:webview — editor chat shell React rendering', () => {
         })
         await waitFor(() => {
           expect(screen.getByTestId('editor-chat-root').getAttribute('data-follow-state')).toBe('on')
-          expect(getFollowState()).toBe('on')
+          expect(probes.getFollowState()).toBe('on')
         })
 
         const messagesEl = screen.getByTestId('messages')
@@ -570,14 +570,14 @@ describe('cap:webview — editor chat shell React rendering', () => {
         fireEvent.scroll(messagesEl)
         await waitFor(() => {
           expect(screen.getByTestId('editor-chat-root').getAttribute('data-follow-state')).toBe('off')
-          expect(getFollowState()).toBe('off')
+          expect(probes.getFollowState()).toBe('off')
           expect(screen.getByTestId('btn-follow-resume')).toBeTruthy()
         })
 
         fireEvent.click(screen.getByTestId('btn-follow-resume'))
         await waitFor(() => {
           expect(screen.getByTestId('editor-chat-root').getAttribute('data-follow-state')).toBe('on')
-          expect(getFollowState()).toBe('on')
+          expect(probes.getFollowState()).toBe('on')
         })
       })
 
@@ -1044,9 +1044,9 @@ describe('cap:webview — editor chat shell React rendering', () => {
         })
 
         fireEvent.click(screen.getAllByTestId('btn-edit-resend')[0]!)
-        await waitFor(() => expect(screen.getByTestId('edit-resend-form')).toBeTruthy())
+        await waitFor(() =>{  expect(screen.getByTestId('edit-resend-form')).toBeTruthy() })
         fireEvent.click(screen.getByTestId('btn-edit-resend-cancel'))
-        await waitFor(() => expect(screen.queryByTestId('edit-resend-form')).toBeNull())
+        await waitFor(() =>{  expect(screen.queryByTestId('edit-resend-form')).toBeNull() })
         expect(posts.some(p => (p as { type?: string }).type === 'action/edit-resend')).toBe(false)
 
         const payloads: Array<{ messageId?: string; text?: string }> = []
@@ -1055,7 +1055,7 @@ describe('cap:webview — editor chat shell React rendering', () => {
           [1, 'u-b', 'edited-b'],
         ] as const) {
           fireEvent.click(screen.getAllByTestId('btn-edit-resend')[idx]!)
-          await waitFor(() => expect(screen.getByTestId('edit-resend-form')).toBeTruthy())
+          await waitFor(() =>{  expect(screen.getByTestId('edit-resend-form')).toBeTruthy() })
           fireEvent.change(screen.getByTestId('edit-resend-input'), { target: { value: text } })
           fireEvent.click(screen.getByTestId('btn-edit-resend-confirm'))
           const hit = posts.find(p =>
@@ -1086,16 +1086,16 @@ describe('cap:webview — editor chat shell React rendering', () => {
         })
         fireEvent.click(within(screen.getByTestId('history-row')).getByTestId('btn-history-more'))
         fireEvent.click(within(screen.getByTestId('history-row')).getByTestId('btn-history-delete'))
-        await waitFor(() => expect(screen.getByTestId('delete-confirm-modal')).toBeTruthy())
+        await waitFor(() =>{  expect(screen.getByTestId('delete-confirm-modal')).toBeTruthy() })
         fireEvent.click(screen.getByTestId('btn-delete-cancel'))
-        await waitFor(() => expect(screen.queryByTestId('delete-confirm-modal')).toBeNull())
+        await waitFor(() =>{  expect(screen.queryByTestId('delete-confirm-modal')).toBeNull() })
         expect(posts.some(p => (p as { type?: string }).type === 'ui/delete-request')).toBe(false)
       })
 
       it('CAP-WEBVIEW-029 V-A5: chrome vs history search origin isolation / flip', async () => {
         render(<App bridge={bridge} />)
         fireEvent.click(screen.getByTestId('btn-search'))
-        await waitFor(() => expect(screen.getByTestId('search-panel')).toBeTruthy())
+        await waitFor(() =>{  expect(screen.getByTestId('search-panel')).toBeTruthy() })
         fireEvent.change(screen.getByTestId('search-input'), { target: { value: 'chrome-q' } })
         await act(async () => {
           applyHostFrame({
@@ -1110,7 +1110,7 @@ describe('cap:webview — editor chat shell React rendering', () => {
             }],
           })
         })
-        await waitFor(() => expect(screen.getByTestId('search-hit')).toBeTruthy())
+        await waitFor(() =>{  expect(screen.getByTestId('search-hit')).toBeTruthy() })
 
         await act(async () => {
           applyHostFrame({
@@ -1331,7 +1331,7 @@ describe('cap:webview — editor chat shell React rendering', () => {
             }],
           })
         })
-        await waitFor(() => expect(screen.getByTestId('tab-item')).toBeTruthy())
+        await waitFor(() =>{  expect(screen.getByTestId('tab-item')).toBeTruthy() })
 
         fireEvent.contextMenu(screen.getByTestId('tab-item'))
         await waitFor(() => {
@@ -1344,13 +1344,13 @@ describe('cap:webview — editor chat shell React rendering', () => {
           expect(screen.getByTestId('delete-confirm-copy').textContent).toMatch(/不可恢复/)
         })
         fireEvent.click(screen.getByTestId('btn-delete-cancel'))
-        await waitFor(() => expect(screen.queryByTestId('delete-confirm-modal')).toBeNull())
+        await waitFor(() =>{  expect(screen.queryByTestId('delete-confirm-modal')).toBeNull() })
         expect(posts.some(p => (p as { type?: string }).type === 'ui/delete-request')).toBe(false)
 
         fireEvent.contextMenu(screen.getByTestId('tab-item'))
-        await waitFor(() => expect(screen.getByTestId('menu-tab-delete-session')).toBeTruthy())
+        await waitFor(() =>{  expect(screen.getByTestId('menu-tab-delete-session')).toBeTruthy() })
         fireEvent.click(screen.getByTestId('menu-tab-delete-session'))
-        await waitFor(() => expect(screen.getByTestId('delete-confirm-modal')).toBeTruthy())
+        await waitFor(() =>{  expect(screen.getByTestId('delete-confirm-modal')).toBeTruthy() })
         fireEvent.click(screen.getByTestId('btn-delete-confirm'))
         expect(posts.some(p =>
           (p as { type?: string; sessionId?: string }).type === 'ui/delete-request'
@@ -1442,13 +1442,13 @@ describe('cap:webview — editor chat shell React rendering', () => {
         })
         // Cancel first — must not emit, and must not accidentally target active
         fireEvent.click(screen.getByTestId('btn-delete-cancel'))
-        await waitFor(() => expect(screen.queryByTestId('delete-confirm-modal')).toBeNull())
+        await waitFor(() =>{  expect(screen.queryByTestId('delete-confirm-modal')).toBeNull() })
         expect(posts.some(p => (p as { type?: string }).type === 'ui/delete-request')).toBe(false)
 
         fireEvent.contextMenu(inactive!)
-        await waitFor(() => expect(screen.getByTestId('menu-tab-delete-session')).toBeTruthy())
+        await waitFor(() =>{  expect(screen.getByTestId('menu-tab-delete-session')).toBeTruthy() })
         fireEvent.click(screen.getByTestId('menu-tab-delete-session'))
-        await waitFor(() => expect(screen.getByTestId('delete-confirm-modal')).toBeTruthy())
+        await waitFor(() =>{  expect(screen.getByTestId('delete-confirm-modal')).toBeTruthy() })
         fireEvent.click(screen.getByTestId('btn-delete-confirm'))
 
         const deletes = posts.filter(p =>

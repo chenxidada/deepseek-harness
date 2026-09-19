@@ -211,6 +211,7 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
       })
 
       it('CAP-CHANGE-LIST-006 copy dictionary has no pending-write / awaiting-approval wording', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         // Assert product strings / status chip path — ignore comments.
         // phase-4: status labels live in extracted changeStatusLabel (DEBT-CUX-001).
@@ -302,6 +303,7 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
       })
 
       it('CAP-CHANGE-LIST-008 primary click posts change/open (not only shift/dblclick); expand is separate', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         // Primary open path on change-list-item click.
         expect(html).toMatch(/change-list-item[\s\S]*change\/open/)
@@ -342,6 +344,7 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
       })
 
       it('CAP-CHANGE-LIST-010 change→source posts reveal-source; Host scrolls assistant bubble (not change-list)', async () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('change/reveal-source')
         expect(html).toContain('change-list-reveal-source')
@@ -420,6 +423,7 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
         expect(lists).toHaveLength(2)
         expect(lists[0]!.changeList?.turn).not.toBe(lists[1]!.changeList?.turn)
 
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('data-turn')
         expect(html).toContain('data-source-message-id')
@@ -427,6 +431,7 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
       })
 
       it('CAP-CHANGE-LIST-012 change-list / diff pane uses textContent escape path (no script / external load)', () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('change/get-diff')
         expect(html).toMatch(/textContent/)
@@ -437,6 +442,7 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
       })
 
       it('CAP-CHANGE-LIST-013 diff-summary click carries sourceMessageId; Host reveals corresponding list', async () => {
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('action/reveal-change-list')
         expect(html).toMatch(/reveal\.sourceMessageId\s*=/)

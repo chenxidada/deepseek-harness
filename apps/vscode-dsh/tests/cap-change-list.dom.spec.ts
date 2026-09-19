@@ -53,7 +53,7 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
           sessionId,
           event: { type, seq: 1, time: 0, data },
         },
-      } as HarnessNotification
+      }
     }
 
     describe('layer-B timeline + replay refs/changes', () => {
@@ -280,6 +280,7 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
         fillUserBubbleWithRefCards(replay, text)
         expect(replay.querySelectorAll('[data-testid="ref-card"]').length).toBe(1)
 
+        // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('function extractAtPathTokens')
         expect(html).toContain('function renderChangeListBubble')

@@ -363,6 +363,8 @@ graph TD
 |---|------|-----------|--------|--------|---------|
 | R-1 | 2026-09-19 | 核心实体/数据模型 §1 | 新增顶层 `testScripts` 字段（`{ path, category, domain }`）承载 AC-19 四类归类；`domains[].scripts` 降级为历史字段，不再作 AC-19 唯一真相源 | 用户确认（HG-3 SHOULD-FIX S-1） | review-design.md S-1 |
 | R-2 | 2026-09-19 | DEBT-1 去重方案 | 3 处语义漂移（`assistantText` / `probeScreenSize` / `resolveCaptureTool`）选 **runner 侧**为真身：`assistantText` 采用无分隔符 `+= ''` 拼接（放弃 driver 侧 `.join('\n')`），两个临时文件名采用 `layer-v-cap-*` 前缀。理由：capabilities exit 0 是唯一真机验证通过的路径，以 runner 侧为真身 | 用户确认（HG-3 SHOULD-FIX S-2） | review-design.md S-2 |
+| R-3 | 2026-09-19 | lint 归零方案（决策 5） | `tests/tsconfig.json` 的 `compilerOptions` 追加 `"jsx": "react-jsx"`（复用 `apps/vscode-dsh/webview/tsconfig.json:7` 既有值），使 glob 覆盖 `.tsx` 后正确解析 JSX，消除 35 条 `TS17004` config 假错误。属「glob 覆盖全目录」的必要补充，非 scope creep | 用户确认（HG-3 SHOULD-FIX S-1） | review-design.md S-1 |
+| R-4 | 2026-09-19 | lint 归零方案 / 决策 5 / 摘要 | oxlint glob 化真实起点为 **145**（非 §决策 5 / §摘要字面的「203」）。203 为 Phase 2 归并前（61 文件时代）的旧假设值；归并后 tests 为 12 cap + 3 helper，真实起点 145，已在 Phase 4 implementation.md D-2 复测留档。引用时以 145 为准 | 用户确认（HG-3 SHOULD-FIX S-2） | review-design.md S-2 |
 
 ## 建议的下一步
 

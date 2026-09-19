@@ -264,7 +264,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         )
         expect(executed).toHaveLength(1)
         expect(executed[0]?.command).toBe('vscode.diff')
-        expect(String(executed[0]?.args[2] ?? '')).toContain('fake-write.txt')
+        expect((executed[0]?.args[2] as string | undefined) ?? '').toContain('fake-write.txt')
 
         // Default is post-hoc only — no mid-run confirm command in package contributes is asserted via constant.
         expect(getWriteDiffEntries).toBeTypeOf('function')
@@ -318,7 +318,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
                 return { scheme: 'file', path, fsPath: path, toString: () => `file://${path}` }
               },
             },
-          } as never,
+          },
         )
 
         expect(commands.has('dsh.reviewWorkspaceDiffs')).toBe(true)
@@ -509,6 +509,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
       it('CAP-TIMELINE-009 strips empty Tabs, forces replay, prioritizes active, caps UI at N', async () => {
         const mem = new Map<string, unknown>()
         const state = {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
           get<T>(key: string) { return mem.get(key) as T | undefined },
           update(key: string, value: unknown) { mem.set(key, value) },
         }
@@ -564,7 +565,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         expect(result.hydrated[0]?.sessionId).toBe('sess-c')
         expect(result.deferredSessionIds.length).toBeGreaterThanOrEqual(1)
         // New tabIds (AD-CU-5 cold restore).
-        expect(result.hydrated.every(h => h.tabId.startsWith('old-') === false)).toBe(true)
+        expect(result.hydrated.every(h => ! h.tabId.startsWith('old-'))).toBe(true)
 
         const index = controller2.index.read()
         expect(index.openTabSet.every(t => t.sessionId !== 'sess-empty')).toBe(true)
@@ -578,6 +579,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
       it('CAP-TIMELINE-010 waiting-host when Host disconnected; auto-restores after connect', async () => {
         const mem = new Map<string, unknown>()
         const state = {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
           get<T>(key: string) { return mem.get(key) as T | undefined },
           update(key: string, value: unknown) { mem.set(key, value) },
         }
@@ -641,6 +643,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
       it('CAP-TIMELINE-012 persist keeps deferred in openTabSet across second restart', async () => {
         const mem = new Map<string, unknown>()
         const state = {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
           get<T>(key: string) { return mem.get(key) as T | undefined },
           update(key: string, value: unknown) { mem.set(key, value) },
         }
@@ -687,6 +690,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
       it('CAP-TIMELINE-013 pendingRestoreLatch auto-fires when Host becomes connected', async () => {
         const mem = new Map<string, unknown>()
         const state = {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
           get<T>(key: string) { return mem.get(key) as T | undefined },
           update(key: string, value: unknown) { mem.set(key, value) },
         }
@@ -710,7 +714,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         expect(controller.panelSnapshot().pendingRestore).toBe(true)
 
         host.status = 'connected'
-        await waitFor(() => controller.panelSnapshot().pendingRestore === false, 2_000)
+        await waitFor(() => ! controller.panelSnapshot().pendingRestore, 2_000)
         expect(controller.registry.list()).toHaveLength(1)
         expect(controller.registry.getActive()?.mode).toBe('replay')
         expect(controller.panelSnapshot().mode).toBe('replay')
@@ -719,6 +723,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
       it('CAP-TIMELINE-014 readSessionLog failure does not permanently strip openTabSet row', async () => {
         const mem = new Map<string, unknown>()
         const state = {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
           get<T>(key: string) { return mem.get(key) as T | undefined },
           update(key: string, value: unknown) { mem.set(key, value) },
         }
@@ -781,6 +786,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
       it('CAP-TIMELINE-015 restoreMoreTabs: read failure requeues deferred so second cold start keeps openTabSet', async () => {
         const mem = new Map<string, unknown>()
         const state = {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
           get<T>(key: string) { return mem.get(key) as T | undefined },
           update(key: string, value: unknown) { mem.set(key, value) },
         }
@@ -854,7 +860,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
 
     describe('thin Webview chrome for Continue / 查看更多', () => {
       it('CAP-TIMELINE-016 buildThinChatHtml consumes continue + deferredRestoreCount and posts actions', async () => {
-        const { buildThinChatHtml } = await import('../src/chat-panel/chat-panel-provider.ts')
+        // oxlint-disable-next-line typescript/no-deprecated -- buildThinChatHtml is fixture-only (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('action/continue')
         expect(html).toContain('action/restore-more')
@@ -1030,7 +1036,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
               return { dispose() {} }
             },
           },
-        } as never)
+        })
 
         expect(commands.has('dsh.test.restoreOpenTabs')).toBe(true)
         expect(commands.has('dsh.test.continue')).toBe(true)
@@ -1062,7 +1068,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         },
         setConversationRegistry(registry?: unknown) {
           if (registry !== undefined) {
-            ;(this.interactions as InteractionCoordinator).setRegistry(registry as never)
+            ;(this.interactions).setRegistry(registry as never)
           }
         },
         onNotification() { return () => {} },
@@ -1719,6 +1725,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
           ui: { restoreUiLimit: 8 },
         } satisfies ExtensionIndexSnapshot)
         const state = {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
           get<T>(key: string) { return mem.get(key) as T | undefined },
           update(key: string, value: unknown) { mem.set(key, value) },
         }
@@ -1877,6 +1884,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
           .toEqual({ type: 'change/revert', changeId: 'x' })
         expect(parseWebviewToHostMessage({ type: 'change/revert-many', changeIds: ['a', 'b'] }))
           .toEqual({ type: 'change/revert-many', changeIds: ['a', 'b'] })
+        // oxlint-disable-next-line typescript/no-deprecated -- buildThinChatHtml is fixture-only (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('change/mark-reviewed')
         expect(html).toContain('change/revert')
