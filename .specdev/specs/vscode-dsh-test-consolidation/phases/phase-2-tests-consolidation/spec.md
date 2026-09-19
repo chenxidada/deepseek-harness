@@ -30,7 +30,7 @@
 | AC-26 | spike/gap 5 文件归入对应域，每条断言台账有明确处置 |
 | AC-27 | 台账每行 `keepChecks`（K1/K2/K3 三 bool），K=true 行给 `路径:行号` 依据 |
 | AC-28 | drop 行理由码恰一 D（0 或 ≥2 均不通过） |
-| AC-29 | 筛选硬约束：不以 D1/D2 删 K 命中项；D2 给私有符号名；弱化断言标 `weakened` 且不计入 `entryAssertions` |
+| AC-29 | 筛选硬约束：不以 D1/D2 删 K 命中项；D3/D4 可删 K 命中项（重复覆盖/过期守卫不因命中 K1 而豁免）；D2 给私有符号名；弱化断言标 `weakened` 且不计入 `entryAssertions` |
 
 ## 验证策略
 

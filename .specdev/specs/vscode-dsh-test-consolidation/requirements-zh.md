@@ -96,7 +96,7 @@ vscode-dsh 维护者／贡献者（能回答「这项能力被哪条断言覆盖
 
 判定：以 phase-1 基线冻结的整合前用例声明集（同一静态计数命令采集留档）为基线，与台账行并集做双向差集**必须**为空；每条 keep 行新编号在树中可 `grep` 到；每条 drop 行理由码合法且字段完整。
 
-**AC-10:** `[Must]` **普遍型** — 测试资产编号体系**必须**迁移到 `CAP-<DOMAIN>-<NNN>`；任一 `it`/`test` 标题**必须不**出现未带工作流限定的裸 `AC-<数字>`。既有需求引用只允许出现在注释中，且**必须**带工作流限定（形如 `AC[vscode-dsh-usable-loop]-10`）。验证：由 reviewer-correctness 在 `review.md` 复核并留痕。
+**AC-10:** `[Must]` **普遍型** — 测试资产编号体系**必须**迁移到 `CAP-<DOMAIN>-<NNN>`；`it`/`test` 标题与代码注释**必须不**出现工作流文档编号 `AC-<数字>` / `DEBT-<数字>` / `GAP-<数字>`（`.specdev/specs/` 下的工作流文档编号不进入测试资产，标题/注释按功能语义描述）。验证：由 reviewer-correctness 在 `review.md` 复核并留痕。
 
 ### F4 核心入口覆盖与删除理由码
 **AC-11:** `[Must]` **普遍型** — 每个能力域的**入口行为**必须被断言覆盖，且覆盖**必须**是可判定结构：`capability-domains.json` 的每个域条目**必须**含非空 `entryAssertions`，每个元素形如 `{ "entrypoint": "<string>", "caps": ["CAP-<DOMAIN>-<NNN>", ...] }`；`entrypoint` 为该域对外部可观察的入口（工具名 / 命令 id / IPC 消息 / 导出符号），`caps` 非空且每个编号满足：① 出现在该域 spec 内；② 域段与该域 id 一致；③ 出现在某 `it`/`test` 标题中。验证：由 reviewer-correctness 逐条核对 entrypoint→caps 映射与 `src/` 真实调用路径，结果写入 `review.md` 并留痕。
@@ -152,11 +152,11 @@ vscode-dsh 维护者／贡献者（能回答「这项能力被哪条断言覆盖
 | D3 | 已被更严用例覆盖 | 存在断言范围严格覆盖它的替代用例 | 替代者 `CAP-` 编号（须存在于树中） |
 | D4 | 债修复的临时守卫 | 为已修复缺陷写的一次性守卫，该缺陷已不可能回归 | 缺陷**关闭依据**（`verification.md` / registry id / commit sha） |
 
-**AC-27:** `[Must]` **普遍型** — 台账每行**必须**判定 `keepChecks`（K1/K2/K3 三 bool），且：① 任一为 `true` 的行处置**必须为 `keep`**；② 每个为 `true` 的 `keepCheck` **必须**给出「可判定依据」（`路径:行号`），路径**必须**在仓库存在且行号不越界（复用 `design.md` 现状依据 L4/L5 校验）。验证：由 reviewer-correctness 在 `review.md` 逐条复核——`disposition: drop` 且 `keepChecks.K1: true`、或 K1=true 但依据路径不存在的行判不通过；依据指向真实位置**不保证**依据支持 K 码成立（语义归 `reviewer-correctness`）。
+**AC-27:** `[Must]` **普遍型** — 台账每行**必须**判定 `keepChecks`（K1/K2/K3 三 bool），且：① 任一为 `true` 的行处置**必须为 `keep`**，**除非**该行同时命中 D3（已被更严用例覆盖）或 D4（债已关闭的临时守卫）——此时处置可为 `drop`，理由码为对应 D 码（D3/D4 不受「命中 K」豁免）；② 每个为 `true` 的 `keepCheck` **必须**给出「可判定依据」（`路径:行号`），路径**必须**在仓库存在且行号不越界（复用 `design.md` 现状依据 L4/L5 校验）。验证：由 reviewer-correctness 在 `review.md` 逐条复核——`disposition: drop` 且理由码为 D1/D2 却 `keepChecks.K1: true`、或 K1=true 但依据路径不存在的行判不通过；依据指向真实位置**不保证**依据支持 K 码成立（语义归 `reviewer-correctness`）。
 
 **AC-28:** `[Must]` **不期望行为型** — **如果**某行标 `drop`，**那么**该行**必须**命中**恰好一个** `D1`–`D4`（0 个或 ≥2 个均不通过）。验证：由 reviewer-correctness 在 `review.md` 逐条复核——`reasonCode` 为空或含多个理由码（如 `"D1,D2"`）的行判不通过，并记入台账行号。
 
-**AC-29:** `[Must]` **普遍型** — 筛选硬约束：① **不得以 D1/D2 删除 K1–K3 命中项**（由 AC-27 ① 结构判定）；② `D2` 行**必须**给至少一个私有符号名且该名在整合前对应文件内可 `grep` 到；③ **禁止以「整合」为名做未经台账的断言语义削弱**——整合后某用例断言若弱于来源用例，台账该行**必须**标 `weakened: true` 并给理由，且**不得**据 AC-11 计入 `entryAssertions`，除非 `reviewer-correctness` 判定为等价重写并记入 `review.md`。验证：由 reviewer-correctness 在 `review.md` 逐条复核——`D2` 且 `privateSymbols` 为空、`D2` 指向不存在符号、`weakened: true` 仍列进 `entryAssertions` 的 `caps` 均判不通过；D3 严格覆盖 / D1·D4 依据是否支撑 / `weakened` 是否等价均属语义判断，归 `reviewer-correctness`。
+**AC-29:** `[Must]` **普遍型** — 筛选硬约束：① **不得以 D1/D2 删除 K1–K3 命中项**（由 AC-27 ① 结构判定）；**D3/D4 可删除 K 命中项**（重复覆盖 / 过期守卫不因命中 K1 而豁免）；② `D2` 行**必须**给至少一个私有符号名且该名在整合前对应文件内可 `grep` 到；③ **禁止以「整合」为名做未经台账的断言语义削弱**——整合后某用例断言若弱于来源用例，台账该行**必须**标 `weakened: true` 并给理由，且**不得**据 AC-11 计入 `entryAssertions`，除非 `reviewer-correctness` 判定为等价重写并记入 `review.md`。验证：由 reviewer-correctness 在 `review.md` 逐条复核——`D2` 且 `privateSymbols` 为空、`D2` 指向不存在符号、`weakened: true` 仍列进 `entryAssertions` 的 `caps` 均判不通过；D3 严格覆盖 / D1·D4 依据是否支撑 / `weakened` 是否等价均属语义判断，归 `reviewer-correctness`。
 
 ## 约束
 1. **集成分支**：仓库**没有 `main`**；集成分支是 **`new/vscode-dsh`**。`.cursor/rules/spec-workflow.mdc` 的 `git checkout main` 与仓库实际不符 → 本工作流 Phase 分支**必须**改用 `new/vscode-dsh`。**偏离只记 `design.md`，不在本工作流内修改规则文件。**
@@ -174,7 +174,7 @@ vscode-dsh 维护者／贡献者（能回答「这项能力被哪条断言覆盖
 | R-5 | 含模板拼接的动态标题导致 `CAP-` 编号无法稳定计数 | 动态拼接标题**必须**改为字面量，不得降低 AC-6 强度 |
 | R-6 | `.bashrc:151` 默认 node 写死 v20.16.0 → 未显式指定解释器的命令误用 Node 20，产生 `ERR_REQUIRE_ESM` 与失败 | 判定命令**必须**写 `env PATH="/usr/local/n/versions/node/24.3.0/bin:$PATH" <cmd>`；phase-1 基线冻结解释器路径与版本；verifier 在 `verification.md` 写明版本与路径（AC-4） |
 | R-7 | 域划分由文件内容推断，未必等于产品能力边界 | 设计阶段由 code-explorer（workflow 级）核对 `src/` 模块边界后定稿；AC-2 只要求每个旧文件恰好归属一个域 |
-| R-8 | 筛选（D1–D4）可能被滥用为「删除没时间维护的用例」 | AC-27 ① 机械禁止「keepCheck=true 却 drop」；AC-12 要求每条 drop 给可定位所指对象；AC-29 ③ 禁止未留痕语义削弱；语义复核归 `reviewer-correctness` |
+| R-8 | 筛选（D1–D4）可能被滥用为「删除没时间维护的用例」 | AC-27 ① 机械禁止「D1/D2 却 keepCheck=true」；D3/D4 可删 K 命中项但**必须**给替代 `CAP-`（D3）或缺陷关闭依据（D4）；AC-12 要求每条 drop 给可定位所指对象；AC-29 ③ 禁止未留痕语义削弱；语义复核归 `reviewer-correctness` |
 
 ## 建议的 Phase 拆分方向
 仅作高层指引，具体拆分由 plan-generator 决定：

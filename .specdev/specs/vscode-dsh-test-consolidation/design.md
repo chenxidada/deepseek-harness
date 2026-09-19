@@ -65,7 +65,7 @@
 - 域文件名：`cap-<domain>.spec.ts|tsx`（`<domain>` 小写连字符）；`.tsx` 域（webview）用 `.spec.tsx`，其余用 `.spec.ts`。
 - 顶层 `describe` 标题：`describe('cap:<domain> — …')`（AC-3）。
 - 断言编号：`CAP-<DOMAIN>-<NNN>`，`<DOMAIN>` 为域 id 大写连字符，`<NNN>` 三位十进制 `001`–`999`（同域不要求连续）。
-- 旧 `AC-<n>` 只允许出现在带工作流限定的注释中（`AC[vscode-dsh-usable-loop]-10` 形），不得出现在 `it`/`test` 标题。
+- 旧 `AC-<n>`（工作流需求文档编号）不得出现在测试资产的 `it`/`test` 标题或代码注释中；标题/注释按功能语义描述。
 
 **理由**：编号即定位（R-2 报错行即编号）；台账 + git 历史承担「原文件 → 新编号」反查（S-4）。
 
@@ -265,7 +265,7 @@
 - 文件：`cap-<domain>.spec.ts|tsx`；`.tsx`(jsdom webview RTL) 域 `webview` 用 `.spec.tsx`，其余 9 域用 `.spec.ts`。
 - 顶层 `describe`：`describe('cap:<domain> — <中文/英文域描述>', () => …)`；标题首段 `cap:<domain>` 与域 id 一致（AC-3 判定 `grep -c "^describe('cap:<domain> — "` ≥ 1）。
 - 断言编号：`CAP-<DOMAIN>-<NNN>`；`<DOMAIN>` 大写连字符（见表），`<NNN>` 三位十进制 `001`–`999`，同域不要求连续，全树唯一（AC-6/AC-7/AC-8）。
-- 旧 `AC-<n>` 迁移：仅允许出现在注释，且带工作流限定 `AC[vscode-dsh-usable-loop]-<n>`（AC-10）。
+- 旧 `AC-<n>` 迁移：从测试资产的标题/注释中移除（工作流编号不进入测试资产），标题/注释按功能语义描述（AC-10）。
 - 动态标题（R-5）：含模板拼接的动态 `it.each` 标题必须改为字面量，保证 `CAP-` 编号稳定计数。
 
 ---
@@ -277,18 +277,20 @@
 ```
 1. 计算 keepChecks：K1（外部可观察行为）、K2（跨模块集成 ≥2 模块）、K3（负向对照）
    每个为 true 的 K 必须给「可判定依据」`路径:行号`（AC-27 ②）
-2. 若任一 K = true → 处置 = keep，理由码 = 命中 K 集合，新编号 = CAP-<DOMAIN>-<NNN>
-3. 否则判定 D1–D4，必须恰命中一个：
+2. 三 K 都不命中 → 判 D1/D2，必须恰命中一个：
    - D1 一次性探查：给「结论已固化」依据（`路径:行号` 或受影响用例编号）
    - D2 实现细节耦合：给被断言的私有符号名（非空，可在原文件 grep 到）
+   → 处置 = drop，理由码 = 该 D
+3. 任一 K 命中 → 候选 keep，但必须先做 D3/D4 独立复查（D3/D4 不受「命中 K」豁免）：
    - D3 已被更严用例覆盖：给替代 CAP 编号（存在于树中）
    - D4 债修复临时守卫：给缺陷关闭依据（verification.md / registry id / commit sha）
-   → 处置 = drop，理由码 = 该 D
+   → 命中即 drop，理由码 = 该 D；均不命中才 keep，理由码 = 命中 K 集合，新编号 = CAP-<DOMAIN>-<NNN>
 4. 既无 K 也无 D → 不得静默，升级交 reviewer-correctness / 调度者裁决
 ```
 
 硬约束（AC-27/AC-28/AC-29）：
 - 禁止以 D1/D2 删除 K1–K3 命中项（AC-27 ①）。
+- D3/D4 可删除 K 命中项（重复覆盖 / 过期守卫不因命中 K1 而豁免）；D3/D4 drop 行 `keepChecks` 可为 true。
 - drop 行理由码恰一 D（AC-28）；keep 行理由码 ≥1 K。
 - 整合后断言弱于来源用例 → 台账标 `weakened: true` + 理由，且不得计入 `entryAssertions.caps`（AC-29 ③）。
 - spike/gap 5 文件（`gap-003-004`、`gap-005-009`、`spike-attribution-snapshot`、`spike-t0a-replay-rebuild`、`spike-t0b-continue-capability`）每条断言必须落台账有明确处置（AC-26）。
