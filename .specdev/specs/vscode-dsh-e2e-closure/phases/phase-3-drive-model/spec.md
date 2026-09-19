@@ -4,7 +4,7 @@
 
 对 `requiresModel:true` 的 23 项能力逐项真机驱动：用真实 key 做模型往返（AC-9/10），无 key 时 fail-closed（exit 3，不伪造通过）。重点解决 React SPA 的强制渲染与流式末块断言，升级「仅面板打开」为具体结果断言。
 
-覆盖组：`react-spa-main`(5 model) + `editor-panel`(1) + `session`(3) + `search`(2) + `agent`(3) + `interaction-ask`(1) + `preset-enterprise`(1) + `skill-render`(4) + `pdc`(1) + `sandbox`(1) + `guard`(1)。
+覆盖组（以 design.md 能力分批表 + manifest 现状为准）：`session-main-path`(8 model) + `subagent`(2) + `code-context` 的 `selection-ask`(1) + `change-list`(3) + `search`(2) + `fork`(2) + `continue`(3) + `history`(2) = 23 项。注：`react-spa-main` 组 8 项全部 `requiresModel:false`（已在 Phase 2 覆盖），本 Phase 无 react-spa-main 模型项。
 
 ## 前置条件
 
@@ -29,7 +29,7 @@
 | AC-9 | 运行时（fail-closed，反向） | 无 key（`unset DEEPSEEK_API_KEY`）跑模型组，断言 `verdict=SKIPPED_NO_CREDENTIALS` 且 `exit 3`，status.json 中该项 `closedLoop.closed=false`、`reason` 记录「无凭证」 | 无 key 不伪造通过，exit 3 |
 | AC-10 | 静态检查 | grep `layer-v-capabilities.json` 中 `requiresModel` 组的断言：必须出现 `$assistantContains`/`$titleContains`/`$userContains`/`lastChunk`/`stream` 之一，不得仅 `panelOpen`/`command registered` | 模型组断言均为具体结果 |
 | AC-10 | 运行时（反向） | 对一个模型能力临时改回 `panelOpen:true` 断言，跑 `classifyAssertionStrength`，断言返回 `weak` 且该项 `closedLoop.concreteAssertion=false`（验证后还原） | 弱证据被识别为未闭环 |
-| AC-11 | 运行时（真机） | React SPA 强制渲染：`react-spa-main` 模型能力必须出现 `$titleContains`（消息标题）+ 末块非空；断言 `closedLoop` 三条齐备 | react-spa-main 模型闭环 |
+| AC-11 | 运行时（真机） | 历史窗口 + 流式末块断言：`history` 组（`cap-history-list`/`cap-open-from-history`）与流式末块（`stream` 步 + `$assistantContains` + `requireIncrement:true`）纳入验证；断言 `closedLoop` 三条齐备 | history 组 + 流式末块闭环 |
 | AC-6 | 运行时（真机） | 逐项读取 status.json，断言每项 `closedLoop.realScreenshot=true`（非退化 PNG，`MIN_DISTINCT_MD5=3` 校验通过） | 每项有真实截图 |
 | AC-15 | 运行时 | 完整跑模型批后，逐项有 `closedLoop`；未闭环项在 registry 有「缺口三元组」条目；重复跑两次 run 目录独立 | 逐项结论 + 可重复 |
 

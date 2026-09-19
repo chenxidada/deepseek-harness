@@ -243,7 +243,7 @@ SUMMARY_PATH="${RUN_DIR}/layer-v-capabilities-summary.json"
 | `fork`（2 项） | 2 | true | Phase 3 |
 | `continue`（3 项） | 3 | true | Phase 3 |
 | `history`（2 项） | 2 | true | Phase 3 |
-| `subagent`（2 项） | 2 | true（步骤用 injectSubagent，需逐项核实是否真 model 往返） | Phase 3 |
+| `subagent`（2 项） | 2 | true（步骤用 injectSubagent；Phase 3 已核实为**测试注入、非真实模型往返**，AC-9 不满足，登记 DEBT-10） | Phase 3 |
 
 > `react-spa-main` / `editor-panel` 两组当前是弱证据（`panelOpen: true`）。Phase 2 逐项升级为具体结果断言：对 host 侧可观测的能力（如「单例 Panel」用 `re-reveal` 后 `panelSnapshot` 仍单例、「历史窗口」用 `listHistory` 返回真实会话），升级断言并闭环；对纯 webview 内部组件（host 侧无 `dsh.test.*` 接口暴露其渲染状态），诚实登记「未闭环：缺具体结果断言（webview 内部组件，无 host 侧探测 hook）」，建议后续 feature 补充 webview 内 `data-testid` 探测通道。这正是 AC-15 的核心语义，也是 AC-11「呈现路径闭环」的落点——「单例 Panel / 多 Tab / 历史窗口」经行为驱动 + 截图后可得闭环证据。
 
@@ -310,6 +310,8 @@ phase-1-closure-foundation
 | 1 | 2026-09-19 | §核心实体 #1「弱证据分类规则」 | 分类失败（未知形态）由「默认 `weak`」改为「判为 `unknown`」，消除与 §实现方案骨架 / spec AC-2 三态的自相矛盾 | 调度者（HG-3 SHOULD-FIX 回填） | implementer 偏差 2 |
 | 2 | 2026-09-19 | §API 域 `readPlan`/`resolveArtifactDir` 行 | `extension.cjs` 的 `driver.planPath` 由 `path.join(artifactDir,…)` 改为稳定 base 路径（`FALLBACK_ARTIFACT_DIR`），因 per-run 后 `artifactDir` 指向 `runs/<runId>/` 而 plan 实为稳定 base 路径；该字段仅作 status 元数据、无下游消费者 | 调度者（HG-3 SHOULD-FIX 回填） | implementer 偏差 1 |
 | 3 | 2026-09-20 | §实现方案「逐项驱动的能力分批」note（`design.md:248`「单例 Panel / 多 Tab / 历史窗口经行为驱动后可得闭环证据」） | 真机证伪：`cap-history-panel` 的 `listHistory` 在无模型往返时恒空（`isHistoryEligibleSession` 排除空 title 会话，`newConversation` 只产生 `EMPTY_LIVE_TITLE`），无法形成具体断言；`cap-tab-chrome`（多 Tab）为纯 webview 内部组件、无 host 侧探测 hook。二者由「升级断言并闭环」改为「如实登记未闭环」（DEBT-8 / DEBT-7），符合 AC-15 诚实登记原则 | 调度者（HG-3 SHOULD-FIX 回填） | implementer 偏差 2 |
+| 4 | 2026-09-20 | §实现方案「subagent 组『步骤用 injectSubagent，需逐项核实是否真 model 往返』」（`design.md:246`） | 真机核实：subagent 2 项（`cap-open-subagent-context`/`cap-pin-subagent-tab`）的 `dsh.test.injectSubagent` 是测试注入、**无真实模型往返**（无 `sendPrompt`→`assistant-replied`），AC-9 不满足；如实登记 DEBT-10，不把注入当模型往返等价物 | 调度者（HG-3 SHOULD-FIX 回填） | implementer 偏差（DEBT-10） |
+| 5 | 2026-09-20 | §范围边界「不修改产品业务逻辑」 | Phase 3 真机发现 `cap-selection-ask` 探针文件 `package.json` 触发产品防泄漏检查裸子串误报（`selection-ask.ts:182` `pointerText.includes(doc.languageId)`），属**产品代码 bug**、超本 workflow 范围；manifest 改用 `src/index.ts` 规避（不改产品代码），登记 DEBT-9 交后续 feature 修复 | 调度者（HG-3 SHOULD-FIX 回填） | implementer 偏差（DEBT-9） |
 
 ## 建议的下一步
 
