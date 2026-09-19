@@ -98,10 +98,10 @@ Test Files  12 passed (12)
 | 风险 | 严重性 | 阻塞 HG-3 | 说明 |
 |------|:--:|:--:|------|
 | R-1 `?? packages/typert/generator/tests/.generated-tools-Tlt0dU/`（未跟踪目录） | 🟢 LOW | 否 | 该目录含 `host.mjs`，mtime 为 **2026-09-15 16:18**（本工作流 9/18 启动之前），与 `packages/typert/generator/tests/` 下同类 `.generated-*` / `.typert-*` 暂存目录同源，是 typert generator 测试的遗留暂存物，**非本 Phase 产物**，且为 `??`（未跟踪）而非 `M`/`A`，不构成 AC-24「修改生产代码」。 |
-| R-2 D1 依据的**语义**有效性（「replay-hydrator.ts:363 是否真固化 spike 结论」） | 🟡 语义判断 | 否 | 按 requirements AC-12 分工，属 `reviewer-correctness` 的语义判断。verifier 仅验证**机械可判定**部分：路径存在 + 行号不越界（已通过）。 |
+| R-2 D1 依据的**语义**有效性（「replay-hydrator.ts:363 是否真固化 spike 结论」） | 🟢 LOW | 否 | 属语义判断（非功能缺陷），按 requirements AC-12 分工归 `reviewer-correctness`；verifier 仅验证**机械可判定**部分：路径存在 + 行号不越界（已通过）。 |
 | R-3 AC-25「行数比 > 0.9 且高度重合」第二副本 | 🟢 LOW | 否 | 域文件为多源聚合（12 文件 12K–187K，单一旧文件为小文件），构造上不存在「新文件 ≈ 某旧文件」的近似副本；`.archive`/`*-old.spec.ts`/`.verifier-baseline.json` 三者均已确认不存在。 |
 
-> 无 🔴 CRITICAL、无 🟡 MEDIUM（非语义类）残余风险；R-2 语义判断已由 reviewer-correctness 在 `review.md` 复核留痕（判决 PASS）。
+> 三项残余风险均为 🟢 LOW 且「阻塞 HG-3 = 否」；R-2 语义判断已由 reviewer-correctness 在 `review.md` 复核留痕（判决 PASS）。
 
 ---
 
