@@ -30,10 +30,8 @@
 
 'use strict'
 
-const cp = require('node:child_process')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
-const os = require('node:os')
 const path = require('node:path')
 const vscode = require('vscode')
 // AD-16 decision 3's per-step cleanliness predicate. Kept in its own dependency-free module so
@@ -41,6 +39,23 @@ const vscode = require('vscode')
 // inlined here was only observable through a full host run, and the one branch it could never
 // reach was the one that matters (DEBT-015).
 const { runStartedAtMsOf, homeSandboxOf, staleProductState } = require('./sandbox-clean-state.cjs')
+const {
+  StageError,
+  linkFailure,
+  harnessError,
+  skipNoCredentials,
+  sleep,
+  nowIso,
+  truncate,
+  safeJson,
+  unwrap,
+  poll,
+  assistantText,
+  pngVerdict,
+  sha256Of,
+  resolveCaptureTool,
+  captureScreenshot,
+} = require('../layer-v-support/primitives.cjs')
 
 const DRIVER_DIR = __dirname
 const ARTIFACT_DIR = path.resolve(DRIVER_DIR, '..', '..', 'test-artifacts', 'layer-v')
@@ -51,12 +66,6 @@ const LOG_EVIDENCE_PATH = path.join(ARTIFACT_DIR, 'layer-v-log-evidence.json')
 
 /** Extension under test (AC-24(d)); the id VS Code derives from publisher + name. */
 const TARGET_EXTENSION_ID = 'deepseek-ai.@deepseek-ai/dsh-vscode-dsh'
-
-/**
- * Area asked for when measuring the screen: larger than any display this runs on, so
- * `x11grab` refuses and reports the real size (see {@link probeScreenSize}).
- */
-const OVERSIZED_CAPTURE_AREA = '4096x2160'
 
 /** AD-14 v1 field set. A record of schemaVersion 1 must have exactly these keys. */
 const V1_RECORD_FIELDS = [
@@ -92,91 +101,6 @@ const DEFAULT_TIMEOUTS = {
 }
 
 const invokedCommands = new Set()
-
-/** A step failure that already knows how it must be classified. */
-class StageError extends Error {
-  /**
-   * @param {string} conclusion - `LINK_FAILURE`, `HARNESS_ERROR` or `SKIPPED_NO_CREDENTIALS`.
-   * @param {{ reason: string, evidence?: unknown, step?: string }} detail - failure facts.
-   */
-  constructor(conclusion, detail) {
-    super(`${conclusion}: ${detail.reason}`)
-    this.conclusion = conclusion
-    this.reason = detail.reason
-    this.evidence = detail.evidence
-    this.step = detail.step
-  }
-}
-
-const linkFailure = (reason, evidence) => new StageError('LINK_FAILURE', { reason, evidence })
-const harnessError = (reason, evidence) => new StageError('HARNESS_ERROR', { reason, evidence })
-// AC-32: no credentials is a skip, never a link failure, and it must stop before step 3.
-const skipNoCredentials = (reason, evidence) => new StageError('SKIPPED_NO_CREDENTIALS', { reason, evidence })
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-function nowIso() {
-  return new Date().toISOString()
-}
-
-function truncate(text, limit) {
-  if (typeof text !== 'string') return ''
-  return text.length <= limit ? text : `${text.slice(0, limit)}…[${text.length} chars]`
-}
-
-/**
- * JSON-safe projection: drop functions, cycles and length explosions from evidence.
- *
- * The bound is a recursion guard, not a presentation choice — but it has to be loose enough
- * for the *shape the evidence is actually written in*, because the write path projects
- * again (`step.evidence = safeJson(outcome.evidence)`): a scenario that projects its own
- * sub-fields pays two levels per wrapper. At `4` the second pass turned the approval
- * records into `{"asked":["[object]"]}` (measured 2026-09-16) — i.e. the durable proof of
- * `allowed-once` and the first attempt's denial result were present but unreadable.
- */
-function safeJson(value, depth = 0) {
-  if (value === null || value === undefined) return value ?? null
-  const type = typeof value
-  if (type === 'string') return truncate(value, 2000)
-  if (type === 'number' || type === 'boolean') return value
-  if (type === 'function') return '[function]'
-  if (Array.isArray(value)) {
-    if (depth >= 6) return `[array:${value.length}]`
-    return value.slice(0, 50).map(item => safeJson(item, depth + 1))
-  }
-  if (type === 'object') {
-    if (depth >= 6) return '[object]'
-    const out = {}
-    for (const [key, item] of Object.entries(value)) {
-      if (key === 'abort' || key === 'resolve' || key === 'reject') {
-        out[key] = '[opaque]'
-        continue
-      }
-      out[key] = safeJson(item, depth + 1)
-    }
-    return out
-  }
-  return String(value)
-}
-
-/**
- * Read a command's payload whichever envelope shape it used.
- *
- * Spike-era reports show some hooks answering `{ok:true,value:{...}}` while the current
- * handlers answer flat (`{ok:true,hostStatus:...}`); the driver must not depend on which
- * side of that refactor it is talking to.
- * @param {unknown} result - raw `executeCommand` result.
- * @returns {unknown} the payload.
- */
-function unwrap(result) {
-  if (result !== null && typeof result === 'object' && !Array.isArray(result)) {
-    const inner = result.value
-    if (inner !== undefined && inner !== null && typeof inner === 'object') return inner
-  }
-  return result
-}
 
 function appendJournal(entry) {
   try {
@@ -239,32 +163,6 @@ async function readHostDiagnostics() {
     }
   } catch (error) {
     return { ok: false, reason: String(error?.message ?? error) }
-  }
-}
-
-async function poll(description, probe, options) {
-  const timeoutMs = options.timeoutMs
-  const intervalMs = options.intervalMs ?? 500
-  const deadline = Date.now() + timeoutMs
-  let last = null
-  for (;;) {
-    last = await probe()
-    // A probe that recognizes a *different* conclusion than "timed out" hands the error
-    // back instead of throwing, so this loop stays the only place that owns timeouts.
-    if (last !== null && typeof last === 'object' && last.fail instanceof Error) throw last.fail
-    if (last !== null && last !== undefined && last.ok === true) return last.value
-    if (Date.now() >= deadline) {
-      throw new StageError(options.conclusion, {
-        reason: options.reason,
-        evidence: {
-          description,
-          timeoutMs,
-          lastObserved: safeJson(last),
-          ...(options.extraEvidence === undefined ? {} : { extra: safeJson(options.extraEvidence) }),
-        },
-      })
-    }
-    await sleep(intervalMs)
   }
 }
 
@@ -515,15 +413,6 @@ async function awaitProbeVerdict(probePath, budgetMs) {
   }
 }
 
-/** All assistant text the projection holds, joined — what the marker assertion reads. */
-function assistantText(snapshot) {
-  const messages = Array.isArray(snapshot?.messages) ? snapshot.messages : []
-  return messages
-    .filter(message => message.role === 'assistant' && typeof message.text === 'string')
-    .map(message => message.text)
-    .join('\n')
-}
-
 /** Assistant text that carries no marker from an earlier step (step-local assertion). */
 function assistantTextFor(snapshot, marker) {
   return assistantText(snapshot).includes(marker)
@@ -545,28 +434,6 @@ function assistantMarkerCount(snapshot, marker) {
 
 async function panelSnapshot() {
   return unwrap(await callCommand('dsh.test.panelSnapshot'))
-}
-
-function pngVerdict(file) {
-  try {
-    const stat = fs.statSync(file)
-    if (stat.size < 1000) return { ok: false, reason: 'too-small', size: stat.size }
-    const head = fs.readFileSync(file).subarray(0, 8)
-    const magic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-    if (!head.equals(magic)) return { ok: false, reason: 'bad-magic', size: stat.size }
-    return { ok: true, size: stat.size }
-  } catch (error) {
-    return { ok: false, reason: `stat-failed: ${String(error)}` }
-  }
-}
-
-/** SHA-256 of a file, or an explicit reason it could not be read. */
-function sha256Of(file) {
-  try {
-    return { sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') }
-  } catch (error) {
-    return { sha256: null, error: truncate(String(error?.message ?? error), 200) }
-  }
 }
 
 /**
@@ -642,185 +509,6 @@ function directoryDigest(root) {
     }
   } catch (error) {
     return { digest: null, entryCount: 0, error: truncate(String(error?.message ?? error), 200) }
-  }
-}
-
-/**
- * Read the screen geometry from `x11grab` itself, by asking for an area that cannot fit.
- *
- * `ffmpeg` documents no way to query the screen, and this host has none of `xdpyinfo` /
- * `xrandr` / `xwininfo`. An oversized `-video_size` is a hard error whose message names
- * the real size — measured 2026-09-16 on `DISPLAY=:1`: `Capture area 4096x2160 at position
- * 0.0 outside the screen size 3840x1080`. Without this, `x11grab`'s own 640x480 default
- * silently crops, and the crop misses the editor-area conversation panel that four of the
- * five steps exist to show.
- * @param {string} display - the X display to measure.
- * @returns {string|null} `"WxH"`, or null when the probe produced no geometry (never a guess).
- */
-function probeScreenSize(display) {
-  const probeOut = path.join(os.tmpdir(), `layer-v-geometry-probe-${process.pid}.png`)
-  try {
-    fs.rmSync(probeOut, { force: true })
-  } catch {
-    // The probe's own output is irrelevant; only its rejection message is read.
-  }
-  const run = runCapture('ffmpeg', [
-    '-hide_banner', '-loglevel', 'error', '-f', 'x11grab',
-    '-video_size', OVERSIZED_CAPTURE_AREA, '-i', display,
-    '-frames:v', '1', '-update', '1', '-y', probeOut,
-  ], probeOut)
-  try {
-    fs.rmSync(probeOut, { force: true })
-  } catch {
-    // Best-effort: the rejected probe writes no file.
-  }
-  const match = /outside the screen size (\d+x\d+)/.exec(String(run.stderr ?? ''))
-  return match === null ? null : match[1]
-}
-
-/**
- * The capture args are a template: the caller appends the output file. An output path
- * left inside makes the tool write two images, which `ffmpeg` answers with a non-zero
- * exit *after* writing a valid frame — a failure that looks like a screenshot problem.
- * @param {string[]} args - candidate argv, without an output file.
- * @returns {string|null} the offending argument, or null when the template is clean.
- */
-function outputFreeTemplateViolation(args) {
-  for (const arg of args) {
-    if (arg.endsWith('.png')) return arg
-  }
-  return null
-}
-
-function runCapture(tool, args, _out) {
-  try {
-    cp.execFileSync(tool, args, { timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] })
-    return { tool, args, exitOk: true }
-  } catch (error) {
-    return {
-      tool,
-      args,
-      exitOk: false,
-      stderr: truncate(String(error?.stderr ?? error?.message ?? error), 400),
-    }
-  }
-}
-
-/**
- * Decide how to grab the screen, by measurement rather than assumption.
- *
- * Measured on this host (2026-09-16, `DISPLAY=:1`): `ffmpeg -f x11grab -i $DISPLAY
- * -frames:v 1` succeeds *without* an explicit `-video_size` (640x480 PNG, 6942 bytes),
- * and `gnome-screenshot -f` also produces a valid PNG. Both are kept: ffmpeg first
- * because it needs no session bus, `gnome-screenshot` as the stated backup.
- *
- * The returned `args` are an **output-free template**: they end with `-y` (or `-f`, for
- * `gnome-screenshot`) and the caller appends the file. Returning the probe command
- * verbatim once shipped args that still carried the probe path, so every live capture
- * handed the image2 muxer two outputs — ffmpeg then answered `Could not get frame
- * filename number 2` and exited non-zero *after* writing a perfectly good PNG, which the
- * driver reported as a failed screenshot on all five steps. The template contract is
- * therefore asserted here rather than left to the caller.
- * @param {object} plan - smoke plan.
- * @returns {{ tool: string|null, args: string[], why?: string, screenSize?: string|null, attempts: object[], reason?: string }}
- */
-function resolveCaptureTool(plan) {
-  const display = process.env.DISPLAY ?? ':0'
-  const probeOut = path.join(os.tmpdir(), `layer-v-capture-probe-${process.pid}.png`)
-  const videoSize = plan.screenshot?.videoSize ?? '1600x1000'
-  const geometry = probeScreenSize(display)
-  const attempts = []
-  // `-update 1` is the second half of the same lesson: it tells the image2 muxer that a
-  // fixed filename is intentional, so a single frame is written and the exit code is 0.
-  //
-  // Order is evidence-first. The measured full-screen candidate leads: `x11grab`'s own
-  // default is 640x480, which on this 3840x1080 screen silently crops the top-left corner
-  // (measured 2026-09-16: the crop is 86 KB of real UI, but the conversation panel lives in
-  // the editor area — outside it). The plan's `videoSize` is a deliberate crop, and the
-  // last ffmpeg candidate is the unmeasured default, kept so a host whose geometry probe
-  // fails still yields a PNG rather than no evidence. `gnome-screenshot` captures the whole
-  // screen with no `-video_size` at all, which is why it stays as the stated backup.
-  const ffmpegHead = ['-hide_banner', '-loglevel', 'error', '-f', 'x11grab']
-  const ffmpegTail = ['-frames:v', '1', '-update', '1', '-y']
-  const candidates = [
-    ...(geometry === null
-      ? []
-      : [{
-          tool: 'ffmpeg',
-          why: `full screen (${geometry}, read from x11grab)`,
-          args: [...ffmpegHead, '-video_size', geometry, '-i', display, ...ffmpegTail],
-        }]),
-    {
-      tool: 'ffmpeg',
-      why: `plan crop (${videoSize})`,
-      args: [...ffmpegHead, '-video_size', videoSize, '-i', display, ...ffmpegTail],
-    },
-    {
-      tool: 'ffmpeg',
-      why: 'x11grab default region (640x480 top-left crop)',
-      args: [...ffmpegHead, '-i', display, ...ffmpegTail],
-    },
-    { tool: 'gnome-screenshot', why: 'whole screen, no geometry needed', args: ['-f'] },
-  ]
-  for (const candidate of candidates) {
-    const violation = outputFreeTemplateViolation(candidate.args)
-    if (violation !== null) {
-      attempts.push({
-        tool: candidate.tool,
-        args: candidate.args,
-        exitOk: false,
-        verdict: { ok: false, reason: 'template-carried-an-output-path' },
-        violation,
-      })
-      continue
-    }
-    try {
-      fs.rmSync(probeOut, { force: true })
-    } catch {
-      // A stale probe file only affects this attempt's verdict, not the run.
-    }
-    const args = [...candidate.args, probeOut]
-    const run = runCapture(candidate.tool, args, probeOut)
-    const verdict = run.exitOk ? pngVerdict(probeOut) : { ok: false, reason: 'nonzero-exit' }
-    attempts.push({ ...run, args: candidate.args, why: candidate.why, verdict })
-    if (run.exitOk && verdict.ok === true) {
-      try {
-        fs.rmSync(probeOut, { force: true })
-      } catch {
-        // Cleanup of the probe is best-effort.
-      }
-      return { tool: candidate.tool, args: candidate.args, why: candidate.why, geometry, screenSize: geometry, attempts }
-    }
-  }
-  try {
-    fs.rmSync(probeOut, { force: true })
-  } catch {
-    // Cleanup of the probe is best-effort.
-  }
-  return { tool: null, attempts, reason: 'no-capture-tool-produced-a-png' }
-}
-
-/**
- * Capture one step screenshot with the tool chosen at startup (AC-26).
- * @param {{tool: string, args: string[]}} capture - resolved capture command.
- * @param {string} fileName - stable artifact name.
- * @returns {{ok: boolean, file: string|null, verdict: object, stderr?: string}}
- */
-function captureScreenshot(capture, fileName) {
-  if (capture.tool === null) return { ok: false, file: null, verdict: { ok: false, reason: 'no-tool' } }
-  const out = path.join(ARTIFACT_DIR, fileName)
-  try {
-    fs.rmSync(out, { force: true })
-  } catch {
-    // A pre-existing screenshot is overwritten by the capture itself.
-  }
-  const run = runCapture(capture.tool, [...capture.args, out], out)
-  const verdict = run.exitOk ? pngVerdict(out) : { ok: false, reason: 'nonzero-exit' }
-  return {
-    ok: verdict.ok === true,
-    file: verdict.ok === true ? fileName : null,
-    verdict,
-    ...(run.stderr === undefined ? {} : { stderr: run.stderr }),
   }
 }
 
@@ -2325,7 +2013,7 @@ async function runAll() {
       step.evidence = safeJson(outcome.evidence)
       step.assertions = outcome.assertions
       step.snapshot = (await panelSnapshot()).mode ?? null
-      const shot = captureScreenshot(capture, `step-${index + 1}-${step.slug}.png`)
+      const shot = captureScreenshot(capture, `step-${index + 1}-${step.slug}.png`, ARTIFACT_DIR)
       step.screenshotCaptured = shot.ok
       step.screenshot = shot.file
       if (!shot.ok) {

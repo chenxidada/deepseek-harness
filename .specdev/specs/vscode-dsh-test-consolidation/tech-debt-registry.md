@@ -23,13 +23,14 @@
 
 | ID | 源Phase | 模块 | 文件:函数:行号 | 当前行为 | 预期行为 | 类型 | 标签 | 依赖它的模块 | 目标Phase | 阻塞 | 来源 | 注册日期 |
 |----|:------:|------|---------------|---------|---------|------|------|-------------|:--------:|:---:|------|---------|
-| — | — | — | — | — | — | — | — | — | — | — | — | — |
+| `DEBT-4@vscode-dsh-e2e-closure` | phase-3-remaining-capabilities | layer-v-capability-driver | `apps/vscode-dsh/test-scripts/layer-v-capabilities.json`（`cap-change-index-store`/`cap-snapshot-revert`/`cap-change-diff-render`） | 三项能力 steps/断言已写入 manifest，但从未真机执行（`test-artifacts/**` 下匹配这三个 id 的取证文件数为 0） | 带真实 `DEEPSEEK_API_KEY` 逐项执行 `run-layer-v-capabilities.sh --capability <id>`，产出 `conclusion=PASS` + 截图取证 | 功能缺失 | `module:layer-v-capability-driver, type:gap, concern:unverified-capabilities, group:change-list` | 无（覆盖缺口，非接口依赖） | 不关闭（理由：本工作流仅重组测试资产、不做真机带 key 验证；承接方：整合工作流之后的真机补跑） | 🔴阻塞 | e2e-closure 调度者收尾核对 | 2026-09-19 |
+| `DEBT-5@vscode-dsh-e2e-closure` | phase-3-remaining-capabilities | layer-v-capability-driver | `apps/vscode-dsh/test-scripts/layer-v-capabilities.json`（`cap-at-path-token`/`cap-workspace-path-resolve`/`cap-selection-ask`/`cap-interaction-coordinator`/`cap-interaction-ui`） | 五项能力 steps/断言已写入 manifest，但从未真机执行（取证文件数为 0）；其中 `cap-selection-ask` 涉及真实模型往返、`cap-interaction-*` 验证 fail-closed 行为 | 带真实 key 逐项执行并取证；`cap-selection-ask` 另需 `env -u DEEPSEEK_API_KEY` 负向 run（断言 `SKIPPED_NO_CREDENTIALS` exit 3，不记 PASS） | 功能缺失 | `module:layer-v-capability-driver, type:gap, concern:unverified-capabilities, group:code-context, group:interaction` | 无（覆盖缺口，非接口依赖） | 不关闭（理由：本工作流仅重组测试资产、不做真机带 key 验证；承接方：整合工作流之后的真机补跑） | 🔴阻塞 | e2e-closure 调度者收尾核对 | 2026-09-19 |
 
 ## 已解决
 
 | ID | 源Phase | 描述 | 解决Phase | 解决日期 | 验证方式 |
 |----|:------:|------|:--------:|---------|---------|
-| — | — | — | — | — | — |
+| `DEBT-1@vscode-dsh-e2e-closure` | phase-1-driver-framework-pilot | 两个 driver（`layer-v-driver/extension.cjs`、`layer-v-capability-driver/capability-runner.cjs`）的 19 项镜像原语双拷贝，已抽到 `apps/vscode-dsh/test-scripts/layer-v-support/primitives.cjs`，两 driver 改 `require('../layer-v-support/primitives.cjs')` 复用；`captureScreenshot` 统一 3 参 `(capture, fileName, artifactDir)` | phase-3-test-scripts-consolidation | 2026-09-19 | 逐原语 `grep -rnE "(function|const|class)[[:space:]]+<name>\b" apps/vscode-dsh/test-scripts` 计数=1（19/19 实测）；`node --check` 对四个 `.cjs` 全部通过 |
 
 ---
 

@@ -197,7 +197,8 @@
 
 - `id`：域 id（小写连字符）。
 - `spec`：域 spec 文件路径（相对 `apps/vscode-dsh/tests/`），或 `null`（本工作流所有域都有 spec）。
-- `scripts`：该域相关的 test-scripts 文件路径（AC-19 归属）。
+- `scripts`：⚠️ 已降级为历史字段（Phase 3 起不再作为 AC-19 归属的唯一真相源），保留仅作可读性参考。
+- `testScripts`（顶层数组，Phase 3 新增）：AC-19 四类归类的唯一真相源。元素 `{ path, category, domain }`；`category` ∈ `{entry-orchestration, shared-primitives, capability-manifest-data, support-resources}`，`domain` ∈ 10 域 id 集合。
 - `absorbed`：域吸收的整合前 spec 路径列表（AC-2 双向差集判定对象）。
 - `entryAssertions`：非空数组，元素 `{ entrypoint, caps }`；`entrypoint` = 该域对外可观察入口（命令 id / 导出符号 / IPC 消息 / 工具名），`caps` = 非空 `CAP-` 编号数组（AC-11）。
 - `verifierSources`：仅记录（可选），本工作流填 `null` 或省略。
@@ -360,7 +361,8 @@ graph TD
 
 | # | 日期 | 原设计章节 | 修改为 | 批准人 | 偏差来源 |
 |---|------|-----------|--------|--------|---------|
-| — | — | — | — | — | — |
+| R-1 | 2026-09-19 | 核心实体/数据模型 §1 | 新增顶层 `testScripts` 字段（`{ path, category, domain }`）承载 AC-19 四类归类；`domains[].scripts` 降级为历史字段，不再作 AC-19 唯一真相源 | 用户确认（HG-3 SHOULD-FIX S-1） | review-design.md S-1 |
+| R-2 | 2026-09-19 | DEBT-1 去重方案 | 3 处语义漂移（`assistantText` / `probeScreenSize` / `resolveCaptureTool`）选 **runner 侧**为真身：`assistantText` 采用无分隔符 `+= ''` 拼接（放弃 driver 侧 `.join('\n')`），两个临时文件名采用 `layer-v-cap-*` 前缀。理由：capabilities exit 0 是唯一真机验证通过的路径，以 runner 侧为真身 | 用户确认（HG-3 SHOULD-FIX S-2） | review-design.md S-2 |
 
 ## 建议的下一步
 

@@ -14,6 +14,25 @@
     "interaction": "interaction",
     "test-hooks": "test-harness"
   },
+  "testScripts": [
+    { "path": "run-layer-v-smoke.sh", "category": "entry-orchestration", "domain": "session-host" },
+    { "path": "run-layer-v-capabilities.sh", "category": "entry-orchestration", "domain": "test-harness" },
+    { "path": "run-chat-ready-regression.sh", "category": "entry-orchestration", "domain": "test-harness" },
+    { "path": "layer-v-shadow-preset.sh", "category": "support-resources", "domain": "session-host" },
+    { "path": "layer-v-capabilities.json", "category": "capability-manifest-data", "domain": "test-harness" },
+    { "path": "layer-v-driver/extension.cjs", "category": "entry-orchestration", "domain": "session-host" },
+    { "path": "layer-v-driver/package.json", "category": "support-resources", "domain": "session-host" },
+    { "path": "layer-v-driver/sandbox-clean-state.cjs", "category": "support-resources", "domain": "test-harness" },
+    { "path": "layer-v-capability-driver/extension.cjs", "category": "entry-orchestration", "domain": "test-harness" },
+    { "path": "layer-v-capability-driver/capability-runner.cjs", "category": "entry-orchestration", "domain": "test-harness" },
+    { "path": "layer-v-capability-driver/package.json", "category": "support-resources", "domain": "test-harness" },
+    { "path": "layer-v-support/layer-v-runtime.sh", "category": "shared-primitives", "domain": "test-harness" },
+    { "path": "layer-v-support/primitives.cjs", "category": "shared-primitives", "domain": "test-harness" },
+    { "path": "layer-v-support/artifact-index.cjs", "category": "support-resources", "domain": "test-harness" },
+    { "path": "layer-v-support/build-freshness.cjs", "category": "support-resources", "domain": "test-harness" },
+    { "path": "layer-v-support/display-evidence.cjs", "category": "support-resources", "domain": "test-harness" },
+    { "path": "layer-v-support/display-evidence-shell.sh", "category": "support-resources", "domain": "test-harness" }
+  ],
   "domains": [
     {
       "id": "session-host",

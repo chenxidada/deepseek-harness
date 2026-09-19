@@ -31,16 +31,16 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const vscode = require('vscode')
+const { runManifest } = require('./capability-runner.cjs')
 const {
   StageError,
   harnessError,
   safeJson,
   resolveCaptureTool,
   captureScreenshot,
-  runManifest,
   nowIso,
   truncate,
-} = require('./capability-runner.cjs')
+} = require('../layer-v-support/primitives.cjs')
 
 const DRIVER_DIR = __dirname
 // Fallback only. The plan's `artifactDir` (written by `write_plan`) is the single source of
