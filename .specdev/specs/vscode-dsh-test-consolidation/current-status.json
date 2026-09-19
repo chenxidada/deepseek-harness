@@ -8,7 +8,7 @@
   "human_gates": {
     "hg1": "passed",
     "hg2": "passed",
-    "hg3": "pending"
+    "hg3": "passed"
   },
   "phases": {
     "phase-1-baseline-domain-inventory": {
