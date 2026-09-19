@@ -31,7 +31,6 @@
     "webview:build": "vite build --config webview/vite.config.ts",
     "build:webview": "pnpm run webview:build",
     "build:host": "tsc -b && tsdown",
-    "check:stale-chunks": "node test-scripts/layer-v-support/check-stale-chunks.cjs",
     "vscode:prepublish": "pnpm run build:host && pnpm run webview:build",
     "prepublishOnly": "pnpm run build:host && pnpm run webview:build"
   },
