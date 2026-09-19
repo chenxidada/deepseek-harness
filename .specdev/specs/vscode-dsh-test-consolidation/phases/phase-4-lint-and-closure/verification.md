@@ -59,4 +59,4 @@ review.md 为 SHOULD-FIX（3 条 should-fix 均为文档回写类，非功能缺
 
 ## 判决理由
 
-6 项验收标准（AC-13~AC-18）全部通过独立验证，端到端数据路径（glob program → lint 归零 → vitest 全绿 → 单域文件复跑）全部连通，无 CRITICAL/MEDIUM 残余风险。残余 3 项 should-fix 均为「文档回写类」🟢 LOW 项，不阻塞 HG-3。
+6 项验收标准（AC-13~AC-18）全部通过独立验证，端到端数据路径（glob program → lint 归零 → vitest 全绿 → 单域文件复跑）全部连通。残余 3 项 should-fix 均为「文档回写类」🟢 LOW 项（阻塞 HG-3 = 否），不阻塞 HG-3，且已通过修改 design.md（R-3/R-4）+ implementation.md（D-4）关闭。
