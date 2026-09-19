@@ -3,7 +3,7 @@
   "description": "整合 apps/vscode-dsh 的测试资产：把 apps/vscode-dsh/tests/ 下按 Phase 碎片化的 spec 文件重组为按能力域组织的「活文件」（以后只增不新建），并对用例做基于内容的筛选（保留核心回归，按理由码删除一次性/实现耦合类）；test-scripts/ 纳入同一域清单并消除 DEBT-1 双拷贝，同时建立全局唯一的 CAP- 断言编号。",
   "created": "2026-09-18T16:10:47Z",
   "current_stage": "phase-implementation",
-  "current_phase": "phase-3-test-scripts-consolidation",
+  "current_phase": "phase-4-lint-and-closure",
   "loop_count": 0,
   "human_gates": {
     "hg1": "passed",
@@ -25,7 +25,12 @@
       "implementer": "completed",
       "reviewer": "completed",
       "verifier": "completed"
+    },
+    "phase-4-lint-and-closure": {
+      "implementer": "pending",
+      "reviewer": "pending",
+      "verifier": "pending"
     }
   },
-  "last_update": "2026-09-19T10:20:00Z"
+  "last_update": "2026-09-19T12:10:00Z"
 }
