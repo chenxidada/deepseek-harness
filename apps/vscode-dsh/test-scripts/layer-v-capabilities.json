@@ -145,9 +145,13 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/editor-chat-panel.ts", "line": 161 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "singleton-open", "command": "dsh.showPanel", "expect": { "viewId": "dsh.editorChat", "panelOpen": true } },
+        { "kind": "command", "step": "set-credential-presence", "command": "dsh.test.setCredentialPresence", "args": [true] },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created", "mode": "live" } },
+        { "kind": "assert", "step": "singleton-before-reveal", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live", "sessionId": "$string", "tabId": "$string" } },
         { "kind": "command", "step": "re-reveal-no-duplicate", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "still-single-panel", "command": "dsh.showPanel", "expect": { "viewId": "dsh.editorChat", "panelOpen": true } },
+        { "kind": "assert", "step": "singleton-after-reveal", "command": "dsh.test.panelSnapshot", "expect": { "mode": "live", "sessionId": "$string", "tabId": "$string" } },
         { "kind": "screenshot", "step": "editor-panel-singleton", "file": "cap-editor-panel-singleton.png" }
       ]
     },
@@ -172,7 +176,7 @@
       "requiresModel": false,
       "evidence": [{ "path": "apps/vscode-dsh/src/extension.ts", "line": 374 }],
       "steps": [
-        { "kind": "assert", "step": "startup-hook-responsive", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "$string" } },
+        { "kind": "assert", "step": "startup-hook-responsive", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "idle" } },
         { "kind": "screenshot", "step": "extension-activate", "file": "cap-extension-activate.png" }
       ]
     },
@@ -677,6 +681,7 @@
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
         { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "set-credential-presence", "command": "dsh.test.setCredentialPresence", "args": [true] },
         { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
         { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
         { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
@@ -697,6 +702,7 @@
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
         { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "set-credential-presence", "command": "dsh.test.setCredentialPresence", "args": [true] },
         { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
         { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
         { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
@@ -716,7 +722,7 @@
       "requiresModel": false,
       "evidence": [{ "path": "apps/vscode-dsh/src/extension.ts", "line": 1011 }],
       "steps": [
-        { "kind": "assert", "step": "test-hooks-registered", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true } },
+        { "kind": "assert", "step": "test-hooks-registered", "command": "dsh.test.getStartState", "expect": { "state": "idle" } },
         { "kind": "screenshot", "step": "test-hooks", "file": "cap-test-hooks.png" }
       ]
     }

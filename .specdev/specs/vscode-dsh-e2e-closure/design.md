@@ -309,6 +309,7 @@ phase-1-closure-foundation
 |---|------|-----------|--------|--------|---------|
 | 1 | 2026-09-19 | §核心实体 #1「弱证据分类规则」 | 分类失败（未知形态）由「默认 `weak`」改为「判为 `unknown`」，消除与 §实现方案骨架 / spec AC-2 三态的自相矛盾 | 调度者（HG-3 SHOULD-FIX 回填） | implementer 偏差 2 |
 | 2 | 2026-09-19 | §API 域 `readPlan`/`resolveArtifactDir` 行 | `extension.cjs` 的 `driver.planPath` 由 `path.join(artifactDir,…)` 改为稳定 base 路径（`FALLBACK_ARTIFACT_DIR`），因 per-run 后 `artifactDir` 指向 `runs/<runId>/` 而 plan 实为稳定 base 路径；该字段仅作 status 元数据、无下游消费者 | 调度者（HG-3 SHOULD-FIX 回填） | implementer 偏差 1 |
+| 3 | 2026-09-20 | §实现方案「逐项驱动的能力分批」note（`design.md:248`「单例 Panel / 多 Tab / 历史窗口经行为驱动后可得闭环证据」） | 真机证伪：`cap-history-panel` 的 `listHistory` 在无模型往返时恒空（`isHistoryEligibleSession` 排除空 title 会话，`newConversation` 只产生 `EMPTY_LIVE_TITLE`），无法形成具体断言；`cap-tab-chrome`（多 Tab）为纯 webview 内部组件、无 host 侧探测 hook。二者由「升级断言并闭环」改为「如实登记未闭环」（DEBT-8 / DEBT-7），符合 AC-15 诚实登记原则 | 调度者（HG-3 SHOULD-FIX 回填） | implementer 偏差 2 |
 
 ## 建议的下一步
 
