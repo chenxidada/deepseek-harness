@@ -6,8 +6,11 @@ is the tracked record of those runs: the orchestration splices one row into the 
 below per run, so the per-run status/journal/summary/screenshots can be reviewed from the
 repository without committing binaries.
 
-- **Produces**: `apps/vscode-dsh/test-scripts/run-layer-v-capabilities.sh` (per-run directory
-  under `runs/<runId>/`; the row is spliced by the workflow's full-chain entry, Phase 4).
+- **Produces**: `apps/vscode-dsh/test-scripts/run-vscode-dsh-e2e-closure.sh` (the Phase 4
+  full-chain entry: runs every capability in two `requiresModel` batches — 18 non-model then
+  23 model — each a separate `apps/vscode-dsh/test-scripts/run-layer-v-capabilities.sh`
+  invocation under `runs/<runId>/`; the entry splices one row into the run table below per
+  batch).
 - **Never overwritten**: rows are only ever added, so a failed or skipped run stays visible.
 - **Per-run artifacts**: `runs/<runId>/layer-v-capabilities-status.json` (machine-readable
   verdict, including each capability's `closedLoop`), `-journal.jsonl` (step-by-step),

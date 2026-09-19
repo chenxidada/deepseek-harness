@@ -381,7 +381,13 @@ main() {
   # `wait_for_status` refuses a status file that does not belong to this run) and ensure the
   # directory exists before the host writes into it.
   mkdir -p "${RUN_DIR}" || { set_conclusion "HARNESS_ERROR" 4 "artifact" "could not create ${RUN_DIR}"; exit_now; }
-  rm -f "${STATUS_PATH}" "${JOURNAL_PATH}" 2>/dev/null || true
+  # The in-host driver's `activate()` fallback (driver-failed-before-run) writes status/journal
+  # to the base artifact dir when it cannot read the plan, so clear those too (DEBT-6): a failed
+  # prior run must not leave orphan files under the base that outlive the run that produced them.
+  # The plan itself stays untouched — it is rewritten by write_plan below and read by the driver.
+  rm -f "${STATUS_PATH}" "${JOURNAL_PATH}" \
+    "${ARTIFACT_DIR}/layer-v-capabilities-status.json" \
+    "${ARTIFACT_DIR}/layer-v-capabilities-journal.jsonl" 2>/dev/null || true
   write_plan
   prepare_shadow_preset
 

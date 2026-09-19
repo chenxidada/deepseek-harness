@@ -2,6 +2,18 @@
 # vscode-dsh-chat-ready Feature regression (AC-R1 / AC-R2)
 # One-command entry: phase-1…5 Must suites + AC-27 prior-behavior sample.
 # Run from repo root: bash apps/vscode-dsh/test-scripts/run-chat-ready-regression.sh
+#
+# OBSOLETE (vscode-dsh-e2e-closure Phase 4, decision C): this script is kept on disk but no
+# longer maintained. The ten test files it runs below were consolidated into
+# apps/vscode-dsh/tests/cap-*.spec.ts by the vscode-dsh-test-consolidation workflow, so the
+# vitest invocations name files that no longer exist. Its regression duty is now covered by
+# `pnpm exec vitest run apps/vscode-dsh/tests` (see AC-12). The registry/agent-loop checks
+# below point at the unrelated vscode-dsh-chat-ready workflow and are likewise dead. It is
+# retained, not deleted, because four guard references pin it (cap-test-harness.spec.ts
+# CAP-TEST-HARNESS-083, scripts/check-test-scripts-syntax.sh, tests/capability-domains.json,
+# apps/vscode-dsh/README.md) — see tech-debt-registry.md DEBT-11 for the cleanup follow-up.
+# This comment only marks the file obsolete; no logic below is changed, so `bash -n` still
+# passes and the guards that assert this file exists keep passing.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
