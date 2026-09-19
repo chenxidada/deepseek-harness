@@ -1,52 +1,21 @@
 {
   "slug": "vscode-dsh-e2e-closure",
-  "description": "为 vscode-dsh 完整能力链（ide → conversation-ui → chat-ready → code-context-diff → chat-ux → editor-chat-panel）建立真机端到端闭环验证：复用 usable-loop 的层 V 冒烟闭环（Xvfb + code CLI + 截图），补齐缺失的层 V 真机驱动代码与视觉证据，并处理审计遗留偏差（lib 陈旧 chunk、FiberState 债登记）。",
+  "description": "对 vscode-dsh 当前代码真实实现的每项功能能力建立真机端到端闭环验证（实际触发行为 + 断言具体结果 + 截图证据），复用层 V 冒烟闭环基座；核心交付物是可重复运行的真机闭环验证基座，未闭环能力如实登记后交由后续 feature 补充开发。",
   "created": "2026-09-18T02:19:29Z",
   "current_stage": "phase-implementation",
-  "current_phase": "phase-3-remaining-capabilities",
+  "current_phase": "phase-1-closure-foundation",
   "loop_count": 0,
   "human_gates": {
     "hg1": "passed",
     "hg2": "passed",
-    "hg3": "pending"
+    "hg3": "passed"
   },
   "phases": {
-    "phase-1-driver-framework-pilot": {
+    "phase-1-closure-foundation": {
       "implementer": "completed",
       "reviewer": "completed",
       "verifier": "completed"
-    },
-    "phase-2-session-main-path-llm": {
-      "implementer": "completed",
-      "reviewer": "completed",
-      "verifier": "completed"
-    },
-    "phase-3-remaining-capabilities": {
-      "implementer": "completed",
-      "reviewer": "skipped",
-      "verifier": "skipped"
     }
   },
-  "closure": {
-    "mode": "descoped",
-    "closed_at": "2026-09-18T16:09:45Z",
-    "closed_by": "user decision",
-    "reason": "用户决定终止本 Phase 的 review / verifier，并以范围缩减方式关闭 Phase 3。hg3 保持 pending —— 门禁对 hg3=passed 要求 implementation.md / review.md / verification.md 齐备且判决为 PASS，本次未走该流程，故不声称验收通过。",
-    "declared_capabilities": 14,
-    "verified_capabilities": 6,
-    "verified_scope": "§12.4 子会话（2 项）、§12.7 搜索（2 项）、§12.10 历史（2 项）— 均 conclusion=PASS、exit=0，截图取证齐全",
-    "unverified_capabilities": [
-      "cap-at-path-token",
-      "cap-workspace-path-resolve",
-      "cap-selection-ask",
-      "cap-change-index-store",
-      "cap-snapshot-revert",
-      "cap-change-diff-render",
-      "cap-interaction-coordinator",
-      "cap-interaction-ui"
-    ],
-    "unverified_note": "这 8 项的 steps/断言已写入 manifest，但从无机运行取证（test-artifacts 下匹配文件数为 0）。已登记为 DEBT-4（§12.6，3 项）与 DEBT-5（§12.5 + §12.11，5 项）。",
-    "debts": ["DEBT-4", "DEBT-5"]
-  },
-  "last_update": "2026-09-18T16:09:45Z"
+  "last_update": "2026-09-19T16:50:00Z"
 }

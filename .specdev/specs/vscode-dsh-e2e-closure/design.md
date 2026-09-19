@@ -1,210 +1,315 @@
-# 架构设计 — vscode-dsh 完整能力链真机端到端闭环验证
+# 架构设计 — vscode-dsh 功能能力真机端到端闭环验证（重做）
 
 > 工作流 slug：`vscode-dsh-e2e-closure`
-> 本文件由 plan-generator 产出，是 HG-2 方案确认与后续 Phase 实施的架构依据。
+> 本文件由 plan-generator 产出，是 implementer / reviewer / verifier 的实施与验收依据。
+> 上一轮 `vscode-dsh-e2e-closure` 已 descoped 关闭，本文件**完全重写**，替代旧方案（旧方案把审计偏差 5/6 修复拆成 Phase，本次已排除；旧方案也没有「未闭环登记」这一核心语义）。
 
 ## 范围覆盖
 
-本设计覆盖整个工作流（5 个 Phase，见 `phase-plan.md` DAG）。交付物为三类，全部落在 `apps/vscode-dsh/` 与 `.specdev/specs/*/`：
-
-1. **层 V 真机驱动代码**：复用 `run-layer-v-smoke.sh` 基座，新增多能力驱动编排框架，把真机 EDH 覆盖从 usable-loop 扩展到 repo-exploration §12 的 41 项真实功能能力。
-2. **清除 mock/过时测试/过时验证产物**：按 repo-exploration §14 清单驱动，留痕删除。
-3. **修复审计遗留偏差 5（lib 陈旧 chunk）与偏差 6（`const enum FiberState`）**。
-
-`ui_relevant: false`：本工作流不新增/修改任何产品 UI 视图文件；截图是**验证证据**（由 verifier 断言「真机是否跑通」），不是「被设计的界面」。
+本设计覆盖本工作流全部 4 个 Phase（`phase-1-closure-foundation` → `phase-2-drive-nonmodel` → `phase-3-drive-model` → `phase-4-orchestration-regression`），对应 `phase-plan.md` 中的 DAG。核心交付物是「可重复运行的真机闭环验证基座」——复用层 V 冒烟闭环基座，对当前代码真实实现的每项能力逐项真机驱动、给结论，能闭环则闭环、不能闭环则如实登记（AC-15）。
 
 ## 现状依据
 
+> 本节是 `pipeline-gate.sh` 在 `hg2=passed` 时程序化校验的必填章节（L1–L5）。每条证据都是「本设计依赖的现状事实」，形如 `` `路径:行号` ``，路径真实存在、行号不越界。所有断言均为 ✅ CONFIRMED（已读函数体/配置实际值）。
+
 | 事实（本设计依赖的现状） | 证据 |
 |------|------|
-| 层 V 冒烟闭环基座 `run-layer-v-smoke.sh` 已存在（约 3149 行），其 `main` 为单一入口 | `apps/vscode-dsh/test-scripts/run-layer-v-smoke.sh:3090` |
-| 层 V 退出码/结论契约：0=PASS / 1=LINK_FAILURE / 2=SKIPPED_NO_DISPLAY / 3=SKIPPED_NO_CREDENTIALS / 4=HARNESS_ERROR，且「never merged/downgraded/guessed」 | `apps/vscode-dsh/test-scripts/run-layer-v-smoke.sh:32` |
-| 基座声明 installs nothing、不写真实 `~/.dsh`（route A 所有写落在沙箱 HOME）、不用 UI 自动化/回放 | `apps/vscode-dsh/test-scripts/run-layer-v-smoke.sh:39` |
-| 基座关键函数可被复用：`set_conclusion` / `cleanup` / `launch_host`，但 `main "$@"` 在文件底部**无守卫地立即执行**（不可简单 `source`） | `apps/vscode-dsh/test-scripts/run-layer-v-smoke.sh:217`、`:306`、`:1413`、`:3149` |
-| 层 V 驱动扩展 `extension.cjs`（约 2441 行）实现五步范式 runStep1-5 | `apps/vscode-dsh/test-scripts/layer-v-driver/extension.cjs:928`、`:1050`、`:1090`、`:1188`、`:1607` |
-| React SPA 唯一生产呈现入口是编辑器单例 Panel 控制器（模块级 `panel` 变量） | `apps/vscode-dsh/src/chat-panel/editor-chat-panel.ts:161` |
-| React SPA 的 `webview.html` 由编辑器 Panel 控制器注入 | `apps/vscode-dsh/src/chat-panel/editor-chat-panel.ts:218` |
-| 会话主链路发起提示 `promptActive` | `apps/vscode-dsh/src/conversation-controller.ts:1617` |
-| 消息存储流式 patch `patchMessage` | `apps/vscode-dsh/src/message-store.ts:69` |
-| 全量状态推送 `pushFullState` | `apps/vscode-dsh/src/chat-panel/chat-panel-host.ts:392` |
-| `messages/append` 与 `messages/patch` 协议类型 | `apps/vscode-dsh/src/chat-panel/protocol.ts:114`、`:123` |
-| thin HTML 面板 `buildThinChatHtml` 已 `@deprecated`、fixture-only、生产不调用 | `apps/vscode-dsh/src/chat-panel/chat-panel-provider.ts:190` |
-| Tier-3 全文搜索有意缺席（`TIER3_FULL_TEXT_SEARCH_API = null`） | `apps/vscode-dsh/src/search/session-search.ts:136` |
-| 偏差 5：tsdown `clean: false`，导致 lib 陈旧 chunk 不清理 | `apps/vscode-dsh/tsdown.config.ts:18` |
-| 偏差 5：`package.json#files` 用 `lib/*.js` 通配，囊括全部 19 个 chunk | `apps/vscode-dsh/package.json:24` |
-| 偏差 6：`const enum FiberState` 定义（无运行时对象） | `vendor/cordis/src/fiber.ts:147` |
-| 偏差 6：`agent-loop` 顶层 `new Set([FiberState.UNLOADING, ...])` 运行时读值，source-plane 下崩溃 | `packages/core/agent-loop/src/index.ts:39` |
-| vendor 本地修改记录已把 `fiber.ts` 登记为第 6 条「lifecycle hardening」；同步流程要求重放本地修改 + 更新 manifest + 跑 test/build | `vendor/README.md:38`、`:53` |
-| 层 V 基座已有 machine-readable 产物机制（`layer-v-support/artifact-index.cjs` 是 `main` 的必需输入，artifact-index/journal/status 由基座与驱动协同产出） | `apps/vscode-dsh/test-scripts/run-layer-v-smoke.sh:3095` |
+| 退出码/结论契约的唯一写入点：`set_conclusion` + `fail_harness`/`fail_link`/`fail_display`，`record_teardown_violation`/`record_evidence_violation` 单向把 PASS 降为 HARNESS_ERROR | `apps/vscode-dsh/test-scripts/layer-v-support/layer-v-runtime.sh:51` |
+| 结论词汇与退出码映射：`PASS/LINK_FAILURE/SKIPPED_NO_DISPLAY/SKIPPED_NO_CREDENTIALS/HARNESS_ERROR` = `0/1/2/3/4` | `apps/vscode-dsh/test-scripts/layer-v-support/primitives.cjs:13` |
+| 能力 runner（依赖无关半）复用共享原语，非镜像 | `apps/vscode-dsh/test-scripts/layer-v-capability-driver/capability-runner.cjs:65` |
+| 能力 in-host 驱动复用共享原语（journal 绑定、status 写入在此） | `apps/vscode-dsh/test-scripts/layer-v-capability-driver/extension.cjs:43` |
+| 冒烟 in-host 驱动（5 步链路）复用同一共享原语 | `apps/vscode-dsh/test-scripts/layer-v-driver/extension.cjs:42` |
+| 能力清单 manifest：`capabilities` 数组承载 41 项能力、12 组，每项带 `evidence`（`路径:行号`）与 `steps` | `apps/vscode-dsh/test-scripts/layer-v-capabilities.json:5` |
+| 弱证据断言示例（`panelOpen: true`，仅证明面板打开，AC-2 封禁的模式） | `apps/vscode-dsh/test-scripts/layer-v-capabilities.json:18` |
+| 具体结果断言原语已存在：`$contains:`/`$assistantContains:`/`$assistantClosed:`/`$array:N`（`resolveMatcher` 内联参数化形式） | `apps/vscode-dsh/test-scripts/layer-v-capability-driver/capability-runner.cjs:233` |
+| 凭证门控 fail-closed：`requiresModel && !hasCredential` → `SKIPPED_NO_CREDENTIALS`，且该 skip 在聚合中 outranks PASS | `apps/vscode-dsh/test-scripts/layer-v-capability-driver/capability-runner.cjs:563` |
+| 能力编排证据目录为 flat 单一目录（status/plan/summary 固定文件名，run 间覆盖 → 截图成孤儿，R3） | `apps/vscode-dsh/test-scripts/run-layer-v-capabilities.sh:45` |
+| journal 逐步追加：`appendJournal` 逐行写 JSONL（每步成功/失败均写） | `apps/vscode-dsh/test-scripts/layer-v-capability-driver/extension.cjs:66` |
+| driver 结论 → 进程退出码的 case 映射（唯一且不合并） | `apps/vscode-dsh/test-scripts/run-layer-v-capabilities.sh:361` |
+| `dsh.test.*` 测试钩子仅在 `VSCODE_DSH_TEST=1/true` 或注入 `vscodeArg` 时注册（真机驱动触发行为的接口面） | `apps/vscode-dsh/src/extension.ts:2575` |
+| 截图质量门槛：`MIN_DISTINCT_MD5 = 3`（至少 3 个互异帧，防同帧/全黑退化证据） | `apps/vscode-dsh/test-scripts/layer-v-support/display-evidence.cjs:39` |
+| 陈旧回归脚本 `run-chat-ready-regression.sh` 引用已归并不存在的测试文件（现状破损，AC-12 需处理） | `apps/vscode-dsh/test-scripts/run-chat-ready-regression.sh:15` |
+| artifact-index 机制：冒烟每 run 通过 `artifact-index.cjs` 追加一行到 `<spec>/artifact-index.md` | `apps/vscode-dsh/test-scripts/run-layer-v-smoke.sh:64` |
 
-> 说明：以上证据全部来自 workflow 级 `repo-exploration.md` 并已逐条核对（文件存在 + 行号不越界）。影响架构决策的现状断言均为 ✅ CONFIRMED。
+> 补充说明（非证据，供决策）：manifest 中每项能力的 `ac` 字段（如 `["AC-7","AC-10"]`）引用的是**上一轮工作流的旧 AC 编号体系**，与本工作流 `requirements.md` 的 `AC-1`~`AC-15` 不一致。本设计的 AC 编号以 `requirements.md` 为准；manifest 仅作为「能力清单 + steps/断言」的来源，其 `ac` 字段不作为本工作流的验收映射依据（详见 §实现方案 P1-4）。
 
 ## 架构摘要
 
-复用 usable-loop 已建立的层 V 冒烟闭环（Xvfb + `code` CLI + 驱动扩展 + 退出码契约），把覆盖从「usable-loop 自身功能」扩展到「当前代码真实实现的 41 项能力」。做法是：**提取共享运行时库**（从 `run-layer-v-smoke.sh` 抽出显示/Node/沙箱/凭证/进程回收原语）+ **新增能力编排层**（`run-layer-v-capabilities.sh` + 独立 `layer-v-capability-driver/extension.cjs` + 机器可读能力清单 JSON），用 editor-chat-panel 主呈现路径打样范式后，按能力清单分批驱动、截图、断言。偏差 5/6 与 mock 清除作为独立可验收 Phase，最后用一条全链编排命令串起闭环并跑回归护栏。
+本工作流不新增产品功能、不修改产品代码（`src/` / `webview/src/` 保持不动），全部改动落在验证基础设施（`apps/vscode-dsh/test-scripts/` 与 `test-artifacts/`）。在既有层 V 能力驱动（`run-layer-v-capabilities.sh` + `layer-v-capability-driver/` + `capability-runner.cjs` + `primitives.cjs`）之上做三件事：
+
+1. **落地「真闭环判定」为机器可读结论模型**：给 `capability-runner.cjs` 的每项能力结果增加一个正交于退出码的 `closedLoop` 维度（① 真机实际触发 ② 针对具体结果的断言 ③ 真实桌面截图，三条齐备 = 闭环通过），并把弱证据（`panelOpen: true` 一类）识别为「未闭环」而非 PASS。退出码契约（0/1/2/3/4）保持不变——`closedLoop` 是 per-capability 的 closure 结论，exit code 仍是 run 层面的成败语义。
+2. **解决 per-run 证据隔离（R3）**：把能力编排的产物从 flat 单一目录改为 `<base>/runs/<runId>/`，使「可重复运行」的每一次 run 的历史 verdict 与截图可追溯，不再互相覆盖。
+3. **逐项驱动 + 诚实结论 + 收尾**：用升级后的基座逐项驱动 41 项能力（非模型批先跑、模型批带 key 跑），能闭环则闭环、不能闭环则登记「未闭环 + 缺口三元组」进 `tech-debt-registry.md` 与 closure 汇总；接入 artifact-index 使历史 run 可索引；跑既有回归护栏保证 AC-12。
 
 ## 核心实体 / 数据模型
 
-### 能力清单 manifest（新增，JSON）
+### 1. per-capability 闭环结论（新增，正交于退出码）
 
-```jsonc
+在 `runCapability` / `runManifest` 的返回中，每项能力新增 `closedLoop` 字段：
+
+```javascript
 {
-  "capabilities": [
-    {
-      "id": "cap-editor-panel-singleton",
-      "group": "react-spa-main",
-      "ac": ["AC-7"],
-      "requiresModel": false,
-      "steps": [ { "kind": "command", "command": "dsh.startSession" }, { "kind": "assert", "selector": "[data-testid=editor-chat-root]" } ]
-    }
-  ]
+  id, group, title, requiresModel,
+  conclusion: 'PASS' | 'LINK_FAILURE' | 'SKIPPED_NO_DISPLAY' | 'SKIPPED_NO_CREDENTIALS' | 'HARNESS_ERROR',
+  closedLoop: {
+    closed: boolean,            // ① && ② && ③
+    actualTrigger: boolean,     // ① 真机实际触发
+    concreteAssertion: boolean, // ② 针对具体结果的断言
+    realScreenshot: boolean,    // ③ 真实桌面截图
+    missing: string[],          // 缺失维度，如 ['concreteAssertion']；closed=true 时为空数组
+    reason: string,             // 缺口原因（closed=false 时必填）
+    suggestedFeature: string | null // AC-15 三元组的「建议何种 feature 补充」；运行时可为 null，由 verifier/调度者在 registry 汇总时填写
+  }
 }
 ```
 
-- `id`：能力唯一标识（与 §12 清单编号一一对应，可追溯）。
-- `group`：能力分组（对应 §12.1–§12.12）。
-- `ac`：该能力覆盖的验收标准。
-- `requiresModel`：是否涉及真实 LLM 往返（true → 强制 `DEEPSEEK_API_KEY`，AC-9）。
-- `steps`：EDH 操作序列（command / inject / wait / assert / screenshot）。
+**三元判定规则（机器可读，不靠猜测）：**
 
-### journal 行（沿用既有 JSONL 结构）
+- ① **实际触发**：该能力 steps 中存在至少一条 `assert`/`wait`/`stream` 步骤，其 `command` **不在**「仅 UI 准备」白名单内（`dsh.showPanel` / `dsh.test.openPanel` / `dsh.test.openActivityBar` / `dsh.test.fireConversationVisibility`），且该步骤断言通过（`ok === true`）。
+- ② **具体结果断言**：存在至少一条 `assert`/`wait`/`stream` 步骤，其 `expect` 被分类为「具体结果」（concrete）而非「弱证据」（weak），且该步骤通过。分类规则见下。
+- ③ **真实桌面截图**：存在至少一条 `screenshot` 步骤且 `pngVerdict` 通过（非退化、非空帧）。
 
-```jsonc
-{ "ts": "...", "capability": "cap-editor-panel-singleton", "step": "assert-root", "verdict": "PASS", "evidence": ["step-N.png"], "detail": "..." }
+**弱证据分类规则（`classifyAssertionStrength`）**：一条 `assert`/`wait`/`stream` 步骤的 `expect` 若为**纯存在性**断言（所有字段仅断言 `panelOpen` / `viewId` / `registered` / 单独 `ok: true` 等「存在即通过」值，不含任何内容/数据/状态/数值/负向字段），判为 `weak`；否则（`expect` 含 `$contains:` / `$assistantContains:` / `$assistantClosed:` 谓词，或 `hits.0.matchField` / `changes.0.status` / `count: 1` / `ok: false` 等内容、状态、数值、负向断言）判为 `concrete`。分类失败（未知形态）判为 `unknown` 且**必须**在 reason 中显式记录「断言强度无法分类」。
+
+> 关键语义：`conclusion`（run 成败）与 `closedLoop.closed`（是否达到真闭环标准）是**两个正交维度**。一项能力所有步骤断言都通过（`conclusion=PASS`）但断言是弱证据（如 `panelOpen: true`）时，`closedLoop.closed=false` 且 `missing=['concreteAssertion']`——这正是 AC-2「弱证据不得记验证通过」的机器表达。
+
+### 2. per-run 证据目录（解决 R3）
+
+```
+apps/vscode-dsh/test-artifacts/layer-v-capabilities/
+├── layer-v-capabilities-plan.json          # 每次 run 重写（driver 硬编码读此稳定路径）
+├── runs/
+│   └── <runId>/                            # 每 run 独立目录，历史不覆盖
+│       ├── layer-v-capabilities-status.json
+│       ├── layer-v-capabilities-summary.json
+│       ├── layer-v-capabilities-journal.jsonl   # 逐步追加（AC-7）
+│       └── *.png                            # 该 run 的截图，与 verdict 同目录
+└── latest -> runs/<runId>                  # 软链，指向最新 run（可选，便利入口）
 ```
 
-沿用 `test-artifacts/layer-v/layer-v-journal.jsonl` 的逐步追加语义（AC-3），新增 `capability` 字段定位失败点。
+- `plan.json` 内容里的 `artifactDir` 字段写 `<base>/runs/<runId>`；driver `readPlan` 仍从稳定 `plan.json` 读（无需改 driver 的 plan 定位），`resolveArtifactDir(plan)` 返回 per-run 目录，status/journal/截图全部落其中。
+- 既有 `rm -f` 陈旧 status/journal 的逻辑更新为「清理 `<runId>` 目录内陈旧文件」（或不清理——新目录天然隔离，只需在 `wait_for_status` 前确认本 run 目录干净）。
 
-### 运行状态记录（run-status）
+### 3. closure 汇总（`status.json` 扩展 + 写入 summary）
 
-```jsonc
-{ "capabilities": { "cap-<id>": { "conclusion": "PASS|FAIL|SKIPPED", "evidence": [...], "failedStep": null } }, "exitCode": 0 }
+`status.json` 的 `capabilities[]` 直接承载每项 `closedLoop`。另在 summary 中追加一份机器可读汇总：
+
+```javascript
+{
+  runId, conclusion, exitCode, finishedAt,
+  closureSummary: {
+    total: 41,
+    closed: 12,            // closedLoop.closed === true 的数量
+    notClosed: 29,         // closedLoop.closed === false 的数量
+    skipped: 0,            // SKIPPED_NO_CREDENTIALS / SKIPPED_NO_DISPLAY
+    byGroup: { 'react-spa-main': { total: 8, closed: 2, notClosed: 6 }, ... },
+    notClosedDetails: [ { id, group, missing: [...], reason } ]
+  }
+}
 ```
 
-AC-17 的机器可读产物；AC-18 要求任一能力 FAIL → 非 0 退出码 + 标注失败步骤。
+### 4. artifact-index 行（沿用现有机制）
 
-## API 域
+复用 `layer-v-support/artifact-index.cjs`（不改），为本工作流新建 `.specdev/specs/vscode-dsh-e2e-closure/artifact-index.md`（表头以 `| run (UTC)` 开头，含 `| _(no runs yet)_ | ...` 占位行）。每 run 追加一行：`| <finishedAt> | \`apps/vscode-dsh/test-artifacts/layer-v-capabilities/runs/<runId>/\` | <conclusion> | <exitCode> | <closed/number>→<file> |`。列宽与 `run-layer-v-smoke.sh` 的 `build_index_row` 对齐（改动时同步 smoke 侧表头说明，但不动 smoke 脚本本身）。
 
-本工作流不新增/修改任何产品 API 端点。涉及的能力面：
+## API 域（模块契约）
 
-- **复用驱动宿主 API**：`extension.cjs` 的 `StageError` 分类（`extension.cjs:97-114`）与五步 `runStepN` 断言原语，被新驱动扩展复用（require/import 形态）。
-- **复用产品测试钩子**：`dsh.test.*` 命令（`src/extension.ts:1011-1264`，仅测试模式注册）可作为驱动注入/观察点；但 **AC-9 明确禁止**以 `dsh.test.answerApproval` / session 回放等注入/模拟作为「模型往返」闭环的等价验收 —— 涉及模型往返的能力必须走真实 `DEEPSEEK_API_KEY`。
+本工作流无网络 API、无 HTTP 端点；「接口」指脚本/模块之间的契约。以下是本次要动的契约面：
+
+| 契约 | 位置 | 变更 |
+|---|---|---|
+| `matchesExpect` / `resolveMatcher` / `MATCHERS` | `capability-runner.cjs` | **不改**（复用，具体结果断言原语已够用） |
+| 新增 `classifyAssertionStrength(step)` | `capability-runner.cjs` | 新增导出：`weak` / `concrete` / `unknown` |
+| 新增 `assessClosedLoop(cap, records)` | `capability-runner.cjs` | 新增导出：由 step records 计算 `closedLoop` 对象 |
+| `runCapability` 返回 | `capability-runner.cjs` | 返回值新增 `closedLoop` 字段 |
+| `runManifest` 返回 | `capability-runner.cjs` | `capabilities[]` 每项新增 `closedLoop`；聚合逻辑不变 |
+| `readPlan` / `resolveArtifactDir` | `layer-v-capability-driver/extension.cjs` | `resolveArtifactDir` 读 `plan.artifactDir`（已支持）；`readPlan` 稳定路径不变；`activate()` 的 fallback 路径保持 flat 兜底 |
+| `write_plan` / 变量定义 | `run-layer-v-capabilities.sh` | `ARTIFACT_DIR` 语义拆分：plan 稳定路径 + `RUN_DIR` per-run 目录；`STATUS_PATH`/`SUMMARY_PATH`/`JOURNAL` 指向 `RUN_DIR` |
+| `wait_for_status` / `finish` | `run-layer-v-capabilities.sh` | 读 `RUN_DIR` 下的 status/summary |
+| 全链入口 | `run-vscode-dsh-e2e-closure.sh`（新增） | 顶层命令：全量驱动 + closure 汇总 + artifact-index 追加 + 回归护栏（Phase 4 产物） |
 
 ## 实现方案
 
-### 总体文件产出计划
+### 文件产出计划
 
-**新增（层 V 能力编排 + 驱动）：**
-
-```
-apps/vscode-dsh/test-scripts/
-├── layer-v-capabilities.json              # 41 项能力清单（唯一覆盖依据，机器可读）
-├── run-layer-v-capabilities.sh            # 全链能力编排脚本（复用运行时库）
-├── layer-v-support/layer-v-runtime.sh     # 共享运行时库（从 smoke.sh 提取，见 AD-1）
-└── layer-v-capability-driver/
-    ├── extension.cjs                      # 多能力驱动扩展（复用 base driver 原语）
-    ├── package.json
-    └── capability-runner.cjs              # 按 manifest 驱动 runStep
-```
-
-**修改（偏差修复 + 清理）：**
+**新增文件：**
 
 ```
-apps/vscode-dsh/tsdown.config.ts           # 偏差 5：clean: false → true（或等效）
-apps/vscode-dsh/package.json               # 偏差 5：files 收窄（去掉 lib/*.js 通配陈旧面）
-vendor/cordis/src/fiber.ts                 # 偏差 6：const enum → enum
-vendor/README.md                           # 偏差 6：追加本地修改记录条目
-.specdev/specs/vscode-dsh-e2e-closure/tech-debt-registry.md  # 偏差 6 登记
+apps/vscode-dsh/test-scripts/run-vscode-dsh-e2e-closure.sh   # 全链入口（Phase 4）
+.specdev/specs/vscode-dsh-e2e-closure/artifact-index.md      # 本工作流 run 索引（Phase 1 建模板）
+apps/vscode-dsh/test-scripts/layer-v-support/closure-report.cjs  # 可选：closure 汇总渲染（Phase 1，或并入 status/summary）
 ```
 
-**删除（mock/过时产物，清单驱动 + 留痕）：** repo-exploration §14.2 / §14.3 / §14.4 清单。
+**修改文件：**
 
-### 关键架构决策（AD）
+```
+apps/vscode-dsh/test-scripts/layer-v-capability-driver/capability-runner.cjs
+  — 新增 classifyAssertionStrength / assessClosedLoop；runCapability/runManifest 返回携带 closedLoop
+apps/vscode-dsh/test-scripts/layer-v-capability-driver/extension.cjs
+  — 复核 resolveArtifactDir（已支持 plan.artifactDir）；确认 fallback 路径语义
+apps/vscode-dsh/test-scripts/run-layer-v-capabilities.sh
+  — per-run 目录隔离；closure 汇总写入 summary；接入 artifact-index（或由全链入口接入）
+apps/vscode-dsh/test-scripts/layer-v-capabilities.json
+  — 仅修正「本 Phase 覆盖组」中弱证据条目的断言（每 Phase 只动本批，不动全量 41 项）
+```
 
-**AD-1 复用方式：提取共享运行时库，而非整体 `source` 或复制。**
+> `layer-v-capabilities.json` 的 `ac` 字段（旧编号）**本工作流不重写**，避免大范围 churn；验收映射以 `requirements.md` 的 AC 为准。
 
-`run-layer-v-smoke.sh` 底部 `main "$@"`（`:3149`）无守卫地立即执行，整体 `source` 会触发 main；复制函数体则违反 AC-1「不得从零重建」。故将显示解析/Xvfb、Node 解析、沙箱 HOME、凭证门控、`launch_host`、进程回收、`set_conclusion`/`fail_*` 等原语**原样提取**到 `layer-v-support/layer-v-runtime.sh`，`run-layer-v-smoke.sh` 改为 `source` 该库（行为保持，由 AC-19 回归 + 重跑基座验证），新编排脚本也 `source` 同一库。这是「改正确的地基」而非兼容补丁（与 AGENTS.md pre-release 立场一致）。
+### 关键骨架代码
 
-**AD-2 驱动扩展方式：新增独立 `layer-v-capability-driver/`，不修改既有 `extension.cjs`。**
+`capability-runner.cjs` 新增（伪代码/骨架）：
 
-既有 `extension.cjs`（2441 行）是 usable-loop 已验证交付物。41 项能力直接叠加到其五步 runStep 上会把「已验证闭环」与「新能力」耦合在单一文件。故新驱动复用其 `StageError` 退出码分类与断言原语（require 复用），按 manifest 的 `steps` 泛化执行，保持五步范式的「操作序列 + 截图 + 断言」骨架。
+```javascript
+const UI_PREP_COMMANDS = new Set([
+  'dsh.showPanel', 'dsh.test.openPanel',
+  'dsh.test.openActivityBar', 'dsh.test.fireConversationVisibility',
+])
 
-**AD-3 覆盖清单落地为机器可读 manifest（`layer-v-capabilities.json`）。**
+// 一条断言步骤的强度分类：weak = 纯存在性，concrete = 含内容/状态/数值/负向断言
+function classifyAssertionStrength(step) {
+  const expect = step.expect
+  if (expect === undefined) return 'unknown'
+  if (typeof expect === 'string' && expect.startsWith('$')) {
+    const concretePreds = ['$contains:', '$assistantContains:', '$assistantClosed:']
+    return concretePreds.some(p => expect.startsWith(p)) ? 'concrete' : 'unknown'
+  }
+  if (expect !== null && typeof expect === 'object' && !Array.isArray(expect)) {
+    const weakFields = new Set(['panelOpen', 'viewId', 'registered', 'ok'])
+    const keys = Object.keys(expect)
+    // 负向断言（ok: false / reason / outcome 非成功值）或内容/状态/数值字段 → concrete
+    const hasConcrete = keys.some(k =>
+      !weakFields.has(k) ||
+      (k === 'ok' && expect[k] === false) ||
+      (typeof expect[k] === 'string' && expect[k].startsWith('$'))
+    )
+    return hasConcrete ? 'concrete' : 'weak'
+  }
+  return 'unknown'
+}
 
-AC-6 要求「真实功能能力清单是闭环唯一依据」。把 §12 的 41 项能力编码为 JSON manifest（含 `id`/`group`/`ac`/`requiresModel`/`steps`），使「清单 → 驱动 → journal → 状态记录 → artifact-index」全链可追溯，且可单项复验（S-2）。
+// 由 runCapability 的 step records 计算 closedLoop 三元组
+function assessClosedLoop(cap, records) {
+  const asserted = records.filter(r => r.ok === true && (r.kind === 'assert' || r.kind === 'wait' || r.kind === 'stream'))
+  const triggerSteps = cap.steps.filter(s =>
+    (s.kind === 'assert' || s.kind === 'wait' || s.kind === 'stream') &&
+    !UI_PREP_COMMANDS.has(s.command))
+  const actualTrigger = triggerSteps.length > 0 &&
+    triggerSteps.some(s => asserted.some(r => r.step === s.step))
+  const concreteAssertion = cap.steps.some(s =>
+    (s.kind === 'assert' || s.kind === 'wait' || s.kind === 'stream') &&
+    classifyAssertionStrength(s) === 'concrete' &&
+    asserted.some(r => r.step === s.step))
+  const screenshotRecords = records.filter(r => r.kind === 'screenshot')
+  const realScreenshot = screenshotRecords.some(r => r.ok === true)
+  const missing = []
+  if (!actualTrigger) missing.push('actualTrigger')
+  if (!concreteAssertion) missing.push('concreteAssertion')
+  if (!realScreenshot) missing.push('realScreenshot')
+  return {
+    closed: missing.length === 0,
+    actualTrigger, concreteAssertion, realScreenshot,
+    missing,
+    reason: missing.length === 0 ? '' : `未闭环：缺 ${missing.join('、')}`,
+    suggestedFeature: null,
+  }
+}
+```
 
-**AD-4 断言与证据策略：关键区域存在 + 非退化，不逐像素比对。**
+`run-layer-v-capabilities.sh` 变量区改动（骨架）：
 
-风险 R2（真机截图易抖动）：断言以「`data-testid`/selector 关键区域存在 + 截图 md5 非退化 + 日志/状态证据」为主；AC-4 的「不得全部共享同一 md5」已由基座 `display-evidence` 机制承接。AC-10 禁止以「DOM 存在 / HTTP 200」代替行为断言，故每条能力断言覆盖「操作 → 产品响应 → 截图/日志证据」完整数据路径。
+```bash
+CAP_BASE_DIR="${APP_DIR}/test-artifacts/layer-v-capabilities"
+RUN_DIR="${CAP_BASE_DIR}/runs/${RUN_ID}"
+PLAN_PATH="${CAP_BASE_DIR}/layer-v-capabilities-plan.json"   # 稳定路径（driver 硬编码读）
+STATUS_PATH="${RUN_DIR}/layer-v-capabilities-status.json"
+SUMMARY_PATH="${RUN_DIR}/layer-v-capabilities-summary.json"
+```
 
-**AD-5 偏差 5 修复：`clean: true` + `files` 精确收窄。**
+`write_plan` 的 `artifactDir` 参数改传 `${RUN_DIR}`（plan.json 内容里的 `artifactDir` 指向 per-run 目录）。
 
-根因是 `tsdown.config.ts:18` 的 `clean: false` 使陈旧 chunk 残留，叠加 `package.json#files` 的 `lib/*.js` 通配把全部 19 个 chunk 打入 `.vsix`。修复为：`clean: true`（构建时清空 lib 旧产物）并把 `files` 从 `lib/*.js` 收窄为精确入口文件名（`lib/extension.js`、`lib/index.js` + `lib/types/**` + `media/**` + `webview/dist/**`）。仓库内无 vsce 脚本（✅ CONFIRMED），`.vsix` 由外部 `vsce package` 读取 `files` + `.vscodeignore` 生成，故「不再包含陈旧 chunk」通过「构建后 `lib/` 仅含当前 chunk + `files` 收窄」达成，验证用构建后文件清点 + 打包清单静态核对。
+### 逐项驱动的能力分批（Phase 2 / Phase 3 的覆盖划分）
 
-**AD-6 偏差 6 修复：`const enum FiberState` → `enum FiberState` + vendor 同步记录。**
+| 组 | 项数 | requiresModel | 归属 Phase |
+|---|---|:--:|---|
+| `react-spa-main` | 8 | 全部 false | Phase 2 |
+| `editor-panel` | 4 | 全部 false | Phase 2 |
+| `code-context`（`at-path-token`/`workspace-path-resolve`） | 2 | false | Phase 2 |
+| `interaction`（`interaction-coordinator`/`interaction-ui`） | 2 | false | Phase 2 |
+| `test-hooks` | 1 | false | Phase 2 |
+| `session-main-path`（8 项 model + `extension-activate`） | 9 | 8 true / 1 false | Phase 3（`extension-activate` 可并入 Phase 2 打样） |
+| `code-context`（`selection-ask`） | 1 | true | Phase 3 |
+| `change-list`（3 项） | 3 | true | Phase 3 |
+| `search`（2 项） | 2 | true | Phase 3 |
+| `fork`（2 项） | 2 | true | Phase 3 |
+| `continue`（3 项） | 3 | true | Phase 3 |
+| `history`（2 项） | 2 | true | Phase 3 |
+| `subagent`（2 项） | 2 | true（步骤用 injectSubagent，需逐项核实是否真 model 往返） | Phase 3 |
 
-`const enum` 无运行时对象，esbuild/vitest source-plane 不做跨文件内联 → 运行时 `FiberState` 为 `undefined` → `agent-loop` 顶层 `new Set` 崩溃。修复为移除 `const`（普通 `enum` 保留运行时对象），并在 `vendor/README.md` 本地修改记录追加条目、遵循 `:53-61` 同步流程；同步登记进 `tech-debt-registry.md`（当前为空）。**开放问题**：偏差 6 的「受影响包完整集合」在 repo-exploration 中标 ⚠️ HYPOTHESIS（未逐一重跑），Phase 4 以「修复后对已知受影响包跑 source-plane vitest + 全仓 `pnpm run test`」实测收敛，不做先验断言。
-
-**AD-7 清除策略：清单驱动 + 逐项读体确认 + 留痕。**
-
-清除清单来自 repo-exploration §14，但 §14.2 中「`layer-a/` 5 个用例是否仅测 thin HTML」有 ⚠️ HYPOTHESIS（R3：仅 2 个直接 import `buildThinChatHtml`，其余 3 个可能测共享算法）。故删除前**逐项读体确认**，明确保留 §14.1（`fake-sdk-runtime.mjs`、`run-layer-v-smoke.sh`、`layer-v-driver/`、`layer-v-support/`），删除动作在 `implementation.md` 留痕（列出被清除项 + 判定依据），AC-19 回归护栏兜底防误删。
+> `react-spa-main` / `editor-panel` 两组当前是弱证据（`panelOpen: true`）。Phase 2 逐项升级为具体结果断言：对 host 侧可观测的能力（如「单例 Panel」用 `re-reveal` 后 `panelSnapshot` 仍单例、「历史窗口」用 `listHistory` 返回真实会话），升级断言并闭环；对纯 webview 内部组件（host 侧无 `dsh.test.*` 接口暴露其渲染状态），诚实登记「未闭环：缺具体结果断言（webview 内部组件，无 host 侧探测 hook）」，建议后续 feature 补充 webview 内 `data-testid` 探测通道。这正是 AC-15 的核心语义，也是 AC-11「呈现路径闭环」的落点——「单例 Panel / 多 Tab / 历史窗口」经行为驱动 + 截图后可得闭环证据。
 
 ## Phase DAG 依赖
 
 ```
-phase-1-driver-framework-pilot (无依赖)
- ├─→ phase-2-session-main-path-llm
- ├─→ phase-3-remaining-capabilities
- ├─→ phase-4-audit-debt-fixes (依赖 phase-1：偏差 4 的截图证据由打样产出)
- └─→ (phase-2、phase-3、phase-4 并行)
-        └─→ phase-5-cleanup-orchestration-regression (依赖 2/3/4)
+phase-1-closure-foundation
+        │
+        ├──► phase-2-drive-nonmodel  ──► phase-3-drive-model ──► phase-4-orchestration-regression
 ```
 
-详见 `phase-plan.md` DAG JSON（程序化权威）。
+- `phase-2-drive-nonmodel` 依赖 `phase-1`（基座：closure 判定 + 证据隔离）。
+- `phase-3-drive-model` 依赖 `phase-2`（显式串行：模型批运行昂贵，应先以非模型批校准基座与 closure 判定，避免在昂贵运行上反复试错）。
+- `phase-4-orchestration-regression` 依赖 `phase-3`（全链编排 + 收尾）。
 
 ## 外部依赖
 
-- 无新增 npm 依赖。
-- 真机运行依赖（已就绪，假设 A1）：Xvfb、`code` CLI（`--extensionDevelopmentPath`）、真实 `DEEPSEEK_API_KEY`（AC-9 强制，本环境已提供）。
-- 偏差 6 修复需 `pnpm run test`（source-plane vitest）+ `pnpm run build` 全仓验证。
+- 无新增 npm 依赖、无新增基础设施。复用：`Xvfb` + `code` CLI + `ffmpeg`（截图）+ 真实 `DEEPSEEK_API_KEY`（Phase 3 模型批）。
+- 新增的仅是本工作流内 `.specdev/specs/vscode-dsh-e2e-closure/artifact-index.md` 模板文件。
 
 ## 高风险子系统
 
-| 子系统 | 风险 | 缓解 |
-|---|---|---|
-| `run-layer-v-smoke.sh` 运行时库提取（AD-1） | 提取/重构可能破坏已验证基座行为 | 行为保持重构 + AC-19 回归 + 重跑基座冒烟逐条比对 |
-| 真机闭环时长（R1） | 单次可达 25 分钟，41 项能力全量耗时巨大 | 能力分批（Phase 2/3）+ manifest 支持单项复验（S-2）+ 按组复用 EDH 进程 |
-| 真实 LLM 往返（AC-9） | 模型往返不确定/耗时长，注入/模拟不可等价 | 明确「模型往返类能力必须真实 key」；无 key fail-closed（exit 3）；能力 `requiresModel` 分组隔离 |
-| 偏差 6 vendor 改动（R3） | 改 `vendor/cordis/src/fiber.ts` 影响多包 source-plane | 遵循 `vendor/README.md` 同步流程 + 本地修改记录 + 全仓 test/build 验证 |
-| 清除误删（R4） | 误删仍在用的测试/夹具破坏回归 | §14.1 白名单 + 逐项读体确认 + implementation 留痕 + AC-19 回归护栏 |
+1. **closure 判定规则的边界正确性**：`classifyAssertionStrength` 对「弱证据」的判定若过宽，会把具体结果断言误判为 weak（假阴性，能力被错误登记未闭环）；若过窄，会放过弱证据（假阳性，AC-2 失效）。缓解：Phase 1 用 fixture dry-run（构造弱/强断言样例喂给 `classifyAssertionStrength`）锁定分类行为，并让 reviewer 对照 manifest 现有 41 项逐项抽查。
+2. **per-run 目录改造引入 shell↔driver 路径错位**：`write_plan` 的 `artifactDir` 改 per-run 后，若 driver 仍从旧 flat 读 status 或 shell 从旧 flat 读 status，会出现「写 runId 目录、读 flat」的静默错位。缓解：改造后立即以 `--capability react-spa-main` 单项端到端验证 status/journal/截图三者同目录，且 `wait_for_status` 对「读到不属于本 run 的 status」仍 fail-closed（既有逻辑保留）。
+3. **模型批运行时长/抖动**（R1/R2）：41 项中 20+ 项涉及真实 LLM 往返，全量单次可能 1–2 小时，且流式断言（DEBT-3）跨 run 波动。缓解：Phase 3 支持 `--capability` 分批 + 全链入口支持断点续跑（基于 per-run 目录 + artifact-index 已跑项）；流式波动不作为「放宽断言」的理由，波动即如实登记（AC-14）。
+4. **陈旧回归脚本 `run-chat-ready-regression.sh`**：现状引用不存在的测试文件。缓解：Phase 4 按 AC-12「既有真机冒烟/回归脚本保持通过」处理——评估其引用的测试文件已被 `cap-*.spec.ts` 归并后，将其改为引用当前真实存在的 `cap-*.spec.ts` 或登记为过时并归档，不静默删除。
 
 ## 权衡/替代方案
 
-| 决策 | 备选 | 取舍 |
-|---|---|---|
-| AD-1 提取共享运行时库 | (a) 新脚本整体 `source` smoke.sh；(b) 新脚本复制原语 | (a) 因 `main "$@"` 无守卫（`:3149`）会触发 main 不可行；(b) 违反 AC-1「不得从零重建」 |
-| AD-2 新独立驱动扩展 | 在既有 `extension.cjs` 上叠加 41 项能力 | 叠加会耦合「已验证闭环」与「新能力」，重跑/回归风险更高；独立驱动隔离 blast radius |
-| AD-4 非逐像素断言 | 逐像素比对 | 真机截图受窗口/字体/显示差异影响（R2），逐像素易误报；关键区域 + 非退化更稳 |
-| AD-5 `clean:true` | 仅删 18 个陈旧 chunk 不改 `clean` | 只删不改会复发（下次构建再积累陈旧 chunk）；改 `clean:true` 治本 |
+| 决策 | 选定 | 替代方案 | 为什么选 |
+|---|---|---|---|
+| 「闭环」结论的表达 | 新增正交的 `closedLoop` 维度，不改退出码契约 | 新增退出码（如 5=NOT_CLOSED） | 退出码契约是 AC-8 冻结的 0/1/2/3/4，改它会破坏与 smoke/既有消费者的共享语义；`closedLoop` 是 per-capability 维度，exit code 是 run 维度，二者本就不同粒度 |
+| 弱证据→具体结果 | 升级 manifest 断言，不改断言原语 | 新增 `$selector`/`$visible` 视觉断言原语 | 现有 `MATCHERS` 已含 `$contains`/`$assistantContains`/`$assistantClosed`/`$array:N`，足够表达「搜索命中/流式末块/变更状态」；新增视觉断言需 webview 内 DOM 可达性（当前不可达），属后续 feature 而非本工作流 |
+| per-run 证据隔离 | plan 稳定路径 + 产物 per-run 目录 | driver 改读环境变量 `LV_PLAN_PATH` | 后者需改共享 `launch_host`（影响 smoke），侵入大；plan 稳定路径 + `plan.artifactDir` 指 per-run，driver 几乎零改动 |
+| 全链入口 | 新增 `run-vscode-dsh-e2e-closure.sh` 薄封装 | 修改 `run-layer-v-capabilities.sh` 默认全量 | 薄封装不改既有能力脚本的 pilot 默认值（保持向后兼容），把「全量 + 汇总 + 回归」作为本工作流的入口 |
+| 能力批次序 | 非模型批先、模型批后（串行） | 两批并行 | 模型批昂贵且抖动大，先以非模型批校准 closure 判定与隔离，避免在昂贵运行上试错；串行也有利于「先打样再铺开」 |
 
 ## 验收标准验证方案
 
-| AC | Phase | 验证类型 | 优先级 |
-|----|------|---------|:------:|
-| AC-1 ~ AC-5 | 1 | 运行时验证（真机闭环 + 退出码断言） | must |
-| AC-6 | 1 | 静态检查（manifest 与 §12 清单一一对应，附 `路径:行号`） | must |
-| AC-7 / AC-8 / AC-9 / AC-10 | 2、3 | 运行时验证（真机 EDH + 真实 LLM 往返 + 截图断言） | must |
-| AC-11 / AC-12 / AC-13 | 4 | 编译验证（tsc/vitest）+ 运行时验证 + 静态检查（vendor 记录） | must |
-| AC-14 ~ AC-19 | 5 | 静态检查（清除留痕）+ 运行时验证（回归护栏 + 全链编排） | must |
+> 逐 Phase 的详细验证策略（每 AC 的验证类型/方法/预期）在 `phases/<phase-id>/spec.md`。下表是整体 AC → Phase 归属与验证类型概览，供 reviewer/verifier 建立全局视角。
 
-> 每条 AC 的详细、可执行验证方案见各 `phases/<phase-id>/spec.md` 的「验证策略」章节。
+| AC | 归属 Phase | 验证类型 | 一句话验证思路 |
+|----|:--:|---|------|
+| AC-1 | P1 | fixture dry-run + 运行时 | `assessClosedLoop` 对三条齐备/缺一/缺二的样例给出正确 `closed` |
+| AC-2 | P1 + P2 | fixture dry-run | `classifyAssertionStrength` 把 `panelOpen:true` 判 weak，`$assistantContains` 判 concrete |
+| AC-3 | P2 | 静态检查 | `layer-v-capabilities.json` 与 repo-exploration §12 清单一致，每项带 `路径:行号` |
+| AC-4 | P2 | 静态检查 | 过时清单（thin HTML 面板等）存在且未建立闭环覆盖 |
+| AC-5 | P1 | 静态检查 | 改动不重写 `layer-v-runtime.sh`/`primitives.cjs` 的显示/Node/沙箱/凭证/进程逻辑 |
+| AC-6 | P2 + P3 | 运行时（真机） | 每项能力产出 PNG + ≥1 条端到端断言 |
+| AC-7 | P1 | 运行时 | journal 逐行追加，中途 kill 仍能按 step 定位 |
+| AC-8 | P1 | 运行时 | 退出码 0/1/2/3/4 语义不变，不合并/不降级 |
+| AC-9 | P3 | 运行时（真机 + key） | 模型能力真实 LLM 往返（`$assistantContains` 标记） |
+| AC-10 | P3 | 运行时（负向） | `env -u DEEPSEEK_API_KEY` → exit 3，不记 PASS |
+| AC-11 | P3 | 运行时 + visual | React SPA 呈现路径（单例/多 Tab/历史）截图 + 断言闭环 |
+| AC-12 | P4 | 回归验证 | `vitest run apps/vscode-dsh/tests` + 既有冒烟脚本保持通过 |
+| AC-13 | P4 | 静态检查 | 驱动落 `test-scripts/`，phase 临时脚本在临时目录且验证后删除，不落 `tests/` |
+| AC-14 | P4 | 运行时 + 审查 | 未闭环/失败如实登记 registry 与报告，不重试/不放宽 |
+| AC-15 | P2 + P3 + P4 | 运行时 + 静态检查 | 基座可重复运行；每项能力有「闭环通过/未闭环 + 三元组」结论 |
 
 ## 设计修订记录
 
 | # | 日期 | 原设计章节 | 修改为 | 批准人 | 偏差来源 |
 |---|------|-----------|--------|--------|---------|
-| — | — | — | — | — | — |
+| 1 | 2026-09-19 | §核心实体 #1「弱证据分类规则」 | 分类失败（未知形态）由「默认 `weak`」改为「判为 `unknown`」，消除与 §实现方案骨架 / spec AC-2 三态的自相矛盾 | 调度者（HG-3 SHOULD-FIX 回填） | implementer 偏差 2 |
+| 2 | 2026-09-19 | §API 域 `readPlan`/`resolveArtifactDir` 行 | `extension.cjs` 的 `driver.planPath` 由 `path.join(artifactDir,…)` 改为稳定 base 路径（`FALLBACK_ARTIFACT_DIR`），因 per-run 后 `artifactDir` 指向 `runs/<runId>/` 而 plan 实为稳定 base 路径；该字段仅作 status 元数据、无下游消费者 | 调度者（HG-3 SHOULD-FIX 回填） | implementer 偏差 1 |
 
 ## 建议的下一步
 
-进入 HG-2 方案确认：向用户展示本设计 + Phase 拆分计划，用户确认后创建 `impl-phase-1-driver-framework-pilot` 分支并委托 `implementer`。
+HG-2 用户确认方案后，进入 `phase-1-closure-foundation`：先委托 code-explorer（phase 级）对 `capability-runner.cjs` / `run-layer-v-capabilities.sh` / `layer-v-capability-driver/extension.cjs` 的改动面做实施级调研，再创建 `impl-phase-1-closure-foundation` 分支，委托 implementer。

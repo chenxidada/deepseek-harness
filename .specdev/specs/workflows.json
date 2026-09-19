@@ -63,11 +63,28 @@
     "description": "让 vscode-dsh 的真机可用闭环可重复执行：修复 Node 版本矩阵/环境一致性导致的运行期失败，补齐扩展侧启动失败的 fail-loud 诊断，建立层 V（VS Code 真机 EDH）脚本化冒烟闭环（Xvfb + code CLI，产出截图）。UI 视觉美化不在本工作流范围。"
   },
   "vscode-dsh-e2e-closure": {
-    "status": "descoped",
+    "status": "active",
     "created": "2026-09-18T02:19:29Z",
-    "closed": "2026-09-18T16:09:45Z",
-    "closure_mode": "descoped",
-    "closure_note": "Phase 1/2 完整通过。Phase 3 以范围缩减关闭：14 项能力已在 manifest 声明，其中 6 项（§12.4/§12.7/§12.10）真机 PASS 并留有截图取证；8 项（§12.5/§12.6/§12.11）已写 steps 但从未执行 → 登记为 DEBT-4 / DEBT-5。用户决定终止本 Phase 的 review/verify，故未写 hg3=passed。",
-    "description": "为 vscode-dsh 完整能力链建立真机端到端闭环验证：复用 usable-loop 层 V 冒烟闭环，补齐缺失的层 V 真机驱动代码与视觉证据，处理审计遗留偏差（lib 陈旧 chunk、FiberState 债登记）"
+    "restarted": "2026-09-19T15:32:00Z",
+    "restart_note": "复用 slug 重做：整合完成、审计偏差 5/6 已由 bugfix 修复后，重新评估需求与方案，聚焦当前代码真实能力项的真机闭环验证（实际触发 + 断言结果），复核并补齐此前 descoped 未验证能力。",
+    "description": "对 vscode-dsh 当前代码真实实现的每项功能能力建立真机端到端闭环验证（实际触发行为 + 断言具体结果 + 截图证据），复用层 V 冒烟闭环基座"
+  },
+  "vscode-dsh-test-consolidation": {
+    "status": "completed",
+    "created": "2026-09-18T16:10:47Z",
+    "completed": "2026-09-19T13:05:00Z",
+    "description": "整合 apps/vscode-dsh 的测试资产：tests/ 下 60 个按 Phase 碎片化的 spec 归并为约 12 个按能力域组织的活文件（以后只增不新建），test-scripts/ 一并纳入；建立全局唯一断言引用体系，消除 AC 编号与 phaseN- 文件名跨工作流撞号"
+  },
+  "fix-vscode-dsh-lib-stale-chunks": {
+    "status": "completed",
+    "created": "2026-09-19T13:40:00Z",
+    "completed": "2026-09-19T14:15:00Z",
+    "description": "清理 apps/vscode-dsh/lib/ 累积的陈旧 hash chunk（23 个 chunk、22 个陈旧），tsdown clean 改为精确 glob + fail-closed 回归命令，使 .vsix 不再包含陈旧产物"
+  },
+  "fix-cordis-fiberstate-const-enum": {
+    "status": "completed",
+    "created": "2026-09-19T14:20:00Z",
+    "completed": "2026-09-19T15:20:00Z",
+    "description": "vendor/cordis 的 const enum FiberState 改为普通 enum，消除 source-plane 运行时访问报错，遵循 vendor 同步策略"
   }
 }

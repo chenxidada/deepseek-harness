@@ -294,6 +294,173 @@ function matchesExpect(actual, expect) {
     : { ok: false, path: '$root', expected: safeJson(expect), actual: safeJson(actual) }
 }
 
+// --- closure assessment ----------------------------------------------------------------
+
+/**
+ * Commands that only prepare the UI surface — open a panel, focus the activity bar, make the
+ * conversation visible. They prove a surface exists, not that a product behaviour was actually
+ * triggered, so an assertion whose command is one of these never counts toward the "actual
+ * trigger" dimension of a closed loop (AC-2).
+ */
+const UI_PREP_COMMANDS = new Set([
+  'dsh.showPanel',
+  'dsh.test.openPanel',
+  'dsh.test.openActivityBar',
+  'dsh.test.fireConversationVisibility',
+])
+
+/**
+ * `$...` predicates that assert *specific content* — a substring, a model marker, a settled
+ * turn, or a non-degenerate array. They prove "what" happened rather than merely "that"
+ * something is present, so they are the concrete half of the closed-loop assertion dimension.
+ */
+const CONCRETE_PREDICATE_PREFIXES = ['$contains:', '$assistantContains:', '$assistantClosed:']
+
+/**
+ * Pure type/presence predicates. They prove a value exists with some type, never what the
+ * value is, so they are the weak half — an existence assertion, like `panelOpen: true`.
+ */
+const TYPE_PREDICATES = ['$string', '$number', '$boolean', '$object', '$array', '$present']
+
+/**
+ * Classify one `$...` predicate string as `concrete` (specific content), `weak` (type/presence
+ * only) or `unknown` (not a predicate this runner recognises). The parameterised `$array:N`
+ * form is concrete: "at least N elements" is a non-degenerate content assertion, not a bare
+ * "is an array".
+ * @param {string} pred
+ * @returns {{strength:'concrete'|'weak'|'unknown', reason:string}}
+ */
+function classifyPredicate(pred) {
+  if (CONCRETE_PREDICATE_PREFIXES.some(prefix => pred.startsWith(prefix)) || /^\$array:\d+$/.test(pred)) {
+    return { strength: 'concrete', reason: `${pred} asserts specific content` }
+  }
+  if (TYPE_PREDICATES.includes(pred)) {
+    return { strength: 'weak', reason: `${pred} asserts type/presence only` }
+  }
+  return { strength: 'unknown', reason: `unrecognised predicate ${pred}` }
+}
+
+/**
+ * Field names whose presence alone (`panelOpen: true`, `viewId: 'x'`, `registered: true`)
+ * proves only that a surface exists, never that a specific result was produced — AC-2's
+ * "weak evidence" set.
+ */
+const WEAK_EXISTENCE_FIELDS = new Set(['panelOpen', 'viewId', 'registered'])
+
+/**
+ * Classify one assertion step's strength by its `expect` (AC-2). `weak` = the assertion can
+ * only pass by proving existence (a panel opened / a view id is present / a bare `ok: true`).
+ * `concrete` = it asserts a specific content, state, numeric or negative fact (a `$contains:` /
+ * `$assistantContains:` marker, a `hits.0.matchField`, a `changes.0.status`, an `ok: false`).
+ * `unknown` = the form is not one this runner can classify; the reason is recorded explicitly
+ * rather than silently defaulted (fail-closed, never a guess).
+ * @param {{expect?:unknown}} step - an `assert`/`wait`/`stream` step record.
+ * @returns {{strength:'concrete'|'weak'|'unknown', reason:string}}
+ */
+function classifyAssertionStrength(step) {
+  const expect = step !== null && typeof step === 'object' ? step.expect : undefined
+  if (expect === undefined) {
+    return { strength: 'unknown', reason: 'the step carries no `expect` to classify' }
+  }
+  if (typeof expect === 'string' && expect.startsWith('$')) {
+    return classifyPredicate(expect)
+  }
+  if (expect !== null && typeof expect === 'object' && !Array.isArray(expect)) {
+    const keys = Object.keys(expect)
+    if (keys.length === 0) {
+      return { strength: 'weak', reason: 'an empty `expect` object asserts nothing concrete' }
+    }
+    let sawConcrete = false
+    const unknownReasons = []
+    for (const key of keys) {
+      const value = expect[key]
+      if (typeof value === 'string' && value.startsWith('$')) {
+        const pred = classifyPredicate(value)
+        if (pred.strength === 'concrete') sawConcrete = true
+        else if (pred.strength === 'unknown') unknownReasons.push(`${key}: ${pred.reason}`)
+        continue
+      }
+      if (key === 'ok') {
+        // `ok: true` is the weak existence form; `ok: false` is a negative assertion.
+        if (value === false) sawConcrete = true
+        continue
+      }
+      if (WEAK_EXISTENCE_FIELDS.has(key)) {
+        continue
+      }
+      // Any other literal value (string/number/boolean/array/object) asserts a specific
+      // content/state/numeric fact, not mere presence.
+      sawConcrete = true
+    }
+    if (sawConcrete) return { strength: 'concrete', reason: 'asserts specific content/state/numeric facts' }
+    if (unknownReasons.length > 0) return { strength: 'unknown', reason: unknownReasons.join('; ') }
+    return { strength: 'weak', reason: 'asserts existence only (panelOpen/viewId/registered/ok:true)' }
+  }
+  return { strength: 'unknown', reason: `unclassifiable expect form (${typeof expect})` }
+}
+
+/**
+ * Compute the orthogonal per-capability closure verdict from the step records (AC-1). A loop
+ * is "closed" only when all three hold at once:
+ *   ① actualTrigger      an `assert`/`wait`/`stream` step whose command is *not* UI-preparation
+ *                        actually passed;
+ *   ② concreteAssertion  an `assert`/`wait`/`stream` step whose `expect` classifies as
+ *                        `concrete` passed;
+ *   ③ realScreenshot     a `screenshot` step produced a non-degenerate PNG.
+ * Missing any one dimension → `closed: false` with the missing dimensions named in `missing`
+ * (AC-2: a capability that only proved "the panel opened" is not a closed loop). The run-level
+ * `conclusion` is untouched: this verdict is a separate, per-capability axis.
+ * @param {object} cap - the manifest entry (has `steps`).
+ * @param {object[]} records - the step records `runCapability` produced (success path only).
+ * @returns {{closed:boolean, actualTrigger:boolean, concreteAssertion:boolean, realScreenshot:boolean, missing:string[], reason:string, suggestedFeature:null}}
+ */
+function assessClosedLoop(cap, records) {
+  const steps = Array.isArray(cap?.steps) ? cap.steps : []
+  const list = Array.isArray(records) ? records : []
+  const asserted = list.filter(r => r.ok === true && (r.kind === 'assert' || r.kind === 'wait' || r.kind === 'stream'))
+  const passedStep = s => asserted.some(r => r.step === s.step && r.command === s.command)
+  const triggerSteps = steps.filter(s =>
+    (s.kind === 'assert' || s.kind === 'wait' || s.kind === 'stream') &&
+    !UI_PREP_COMMANDS.has(s.command))
+  const actualTrigger = triggerSteps.length > 0 && triggerSteps.some(passedStep)
+  const concreteAssertion = steps.some(s =>
+    (s.kind === 'assert' || s.kind === 'wait' || s.kind === 'stream') &&
+    classifyAssertionStrength(s).strength === 'concrete' &&
+    passedStep(s))
+  const realScreenshot = list.some(r => r.kind === 'screenshot' && r.ok === true)
+  const missing = []
+  if (!actualTrigger) missing.push('actualTrigger')
+  if (!concreteAssertion) missing.push('concreteAssertion')
+  if (!realScreenshot) missing.push('realScreenshot')
+  return {
+    closed: missing.length === 0,
+    actualTrigger,
+    concreteAssertion,
+    realScreenshot,
+    missing,
+    reason: missing.length === 0 ? '' : `未闭环：缺 ${missing.join('、')}`,
+    suggestedFeature: null,
+  }
+}
+
+/**
+ * The closure verdict for a capability that never ran to completion (skipped or failed): none
+ * of the three dimensions was satisfied, so it is `closed: false` with all three named missing.
+ * @param {string} reason
+ * @returns {{closed:false, actualTrigger:false, concreteAssertion:false, realScreenshot:false, missing:string[], reason:string, suggestedFeature:null}}
+ */
+function unclosedLoop(reason) {
+  return {
+    closed: false,
+    actualTrigger: false,
+    concreteAssertion: false,
+    realScreenshot: false,
+    missing: ['actualTrigger', 'concreteAssertion', 'realScreenshot'],
+    reason,
+    suggestedFeature: null,
+  }
+}
+
 // --- orchestration ----------------------------------------------------------------------
 
 /**
@@ -513,6 +680,7 @@ async function runCapability(cap, host, opts = {}) {
     requiresModel: cap.requiresModel === true,
     conclusion: 'PASS',
     steps: records,
+    closedLoop: assessClosedLoop(cap, records),
   }
 }
 
@@ -574,6 +742,7 @@ async function runManifest(manifest, host, options = {}) {
         conclusion: 'SKIPPED_NO_CREDENTIALS',
         skipped: true,
         reason: 'requiresModel capability and no DEEPSEEK_API_KEY',
+        closedLoop: unclosedLoop('skipped: requiresModel capability and no DEEPSEEK_API_KEY'),
       })
       continue
     }
@@ -588,6 +757,7 @@ async function runManifest(manifest, host, options = {}) {
         conclusion: staged.conclusion,
         reason: staged.reason,
         evidence: safeJson(staged.evidence),
+        closedLoop: unclosedLoop(`errored: ${staged.conclusion} — ${staged.reason}`),
       })
     }
   }
@@ -624,4 +794,7 @@ module.exports = {
   runCapability,
   runManifest,
   overallConclusion,
+  // closure assessment
+  classifyAssertionStrength,
+  assessClosedLoop,
 }

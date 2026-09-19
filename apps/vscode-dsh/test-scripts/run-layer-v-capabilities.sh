@@ -42,11 +42,14 @@ APP_DIR="${REPO_ROOT}/apps/vscode-dsh"
 DRIVER_DIR="${SCRIPT_DIR}/layer-v-capability-driver"
 SUPPORT_DIR="${SCRIPT_DIR}/layer-v-support"
 MANIFEST_PATH="${SCRIPT_DIR}/layer-v-capabilities.json"
+# Base artifact root. `prepare_sandbox` in layer-v-runtime.sh reads `${ARTIFACT_DIR}` to lay
+# down `layer-v-report-meta.json`, so this variable keeps its name and points at the base.
 ARTIFACT_DIR="${APP_DIR}/test-artifacts/layer-v-capabilities"
 
-STATUS_PATH="${ARTIFACT_DIR}/layer-v-capabilities-status.json"
+# Stable plan path (the in-host driver's `readPlan` reads this exact path, never a per-run one;
+# see layer-v-capability-driver/extension.cjs `FALLBACK_ARTIFACT_DIR`). The plan's `artifactDir`
+# field is what relocates status/journal/screenshots into the per-run directory.
 PLAN_PATH="${ARTIFACT_DIR}/layer-v-capabilities-plan.json"
-SUMMARY_PATH="${ARTIFACT_DIR}/layer-v-capabilities-summary.json"
 
 # Candidate interpreter directories, best first (same contract as run-layer-v-smoke.sh).
 NODE_DIR_CANDIDATES=(
@@ -78,6 +81,15 @@ SHIPPED_PRESETS_ROOT="${REPO_ROOT}/packages/specdev/specdev-presets/presets"
 AGENT_PRESET="specdev-orchestrator"
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+
+# Per-run evidence isolation (design.md §核心实体/数据模型 #2): every run's status/journal/
+# summary/screenshots land in its own `runs/<runId>/` directory so history never overwrites
+# (R3). The plan stays at the stable base path above; only the artifacts move under runs/.
+RUN_DIR="${ARTIFACT_DIR}/runs/${RUN_ID}"
+STATUS_PATH="${RUN_DIR}/layer-v-capabilities-status.json"
+SUMMARY_PATH="${RUN_DIR}/layer-v-capabilities-summary.json"
+JOURNAL_PATH="${RUN_DIR}/layer-v-capabilities-journal.jsonl"
+
 CONCLUSION="HARNESS_ERROR"
 EXIT_CODE=4
 FAILED_STAGE=""
@@ -147,7 +159,7 @@ write_plan() {
     }
     fs.mkdirSync(artifactDir, { recursive: true })
     fs.writeFileSync(planPath, JSON.stringify(plan, null, 2) + "\n")
-  ' "${PLAN_PATH}" "${RUN_ID}" "${MANIFEST_PATH}" "${ARTIFACT_DIR}" \
+  ' "${PLAN_PATH}" "${RUN_ID}" "${MANIFEST_PATH}" "${RUN_DIR}" \
     "${HAS_CREDENTIAL}" "${SCREENSHOT_VIDEO_SIZE}" "${STEP_TIMEOUT_MS}" "${selector_json}" || {
     fail_harness "plan" "could not write the plan"
   }
@@ -205,17 +217,53 @@ finish() {
   fi
   FINISHED="true"
   reclaim_run_processes
-  if [ -n "${NODE_TOOL}" ] && [ -d "${ARTIFACT_DIR}" ]; then
+  if [ -n "${NODE_TOOL}" ]; then
     "${NODE_TOOL}" -e '
       const fs = require("node:fs")
-      const [summaryPath, runId, conclusion, exitCode, failedStage, failureReason] = process.argv.slice(1)
+      const path = require("node:path")
+      const [summaryPath, runId, conclusion, exitCode, failedStage, failureReason, statusPath] = process.argv.slice(1)
+      // Closure summary (design.md core entity #3): derived from each capability
+      // closedLoop verdict, orthogonal to the run-level exit code. skipped = credential or
+      // display gate; closed = closedLoop.closed true; notClosed = everything else.
+      const closureSummary = { total: 0, closed: 0, notClosed: 0, skipped: 0, byGroup: {}, notClosedDetails: [] }
+      try {
+        const status = JSON.parse(fs.readFileSync(statusPath, "utf8"))
+        const caps = Array.isArray(status.capabilities) ? status.capabilities : []
+        const byGroup = {}
+        for (const c of caps) {
+          const g = typeof c.group === "string" && c.group !== "" ? c.group : "(none)"
+          if (!byGroup[g]) byGroup[g] = { total: 0, closed: 0, notClosed: 0 }
+          byGroup[g].total += 1
+          const skipped = c.skipped === true || c.conclusion === "SKIPPED_NO_CREDENTIALS" || c.conclusion === "SKIPPED_NO_DISPLAY"
+          const closed = !!(c.closedLoop && c.closedLoop.closed === true)
+          if (skipped) {
+            closureSummary.skipped += 1
+          } else if (closed) {
+            closureSummary.closed += 1
+            byGroup[g].closed += 1
+          } else {
+            closureSummary.notClosed += 1
+            byGroup[g].notClosed += 1
+            closureSummary.notClosedDetails.push({
+              id: c.id ?? null,
+              group: typeof c.group === "string" ? c.group : null,
+              missing: Array.isArray(c.closedLoop && c.closedLoop.missing) ? c.closedLoop.missing : [],
+              reason: (c.closedLoop && typeof c.closedLoop.reason === "string" ? c.closedLoop.reason : "") || (typeof c.reason === "string" ? c.reason : ""),
+            })
+          }
+        }
+        closureSummary.total = caps.length
+        closureSummary.byGroup = byGroup
+      } catch {}
+      fs.mkdirSync(path.dirname(summaryPath), { recursive: true })
       fs.writeFileSync(summaryPath, JSON.stringify({
         runId, conclusion, exitCode: Number(exitCode),
         failedStage: failedStage === "" ? null : failedStage,
         failureReason: failureReason === "" ? null : failureReason,
         finishedAt: new Date().toISOString(),
+        closureSummary,
       }, null, 2) + "\n")
-    ' "${SUMMARY_PATH}" "${RUN_ID}" "${CONCLUSION}" "${EXIT_CODE}" "${FAILED_STAGE}" "${FAILURE_REASON}" 2>/dev/null || true
+    ' "${SUMMARY_PATH}" "${RUN_ID}" "${CONCLUSION}" "${EXIT_CODE}" "${FAILED_STAGE}" "${FAILURE_REASON}" "${STATUS_PATH}" 2>/dev/null || true
   fi
   print_report
 }
@@ -328,8 +376,12 @@ main() {
   resolve_display
   baseline_processes
 
-  # Remove a stale status/journal so a previous run's verdict is never read as this run's.
-  rm -f "${STATUS_PATH}" "${ARTIFACT_DIR}/layer-v-capabilities-journal.jsonl" 2>/dev/null || true
+  # Per-run isolation already guarantees a fresh directory, so no previous run's status or
+  # journal can be read as this run's. Still clear the per-run files defensively (fail-closed:
+  # `wait_for_status` refuses a status file that does not belong to this run) and ensure the
+  # directory exists before the host writes into it.
+  mkdir -p "${RUN_DIR}" || { set_conclusion "HARNESS_ERROR" 4 "artifact" "could not create ${RUN_DIR}"; exit_now; }
+  rm -f "${STATUS_PATH}" "${JOURNAL_PATH}" 2>/dev/null || true
   write_plan
   prepare_shadow_preset
 

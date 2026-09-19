@@ -102,7 +102,9 @@ async function runAll() {
   const capture = resolveCaptureTool(plan)
   const driver = {
     artifactDir,
-    planPath: path.join(artifactDir, 'layer-v-capabilities-plan.json'),
+    // The plan is read from the stable base path (see readPlan), not from the per-run
+    // artifact directory, so record that stable path here rather than a run-local one.
+    planPath: path.join(FALLBACK_ARTIFACT_DIR, 'layer-v-capabilities-plan.json'),
     runId: plan.runId ?? null,
     nodeVersion: process.version,
     vscodeVersion: vscode.version,
