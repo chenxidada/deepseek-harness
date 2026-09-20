@@ -1661,6 +1661,11 @@ record="$(display_evidence_record_json)"
     } {
       return {
         executeCommand: async (id, ..._args) => {
+          // The runner resets to idle after every executed capability (DEBT-12); the mock
+          // answers it as a no-op so the reset does not surface as an unexpected command.
+          if (id === 'dsh.test.resetToIdle') {
+            return { ok: true, startState: 'idle', clearedContexts: 0, closedChildTabs: 0 }
+          }
           if (id in answers) return answers[id]
           throw new Error(`unexpected command ${id}`)
         },

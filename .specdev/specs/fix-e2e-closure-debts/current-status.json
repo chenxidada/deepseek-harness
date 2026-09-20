@@ -17,10 +17,10 @@
       "verifier": "completed"
     },
     "phase-2-realmachine-infra": {
-      "implementer": "pending",
-      "reviewer": "pending",
-      "verifier": "pending"
+      "implementer": "completed",
+      "reviewer": "completed",
+      "verifier": "completed"
     }
   },
-  "last_update": "2026-09-20T02:31:00Z"
+  "last_update": "2026-09-20T07:40:00Z"
 }

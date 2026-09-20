@@ -178,6 +178,8 @@ const initialState: ChatUiState = {
 
 let state: ChatUiState = { ...initialState }
 const listeners = new Set<ChatUiListener>()
+/** Whether at least one Host→Webview frame has been delivered through the bridge. */
+let hostFrameDelivered = false
 
 function emit(): void {
   for (const listener of listeners) listener()
@@ -276,6 +278,21 @@ function mapMessage(m: unknown, index: number): UiMessage {
 
 export function getChatUiState(): ChatUiState {
   return state
+}
+
+/**
+ * Whether any Host→Webview frame (state or probe) has been delivered through the
+ * message bridge since the webview booted. Used by the render-state probe to give
+ * the `messageBridge` capability a concrete signal even when the host only ever
+ * sent `probe/query-render-state`.
+ */
+export function hasHostFrameDelivered(): boolean {
+  return hostFrameDelivered
+}
+
+/** Mark that a Host→Webview frame reached the bridge (used by the probe interceptor). */
+export function markHostFrameDelivered(): void {
+  hostFrameDelivered = true
 }
 
 export function subscribeChatUi(listener: ChatUiListener): () => void {
@@ -399,6 +416,7 @@ export function resetChatUiState(partial?: Partial<ChatUiState>): void {
  */
 export function applyHostFrame(raw: unknown): void {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return
+  hostFrameDelivered = true
   const frame = raw as Record<string, unknown>
   const type = frame.type
   if (type === 'panel/state') {

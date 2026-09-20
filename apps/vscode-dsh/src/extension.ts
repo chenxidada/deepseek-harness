@@ -1015,8 +1015,28 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         if (panelHost === undefined) return { ok: false, reason: 'no-host' as const }
         return panelHost.sendPrompt(typeof text === 'string' ? text : '')
       }),
+      /**
+       * Selection ask (DEBT-14): `openEditorWithSelection` opens a text editor, which
+       * blurs the Conversation webview. That blur resets the auto-ready visibility
+       * epoch, so the `revealConversationPanel` inside `runAskAboutSelection` triggers
+       * an asynchronous open-tab restore. The restore tears down the live Tab the
+       * capability just created and reopens persisted Tabs in `replay` mode, so the
+       * `sendPrompt` that follows would target a replay Tab (or none). Settle any
+       * in-flight restore and re-ensure a live active Tab so `sendPrompt` and the
+       * following `assistant-replied` assertion read the same live session.
+       */
       vscode.commands.registerCommand('dsh.test.askAboutSelection', async () => {
-        return runAskAboutSelection(vscode)
+        const result = await runAskAboutSelection(vscode)
+        await autoReady?.triggerAutoReady()
+        const controller = conversations
+        if (controller !== undefined) {
+          const active = controller.registry.getActive()
+          if (active === undefined || active.mode !== 'live') {
+            controller.newConversation(EMPTY_LIVE_TITLE)
+            panelHost?.pushFullState()
+          }
+        }
+        return result
       }),
       vscode.commands.registerCommand('dsh.test.prefillComposer', (text?: unknown) => {
         if (panelHost === undefined) return { ok: false as const }
@@ -1332,6 +1352,35 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         return { outcome: 'injected' as const }
       }),
       /**
+       * List the active (or named) parent's child sessions with hydrated messages
+       * (DEBT-10). Registered inside `shouldRegisterTestHooks` (`VSCODE_DSH_TEST=1`
+       * gated), so a driver can assert a real model delegation produced a child
+       * assistant reply (`$assistantContains`) without entering the child context.
+       */
+      vscode.commands.registerCommand('dsh.test.listChildren', async (parentSessionId?: unknown) => {
+        const controller = conversations
+        if (controller === undefined) return { parentSessionId: '', children: [] as const }
+        return controller.listChildren(typeof parentSessionId === 'string' ? parentSessionId : undefined)
+      }),
+      /**
+       * Reset the harness to a clean idle state between capabilities (DEBT-12).
+       * Registered inside `shouldRegisterTestHooks` (`VSCODE_DSH_TEST=1` gated),
+       * so production never exposes it. Unwinds both serial-pollution classes:
+       * the orchestrator returns to `idle` (`onUserStop`, pollution ①), and the
+       * conversation registry clears in-panel child contexts and closes pinned
+       * subagent Tabs (`resetForTest`, pollution ② / `readonly-live`).
+       */
+      vscode.commands.registerCommand('dsh.test.resetToIdle', () => {
+        orchestrator?.onUserStop()
+        const reset = conversations?.resetForTest()
+        panelHost?.pushFullState()
+        return {
+          ok: true as const,
+          startState: orchestrator?.getStartState() ?? 'idle',
+          ...reset === undefined ? {} : reset,
+        }
+      }),
+      /**
        * §12.6 change-list: list the active session's attributed ChangeRecords (AC-10).
        * The full record list (changeId / path / kind / status) lets a driver assert the
        * complete "change produced → listed → reverted" path, not just a count.
@@ -1537,6 +1586,30 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
           }
         }
         return { ok: true as const, path: relativePath, abs }
+      }),
+      /**
+       * Host→webview render-detection probe (DEBT-7). Registered inside
+       * `shouldRegisterTestHooks` (VSCODE_DSH_TEST gated), so the production
+       * extension never exposes it. The host asks the webview for its `probe/render-state`
+       * (the `data-testid` set + the per-surface `renderState` booleans) and resolves
+       * with that answer. It fails closed — `no-webview-attached` / `render-state-timeout` —
+       * rather than returning a guess, so a driver can retry until the webview mounts.
+       */
+      vscode.commands.registerCommand('dsh.test.queryWebviewRenderState', async (timeoutMs?: unknown) => {
+        if (panelHost === undefined) {
+          return { ok: false as const, reason: 'no-host' as const }
+        }
+        try {
+          const state = await panelHost.queryWebviewRenderState(
+            typeof timeoutMs === 'number' ? timeoutMs : 5000,
+          )
+          return { ok: true as const, testIds: state.testIds, renderState: state.renderState }
+        } catch (error) {
+          return {
+            ok: false as const,
+            reason: error instanceof Error ? error.message : 'render-state-query-failed',
+          }
+        }
       }),
     )
   }

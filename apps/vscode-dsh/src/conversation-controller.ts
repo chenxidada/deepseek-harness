@@ -1796,6 +1796,77 @@ export class ConversationController {
   }
 
   /**
+   * List a parent session's child (subagent) sessions with their hydrated
+   * projected messages (DEBT-10). Hydrates each child from the authoritative
+   * log so a driver can assert the child produced an assistant reply, without
+   * ever entering the child context in the UI. Registered only behind
+   * `dsh.test.listChildren` (`VSCODE_DSH_TEST=1`).
+   * @param parentSessionId - optional; defaults to the active Tab's session.
+   * @returns the parent id and its children, each with projected messages.
+   */
+  async listChildren(parentSessionId?: string): Promise<{
+    parentSessionId: string
+    children: Array<{
+      sessionId: string
+      parentSessionId: string
+      title: string
+      status: 'running' | 'ended'
+      messages: readonly ChatMessage[]
+    }>
+  }> {
+    const parent = parentSessionId ?? this.registry.getActive()?.sessionId
+    if (parent === undefined) return { parentSessionId: '', children: [] }
+    const rows = this.index.read().sessions.filter(row => row.parentSessionId === parent)
+    const children: Array<{
+      sessionId: string
+      parentSessionId: string
+      title: string
+      status: 'running' | 'ended'
+      messages: readonly ChatMessage[]
+    }> = []
+    for (const row of rows) {
+      await this.ensureChildHydrated(row.sessionId)
+      children.push({
+        sessionId: row.sessionId,
+        parentSessionId: parent,
+        title: row.title,
+        status: this.childRunState.get(row.sessionId) ?? 'ended',
+        messages: this.messages.get(row.sessionId),
+      })
+    }
+    return { parentSessionId: parent, children }
+  }
+
+  /**
+   * Unwind per-capability conversation state for the Layer-V driver (DEBT-12).
+   * Clears every Tab's in-panel child context and closes pinned subagent Tabs,
+   * leaving root conversations open so the next capability starts from a clean
+   * projection (no `readonly-live` leak). The orchestrator's own reset
+   * (`onUserStop`) is the caller's responsibility — this only unwinds the
+   * registry side. Test-only: registered behind `dsh.test.resetToIdle`.
+   * @returns how many contexts were cleared and child Tabs closed.
+   */
+  resetForTest(): { clearedContexts: number; closedChildTabs: number } {
+    let clearedContexts = 0
+    let closedChildTabs = 0
+    for (const tab of this.registry.list()) {
+      if (tab.contextSessionId !== undefined) {
+        this.registry.setContextSessionId(tab.tabId, undefined)
+        clearedContexts += 1
+      }
+    }
+    for (const tab of this.registry.list()) {
+      if (tab.pinnedSubagent === true) {
+        this.registry.close(tab.tabId)
+        closedChildTabs += 1
+      }
+    }
+    this.persistOpenTabs()
+    this.panelHost?.pushFullState()
+    return { clearedContexts, closedChildTabs }
+  }
+
+  /**
    * Leave in-panel child context and restore the parent Tab stream (AC-36).
    * No-op when parent is deleted on a pinned child Tab (AC-75).
    * @returns navigation outcome.

@@ -235,6 +235,11 @@ export type HostToWebviewMessage =
       continueHint?: string
     }>
   }
+  | {
+    /** Host-side render-detection request (DEBT-7). The webview answers with
+     * `probe/render-state`; carries no presentation state. */
+    type: 'probe/query-render-state'
+  }
 
 /** Webview → Host frames (Phase 1–4 + change protocol + editor chrome). */
 export type WebviewToHostMessage =
@@ -292,6 +297,8 @@ export type WebviewToHostMessage =
   | { type: 'nav/back' }
   /** Promote the in-panel child context into its own pinned Tab (phase-4). */
   | { type: 'action/pin-subagent'; childSessionId: string }
+  /** Host-side render-detection response (DEBT-7). */
+  | { type: 'probe/render-state'; testIds: string[]; renderState: Record<string, boolean> }
 
 /**
  * Narrow an unknown postMessage payload to a Webview→Host frame.
@@ -441,6 +448,20 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
     return { type, childSessionId: record.childSessionId }
   }
   if (type === 'nav/back') return { type: 'nav/back' }
+  if (type === 'probe/render-state') {
+    if (!Array.isArray(record.testIds)) return undefined
+    const testIds = record.testIds.filter((id): id is string => typeof id === 'string')
+    if (testIds.length !== record.testIds.length) return undefined
+    if (typeof record.renderState !== 'object' || record.renderState === null || Array.isArray(record.renderState)) {
+      return undefined
+    }
+    const renderState: Record<string, boolean> = {}
+    for (const [key, val] of Object.entries(record.renderState)) {
+      if (typeof val !== 'boolean') return undefined
+      renderState[key] = val
+    }
+    return { type: 'probe/render-state', testIds, renderState }
+  }
   return undefined
 }
 

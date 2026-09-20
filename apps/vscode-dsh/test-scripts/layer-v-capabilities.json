@@ -15,7 +15,7 @@
       ],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "viewId": "dsh.editorChat", "panelOpen": true } },
+        { "kind": "wait", "step": "react-spa-root-rendered", "command": "dsh.test.queryWebviewRenderState", "expect": { "renderState.reactSpaRoot": true }, "timeoutMs": 15000 },
         { "kind": "screenshot", "step": "react-spa-root", "file": "cap-react-spa-root.png" }
       ]
     },
@@ -28,7 +28,7 @@
       "evidence": [{ "path": "apps/vscode-dsh/webview/src/components/TabChrome.tsx", "line": 36 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "wait", "step": "tab-chrome-rendered", "command": "dsh.test.queryWebviewRenderState", "expect": { "renderState.tabChrome": true }, "timeoutMs": 15000 },
         { "kind": "screenshot", "step": "tab-chrome", "file": "cap-tab-chrome.png" }
       ]
     },
@@ -78,7 +78,7 @@
       "evidence": [{ "path": "apps/vscode-dsh/webview/src/components/Composer.tsx", "line": 17 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "wait", "step": "composer-rendered", "command": "dsh.test.queryWebviewRenderState", "expect": { "renderState.composer": true }, "timeoutMs": 15000 },
         { "kind": "screenshot", "step": "composer", "file": "cap-composer.png" }
       ]
     },
@@ -104,7 +104,7 @@
       "evidence": [{ "path": "apps/vscode-dsh/webview/src/store/chat-ui-store.ts", "line": 277 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "wait", "step": "chat-ui-store-rendered", "command": "dsh.test.queryWebviewRenderState", "expect": { "renderState.chatUiStore": true }, "timeoutMs": 15000 },
         { "kind": "screenshot", "step": "chat-ui-store", "file": "cap-chat-ui-store.png" }
       ]
     },
@@ -117,7 +117,7 @@
       "evidence": [{ "path": "apps/vscode-dsh/webview/src/bridge/message-bridge.ts", "line": 64 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "wait", "step": "message-bridge-rendered", "command": "dsh.test.queryWebviewRenderState", "expect": { "renderState.messageBridge": true }, "timeoutMs": 15000 },
         { "kind": "screenshot", "step": "message-bridge", "file": "cap-message-bridge.png" }
       ]
     },
@@ -130,7 +130,7 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/editor-chat-panel.ts", "line": 89 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "view-type", "command": "dsh.showPanel", "expect": { "viewId": "dsh.editorChat" } },
+        { "kind": "wait", "step": "editor-panel-viewtype-rendered", "command": "dsh.test.queryWebviewRenderState", "expect": { "renderState.editorPanelViewtype": true }, "timeoutMs": 15000 },
         { "kind": "screenshot", "step": "editor-panel-viewtype", "file": "cap-editor-panel-viewtype.png" }
       ]
     },
@@ -143,7 +143,7 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/editor-chat-panel.ts", "line": 116 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "spa-mounted", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "wait", "step": "spa-html-builder-rendered", "command": "dsh.test.queryWebviewRenderState", "expect": { "renderState.reactSpaHtmlBuilder": true }, "timeoutMs": 15000 },
         { "kind": "screenshot", "step": "react-spa-html-builder", "file": "cap-react-spa-html-builder.png" }
       ]
     },
@@ -175,7 +175,7 @@
       "evidence": [{ "path": "apps/vscode-dsh/src/chat-panel/editor-chat-panel.ts", "line": 218 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "webview-mounted", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "wait", "step": "webview-html-injection-rendered", "command": "dsh.test.queryWebviewRenderState", "expect": { "renderState.webviewHtmlInjection": true }, "timeoutMs": 15000 },
         { "kind": "screenshot", "step": "webview-html-injection", "file": "cap-webview-html-injection.png" }
       ]
     },
@@ -278,8 +278,8 @@
         { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
         { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
         { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
-        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返，用于验证流式（增量）呈现。请严格按下面四行逐行输出，每行一个独立段落，逐段生成、不要一次性合并输出，也不要调用任何工具：\n第一行：我已收到指令，开始分段落输出。\n第二行：本行用于让流式回复足够长，便于轮询捕获中间态。\n第三行：下面回显本次验证的唯一标记。\n第四行：LAYER-V-CAP-18-OK"] },
-        { "kind": "stream", "step": "streamed-message", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-18-OK", "timeoutMs": 300000, "intervalMs": 150, "requireIncrement": true },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返，用于验证流式（增量）呈现。请严格按下面六段逐段输出，每段一个独立段落，逐段生成、每段之间不要合并、不要一次性输出完，也不要调用任何工具：\n第一段：我已收到指令，现在开始逐段输出，这一段只是开场说明，说明我会严格分段。\n第二段：这一段用于让流式回复足够长，好让外部的轮询能够稳定观察到文本在增长。\n第三段：继续补充说明，流式增量只在文本真正逐段出现时才能被观察，所以我会放慢节奏逐段输出。\n第四段：下面两段回显本次验证的唯一标记，请务必原样输出，不要改写、不要省略。\n第五段：唯一标记是 LAYER-V-CAP-18-OK，这是本次能力验证需要回显的确认字符串。\n第六段：LAYER-V-CAP-18-OK"] },
+        { "kind": "stream", "step": "streamed-message", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-18-OK", "timeoutMs": 300000, "intervalMs": 50, "requireIncrement": true },
         { "kind": "screenshot", "step": "message-store-stream-patch", "file": "cap-message-store-stream-patch.png" }
       ]
     },
@@ -346,7 +346,7 @@
       "group": "subagent",
       "title": "打开子会话上下文",
       "ac": ["AC-9", "AC-10"],
-      "requiresModel": true,
+      "requiresModel": false,
       "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1758 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
@@ -365,7 +365,7 @@
       "group": "subagent",
       "title": "钉住子会话 Tab",
       "ac": ["AC-9", "AC-10"],
-      "requiresModel": true,
+      "requiresModel": false,
       "evidence": [{ "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1831 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
@@ -379,6 +379,27 @@
         { "kind": "assert", "step": "pinned-tab-is-in-registry", "command": "dsh.test.pinSubagent", "args": ["sub-cap-23"], "expect": { "outcome": "activated", "childSessionId": "sub-cap-23", "tabId": "$string", "parentTabId": "$string" } },
         { "kind": "assert", "step": "panel-projects-pinned-child", "command": "dsh.test.panelSnapshot", "expect": { "mode": "readonly-live", "sessionId": "sub-cap-23", "tabId": "$string", "tabStatus": "idle" } },
         { "kind": "screenshot", "step": "pin-subagent-tab", "file": "cap-pin-subagent-tab.png" }
+      ]
+    },
+    {
+      "id": "cap-delegate-subagent-model",
+      "group": "subagent",
+      "title": "真实模型委托子 Agent（tool-subagent）",
+      "ac": ["AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [
+        { "path": "packages/subagent/tool-subagent/src/index.ts", "line": 43 },
+        { "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1988 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的真实模型委托链路。请调用 subagent 工具，把下面这一行作为子 Agent 的任务委托出去，让子 Agent 只回复这一行，不要在本会话直接回复、不要调用任何其它工具：LAYER-V-CAP-24-OK"] },
+        { "kind": "wait", "step": "child-replied", "command": "dsh.test.listChildren", "expect": { "children.0": "$assistantContains:LAYER-V-CAP-24-OK" }, "timeoutMs": 300000 },
+        { "kind": "screenshot", "step": "delegate-subagent-model", "file": "cap-delegate-subagent-model.png" }
       ]
     },
     {

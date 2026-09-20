@@ -760,8 +760,37 @@ async function runManifest(manifest, host, options = {}) {
         closedLoop: unclosedLoop(`errored: ${staged.conclusion} — ${staged.reason}`),
       })
     }
+    // DEBT-12: reset to a clean idle state after every capability so serial state
+    // (orchestrator `started` / in-panel `readonly-live` / pinned child Tabs) cannot
+    // leak into the next one. Best-effort — a reset failure is journaled and never
+    // changes the capability's own verdict.
+    await resetToIdle(host, journal, cap.id)
   }
   return { conclusion: overallConclusion(capabilities), capabilities }
+}
+
+/**
+ * Best-effort per-capability reset (DEBT-12). Calls the gated `dsh.test.resetToIdle`
+ * command; a failure (e.g. a stale host that predates the command) is journaled and
+ * swallowed so the run keeps its per-capability verdicts intact.
+ * @param {object} host - the `{ executeCommand, capture }` host interface.
+ * @param {(entry:object)=>void} journal - the run's journal callback.
+ * @param {string} capabilityId - the capability just finished.
+ * @returns {Promise<void>}
+ */
+async function resetToIdle(host, journal, capabilityId) {
+  try {
+    await host.executeCommand('dsh.test.resetToIdle')
+  } catch (error) {
+    journal({
+      capability: capabilityId,
+      step: null,
+      kind: 'reset-to-idle',
+      verdict: 'HARNESS_ERROR',
+      evidence: [],
+      detail: truncate(String(error?.message ?? error), 400),
+    })
+  }
 }
 
 module.exports = {

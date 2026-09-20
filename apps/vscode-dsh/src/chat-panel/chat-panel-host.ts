@@ -307,6 +307,9 @@ export class ChatPanelHost {
   /** Whether the in-panel history window is open (presentation request; Host owns rows). */
   private historyOpen = false
   private historyLoading = false
+  /** Last render-state answer from the webview (DEBT-7). */
+  private lastRenderState: { testIds: string[]; renderState: Record<string, boolean> } | undefined
+  private renderStateResolvers: Array<(state: { testIds: string[]; renderState: Record<string, boolean> }) => void> = []
 
   /**
    * @param deps - registry / store / send gate callbacks.
@@ -739,6 +742,12 @@ export class ChatPanelHost {
   }
 
   private async onWebviewMessage(message: WebviewToHostMessage): Promise<void> {
+    if (message.type === 'probe/render-state') {
+      this.lastRenderState = { testIds: message.testIds, renderState: message.renderState }
+      const resolvers = this.renderStateResolvers.splice(0)
+      for (const resolve of resolvers) resolve(this.lastRenderState)
+      return
+    }
     if (message.type === 'ready') {
       this.pushFullState()
       return
@@ -994,6 +1003,32 @@ export class ChatPanelHost {
   private post(message: HostToWebviewMessage): void {
     this.outbound.push(message)
     this.port?.postMessage(message)
+  }
+
+  /**
+   * Ask the webview for its render state (DEBT-7). Resolves with the last
+   * `probe/render-state` answer; rejects when no webview is attached or on timeout.
+   * @param timeoutMs - how long to wait before failing closed.
+   */
+  queryWebviewRenderState(timeoutMs = 5000): Promise<{ testIds: string[]; renderState: Record<string, boolean> }> {
+    return new Promise((resolve, reject) => {
+      if (this.port === undefined) {
+        reject(new Error('no-webview-attached'))
+        return
+      }
+      const timerRef: { current: ReturnType<typeof setTimeout> | undefined } = { current: undefined }
+      const onResponse = (state: { testIds: string[]; renderState: Record<string, boolean> }): void => {
+        if (timerRef.current !== undefined) clearTimeout(timerRef.current)
+        resolve(state)
+      }
+      this.renderStateResolvers.push(onResponse)
+      timerRef.current = setTimeout(() => {
+        const idx = this.renderStateResolvers.indexOf(onResponse)
+        if (idx >= 0) this.renderStateResolvers.splice(idx, 1)
+        reject(new Error('render-state-timeout'))
+      }, timeoutMs)
+      this.post({ type: 'probe/query-render-state' })
+    })
   }
 }
 

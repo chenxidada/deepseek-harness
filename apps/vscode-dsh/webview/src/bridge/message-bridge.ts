@@ -3,7 +3,7 @@
  * Does not decide send authority.
  */
 
-import { applyHostFrame } from '../store/chat-ui-store.ts'
+import { applyHostFrame, markHostFrameDelivered } from '../store/chat-ui-store.ts'
 
 export type ChromeIntent =
   | { type: 'ready' }
@@ -58,6 +58,17 @@ declare global {
   }
 }
 
+function isProbeQuery(
+  frame: unknown,
+): frame is { type: 'probe/query-render-state' } {
+  return (
+    typeof frame === 'object' &&
+    frame !== null &&
+    !Array.isArray(frame) &&
+    (frame as Record<string, unknown>).type === 'probe/query-render-state'
+  )
+}
+
 /**
  * Create a MessageBridge bound to vscode postMessage (or a test double).
  */
@@ -73,7 +84,21 @@ export function createMessageBridge(opts?: {
       api?.postMessage(msg)
     })
 
+  // Answer a host-side render-state query directly from the mounted probes. The
+  // query frame carries no presentation state, so it never reaches the store.
+  const respondRenderState = (): void => {
+    const probes = typeof window !== 'undefined' ? window.__dshProbes : undefined
+    const testIds = typeof probes?.queryTestIds === 'function' ? probes.queryTestIds() : []
+    const renderState = typeof probes?.getRenderState === 'function' ? probes.getRenderState() : {}
+    post({ type: 'probe/render-state', testIds, renderState })
+  }
+
   const applyFrame = (frame: unknown): void => {
+    if (isProbeQuery(frame)) {
+      markHostFrameDelivered()
+      respondRenderState()
+      return
+    }
     applyHostFrame(frame)
   }
 

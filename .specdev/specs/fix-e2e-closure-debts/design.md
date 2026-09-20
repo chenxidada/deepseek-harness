@@ -311,6 +311,7 @@ phase-1-deterministic-fixes  ──►  phase-2-realmachine-infra
 | # | 日期 | 原设计章节 | 修改为 | 批准人 | 偏差来源 |
 |---|------|-----------|--------|--------|---------|
 | 1 | 2026-09-20 | DEBT-7 二选一默认「保留未闭环」；DEBT-10 二选一默认「requiresModel 收窄 false」；DEBT-12 默认「断言去初始态化」 | 三处均改**真修**：DEBT-7 补 webview 渲染探测通道；DEBT-10 两步（修正标记 + 新增真实委托 capability）；DEBT-12 复用 host + 真实复位（断言保持原语义） | — | 用户否定上一版（三处「规避/收窄/改断言」等于没修债务，要求真修） |
+| 2 | 2026-09-20 | 范围覆盖 = 8 条债务（DEBT-2/3/7/8/9/10/11/12） | 追加 **DEBT-14**：真机（带 key）暴露 `cap-selection-ask` 可复现失败（selection-ask 会话未成为 active tab），系 DEBT-12 修复 readonly-live 污染②后首次暴露的真实路径缺陷；修复落在 `dsh.test.askAboutSelection` 门控 hook（settle in-flight restore + 重建 live Tab） | 用户（选择「本 Phase 修 DEBT-14」） | verifier 真机验证（第二轮带 key） |
 
 ## 建议的下一步
 
