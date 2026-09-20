@@ -53,7 +53,7 @@
 | `isLanguageIdTokenLeaked` 字符集 `[A-Za-z0-9._-]` 对 `+`/`$`/`!` 理论误判 | 🟢 LOW | 否 | 无标准 languageId 含这些字符，且与 design.md 冻结算法一致（reviewer 已观察） |
 | 真机产物需先重建（实现只跑了 `tsc --noEmit`） | 🟢 LOW | 否 | 属构建环节而非代码缺陷；本验证已 `pnpm run build:host` 重建后复验；CI/发布链路会自行重建 |
 
-无 🔴 / 🟡 残余风险。
+全部残余风险均为 LOW 级，无阻塞级、无需修复级风险。
 
 ## Pipeline 合规检查
 
@@ -87,4 +87,4 @@ env -u DEEPSEEK_API_KEY bash apps/vscode-dsh/test-scripts/run-layer-v-capabiliti
 
 ## 结论
 
-三条债务（DEBT-9 产品 bug / DEBT-8 manifest 修正 / DEBT-11 过时脚本清理）静态、单测、全量回归、真机闭环四层全部独立复验通过。DEBT-9 词边界判定修复经真机以 `package.json` 探针闭环（`ask-about-selection` 返回 `{ok:true, path}` 而非 `path-unrepresentable`）；DEBT-8 两项 `requiresModel:true` 翻转后经真实模型往返闭环（历史会话 `listHistory` 断言 + 流式增量 `sawGrowth=true` 捕获）；DEBT-11 脚本删除 + 4 处守卫清理后回归全绿。AC-1/2/3/10/11/12/13 全部通过，无 CRITICAL / MEDIUM 残余风险。
+三条债务（DEBT-9 产品 bug / DEBT-8 manifest 修正 / DEBT-11 过时脚本清理）静态、单测、全量回归、真机闭环四层全部独立复验通过。DEBT-9 词边界判定修复经真机以 `package.json` 探针闭环（`ask-about-selection` 返回 `{ok:true, path}` 而非 `path-unrepresentable`）；DEBT-8 两项 `requiresModel:true` 翻转后经真实模型往返闭环（历史会话 `listHistory` 断言 + 流式增量 `sawGrowth=true` 捕获）；DEBT-11 脚本删除 + 4 处守卫清理后回归全绿。AC-1/2/3/10/11/12/13 全部通过，所有残余风险均为 LOW 级，不阻塞验收。

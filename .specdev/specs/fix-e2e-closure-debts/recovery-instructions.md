@@ -1,6 +1,6 @@
-# 上下文压缩恢复指南 — 2026-09-20T01:21:18Z
+# 上下文压缩恢复指南 — 2026-09-20T02:31:29Z
 
-上下文已于 2026-09-20T01:21:18Z 被压缩。
+上下文已于 2026-09-20T02:31:29Z 被压缩。
 
 ## 恢复步骤（按序执行）
 1. 读取 `.specdev/active-workflow` → slug: fix-e2e-closure-debts
@@ -11,13 +11,13 @@
 
 ## 当前状态快照
 - **工作流**: fix-e2e-closure-debts
-- **阶段**: requirement-analysis
-- **当前 Phase**: 无
+- **阶段**: phase-implementation
+- **当前 Phase**: phase-1-deterministic-fixes
 - **HG-1**: passed
-- **HG-2**: pending
-- **HG-3**: pending
+- **HG-2**: passed
+- **HG-3**: passed
 - **循环次数**: 0
-- **快照时间**: 2026-09-20T01:21:18Z
+- **快照时间**: 2026-09-20T02:31:29Z
 
 ---
 
@@ -38,10 +38,10 @@
 - 参照 `spec-workflow.mdc` 的「可用命令」表与「工作流阶段定义」来判断当前应委托哪个子 Agent、下一步是什么。
 - **不依赖** `current-status.json` 中的 `command` 字段（该字段不存在，不要臆造）。
 
-### 当前阶段：requirement-analysis（需求分析）
+### 当前阶段：phase-implementation（Phase 实施）
 
-- ✅ 该做：委托 `requirement-analyst` 产出 `requirements.md`；产出后用 5-8 句向用户概括需求，等待 **HG-1** 明确确认。
-- ⛔ 不能做：HG-1 未过就委托 `plan-generator` 或进入架构设计；不能自己写需求分析。
+- ✅ 该做：每个 Phase 前**先委托 `code-explorer`** → 建 `impl-<phase-id>` 分支 → 委托 `implementer` →**（UI Phase：先把原型截图呈现给用户确认，`touch .prototype-approved` 后再续做）**→ 4 个并行 reviewer（correctness / design / connectivity / visual）→ `verifier`；每个 Phase 完成后等待 **HG-3** 验收。current_phase 必须取自 DAG JSON。
+- ⛔ 不能做：不能跳过 code-explorer / reviewer / verifier；不能自己写、审、验代码；UI Phase 未确认原型不得派发 reviewer / verifier（`pipeline-gate.sh` 会 deny）；HG-3 未过不能进入下一 Phase。
 
 ### 权威来源声明
 
