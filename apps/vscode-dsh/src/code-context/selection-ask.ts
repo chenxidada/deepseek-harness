@@ -137,6 +137,30 @@ export function toWorkspaceRelativePath(
 }
 
 /**
+ * Report whether `languageId` leaks into `pointerText` as a whole token.
+ * A match is a leak only when both its neighbours are not "path token" chars
+ * (`[A-Za-z0-9._-]`): `package.json` (languageId `json`) is not a leak because
+ * `json` is preceded by `.`, while `@foo/json` is a leak (preceded by `/`).
+ * @param pointerText - built `@path 的 N-M 行` text (or `@"…"` for spaces).
+ * @param languageId - document language id.
+ */
+export function isLanguageIdTokenLeaked(pointerText: string, languageId: string): boolean {
+  if (languageId === '') return false
+  const isPathTokenChar = (ch?: string): boolean =>
+    ch !== undefined && /[A-Za-z0-9._-]/.test(ch)
+  let idx = pointerText.indexOf(languageId)
+  while (idx !== -1) {
+    const before = idx > 0 ? pointerText[idx - 1] : undefined
+    const after = idx + languageId.length < pointerText.length
+      ? pointerText[idx + languageId.length]
+      : undefined
+    if (!isPathTokenChar(before) && !isPathTokenChar(after)) return true
+    idx = pointerText.indexOf(languageId, idx + 1)
+  }
+  return false
+}
+
+/**
  * Command / context-menu entry: dirty-save then prefill live composer with a pointer.
  * @param deps - editor / tab / prefill / notify seams.
  */
@@ -179,7 +203,7 @@ export async function askAboutSelection(deps: AskAboutSelectionDeps): Promise<As
   }
 
   // Defense: never leak languageId / selection body into pointer text (AD-CCD-15).
-  if (doc.languageId !== undefined && pointerText.includes(doc.languageId)) {
+  if (doc.languageId !== undefined && isLanguageIdTokenLeaked(pointerText, doc.languageId)) {
     deps.notify('引用生成异常，已中止。', 'path-unrepresentable')
     return { ok: false, reason: 'path-unrepresentable' }
   }

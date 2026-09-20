@@ -14,31 +14,6 @@
 
 SDK 的 `session.event` / `session.status` / subagent 通知被投影到 Timeline 与 MessageStore。携带 `meta.diffs` 的 write/edit 工具结果暴露一个**事后** Diff 入口（`vscode.diff`）；运行中的逐文件确认不是默认行为（AD-7）。
 
-## Chat-ready 功能回归
-
-针对 `vscode-dsh-chat-ready` 的单命令 L2/L3 回归（phase-1…5 Must + AC-27 抽样）：
-
-```bash
-bash apps/vscode-dsh/test-scripts/run-chat-ready-regression.sh
-```
-
-等价的 vitest 文件清单（从仓库根执行）：
-
-```bash
-./node_modules/.bin/vitest run \
-  apps/vscode-dsh/tests/auto-start-orchestrator.spec.ts \
-  apps/vscode-dsh/tests/phase1-auto-start.spec.ts \
-  apps/vscode-dsh/tests/phase2-auto-ready.spec.ts \
-  apps/vscode-dsh/tests/phase3-chat-ui-chassis.spec.ts \
-  apps/vscode-dsh/tests/phase4-new-conversation-chrome.spec.ts \
-  apps/vscode-dsh/tests/phase5-should-polish.spec.ts \
-  apps/vscode-dsh/tests/phase3-restart-continue.spec.ts \
-  apps/vscode-dsh/tests/phase2-multitab-history-replay.spec.ts \
-  apps/vscode-dsh/tests/panel-close-delete.e2e.spec.ts
-```
-
-矩阵文档同样位于 `tests/chat-ready-regression.spec.ts`。交付摘要：`.specdev/specs/vscode-dsh-chat-ready/feature-delivery-summary.md`。
-
 ## Layer V 冒烟测试链路（真实 Extension Development Host）
 
 一条命令驱动真实的 `code` Extension Development Host 走完五步链路 —— Host 已启动 → 新建会话 → 真实模型往返 → 审批 → 原生 Diff —— 并留下机器可读的证据：

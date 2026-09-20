@@ -14,31 +14,6 @@ The **Conversation** Webview is the live reading and input surface. **Decision s
 
 SDK `session.event` / `session.status` / subagent notifications are projected into Timeline and MessageStore. Write/edit tool results that carry `meta.diffs` expose a **post-hoc** Diff entry (`vscode.diff`); mid-run per-file confirmation is not the default (AD-7).
 
-## Chat-ready Feature regression
-
-One-command L2/L3 regression for `vscode-dsh-chat-ready` (phase-1…5 Must + AC-27 sample):
-
-```bash
-bash apps/vscode-dsh/test-scripts/run-chat-ready-regression.sh
-```
-
-Equivalent vitest file list (from repo root):
-
-```bash
-./node_modules/.bin/vitest run \
-  apps/vscode-dsh/tests/auto-start-orchestrator.spec.ts \
-  apps/vscode-dsh/tests/phase1-auto-start.spec.ts \
-  apps/vscode-dsh/tests/phase2-auto-ready.spec.ts \
-  apps/vscode-dsh/tests/phase3-chat-ui-chassis.spec.ts \
-  apps/vscode-dsh/tests/phase4-new-conversation-chrome.spec.ts \
-  apps/vscode-dsh/tests/phase5-should-polish.spec.ts \
-  apps/vscode-dsh/tests/phase3-restart-continue.spec.ts \
-  apps/vscode-dsh/tests/phase2-multitab-history-replay.spec.ts \
-  apps/vscode-dsh/tests/panel-close-delete.e2e.spec.ts
-```
-
-Matrix documentation also lives in `tests/chat-ready-regression.spec.ts`. Delivery summary: `.specdev/specs/vscode-dsh-chat-ready/feature-delivery-summary.md`.
-
 ## Layer V smoke loop (real Extension Development Host)
 
 One command drives a real `code` Extension Development Host through the five-step link — Host started → new conversation → real model round trip → approval → native Diff — and leaves machine-readable evidence behind:

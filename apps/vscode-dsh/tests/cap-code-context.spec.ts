@@ -1,5 +1,5 @@
 import { ChatPanelHost, FakeWebviewPort, buildThinChatHtml } from '../src/chat-panel/index.ts'
-import { SelectionMetaStore, askAboutSelection, assertEveryRefReadBeforeFinalAnswer, buildPointerText, extractAtPathTokens, extractAtPaths, formatOfficialAtPath, pathsFromReadToolArgs, planReferenceOpen, readArgsCoverPath, validateComposerAtPaths } from '../src/code-context/index.ts'
+import { SelectionMetaStore, askAboutSelection, assertEveryRefReadBeforeFinalAnswer, buildPointerText, extractAtPathTokens, extractAtPaths, formatOfficialAtPath, isLanguageIdTokenLeaked, pathsFromReadToolArgs, planReferenceOpen, readArgsCoverPath, validateComposerAtPaths } from '../src/code-context/index.ts'
 import { ConversationController } from '../src/conversation-controller.ts'
 import { IdeSessionHost } from '../src/session-host.ts'
 import { FILE_REFERENCE_PROMPT } from '@deepseek-ai/dsh-file-reference'
@@ -313,6 +313,55 @@ describe('cap:code-context — @path resolution, references, and selection conte
         controller.registry.switchTo(replay.tabId)
         const rejected = await panel.sendPrompt('should fail on replay')
         expect(rejected).toEqual({ ok: false, reason: 'replay' })
+      })
+    })
+
+    describe('phase-1 selection ask leak-token boundary (DEBT-9)', () => {
+      it('CAP-CODE-CONTEXT-024 languageId as a path substring is not a leak (package.json/json)', () => {
+        expect(isLanguageIdTokenLeaked('@apps/vscode-dsh/package.json 的 1-2 行', 'json')).toBe(false)
+      })
+
+      it('CAP-CODE-CONTEXT-025 languageId as a whole token still leaks (@foo/json)', () => {
+        expect(isLanguageIdTokenLeaked('@foo/json 的 1-2 行', 'json')).toBe(true)
+      })
+
+      it('CAP-CODE-CONTEXT-026 unrelated languageId is not a leak (index.ts/typescript)', () => {
+        expect(isLanguageIdTokenLeaked('@src/index.ts 的 1-2 行', 'typescript')).toBe(false)
+      })
+
+      it('CAP-CODE-CONTEXT-027 empty languageId is never a leak', () => {
+        expect(isLanguageIdTokenLeaked('@src/index.ts 的 1-2 行', '')).toBe(false)
+      })
+
+      it('CAP-CODE-CONTEXT-028 askAboutSelection accepts package.json without path-unrepresentable', async () => {
+        const root = tempWorkspace({ 'package.json': '{"name":"x"}' })
+        const meta = new SelectionMetaStore()
+        const prefills: string[] = []
+        const result = await askAboutSelection({
+          getActiveEditor: () => ({
+            document: {
+              uri: { fsPath: join(root, 'package.json') },
+              isDirty: false,
+              save: () => true,
+              languageId: 'json',
+            },
+            selection: {
+              isEmpty: false,
+              start: { line: 0, character: 0 },
+              end: { line: 1, character: 0 },
+            },
+          }),
+          getWorkspaceFolders: () => [root],
+          ensureLiveTab: () => ({ tabId: 't', sessionId: 's', mode: 'live' }),
+          prefillComposer: (text) => { prefills.push(text) },
+          notify: () => {},
+          selectionMeta: meta,
+        })
+        expect(result.ok).toBe(true)
+        if (result.ok) {
+          expect(result.path).toBe('package.json')
+          expect(prefills).toEqual([result.pointerText])
+        }
       })
     })
 

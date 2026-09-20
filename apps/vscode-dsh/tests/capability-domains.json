@@ -17,7 +17,6 @@
   "testScripts": [
     { "path": "run-layer-v-smoke.sh", "category": "entry-orchestration", "domain": "session-host" },
     { "path": "run-layer-v-capabilities.sh", "category": "entry-orchestration", "domain": "test-harness" },
-    { "path": "run-chat-ready-regression.sh", "category": "entry-orchestration", "domain": "test-harness" },
     { "path": "layer-v-shadow-preset.sh", "category": "support-resources", "domain": "session-host" },
     { "path": "layer-v-capabilities.json", "category": "capability-manifest-data", "domain": "test-harness" },
     { "path": "layer-v-driver/extension.cjs", "category": "entry-orchestration", "domain": "session-host" },
@@ -654,7 +653,6 @@
       "id": "test-harness",
       "spec": "cap-test-harness.spec.ts",
       "scripts": [
-        "run-chat-ready-regression.sh",
         "layer-v-support/layer-v-runtime.sh",
         "layer-v-support/artifact-index.cjs",
         "layer-v-support/build-freshness.cjs",
@@ -765,7 +763,6 @@
             "CAP-TEST-HARNESS-080",
             "CAP-TEST-HARNESS-081",
             "CAP-TEST-HARNESS-082",
-            "CAP-TEST-HARNESS-083",
             "CAP-TEST-HARNESS-084",
             "CAP-TEST-HARNESS-085",
             "CAP-TEST-HARNESS-086",

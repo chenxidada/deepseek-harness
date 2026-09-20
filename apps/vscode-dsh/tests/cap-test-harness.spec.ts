@@ -12,11 +12,11 @@ import { readColdSessionLog } from '@deepseek-ai/dsh-session-query'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
@@ -1391,18 +1391,6 @@ record="$(display_evidence_record_json)"
         const verdict = homeSandboxOf({ homeSandbox: '' })
         expect(verdict.ok).toBe(false)
         expect(verdict.value).toBe('')
-      })
-    })
-  })
-
-  describe('chat-ready-regression.spec.ts', () => {
-    describe('chat-ready-regression (AC-R1 entry)', () => {
-      it('CAP-TEST-HARNESS-083 documents and keeps the one-command regression script on disk', () => {
-        const script = resolve(
-          import.meta.dirname,
-          '../test-scripts/run-chat-ready-regression.sh',
-        )
-        expect(existsSync(script)).toBe(true)
       })
     })
   })

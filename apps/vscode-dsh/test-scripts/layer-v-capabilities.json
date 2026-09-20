@@ -37,11 +37,17 @@
       "group": "react-spa-main",
       "title": "历史窗口（HistoryPanel）",
       "ac": ["AC-7", "AC-10"],
-      "requiresModel": false,
+      "requiresModel": true,
       "evidence": [{ "path": "apps/vscode-dsh/webview/src/components/HistoryPanel.tsx", "line": 30 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的历史窗口模型往返提示词，请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-41-OK"] },
+        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-41-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "history-panel-lists-the-real-session", "command": "dsh.test.listHistory", "expect": { "0.sessionId": "$string", "0.firstUserPreview": "$contains:LAYER-V-CAP-41-OK", "0.continueHint": "$string" } },
         { "kind": "screenshot", "step": "history-panel", "file": "cap-history-panel.png" }
       ]
     },
@@ -50,11 +56,16 @@
       "group": "react-spa-main",
       "title": "消息列表 + 流式呈现（MessageList）",
       "ac": ["AC-7", "AC-10"],
-      "requiresModel": false,
+      "requiresModel": true,
       "evidence": [{ "path": "apps/vscode-dsh/webview/src/components/MessageList.tsx", "line": 25 }],
       "steps": [
         { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
-        { "kind": "assert", "step": "editor-panel-open", "command": "dsh.showPanel", "expect": { "panelOpen": true } },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的消息列表流式呈现模型往返，用于验证消息列表能流式展示回复。请严格按下面四行逐行输出，每行一个独立段落，逐段生成、不要一次性合并输出，也不要调用任何工具：\n第一行：我已收到指令，开始分段落输出。\n第二行：本行用于让流式回复足够长，便于轮询捕获中间态。\n第三行：下面回显本次验证的唯一标记。\n第四行：LAYER-V-CAP-42-OK"] },
+        { "kind": "stream", "step": "streamed-message", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-42-OK", "timeoutMs": 300000, "intervalMs": 150, "requireIncrement": true },
         { "kind": "screenshot", "step": "message-list", "file": "cap-message-list-streaming.png" }
       ]
     },
@@ -409,8 +420,8 @@
         { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
         { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
         { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
-        { "kind": "assert", "step": "open-editor-selection", "command": "dsh.test.openEditorWithSelection", "args": ["apps/vscode-dsh/src/index.ts"], "expect": { "ok": true } },
-        { "kind": "assert", "step": "ask-about-selection", "command": "dsh.test.askAboutSelection", "expect": { "ok": true, "path": "apps/vscode-dsh/src/index.ts" } },
+        { "kind": "assert", "step": "open-editor-selection", "command": "dsh.test.openEditorWithSelection", "args": ["apps/vscode-dsh/package.json"], "expect": { "ok": true } },
+        { "kind": "assert", "step": "ask-about-selection", "command": "dsh.test.askAboutSelection", "expect": { "ok": true, "path": "apps/vscode-dsh/package.json" } },
         { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-26-OK"] },
         { "kind": "wait", "step": "assistant-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantContains:LAYER-V-CAP-26-OK", "timeoutMs": 300000 },
         { "kind": "screenshot", "step": "selection-ask", "file": "cap-selection-ask.png" }

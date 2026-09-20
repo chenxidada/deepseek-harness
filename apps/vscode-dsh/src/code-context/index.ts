@@ -28,6 +28,7 @@ export {
 export {
   askAboutSelection,
   buildPointerText,
+  isLanguageIdTokenLeaked,
   selectionLineRange,
   toWorkspaceRelativePath,
   type AskAboutSelectionDeps,

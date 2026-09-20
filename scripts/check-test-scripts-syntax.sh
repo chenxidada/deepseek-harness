@@ -24,7 +24,6 @@ scan_dir="apps/vscode-dsh/test-scripts"
 pinned=(
   "${scan_dir}/run-layer-v-smoke.sh"
   "${scan_dir}/layer-v-shadow-preset.sh"
-  "${scan_dir}/run-chat-ready-regression.sh"
 )
 
 status=0

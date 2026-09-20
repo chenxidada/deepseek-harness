@@ -87,5 +87,10 @@
     "created": "2026-09-19T14:20:00Z",
     "completed": "2026-09-19T15:20:00Z",
     "description": "vendor/cordis 的 const enum FiberState 改为普通 enum，消除 source-plane 运行时访问报错，遵循 vendor 同步策略"
+  },
+  "fix-e2e-closure-debts": {
+    "status": "active",
+    "created": "2026-09-20T00:46:00Z",
+    "description": "修复 vscode-dsh-e2e-closure 工作流登记的技术债（DEBT-2/3/7/8/9/10/11/12），补齐真机闭环验证缺口与产品缺陷"
   }
 }
