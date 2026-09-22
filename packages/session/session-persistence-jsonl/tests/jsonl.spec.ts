@@ -7,6 +7,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { SessionLogOffset, SessionSeq, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import { SessionHandleClosedError, SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import {
   encodeSegment, eventLines, logPath, projectDir, projectKey, scanLog, sessionDir, SessionLogScanner, toHeaderLine,
@@ -34,6 +35,11 @@ const readTally = vi.hoisted(() => ({
   enabled: false,
 }))
 
+const removeFailure = vi.hoisted(() => ({
+  path: undefined as string | undefined,
+  error: undefined as Error | undefined,
+}))
+
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
@@ -47,6 +53,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       if (statRace.reads < 3) return identity
       return { ...identity, mtimeNs: identity.mtimeNs + 1n }
     }) as typeof actual.stat,
+    rm: (async (...args: Parameters<typeof actual.rm>) => {
+      if (String(args[0]) === removeFailure.path && removeFailure.error !== undefined) throw removeFailure.error
+      return actual.rm(...args)
+    }),
     readFile: (async (...args: Parameters<typeof actual.readFile>) => {
       if (readTally.enabled && typeof args[0] === 'string') {
         readTally.bySuffix.set(args[0], (readTally.bySuffix.get(args[0]) ?? 0) + 1)
@@ -134,6 +144,8 @@ afterEach(async () => {
   readTally.enabled = false
   statFailure.path = undefined
   statFailure.error = undefined
+  removeFailure.path = undefined
+  removeFailure.error = undefined
   vi.restoreAllMocks()
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true })
 })
@@ -878,6 +890,7 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
     await expect(ctx.sessionPersistence.open(m.id, 'write', { signal })).rejects.toBe(reason)
     await expect(ctx.sessionPersistence.stat(m.id, { signal })).rejects.toBe(reason)
     await expect(ctx.sessionPersistence.list({ signal })).rejects.toBe(reason)
+    await expect(ctx.sessionPersistence.delete(m.id, { signal })).rejects.toBe(reason)
 
     const handle = await ctx.sessionPersistence.open(m.id, 'write')
     try {
@@ -1083,6 +1096,113 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
 
     await expect(pending).rejects.toBe(reason)
     expect(discovery).toHaveBeenCalledWith(controller.signal)
+  })
+})
+
+describe('JsonlSessionPersistence: session deletion', () => {
+  let ctx: Context
+  beforeEach(async () => {
+    root = await freshRoot()
+    ctx = new Context()
+    await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+  })
+  afterEach(async () => { await ctx.fiber.dispose() })
+
+  /** A contiguous second-turn batch continuing {@link oneTurnLog} (seqs 0..5). */
+  function secondTurn(): SessionEvent[] {
+    return [
+      { type: 'turn/start', seq: SessionSeq(6), time: 9, data: { turn: 2 } },
+      { type: 'turn/end', seq: SessionSeq(7), time: 10, data: { turn: 2, reason: { kind: 'completed' } } },
+    ]
+  }
+
+  it('removes the session-owned directory and leaves sibling sessions intact', async () => {
+    const m = meta('delete-dir', '/work')
+    await writeLog(ctx.sessionPersistence, m, oneTurnLog())
+    const dir = sessionDir(root, m.cwd, m.id)
+    // The directory is session-owned, so artifacts beside the log go with it.
+    await writeFile(join(dir, 'metadata.json'), '{}\n')
+    const sibling = meta('delete-sibling', '/work')
+    await writeLog(ctx.sessionPersistence, sibling, oneTurnLog())
+    const noCwd = meta('delete-no-cwd')
+    await writeLog(ctx.sessionPersistence, noCwd, oneTurnLog())
+
+    await ctx.sessionPersistence.delete(m.id)
+    await ctx.sessionPersistence.delete(noCwd.id)
+
+    await expect(stat(dir)).rejects.toThrow()
+    await expect(stat(sessionDir(root, noCwd.cwd, noCwd.id))).rejects.toThrow()
+    expect((await ctx.sessionPersistence.list()).map(s => String(s.header.id))).toEqual(['delete-sibling'])
+    expect((await stat(sessionDir(root, sibling.cwd, sibling.id))).isDirectory()).toBe(true)
+
+    // A fresh instance over the same root agrees the session is gone.
+    const reopened = new Context()
+    await reopened.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+    try {
+      expect(await reopened.sessionPersistence.stat(m.id)).toBeUndefined()
+      await expect(reopened.sessionPersistence.open(m.id, 'read'))
+        .rejects.toBeInstanceOf(SessionPersistenceNotFoundError)
+    } finally {
+      await reopened.fiber.dispose()
+    }
+  })
+
+  it('closes the deleted id\'s open handles and leaves other sessions writing', async () => {
+    const m = meta('delete-handles', '/work')
+    const writer = await ctx.sessionPersistence.create(m)
+    await writer.append(oneTurnLog())
+    // Warm the parsed-log memo for the id so the delete has to invalidate it.
+    const reader = await ctx.sessionPersistence.open(m.id, 'read')
+    expect(await reader.read()).toEqual(oneTurnLog())
+    const other = meta('delete-other', '/work')
+    const otherWriter = await ctx.sessionPersistence.create(other)
+    await otherWriter.append(oneTurnLog())
+
+    await ctx.sessionPersistence.delete(m.id)
+
+    await expect(writer.append(secondTurn())).rejects.toBeInstanceOf(SessionHandleClosedError)
+    await expect(reader.read()).rejects.toBeInstanceOf(SessionHandleClosedError)
+    await expect(stat(sessionDir(root, m.cwd, m.id))).rejects.toThrow()
+    // The other session kept its claim, so its next append still lands.
+    await otherWriter.append(secondTurn())
+    expect((await ctx.sessionPersistence.list()).map(s => String(s.header.id))).toEqual(['delete-other'])
+    await otherWriter.close()
+  })
+
+  it('is an idempotent no-op for absent, never-materialized, and already-deleted ids', async () => {
+    await ctx.sessionPersistence.delete(SessionId('delete-absent'))
+
+    // Created but never materialized: the pending entry goes with the delete.
+    const pending = meta('delete-pending', '/work')
+    const creator = await ctx.sessionPersistence.create(pending)
+    await ctx.sessionPersistence.delete(pending.id)
+    expect(await ctx.sessionPersistence.stat(pending.id)).toBeUndefined()
+    // The freed id accepts a fresh create while the old handle is still open.
+    const reused = await ctx.sessionPersistence.create(pending)
+    await reused.close()
+    await creator.close()
+
+    const stored = meta('delete-twice', '/work')
+    await writeLog(ctx.sessionPersistence, stored, oneTurnLog())
+    await ctx.sessionPersistence.delete(stored.id)
+    await ctx.sessionPersistence.delete(stored.id)
+    expect((await ctx.sessionPersistence.list()).map(s => String(s.header.id))).not.toContain('delete-twice')
+  })
+
+  it('surfaces a removal failure and keeps the artifact for a retry', async () => {
+    const m = meta('delete-fault', '/work')
+    await writeLog(ctx.sessionPersistence, m, oneTurnLog())
+    removeFailure.path = sessionDir(root, m.cwd, m.id)
+    removeFailure.error = Object.assign(new Error('EACCES: session directory is not removable'), { code: 'EACCES' })
+
+    await expect(ctx.sessionPersistence.delete(m.id)).rejects.toThrow(/EACCES/)
+
+    // The refused delete left the session readable, so a retry can finish it.
+    removeFailure.path = undefined
+    removeFailure.error = undefined
+    expect((await ctx.sessionPersistence.list()).map(s => String(s.header.id))).toContain('delete-fault')
+    await ctx.sessionPersistence.delete(m.id)
+    expect((await ctx.sessionPersistence.list()).map(s => String(s.header.id))).not.toContain('delete-fault')
   })
 })
 

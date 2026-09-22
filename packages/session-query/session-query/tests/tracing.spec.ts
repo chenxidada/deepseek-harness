@@ -114,6 +114,10 @@ class TracePersistence extends SessionPersistence {
     })
   }
 
+  async delete(id: SessionIdType): Promise<void> {
+    TracePersistence.entries.delete(id)
+  }
+
   list(): Promise<readonly SessionPersistenceSnapshot[]> {
     TracePersistence.listCalls += 1
     if (TracePersistence.listFailure !== undefined) return Promise.reject(TracePersistence.listFailure)

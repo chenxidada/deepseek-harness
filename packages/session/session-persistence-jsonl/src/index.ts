@@ -21,6 +21,7 @@ import {
   assertStoredId, assertVersion, materializeCreateHeader, validateStoredEvents,
   type SessionAccess, type SessionHandle,
   type SessionLocation, type SessionPersistenceCreateOptions,
+  type SessionPersistenceDeleteOptions,
   type SessionPersistenceListOptions, type SessionPersistenceOpenOptions,
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
   type SessionPersistenceRevision as PersistenceRevision,
@@ -364,6 +365,34 @@ class JsonlSessionPersistence extends SessionPersistence {
     }
     signal?.throwIfAborted()
     return snapshots
+  }
+
+  /**
+   * Remove one stored session's directory and this instance's state for its id.
+   *
+   * Handles open on the id close first: a write handle's close drains its
+   * routed buffer durably, so a removal that follows cannot race an append
+   * into a resurrected directory. A session with no artifact left is already
+   * absent and the call is a no-op.
+   * @param id - the stored session to delete.
+   * @param options - optional cancellation.
+   * @throws when the root belongs to the opposite encoding, when a legacy
+   *   flat artifact or a duplicated id makes the target ambiguous, or when the
+   *   directory cannot be removed.
+   */
+  async delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void> {
+    options?.signal?.throwIfAborted()
+    await this.ensureRootEncoding()
+    for (const handle of [...this.tracker.openHandles]) {
+      if (handle.id !== id) continue
+      await handle.close()
+    }
+    this.coldLogMemo.delete(id)
+    const path = await this.findLog(id, options?.signal)
+    if (path === undefined) return
+    // A concurrent writer may repopulate the directory between the recursive
+    // walk and its final rmdir; the bounded retry rides out that ENOTEMPTY.
+    await rm(dirname(path), { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
   }
 
   // --- handle-facing storage internals (package-private via the handle class below) ---

@@ -105,6 +105,12 @@ export interface SessionPersistenceListOptions {
   readonly signal?: AbortSignal
 }
 
+/** Options for {@link SessionPersistence.delete}. */
+export interface SessionPersistenceDeleteOptions {
+  /** Optional cancellation for backend removal work. */
+  readonly signal?: AbortSignal
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     sessionPersistence: SessionPersistence
@@ -195,6 +201,23 @@ export abstract class SessionPersistence extends Service {
    * @returns one snapshot per stored session.
    */
   abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
+
+  /**
+   * Remove one stored session's durable data and this instance's state for its
+   * id — its artifact, its in-process write-ownership claim, and any open
+   * handle it still owns.
+   *
+   * Idempotent: deleting an id with nothing stored resolves without error,
+   * because a caller may retry a delete for a session that never materialized.
+   * A removal that cannot complete rejects; a delete never reports success
+   * while data it could not remove remains. Once it resolves, the id is free
+   * for `create`, and `stat`/`list`/`open` behave as for a session that never
+   * existed. This is storage removal only: disposing live sessions and agents
+   * belongs to their owners, which must do so before calling it.
+   * @param id - the stored session to remove.
+   * @param options - optional cancellation.
+   */
+  abstract delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void>
 }
 
 export default SessionPersistence

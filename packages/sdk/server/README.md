@@ -51,6 +51,10 @@ Stdout carries only JSON-RPC frames, so clients can parse every byte; diagnostic
 
 The plugin answers `shutdown`, flushes the response, disposes the root context so SDK-owned agents, subscriptions, and persistence reach quiescence, then exits 0. EOF and signal exits belong to the app bin, which also disposes the root context. Unloading only this plugin stops serving without exiting the process.
 
+### Host bridge session services
+
+Per-session lifecycle that the wire protocol deliberately omits is published as Cordis services for the ide Host bridge: `sdkSessionDispose`, `sdkSessionResume`, `sdkSessionCancel`, `sdkSessionFork`, and `sdkSessionDelete`. Each is resolved with `ctx.get` by `dsh-ide-bridge` in place of a stdout method. `sdkSessionDelete.deleteSession(sessionId)` runs the same memory teardown as `sdkSessionDispose` first — which releases the session's persistence write handle — and only then deletes the stored data through `ctx.sessionPersistence.delete`; an id with no live session and nothing stored resolves as a no-op. A composition without a persistence backend keeps the memory teardown alone, and a persistence removal that fails rejects with that failure after the memory teardown has already happened, so the Host reports a failed delete rather than a silent partial one.
+
 -----
 
 <a id="understand-the-implementation"></a>
@@ -122,7 +126,7 @@ Append-only; newly visible content follows the reusable request prefix and does 
 
 These limits define when the plugin needs special operational care. They are current package constraints, not a comparison with other serving approaches or a task backlog.
 
-- **The wire has no per-session close or prompt-cancel method** — stdout protocol methods stay `initialize` / `session/prompt` / `shutdown` only. Per-session teardown for the ide profile uses the Cordis `sdkSessionDispose` service (Host bridge `session/dispose`), not a new stdout method.
+- **The wire has no per-session close or prompt-cancel method** — stdout protocol methods stay `initialize` / `session/prompt` / `shutdown` only. Per-session teardown and deletion for the ide profile use the Cordis `sdkSessionDispose` and `sdkSessionDelete` services (Host bridge `session/dispose` and `session/delete`), not a new stdout method.
 - **There is no per-prompt result** — `MessageId` identifies inbox admission only; clients that own an automation interval must define and observe that interval themselves.
 - **stdout purity is deployment-enforced** — a surrounding config can still load a stdout logger and corrupt the JSON-RPC channel; this plugin does not inspect or veto sibling loggers.
 - **Automatic adapter mounting is DeepSeek-specific** — `initialize` can reuse any pre-registered model adapter, but its only fallback mounts the DeepSeek adapter.

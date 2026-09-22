@@ -51,6 +51,10 @@ Stdout 只承载 JSON-RPC 帧，客户端可以逐字节解析；诊断信息应
 
 插件应答 `shutdown`，刷新响应并 dispose 根上下文，使 SDK 持有的 agent、订阅与持久化达到完全停稳，然后以 0 退出。EOF 与信号退出归 app bin 负责，后者也会 dispose 根上下文。仅卸载此插件会停止服务，但不会退出进程。
 
+### Host 桥会话服务
+
+协议有意不提供的逐会话生命周期以 Cordis 服务形式发布，供 ide Host 桥使用：`sdkSessionDispose`、`sdkSessionResume`、`sdkSessionCancel`、`sdkSessionFork` 与 `sdkSessionDelete`。`dsh-ide-bridge` 用 `ctx.get` 解析它们，以替代 stdout 方法。`sdkSessionDelete.deleteSession(sessionId)` 先执行与 `sdkSessionDispose` 相同的内存清理——这会释放该会话的持久化写句柄——之后才通过 `ctx.sessionPersistence.delete` 删除已存储数据；没有存活会话且无已存储数据的 id 会作为空操作正常完成。组合中没有持久化后端时只保留内存清理；持久化移除失败会在内存清理已经发生之后以该失败拒绝，因此 Host 会报告删除失败，而不是静默的部分成功。
+
 -----
 
 <a id="understand-the-implementation"></a>
@@ -122,7 +126,7 @@ Stdout 只承载 JSON-RPC 帧，客户端可以逐字节解析；诊断信息应
 
 这些限制说明本插件何时需要特别的运维注意。它们是当前包约束，不是与其他服务方式的对比或任务积压。
 
-- **协议没有逐会话关闭或提示词取消方法**——stdout 协议方法仍仅为 `initialize` / `session/prompt` / `shutdown`。ide profile 的逐会话拆除通过 Cordis `sdkSessionDispose` 服务（Host bridge `session/dispose`）完成，而不是新增 stdout 方法。
+- **协议没有逐会话关闭或提示词取消方法**——stdout 协议方法仍仅为 `initialize` / `session/prompt` / `shutdown`。ide profile 的逐会话拆除与删除通过 Cordis `sdkSessionDispose` 与 `sdkSessionDelete` 服务（Host bridge `session/dispose` 与 `session/delete`）完成，而不是新增 stdout 方法。
 - **没有逐提示词结果**——`MessageId` 只标识 inbox 准入；拥有自动化活动区间的客户端必须自行定义并观察该区间。
 - **stdout 纯净性由部署保证**——外围配置仍可能加载 stdout logger 并破坏 JSON-RPC 通道；此插件不会检查或否决同级 logger。
 - **自动挂载适配器仅支持 DeepSeek**——`initialize` 可以复用任何预先注册的模型适配器，但唯一的回退行为是挂载 DeepSeek 适配器。

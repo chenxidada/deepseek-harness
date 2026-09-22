@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PassThrough, Writable } from 'node:stream'
@@ -11,6 +11,7 @@ import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import * as jsonrpc from '../src/index.ts'
@@ -20,6 +21,35 @@ import * as jsonrpc from '../src/index.ts'
  * the full transport/server path, response-before-exit shutdown exactly once,
  * and bare-fiber disposal without process exit.
  */
+
+/**
+ * Storage-removal interception for the session-delete cases: the `rm` call
+ * removing a session's own directory observes the process state at that moment
+ * (which proves the memory teardown already ran) and can fail on demand. Every
+ * other `rm` call delegates to the real implementation.
+ */
+const removeWatch = vi.hoisted(() => ({
+  /** Basename of the session directory the current test observes; unset disables interception. */
+  id: undefined as string | undefined,
+  onRemove: undefined as (() => void) | undefined,
+  failure: undefined as Error | undefined,
+}))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    rm: (async (...args: Parameters<typeof actual.rm>) => {
+      const [path] = args
+      if (removeWatch.id !== undefined && typeof path === 'string'
+        && path.split(/[\\/]/).at(-1) === removeWatch.id) {
+        removeWatch.onRemove?.()
+        if (removeWatch.failure !== undefined) throw removeWatch.failure
+      }
+      return actual.rm(...args)
+    }),
+  }
+})
 
 /** One ordered frame, write completion, or exit observation. */
 type WireEvent =
@@ -72,6 +102,8 @@ async function mountPlugin(
   options: {
     writeDelayMs?: number
     failFlush?: boolean
+    /** Mount the JSONL backend; `false` composes a tree with no persistence service. */
+    withPersistence?: boolean
     beforeServer?: (ctx: Context) => Promise<void> | void
   } = {},
 ): Promise<ApplyHarness> {
@@ -79,7 +111,9 @@ async function mountPlugin(
   await mountAgentLoopTestDependencies(ctx)
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
-  await ctx.plugin(JsonlSessionPersistence, { root: storageDir })
+  if (options.withPersistence !== false) {
+    await ctx.plugin(JsonlSessionPersistence, { root: storageDir })
+  }
   await new Promise(resolve => setTimeout(resolve, 50))
   await options.beforeServer?.(ctx)
 
@@ -147,6 +181,9 @@ const servers: Server[] = []
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => new Promise(resolve => server.close(resolve))))
   vi.unstubAllEnvs()
+  removeWatch.id = undefined
+  removeWatch.onRemove = undefined
+  removeWatch.failure = undefined
 })
 
 /** Keyless SSE endpoint for completing a prompt turn. */
@@ -375,6 +412,124 @@ describe('dsh-sdk-jsonrpc-server plugin apply', () => {
       await settle()
       expect(harness.frames().length).toBe(before)
       expect(harness.exits()).toEqual([])
+    } finally {
+      await harness.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('dsh-sdk-jsonrpc-server session delete', () => {
+  /** Storage entries belonging to session `main`, matched by path segment. */
+  async function mainSessionEntries(storageDir: string): Promise<string[]> {
+    const entries = await readdir(storageDir, { recursive: true })
+    return entries.filter(entry => entry.split(/[\\/]/).includes('main'))
+  }
+
+  /** Drive one prompt turn to its settled idle status; earlier frames are ignored. */
+  async function promptTurn(harness: ApplyHarness, id: string): Promise<void> {
+    const seen = harness.frames().length
+    harness.send({
+      jsonrpc: '2.0',
+      id,
+      method: 'session/prompt',
+      params: { sessionId: 'main', contentBlocks: [{ type: 'text', text: 'delete me' }] },
+    })
+    const response = await harness.waitForFrame(frame => frame.id === id, `prompt response ${id}`)
+    expect((response.result as { messageId?: unknown }).messageId).toBeTypeOf('string')
+    await waitFor(
+      () => harness.frames().slice(seen).some(frame => frame.method === 'session.status'
+        && (frame.params as { status?: string } | undefined)?.status === 'idle') ? true : undefined,
+      'idle session status',
+    )
+  }
+
+  /** Mount the plugin over a mock completion endpoint and initialize the SDK route. */
+  async function mountSdkSession(
+    options: { withPersistence?: boolean } = {},
+  ): Promise<{ harness: ApplyHarness; storageDir: string }> {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-apply-delete-'))
+    const llmServer = await mockCompletionServer()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
+    const harness = await mountPlugin(storageDir, options)
+    harness.send({
+      jsonrpc: '2.0',
+      id: 'init',
+      method: 'initialize',
+      params: { cwd: storageDir, provider: 'deepseek-official', model: 'delete-model' },
+    })
+    await harness.waitForFrame(frame => frame.id === 'init', 'initialize response')
+    return { harness, storageDir }
+  }
+
+  it('disposes the live session before removing its stored log, and frees the id', async () => {
+    const { harness, storageDir } = await mountSdkSession()
+    const observations: string[] = []
+    removeWatch.id = 'main'
+    // The removal observes the process state at its own moment: the SDK session
+    // is already disposed, so no live handle can republish the storage it removes.
+    removeWatch.onRemove = () => {
+      observations.push('storage-removal')
+      expect(harness.ctx.agents.get(SessionId('main'))).toBeUndefined()
+    }
+    try {
+      await promptTurn(harness, 'prompt-1')
+
+      await harness.ctx.sdkSessionDelete.deleteSession('main')
+
+      expect(observations).toEqual(['storage-removal'])
+      expect(harness.ctx.agents.get(SessionId('main'))).toBeUndefined()
+      expect(await mainSessionEntries(storageDir)).toEqual([])
+
+      // The id is reusable end to end: a later prompt creates a fresh session
+      // for it instead of hitting the disposed-session error path.
+      await promptTurn(harness, 'prompt-2')
+    } finally {
+      await harness.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the memory teardown when the composition has no persistence backend', async () => {
+    const { harness, storageDir } = await mountSdkSession({ withPersistence: false })
+    try {
+      await promptTurn(harness, 'prompt-1')
+      expect(harness.ctx.agents.get(SessionId('main'))).toBeDefined()
+
+      // Without a backend the delete is the memory teardown alone; unknown ids
+      // resolve as a no-op.
+      await harness.ctx.sdkSessionDelete.deleteSession('main')
+      await harness.ctx.sdkSessionDelete.deleteSession('never-existed')
+
+      expect(harness.ctx.agents.get(SessionId('main'))).toBeUndefined()
+    } finally {
+      await harness.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('propagates a storage removal failure after the memory teardown', async () => {
+    const { harness, storageDir } = await mountSdkSession()
+    const observations: string[] = []
+    removeWatch.id = 'main'
+    removeWatch.failure = Object.assign(new Error('EACCES: session directory is not removable'), { code: 'EACCES' })
+    removeWatch.onRemove = () => {
+      observations.push('storage-removal')
+      expect(harness.ctx.agents.get(SessionId('main'))).toBeUndefined()
+    }
+    try {
+      await promptTurn(harness, 'prompt-1')
+
+      await expect(harness.ctx.sdkSessionDelete.deleteSession('main')).rejects.toThrow(/EACCES/)
+      expect(observations).toEqual(['storage-removal'])
+      expect(harness.ctx.agents.get(SessionId('main'))).toBeUndefined()
+
+      // The refused removal left the log on disk: a retry finishes the delete.
+      removeWatch.failure = undefined
+      expect(await mainSessionEntries(storageDir)).not.toEqual([])
+      await harness.ctx.sdkSessionDelete.deleteSession('main')
+      expect(await mainSessionEntries(storageDir)).toEqual([])
     } finally {
       await harness.dispose()
       await rm(storageDir, { recursive: true, force: true })

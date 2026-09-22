@@ -570,5 +570,75 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         await dispose()
       }
     })
+
+    it('delete removes a stored session from this instance and frees its id', async () => {
+      const { persistence, dispose } = await make()
+      try {
+        const m = meta('deleted', '/work')
+        const writer = await persistence.create(m)
+        await writer.append(oneTurnLog())
+        await writer.close()
+        expect((await persistence.list()).map(s => String(s.header.id))).toContain('deleted')
+
+        await persistence.delete(m.id)
+
+        expect(await persistence.stat(m.id)).toBeUndefined()
+        expect((await persistence.list()).map(s => String(s.header.id))).not.toContain('deleted')
+        await expect(persistence.open(m.id, 'read')).rejects.toBeInstanceOf(SessionPersistenceNotFoundError)
+        await expect(persistence.open(m.id, 'write')).rejects.toBeInstanceOf(SessionPersistenceNotFoundError)
+        // The freed id accepts a fresh create instead of reporting a duplicate.
+        const reused = await persistence.create(m)
+        await reused.append(oneTurnLog())
+        await reused.close()
+        expect(await persistence.stat(m.id)).toBeDefined()
+      } finally {
+        await dispose()
+      }
+    })
+
+    it('delete releases the instance\'s open handle for the id instead of leaving it writing', async () => {
+      const { persistence, dispose } = await make()
+      try {
+        const m = meta('delete-open-handle', '/work')
+        const writer = await persistence.create(m)
+        await writer.append(oneTurnLog())
+        const reader = await persistence.open(m.id, 'read')
+        expect(await reader.read()).toEqual(oneTurnLog())
+
+        await persistence.delete(m.id)
+
+        // Both handles were released by the delete, so neither can resurrect
+        // the removed session.
+        await expect(writer.append(secondTurn())).rejects.toThrow()
+        await expect(reader.read()).rejects.toThrow()
+        expect(await persistence.stat(m.id)).toBeUndefined()
+        await writer.close()
+        await reader.close()
+      } finally {
+        await dispose()
+      }
+    })
+
+    it('delete is an idempotent no-op for an unknown id', async () => {
+      const { persistence, dispose } = await make()
+      try {
+        await persistence.delete(SessionId('absent-delete'))
+        // A created-but-never-appended session holds no durable data; deleting
+        // it drops the pending entry so the id is immediately reusable.
+        const creator = await persistence.create(meta('pending-delete'))
+        await persistence.delete(SessionId('pending-delete'))
+        expect((await persistence.list()).map(s => String(s.header.id))).not.toContain('pending-delete')
+        await expect(persistence.open(SessionId('pending-delete'), 'read'))
+          .rejects.toBeInstanceOf(SessionPersistenceNotFoundError)
+        const reused = await persistence.create(meta('pending-delete'))
+        await reused.close()
+        await creator.close()
+        // Deleting twice is still a no-op.
+        await persistence.delete(SessionId('pending-delete'))
+        await persistence.delete(SessionId('absent-delete'))
+      } finally {
+        await dispose()
+      }
+    })
   })
 }

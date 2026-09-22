@@ -30,6 +30,11 @@ import {
   SDK_SESSION_FORK_SERVICE,
   type SdkSessionFork,
 } from './session-fork.ts'
+import {
+  SDK_SESSION_DELETE_SERVICE,
+  type SessionPersistenceDeleteCapability,
+  type SdkSessionDelete,
+} from './session-delete.ts'
 
 export * from './server.ts'
 export {
@@ -49,6 +54,11 @@ export {
   type SdkSessionFork,
   type SdkSessionForkOptions,
 } from './session-fork.ts'
+export {
+  SDK_SESSION_DELETE_SERVICE,
+  type SessionPersistenceDeleteCapability,
+  type SdkSessionDelete,
+} from './session-delete.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -56,6 +66,7 @@ declare module '@deepseek-ai/cordis' {
     sdkSessionResume: SdkSessionResume
     sdkSessionCancel: SdkSessionCancel
     sdkSessionFork: SdkSessionFork
+    sdkSessionDelete: SdkSessionDelete
   }
 }
 
@@ -118,6 +129,19 @@ export function apply(ctx: Context, config: JsonRpcConfig): void {
     forkSession: (parentSessionId, options) => server.forkSession(parentSessionId, options),
   }
   ctx.provide(SDK_SESSION_FORK_SERVICE, sessionFork)
+  const sessionDelete: SdkSessionDelete = {
+    deleteSession: async (sessionId) => {
+      // Memory teardown first: disposing the session closes its persistence
+      // write handle, so the removal below cannot race a live writer.
+      await server.disposeSession(sessionId)
+      // A composition without a persistence backend keeps only the memory
+      // teardown; the delete then removes nothing durable.
+      const persistence = ctx.get('sessionPersistence') as SessionPersistenceDeleteCapability | undefined
+      if (persistence === undefined) return
+      await persistence.delete(sessionId)
+    },
+  }
+  ctx.provide(SDK_SESSION_DELETE_SERVICE, sessionDelete)
 
   // Share one exit task so racing shutdown requests cannot dispose the root or
   // exit the process more than once.
