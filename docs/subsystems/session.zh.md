@@ -666,6 +666,91 @@ interface TurnEndReasonMap {
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.zh.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
+<a id="ctxsdksessioncancel--sdksessioncancel"></a>
+
+### `ctx.sdkSessionCancel` — `SdkSessionCancel`
+
+Server-owned per-session cancel used by the ide Host bridge Stop path. Calls `Agent.cancel({ kind:'user' }, { keepInbox: true })` — does not dispose.
+
+```ts cordis-catalog
+/**
+ * Cancel the active turn when the session is present; no-op when unknown.
+ * @param sessionId - SDK session identity from the Host Tab binding.
+ */
+cancelSession(sessionId: string): Promise<void>
+```
+
+Source: [`packages/sdk/server/src/session-cancel.ts`](../../packages/sdk/server/src/session-cancel.ts)
+
+<a id="ctxsdksessiondelete--sdksessiondelete"></a>
+
+### `ctx.sdkSessionDelete` — `SdkSessionDelete`
+
+Server-owned per-session deletion used by the ide Host bridge. Disposes the session Map entry before the stored data is removed, so no live persistence handle survives to rewrite the storage this call deletes.
+
+```ts cordis-catalog
+/**
+ * Dispose one session agent when present, then delete its persisted data.
+ * Resolves for an unknown id with nothing stored; a persistence removal that
+ * fails rejects after the memory teardown has happened.
+ * @param sessionId - SDK session identity from the Host Tab binding.
+ */
+deleteSession(sessionId: string): Promise<void>
+```
+
+Source: [`packages/sdk/server/src/session-delete.ts`](../../packages/sdk/server/src/session-delete.ts)
+
+<a id="ctxsdksessiondispose--sdksessiondispose"></a>
+
+### `ctx.sdkSessionDispose` — `SdkSessionDispose`
+
+Server-owned per-session teardown used by the ide Host bridge. Removes the session Map entry before `AgentHandle.dispose()` so a later `session/prompt` can recreate the id instead of hitting the zombie path.
+
+```ts cordis-catalog
+/**
+ * Dispose one session agent when present; no-op when the id is unknown.
+ * @param sessionId - SDK session identity from the Host Tab binding.
+ */
+disposeSession(sessionId: string): Promise<void>
+```
+
+Source: [`packages/sdk/server/src/session-dispose.ts`](../../packages/sdk/server/src/session-dispose.ts)
+
+<a id="ctxsdksessionfork--sdksessionfork"></a>
+
+### `ctx.sdkSessionFork` — `SdkSessionFork`
+
+Server-owned per-session fork used by the ide Host bridge retry/edit/branch path. Creates a prompt-ready child via `sessions.fork` seed semantics + `agents.create`.
+
+```ts cordis-catalog
+/**
+ * Fork `parentSessionId` at a closed-turn boundary into a new child session.
+ * @param parentSessionId - live parent SDK session identity.
+ * @param options - optional boundary seq and child id.
+ * @returns the new child session id.
+ */
+forkSession(parentSessionId: string, options?: SdkSessionForkOptions): Promise<string>
+```
+
+Source: [`packages/sdk/server/src/session-fork.ts`](../../packages/sdk/server/src/session-fork.ts)
+
+<a id="ctxsdksessionresume--sdksessionresume"></a>
+
+### `ctx.sdkSessionResume` — `SdkSessionResume`
+
+Server-owned per-session resume used by the ide Host bridge Continue path. Registers the resumed AgentHandle in the SDK session Map so a later `session/prompt` reuses the live agent instead of `agents.create`.
+
+```ts cordis-catalog
+/**
+ * Resume one persisted session when not already live; no-op when present.
+ * Uses `ctx.agents.resume` — never expands SDK stdout create.
+ * @param sessionId - SDK session identity from the Host Tab binding.
+ */
+resumeSession(sessionId: string): Promise<void>
+```
+
+Source: [`packages/sdk/server/src/session-resume.ts`](../../packages/sdk/server/src/session-resume.ts)
+
 <a id="ctxsessioncontroller--sessioncontroller"></a>
 
 ### `ctx.sessionController` — `SessionController`

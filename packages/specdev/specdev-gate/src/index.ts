@@ -62,6 +62,7 @@ export class SpecdevGateDeniedError extends Error {
 
 /** Optional test hook: override git branch reader. */
 export interface SpecdevGateConfig {
+  /** Branch reader the implementer check reads the current branch from; defaults to {@link readGitBranch}. */
   readonly gitBranchReader?: GitBranchReader
 }
 

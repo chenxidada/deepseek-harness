@@ -428,6 +428,8 @@ export interface CompactionPolicyConfig {
   compactionRetries?: number
   /** Maximum retries after canonical context overflow; `0` disables recovery. Defaults to `1`. */
   maxOverflowRetries?: number
+  /** Cap on the effective context window used for pressure and retention math; defaults to the routed model's own window. */
+  contextWindowCap?: number
 }
 
 /** Exact provider/model override merged over the default compaction policy. */
@@ -439,7 +441,7 @@ export interface ModelCompactPolicyConfig extends CompactionPolicyConfig {
 }
 ```
 
-Source: [`packages/compaction/compaction-basic/src/types.ts:38`](../packages/compaction/compaction-basic/src/types.ts)
+Source: [`packages/compaction/compaction-basic/src/types.ts:40`](../packages/compaction/compaction-basic/src/types.ts)
 
 <a id="deepseek-aidsh-compaction-tool-result-pruner"></a>
 
@@ -899,6 +901,28 @@ export interface Config {
 ```
 
 Source: [`packages/host/webserver/src/index.ts:59`](../packages/host/webserver/src/index.ts)
+
+<a id="deepseek-aidsh-ide-bridge"></a>
+
+## `@deepseek-ai/dsh-ide-bridge`
+
+```ts config-catalog
+/** ide-bridge configuration. */
+export interface Config {
+  /**
+   * Environment variable naming the Host bridge socket path
+   * (default {@link IDE_BRIDGE_SOCK_ENV}).
+   */
+  sockEnv?: string
+  /**
+   * Bound (ms) waiting for Host approval / user-questions responses
+   * (default {@link DEFAULT_INTERACTION_TIMEOUT_MS}).
+   */
+  interactionTimeoutMs?: number
+}
+```
+
+Source: [`packages/ide/ide-bridge/src/index.ts:87`](../packages/ide/ide-bridge/src/index.ts)
 
 <a id="deepseek-aidsh-invariants"></a>
 
@@ -1786,7 +1810,7 @@ export interface JsonRpcConfig {
 
 Depends on: `Readable` (`node:stream`) · `Writable` (`node:stream`)
 
-Source: [`packages/sdk/server/src/index.ts:25`](../packages/sdk/server/src/index.ts)
+Source: [`packages/sdk/server/src/index.ts:78`](../packages/sdk/server/src/index.ts)
 
 <a id="deepseek-aidsh-session-log-deepseek"></a>
 
@@ -1854,7 +1878,7 @@ export interface Config {
 export type JsonlCompression = 'zstd' | 'none'
 ```
 
-Source: [`packages/session/session-persistence-jsonl/src/index.ts:73`](../packages/session/session-persistence-jsonl/src/index.ts)
+Source: [`packages/session/session-persistence-jsonl/src/index.ts:74`](../packages/session/session-persistence-jsonl/src/index.ts)
 
 <a id="deepseek-aidsh-session-projection-cache"></a>
 
@@ -2129,6 +2153,25 @@ export interface Config {
 ```
 
 Source: [`packages/skill/skill-filesystem/src/index.ts:49`](../packages/skill/skill-filesystem/src/index.ts)
+
+<a id="deepseek-aidsh-specdev-gate"></a>
+
+## `@deepseek-ai/dsh-specdev-gate`
+
+Requires: `specdev` · `tools` · `sessionProjections`
+
+```ts config-catalog
+/** Optional test hook: override git branch reader. */
+export interface SpecdevGateConfig {
+  /** Branch reader the implementer check reads the current branch from; defaults to {@link readGitBranch}. */
+  readonly gitBranchReader?: GitBranchReader
+}
+
+/** Reads `git branch --show-current` for a workspace cwd. */
+export type GitBranchReader = (cwd: string) => string | null
+```
+
+Source: [`packages/specdev/specdev-gate/src/index.ts:64`](../packages/specdev/specdev-gate/src/index.ts)
 
 <a id="deepseek-aidsh-spill-local"></a>
 
@@ -3379,6 +3422,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-command-compact` — requires `commands` · `compaction` ([`packages/compaction/command-compact/src/index.ts`](../packages/compaction/command-compact/src/index.ts))
 - `@deepseek-ai/dsh-command-feedback` — requires `commands` ([`packages/feedback/command-feedback/src/index.ts`](../packages/feedback/command-feedback/src/index.ts))
 - `@deepseek-ai/dsh-command-goal` — requires `commands` · `goals` ([`packages/goal/command-goal/src/index.ts`](../packages/goal/command-goal/src/index.ts))
+- `@deepseek-ai/dsh-command-specdev` — requires `commands` · `specdev` ([`packages/specdev/command-specdev/src/index.ts`](../packages/specdev/command-specdev/src/index.ts))
 - `@deepseek-ai/dsh-commands` ([`packages/interaction/commands/src/index.ts`](../packages/interaction/commands/src/index.ts))
 - `@deepseek-ai/dsh-cordis-client-runner` ([`packages/extensions/cordis-client-runner/src/index.ts`](../packages/extensions/cordis-client-runner/src/index.ts))
 - `@deepseek-ai/dsh-deepseek-llm-api-extensions` ([`packages/llm/deepseek-llm-api-extensions/src/index.ts`](../packages/llm/deepseek-llm-api-extensions/src/index.ts))
@@ -3398,6 +3442,9 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-session-stats` — requires `sessionProjections` ([`packages/session/session-stats/src/index.ts`](../packages/session/session-stats/src/index.ts))
 - `@deepseek-ai/dsh-session-turn-outline` — requires `sessionProjections` ([`packages/session/session-turn-outline/src/index.ts`](../packages/session/session-turn-outline/src/index.ts))
 - `@deepseek-ai/dsh-skill-badge` — requires `skills` ([`packages/skill/skill-badge/src/index.ts`](../packages/skill/skill-badge/src/index.ts))
+- `@deepseek-ai/dsh-specdev` — requires `sessionProjections` ([`packages/specdev/specdev/src/index.ts`](../packages/specdev/specdev/src/index.ts))
+- `@deepseek-ai/dsh-specdev-advance` — requires `specdev` · `agents` ([`packages/specdev/specdev-advance/src/index.ts`](../packages/specdev/specdev-advance/src/index.ts))
+- `@deepseek-ai/dsh-specdev-presets` ([`packages/specdev/specdev-presets/src/index.ts`](../packages/specdev/specdev-presets/src/index.ts))
 - `@deepseek-ai/dsh-storage` ([`packages/storage/storage/src/index.ts`](../packages/storage/storage/src/index.ts))
 - `@deepseek-ai/dsh-subagent` ([`packages/subagent/subagent/src/index.ts`](../packages/subagent/subagent/src/index.ts))
 - `@deepseek-ai/dsh-subprocess-local` ([`packages/subprocess/subprocess-local/src/index.ts`](../packages/subprocess/subprocess-local/src/index.ts))
@@ -3455,6 +3502,7 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 - `@deepseek-ai/dsh-home-paths` ([`packages/util/home-paths/src/index.ts`](../packages/util/home-paths/src/index.ts))
 - `@deepseek-ai/dsh-hook-protocol` ([`packages/hooks/hook-protocol/src/index.ts`](../packages/hooks/hook-protocol/src/index.ts))
 - `@deepseek-ai/dsh-http-proxy` ([`packages/util/http-proxy/src/index.ts`](../packages/util/http-proxy/src/index.ts))
+- `@deepseek-ai/dsh-ide` ([`packages/bundle/ide/src/index.ts`](../packages/bundle/ide/src/index.ts))
 - `@deepseek-ai/dsh-launch-environment` ([`packages/util/launch-environment/src/index.ts`](../packages/util/launch-environment/src/index.ts))
 - `@deepseek-ai/dsh-llm-mock-server` ([`packages/test-support/llm-mock-server/src/index.ts`](../packages/test-support/llm-mock-server/src/index.ts))
 - `@deepseek-ai/dsh-loader-smoke` ([`packages/test-support/loader-smoke/src/index.ts`](../packages/test-support/loader-smoke/src/index.ts))

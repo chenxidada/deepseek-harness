@@ -38,6 +38,7 @@ Phase 4+ siblings: wiki hardening complete (STUB-002 closed). Phase-runtime git/
 ## Related documentation
 
 - [Adding a package](../../docs/cookbook/adding-a-package.md) — package checklist.
+- [SpecDev subsystem reference](../../docs/subsystems/specdev.md) — the `.specdev` layout, Human Gates, status projection, phase runtime, and preset roster.
 - [Session projection](../session/session-projection/README.md) — projection seam SpecDev registers on.
 
 -----

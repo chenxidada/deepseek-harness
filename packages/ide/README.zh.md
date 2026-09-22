@@ -31,6 +31,7 @@ ide 组提供 `dsh --profile ide` 使用的 Host bridge 插件。对应的 profi
 <a id="related-documentation"></a>
 ## 相关文档
 
+- [IDE Host bridge 子系统](../../docs/subsystems/ide-bridge.zh.md) — 双通道划分、`BridgeFrame` 清单与发布的连接状态。
 - [dsh-ide 组合包](../bundle/ide/README.zh.md) — 挂载本 bridge 的 profile patch。
 
 <a id="dev-note"></a>

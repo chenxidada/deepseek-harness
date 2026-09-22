@@ -57,5 +57,7 @@
 | [conversation.md](conversation.zh.md) | target-neutral Session event 组装：Context identity、Location data、replay 路径、view builder 与 target 自有 render node |
 | [session-projection.md](session-projection.zh.md) | 投影 seam：`SessionProjectionMap`、纯函数 `ProjectionDefinition` 单元、`ProjectionSnapshot` 的一致切面、变更馈送 |
 | [session-telemetry.md](session-telemetry.zh.md) | 对外会话上报能力 seam：`SessionTelemetryRecord`/`SessionTelemetrySeverity`、`SessionTelemetrySink` 约定和 `session-telemetry/record` 脱敏 waterfall |
+| [specdev.md](specdev.zh.md) | SpecDev 工作流运行时：持久化的 `.specdev/` 布局、单一写入口 `confirmGate`、`specdev/*` 会话事件与 `specdev/status` 投影、阶段运行时的 git/审阅/技术债辅助方法，以及随包角色预设 |
+| [ide-bridge.md](ide-bridge.zh.md) | IDE Host bridge：与 SDK stdout 的双通道划分、NDJSON `BridgeFrame` 清单、故障关闭式交互，以及发布为 `ctx.ideBridge` 的连接状态 |
 
 > 这些页面上的类型声明及其 JSDoc 与源码等价，并由 `pnpm run verify-type-equiv` 检查漂移（见 [development.md](../development.zh.md#documenting-types-verbatim-ts-type-equiv)）。普通块保留完整声明；`public-api` 块保留去除实现体的公开 class 声明。Cordis 服务与事件使用每页生成的 **Cordis API** 小节。

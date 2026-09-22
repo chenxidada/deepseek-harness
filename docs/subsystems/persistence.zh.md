@@ -303,7 +303,7 @@ interface SessionPersistenceSnapshot {
 
 ## 后端
 
-随产品交付的 provider 实现抽象 `SessionPersistence` 约定（`create`/`open`/`stat`/`list`，逐会话 `SessionHandle` 承载 `read`/`append`/`flush`/`close`，全程可选支持取消），并通过共享的持久化契约套件：
+随产品交付的 provider 实现抽象 `SessionPersistence` 约定（`create`/`open`/`stat`/`list`/`delete`，逐会话 `SessionHandle` 承载 `read`/`append`/`flush`/`close`，全程可选支持取消），并通过共享的持久化契约套件：
 
 - **[dsh-session-persistence-jsonl](../../packages/session/session-persistence-jsonl)**——逐会话仅追加的逻辑 JSONL 日志，默认存储为带 checksum 的连续 Zstandard frame，也可配置为原始行；具备崩溃安全的原子实体化、逐批 `fsync` 的 append，以及在第一次新 append 之前截断撕裂尾部。`stat`/`list` 携带 `sizeBytes` 与尽力而为的、由 `fs.stat` 派生的修订号。
 
@@ -387,6 +387,23 @@ abstract stat(id: SessionId, options?: SessionPersistenceStatOptions): Promise<S
  * @returns one snapshot per stored session.
  */
 abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
+
+/**
+ * Remove one stored session's durable data and this instance's state for its
+ * id — its artifact, its in-process write-ownership claim, and any open
+ * handle it still owns.
+ *
+ * Idempotent: deleting an id with nothing stored resolves without error,
+ * because a caller may retry a delete for a session that never materialized.
+ * A removal that cannot complete rejects; a delete never reports success
+ * while data it could not remove remains. Once it resolves, the id is free
+ * for `create`, and `stat`/`list`/`open` behave as for a session that never
+ * existed. This is storage removal only: disposing live sessions and agents
+ * belongs to their owners, which must do so before calling it.
+ * @param id - the stored session to remove.
+ * @param options - optional cancellation.
+ */
+abstract delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void>
 ```
 
 Types: [SessionId](core.zh.md)

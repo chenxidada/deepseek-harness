@@ -1004,6 +1004,28 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'ideBridge',
+    summary: 'Live connection state exposed to the runtime and tests.',
+    description: 'Live connection state exposed to the runtime and tests.',
+    methods: [
+      {
+        signature: 'connected: boolean',
+        description: 'Whether the runtime currently holds an open Host socket.',
+        parameters: [],
+      },
+      {
+        signature: 'sockPath: string | null',
+        description: 'Resolved socket path from the environment, or `null` when unset.',
+        parameters: [],
+      },
+      {
+        signature: 'error?: string',
+        description: 'Last connection failure message when disconnected after an attempt.',
+        parameters: [],
+      },
+    ],
+  },
+  {
     key: 'inspector',
     summary: 'Shared Host/Client service façade over the realm\'s source publisher.',
     description: 'Shared Host/Client service façade over the realm\'s source publisher.',
@@ -1330,6 +1352,67 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'sdkSessionCancel',
+    summary: 'Server-owned per-session cancel used by the ide Host bridge Stop path.',
+    description: 'Server-owned per-session cancel used by the ide Host bridge Stop path. Calls `Agent.cancel({ kind:\'user\' }, { keepInbox: true })` — does not dispose.',
+    methods: [
+      {
+        signature: 'cancelSession(sessionId: string): Promise<void>',
+        description: 'Cancel the active turn when the session is present; no-op when unknown.',
+        parameters: [{ name: 'sessionId', description: 'SDK session identity from the Host Tab binding.' }],
+      },
+    ],
+  },
+  {
+    key: 'sdkSessionDelete',
+    summary: 'Server-owned per-session deletion used by the ide Host bridge.',
+    description: 'Server-owned per-session deletion used by the ide Host bridge. Disposes the session Map entry before the stored data is removed, so no live persistence handle survives to rewrite the storage this call deletes.',
+    methods: [
+      {
+        signature: 'deleteSession(sessionId: string): Promise<void>',
+        description: 'Dispose one session agent when present, then delete its persisted data. Resolves for an unknown id with nothing stored; a persistence removal that fails rejects after the memory teardown has happened.',
+        parameters: [{ name: 'sessionId', description: 'SDK session identity from the Host Tab binding.' }],
+      },
+    ],
+  },
+  {
+    key: 'sdkSessionDispose',
+    summary: 'Server-owned per-session teardown used by the ide Host bridge.',
+    description: 'Server-owned per-session teardown used by the ide Host bridge. Removes the session Map entry before `AgentHandle.dispose()` so a later `session/prompt` can recreate the id instead of hitting the zombie path.',
+    methods: [
+      {
+        signature: 'disposeSession(sessionId: string): Promise<void>',
+        description: 'Dispose one session agent when present; no-op when the id is unknown.',
+        parameters: [{ name: 'sessionId', description: 'SDK session identity from the Host Tab binding.' }],
+      },
+    ],
+  },
+  {
+    key: 'sdkSessionFork',
+    summary: 'Server-owned per-session fork used by the ide Host bridge retry/edit/branch path.',
+    description: 'Server-owned per-session fork used by the ide Host bridge retry/edit/branch path. Creates a prompt-ready child via `sessions.fork` seed semantics + `agents.create`.',
+    methods: [
+      {
+        signature: 'forkSession(parentSessionId: string, options?: SdkSessionForkOptions): Promise<string>',
+        description: 'Fork `parentSessionId` at a closed-turn boundary into a new child session.',
+        parameters: [{ name: 'parentSessionId', description: 'live parent SDK session identity.' }, { name: 'options', description: 'optional boundary seq and child id.' }],
+        returns: 'the new child session id.',
+      },
+    ],
+  },
+  {
+    key: 'sdkSessionResume',
+    summary: 'Server-owned per-session resume used by the ide Host bridge Continue path.',
+    description: 'Server-owned per-session resume used by the ide Host bridge Continue path. Registers the resumed AgentHandle in the SDK session Map so a later `session/prompt` reuses the live agent instead of `agents.create`.',
+    methods: [
+      {
+        signature: 'resumeSession(sessionId: string): Promise<void>',
+        description: 'Resume one persisted session when not already live; no-op when present. Uses `ctx.agents.resume` — never expands SDK stdout create.',
+        parameters: [{ name: 'sessionId', description: 'SDK session identity from the Host Tab binding.' }],
+      },
+    ],
+  },
+  {
     key: 'sessionController',
     summary: 'Host service backing the generated `ctx.remote.session` namespace.',
     description: 'Host service backing the generated `ctx.remote.session` namespace.',
@@ -1495,6 +1578,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'List every stored session visible to this process, in no promised order.',
         parameters: [{ name: 'options', description: 'optional cancellation.' }],
         returns: 'one snapshot per stored session.',
+      },
+      {
+        signature: 'abstract delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void>',
+        description: 'Remove one stored session\'s durable data and this instance\'s state for its id — its artifact, its in-process write-ownership claim, and any open handle it still owns.\n\nIdempotent: deleting an id with nothing stored resolves without error, because a caller may retry a delete for a session that never materialized. A removal that cannot complete rejects; a delete never reports success while data it could not remove remains. Once it resolves, the id is free for `create`, and `stat`/`list`/`open` behave as for a session that never existed. This is storage removal only: disposing live sessions and agents belongs to their owners, which must do so before calling it.',
+        parameters: [{ name: 'id', description: 'the stored session to remove.' }, { name: 'options', description: 'optional cancellation.' }],
       },
     ],
   },
@@ -2062,6 +2150,126 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Load and validate the winning candidate, passing its opaque discovery locator back to the provider. Cancellation is rechecked after selection, including cache hits, and raced against loading so an uncooperative provider cannot hang the caller.',
         parameters: [{ name: 'name', description: 'kebab-case skill name.' }, { name: 'options', description: 'view options; `scope` selects the viewing agent\'s layers, `cwd` selects workspace-sensitive skills, and `signal` cancels work.' }],
         returns: 'the full skill, including body content, or `undefined`.',
+      },
+    ],
+  },
+  {
+    key: 'specdev',
+    summary: 'SpecDev service (`ctx.specdev`): workspace root, status I/O, confirmGate, phase-runtime helpers, and projection registration.',
+    description: 'SpecDev service (`ctx.specdev`): workspace root, status I/O, confirmGate, phase-runtime helpers, and projection registration.',
+    methods: [
+      {
+        signature: 'resolveRoot(options: ResolveWorkspaceRootOptions = {}): string',
+        description: 'Resolve the SpecDev workspace root per Q-1.',
+        parameters: [{ name: 'options', description: 'session cwd and optional multi-root folders.' }],
+        returns: 'the absolute workspace root.',
+      },
+      {
+        signature: 'active(options: ResolveWorkspaceRootOptions = {}): SpecdevActive | null',
+        description: 'Read the active workflow from `.specdev/active-workflow`, if present.',
+        parameters: [{ name: 'options', description: 'resolution candidates (defaults to `process.cwd()`).' }],
+        returns: 'the active slug with its workspace and layout roots, or null when no slug resolves.',
+      },
+      {
+        signature: 'readStatus(slug: string, options: ResolveWorkspaceRootOptions = {}): CurrentStatusJson',
+        description: 'Read a durable status snapshot for a slug under the resolved layout.',
+        parameters: [{ name: 'slug', description: 'workflow slug.' }, { name: 'options', description: 'workspace resolution options.' }],
+        returns: 'the durable status parsed from `.specdev/specs/<slug>/current-status.json`.',
+      },
+      {
+        signature: 'async ensureLayout(opts: EnsureLayoutOptions): Promise<SpecdevActive>',
+        description: 'Ensure `.specdev` layout + initial `current-status.json` for a slug, and point `active-workflow` at it. Real mkdir + atomic write (not a shell).',
+        parameters: [{ name: 'opts', description: 'slug, initiating command, optional description / roots.' }],
+        returns: 'the ensured slug with its workspace and layout roots.',
+      },
+      {
+        signature: 'dispatchRole( parent: Agent, request: DispatchSpecdevRoleRequest, ): Promise<DispatchSpecdevRoleResult>',
+        description: 'Programmatic role dispatch: child agent + AC-24 metadata + `specdev/dispatch` + followup wake (GAP-002).',
+        parameters: [{ name: 'parent', description: 'Orchestrator / calling agent.' }, { name: 'request', description: 'role / slug / optional phaseId / prompt.' }],
+        returns: 'the child session id, agent, preset id, and the dispatch outcome flags.',
+      },
+      {
+        signature: 'dispatchWiki( parent: Agent, request: DispatchWikiRequest, ): Promise<DispatchWikiResult>',
+        description: 'Shared wiki dispatch (Q-3 / AC-20): ensure workspace `docs/wiki/` and spawn the wiki role with Standalone or Pipeline prompt. Used by `/wiki` and final Feature HG-3 auto path — no Knowledge Base sync (AC-55).',
+        parameters: [{ name: 'parent', description: 'Orchestrator / calling agent.' }, { name: 'request', description: 'wiki dispatch request: slug, standalone/pipeline mode, optional phaseId.' }],
+        returns: 'the role dispatch result plus the `docs/wiki/` root and mode it ran with.',
+      },
+      {
+        signature: 'ensurePhaseBranch( phaseId: string, options: SpecdevGitOptions & { readonly mode?: \'create\' | \'must-fix-stay\' | \'recreate\' }, ): EnsurePhaseBranchResult',
+        description: 'Ensure `impl-<phaseId>` branch exists and is checked out (AC-40 / AC-42). Call **before** dispatching implementer; gate only denies wrong branch.',
+        parameters: [{ name: 'phaseId', description: 'DAG `phases[].id` the branch is named after.' }, { name: 'options', description: 'git cwd plus `mode`: `create` (default), `must-fix-stay` for a re-dispatch on the same branch, or `recreate`.' }],
+        returns: 'the branch name with whether it was created or stayed.',
+      },
+      {
+        signature: 'completePhaseGit( request: { readonly phaseId: string; readonly files: readonly string[] }, options: SpecdevGitOptions, ): CompletePhaseGitResult',
+        description: 'HG-3 git complete with explicit file list (AC-41). Orchestrator invokes **after** `confirmGate({ gate:\'hg3\', decision:\'pass\' })` — not inside it.',
+        parameters: [{ name: 'request', description: 'phase id and the exact files to commit.' }, { name: 'options', description: 'git cwd.' }],
+        returns: 'the branch name, the commit/merge/delete flags, and the files committed.',
+      },
+      {
+        signature: 'mergePhaseReviews( session: Session, phaseId: string, options: ResolveWorkspaceRootOptions = {}, ): MergedReviewResult',
+        description: 'Merge three Feature-path reviewer reports → `review.md` + emit verdict event.',
+        parameters: [{ name: 'session', description: 'parent session receiving `specdev/review-verdict`.' }, { name: 'phaseId', description: 'DAG phase id.' }, { name: 'options', description: 'workspace resolution.' }],
+        returns: 'the merged verdict, the contributing perspectives, and the `review.md` markdown.',
+      },
+      {
+        signature: 'readTechDebt( options: ResolveWorkspaceRootOptions & { readonly slug?: string } = {}, ): TechDebtRegistry',
+        description: 'Parse tech-debt-registry.md for the active (or given) slug.',
+        parameters: [{ name: 'options', description: 'workspace resolution, plus a slug override that skips the active workflow.' }],
+        returns: 'the registry document as path, markdown, and active items.',
+      },
+      {
+        signature: 'listPhaseEntryDebt( phaseId: string, options: ResolveWorkspaceRootOptions = {}, ): TechDebtItem[]',
+        description: 'Blocking inherited debt for Phase Entry Gate (AC-33).',
+        parameters: [{ name: 'phaseId', description: 'DAG phase id the debt must target.' }, { name: 'options', description: 'workspace resolution.' }],
+        returns: 'the blocking items inherited by `phaseId`.',
+      },
+      {
+        signature: 'presentPhaseEntryDebt( phaseId: string, options: ResolveWorkspaceRootOptions = {}, ): string',
+        description: 'Present Phase Entry Gate debt table text.',
+        parameters: [{ name: 'phaseId', description: 'DAG phase id the debt must target.' }, { name: 'options', description: 'workspace resolution.' }],
+        returns: 'the markdown table, or a placeholder line when nothing blocks.',
+      },
+      {
+        signature: 'async prepareRerun( phaseId: string, step: PhaseStepName, options: ResolveWorkspaceRootOptions = {}, ): Promise<CurrentStatusJson>',
+        description: 'Re-run preparation: reset step + cascade downstream + zero loop_count (AC-44). Archives merged `review.md` when re-running reviewer (scheduler-owned). Never uses git to clear artifacts (AC-45).',
+        parameters: [{ name: 'phaseId', description: 'DAG phase id whose step restarts.' }, { name: 'step', description: 'step to reset; later steps cascade with it.' }, { name: 'options', description: 'workspace resolution.' }],
+        returns: 'the persisted status with the reset step and zeroed `loop_count`.',
+      },
+      {
+        signature: 'async bumpLoopCount( options: ResolveWorkspaceRootOptions = {}, ): Promise<CurrentStatusJson>',
+        description: 'Persist `loop_count+1` after a MUST-FIX re-dispatch of implementer. Distinct from prepareRerun which zeros `loop_count`.',
+        parameters: [{ name: 'options', description: 'workspace resolution.' }],
+        returns: 'the persisted status with the incremented `loop_count`.',
+      },
+      {
+        signature: 'snapshot(session?: Session, options: ResolveWorkspaceRootOptions = {}): SpecdevSnapshot | null',
+        description: 'Bridge snapshot for the active workflow (file SoT), optionally refreshed against the session projection when a session is provided.',
+        parameters: [{ name: 'session', description: 'optional session whose projection should be consulted.' }, { name: 'options', description: 'workspace resolution options.' }],
+        returns: 'the bridge snapshot, or null when no workflow is active.',
+      },
+      {
+        signature: 'async confirmGate( session: Session, req: ConfirmGateRequest, options: ResolveWorkspaceRootOptions = {}, ): Promise<ConfirmGateResult>',
+        description: 'Sole Human Gate write API. Updates durable JSON, appends `specdev/gate-decided` (whole post-change view), and advances the `specdev/status` projection via the session event drive.',
+        parameters: [{ name: 'session', description: 'owning session receiving the durable event.' }, { name: 'req', description: 'gate + decision.' }, { name: 'options', description: 'workspace resolution options.' }],
+        returns: 'on acceptance `{ ok: true }` with the post-change snapshot; on refusal `{ ok: false }` with the reason code.',
+      },
+    ],
+  },
+  {
+    key: 'specdevPresets',
+    summary: 'Publishes the SpecDev preset root for roster composition.',
+    description: 'Publishes the SpecDev preset root for roster composition.',
+    methods: [
+      {
+        signature: 'readonly presetRoot: string = SPECDEV_PRESET_ROOT',
+        description: 'Absolute presets directory for `agent-presets` roots.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly orchestratorPresetId: string = SPECDEV_ORCHESTRATOR_PRESET_ID',
+        description: 'Default roster preset id for SpecDev sdk sessions.',
+        parameters: [],
       },
     ],
   },
@@ -3661,6 +3869,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type CompactionTrigger = \'pressure\' | \'context-overflow\';',
   },
   {
+    name: 'CompletePhaseGitResult',
+    declaration: 'export interface CompletePhaseGitResult {\n    readonly branch: string;\n    readonly committed: boolean;\n    readonly merged: boolean;\n    readonly deleted: boolean;\n    readonly files: readonly string[];\n}',
+  },
+  {
     name: 'CompositionRowEnablement',
     declaration: 'export type CompositionRowEnablement = boolean | \'conditional\';',
   },
@@ -3671,6 +3883,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ConfinedSandboxMode',
     declaration: 'export type ConfinedSandboxMode = Exclude<SandboxMode, \'danger-full-access\'>;',
+  },
+  {
+    name: 'ConfirmGateRequest',
+    declaration: 'export interface ConfirmGateRequest {\n    readonly gate: SpecdevGateId;\n    readonly decision: SpecdevGateDecision | string;\n    readonly note?: string;\n    readonly deferredTargetPhase?: string;\n    readonly phaseEntry?: readonly {\n        readonly itemIds: readonly string[];\n        readonly disposition: \'resolve\' | \'defer\' | \'cancel\';\n        readonly deferredTargetPhase?: string;\n    }[];\n}',
+  },
+  {
+    name: 'ConfirmGateResult',
+    declaration: 'export interface ConfirmGateResult {\n    readonly ok: boolean;\n    readonly code?: string;\n    readonly message?: string;\n    readonly snapshot?: SpecdevSnapshot;\n}',
   },
   {
     name: 'ContentBlockMap',
@@ -3821,6 +4041,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type CredentialRef = Branded<\'CredentialRef\'>;',
   },
   {
+    name: 'CurrentStatusJson',
+    declaration: 'export interface CurrentStatusJson {\n    readonly slug: string;\n    readonly description?: string;\n    readonly initiating_command?: string;\n    readonly pipeline_mode?: string;\n    readonly created: string;\n    readonly current_stage: string;\n    readonly current_phase: string | null;\n    readonly loop_count: number;\n    readonly human_gates: {\n        readonly hg1: SpecdevGateState;\n        readonly hg2: SpecdevGateState;\n        readonly hg3: SpecdevGateState;\n    };\n    readonly phases: Readonly<Record<string, {\n        readonly implementer: SpecdevStepState;\n        readonly reviewer: SpecdevStepState;\n        readonly verifier: SpecdevStepState;\n    }>>;\n    readonly last_update: string;\n}',
+  },
+  {
+    name: 'DebtBlocking',
+    declaration: 'export type DebtBlocking = \'blocking\' | \'non-blocking\';',
+  },
+  {
     name: 'DeepSeekLlmApiExtensionMap',
     declaration: 'export interface DeepSeekLlmApiExtensionMap {\n}',
   },
@@ -3871,6 +4099,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'DirectoryRegistrationHandle',
     declaration: 'export interface DirectoryRegistrationHandle {\n    (): void;\n    replace(entries: readonly LlmConfigurableProvider[]): void;\n}',
+  },
+  {
+    name: 'DispatchSpecdevRoleRequest',
+    declaration: 'export interface DispatchSpecdevRoleRequest {\n    readonly role: SpecdevRole;\n    readonly slug: string;\n    readonly phaseId?: string;\n    readonly childSessionId?: string;\n    readonly prompt?: string | null;\n}',
+  },
+  {
+    name: 'DispatchSpecdevRoleResult',
+    declaration: 'export interface DispatchSpecdevRoleResult {\n    readonly childSessionId: string;\n    readonly agent: Agent;\n    readonly presetId: string;\n    readonly mounted: boolean;\n    readonly factoryCreated: boolean;\n    readonly followupSent: boolean;\n}',
+  },
+  {
+    name: 'DispatchWikiRequest',
+    declaration: 'export interface DispatchWikiRequest {\n    readonly slug: string;\n    readonly mode: WikiDispatchMode;\n    readonly phaseId?: string;\n    readonly childSessionId?: string;\n    readonly prompt?: string | null;\n}',
+  },
+  {
+    name: 'DispatchWikiResult',
+    declaration: 'export interface DispatchWikiResult extends DispatchSpecdevRoleResult {\n    readonly wikiRoot: string;\n    readonly mode: WikiDispatchMode;\n}',
   },
   {
     name: 'Domain',
@@ -3947,6 +4191,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'EncodedImageAttachment',
     declaration: 'export interface EncodedImageAttachment {\n    mediaType: ImageMediaType;\n    data: string;\n    name?: string;\n}',
+  },
+  {
+    name: 'EnsureLayoutOptions',
+    declaration: 'export interface EnsureLayoutOptions {\n    readonly slug: string;\n    readonly command: string;\n    readonly description?: string;\n    readonly workspaceRoot?: string;\n    readonly folders?: readonly string[];\n}',
+  },
+  {
+    name: 'EnsurePhaseBranchResult',
+    declaration: 'export interface EnsurePhaseBranchResult {\n    readonly branch: string;\n    readonly created: boolean;\n    readonly stayed: boolean;\n}',
   },
   {
     name: 'EpochHeader',
@@ -4333,6 +4585,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ManualCompactAgentContext extends CompactionAgentContext {\n    runMaintenance<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T>;\n}',
   },
   {
+    name: 'MergedReviewResult',
+    declaration: 'export interface MergedReviewResult {\n    readonly verdict: ReviewVerdict;\n    readonly perspectives: readonly ReviewPerspectiveInput[];\n    readonly markdown: string;\n}',
+  },
+  {
     name: 'Message',
     declaration: 'export interface Message {\n    readonly id: MessageId;\n    readonly role: \'system\' | \'user\' | \'assistant\';\n    readonly content: ContentBlock[];\n    readonly source: MessageSource;\n}',
   },
@@ -4475,6 +4731,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PermissionSelect',
     declaration: 'export interface PermissionSelect {\n    options: PresetOption[];\n    currentValue: string;\n}',
+  },
+  {
+    name: 'PhaseStepName',
+    declaration: 'export type PhaseStepName = \'implementer\' | \'reviewer\' | \'verifier\';',
   },
   {
     name: 'PostToolDecision',
@@ -4665,12 +4925,24 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ResolvedSubagentStartRequest extends SubagentStartRequest {\n    readonly descriptor: SubagentDescriptorData;\n}',
   },
   {
+    name: 'ResolveWorkspaceRootOptions',
+    declaration: 'export interface ResolveWorkspaceRootOptions {\n    readonly cwd?: string;\n    readonly folders?: readonly string[];\n}',
+  },
+  {
     name: 'RestoredSessionOptions',
     declaration: 'export interface RestoredSessionOptions {\n    readonly seed: SessionEvent[];\n    readonly meta: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffset;\n    readonly seedSource: \'persistence\';\n}',
   },
   {
     name: 'ResumeAgentOptions',
     declaration: 'export interface ResumeAgentOptions {\n    readonly resumeSessionId: SessionId;\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
+  },
+  {
+    name: 'ReviewPerspectiveInput',
+    declaration: 'export interface ReviewPerspectiveInput {\n    readonly name: \'correctness\' | \'design\' | \'connectivity\' | \'single\';\n    readonly verdict: ReviewVerdict;\n    readonly summary?: string;\n}',
+  },
+  {
+    name: 'ReviewVerdict',
+    declaration: 'export type ReviewVerdict = \'PASS\' | \'SHOULD-FIX\' | \'MUST-FIX\';',
   },
   {
     name: 'RunnerFailureRule',
@@ -4719,6 +4991,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ScopeKey',
     declaration: 'export type ScopeKey = object;',
+  },
+  {
+    name: 'SdkSessionForkOptions',
+    declaration: 'export interface SdkSessionForkOptions {\n    readonly boundarySeq?: number;\n    readonly emptySeed?: boolean;\n    readonly childSessionId?: string;\n}',
   },
   {
     name: 'SearchFileMatches',
@@ -4977,6 +5253,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionPersistenceCreateOptions {\n    readonly signal?: AbortSignal;\n    readonly inheritedEventCount?: SessionLogOffset;\n}',
   },
   {
+    name: 'SessionPersistenceDeleteOptions',
+    declaration: 'export interface SessionPersistenceDeleteOptions {\n    readonly signal?: AbortSignal;\n}',
+  },
+  {
     name: 'SessionPersistenceListOptions',
     declaration: 'export interface SessionPersistenceListOptions {\n    readonly signal?: AbortSignal;\n}',
   },
@@ -5233,10 +5513,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SettingsNamespace = Branded<\'SettingsNamespace\'>;',
   },
   {
-    name: 'SettingsNamespaceView',
-    declaration: 'export interface SettingsNamespaceView {\n    ns: string;\n    schema: JsonValue;\n    value: JsonValue;\n    base?: JsonValue;\n    user?: JsonValue;\n    applies: \'live\' | \'restart\';\n    secrets: SettingsSecretView[];\n    revision: number;\n}',
-  },
-  {
     name: 'SettingsPathOp',
     declaration: 'export type SettingsPathOp = {\n    op: \'set\';\n    path: readonly string[];\n    value: unknown;\n} | {\n    op: \'unset\';\n    path: readonly string[];\n};',
   },
@@ -5247,10 +5523,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SettingsRegisterOptions',
     declaration: 'export interface SettingsRegisterOptions<T> {\n    base?: Partial<T>;\n    applies?: SettingsApplies;\n    validate?: (value: T) => void;\n}',
-  },
-  {
-    name: 'SettingsSecretView',
-    declaration: 'export interface SettingsSecretView {\n    path: string[];\n    set: boolean;\n}',
   },
   {
     name: 'SettingsSectionHooks',
@@ -5359,6 +5631,38 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SpawnTeammateResult',
     declaration: 'export interface SpawnTeammateResult {\n    readonly member: TeamMemberView;\n}',
+  },
+  {
+    name: 'SpecdevActive',
+    declaration: 'export interface SpecdevActive {\n    readonly slug: string;\n    readonly workspaceRoot: string;\n    readonly layoutRoot: string;\n}',
+  },
+  {
+    name: 'SpecdevGateDecision',
+    declaration: 'export type SpecdevGateDecision = \'pass\' | \'reject\' | \'defer\' | \'resolve\' | \'cancel\';',
+  },
+  {
+    name: 'SpecdevGateId',
+    declaration: 'export type SpecdevGateId = \'hg1\' | \'hg2\' | \'hg3\' | \'phase-entry\';',
+  },
+  {
+    name: 'SpecdevGateState',
+    declaration: 'export type SpecdevGateState = \'pending\' | \'passed\';',
+  },
+  {
+    name: 'SpecdevGitOptions',
+    declaration: 'export interface SpecdevGitOptions {\n    readonly cwd: string;\n}',
+  },
+  {
+    name: 'SpecdevRole',
+    declaration: 'export type SpecdevRole = \'orchestrator\' | \'requirement-analyst\' | \'plan-generator\' | \'code-explorer\' | \'implementer\' | \'reviewer-correctness\' | \'reviewer-design\' | \'reviewer-connectivity\' | \'reviewer\' | \'verifier\' | \'wiki\';',
+  },
+  {
+    name: 'SpecdevSnapshot',
+    declaration: 'export interface SpecdevSnapshot {\n    readonly schemaVersion: number;\n    readonly slug: string;\n    readonly stage: string;\n    readonly phase: string | null;\n    readonly gates: {\n        readonly hg1: SpecdevGateState;\n        readonly hg2: SpecdevGateState;\n        readonly hg3: SpecdevGateState;\n    };\n    readonly steps: Readonly<Record<string, {\n        readonly implementer: SpecdevStepState;\n        readonly reviewer: SpecdevStepState;\n        readonly verifier: SpecdevStepState;\n    }>>;\n    readonly pendingGate: SpecdevGateId | null;\n    readonly loopCount: number;\n    readonly nextAction?: string;\n    readonly techDebtSummary?: {\n        readonly blocking: number;\n        readonly total: number;\n    };\n    readonly initiatingCommand?: string;\n    readonly pipelineMode?: string;\n}',
+  },
+  {
+    name: 'SpecdevStepState',
+    declaration: 'export type SpecdevStepState = \'pending\' | \'in_progress\' | \'completed\' | \'failed\';',
   },
   {
     name: 'SpillLocator',
@@ -5603,6 +5907,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'TeamWaitResult',
     declaration: 'export interface TeamWaitResult {\n    readonly timedOut: boolean;\n}',
+  },
+  {
+    name: 'TechDebtItem',
+    declaration: 'export interface TechDebtItem {\n    readonly id: string;\n    readonly sourcePhase: string;\n    readonly module: string;\n    readonly location: string;\n    readonly currentBehavior: string;\n    readonly expectedBehavior: string;\n    readonly type: string;\n    readonly targetPhase: string;\n    readonly blocking: DebtBlocking;\n    readonly rawBlocking: string;\n}',
+  },
+  {
+    name: 'TechDebtRegistry',
+    declaration: 'export interface TechDebtRegistry {\n    readonly path: string;\n    readonly markdown: string;\n    readonly active: readonly TechDebtItem[];\n}',
   },
   {
     name: 'TerminalBackend',
@@ -6035,6 +6347,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WebUpgradeRoute',
     declaration: 'export interface WebUpgradeRoute {\n    path: string;\n    handler: (req: IncomingMessage, socket: Duplex, head: Buffer) => void | Promise<void>;\n}',
+  },
+  {
+    name: 'WikiDispatchMode',
+    declaration: 'export type WikiDispatchMode = \'standalone\' | \'pipeline\';',
   },
   {
     name: 'WorkflowAgentEndInfo',

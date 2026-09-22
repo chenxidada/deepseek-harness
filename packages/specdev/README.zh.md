@@ -38,6 +38,7 @@ Phase 4+ 兄弟能力：wiki 加固已完成（STUB-002 已关闭）。phase-run
 ## 相关文档
 
 - [添加包](../../docs/cookbook/adding-a-package.zh.md) — 包清单。
+- [SpecDev 子系统参考](../../docs/subsystems/specdev.zh.md) — `.specdev` 布局、Human Gates、状态投影、阶段运行时与预设名册。
 - [会话投影](../session/session-projection/README.zh.md) — SpecDev 注册的投影 seam。
 
 -----

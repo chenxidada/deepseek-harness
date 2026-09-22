@@ -49,15 +49,15 @@ declare module '@deepseek-ai/cordis' {
  * Publishes the SpecDev preset root for roster composition.
  */
 export class SpecdevPresetsService extends Service {
-  static inject = [] as const
+  static inject = []
 
   static Config = Schema.object({})
 
-  /** Absolute presets directory for \`agent-presets\` roots. */
-  readonly presetRoot = SPECDEV_PRESET_ROOT
+  /** Absolute presets directory for `agent-presets` roots. */
+  readonly presetRoot: string = SPECDEV_PRESET_ROOT
 
   /** Default roster preset id for SpecDev sdk sessions. */
-  readonly orchestratorPresetId = SPECDEV_ORCHESTRATOR_PRESET_ID
+  readonly orchestratorPresetId: string = SPECDEV_ORCHESTRATOR_PRESET_ID
 
   constructor(ctx: Context) {
     super(ctx, 'specdevPresets')

@@ -31,6 +31,7 @@ The ide group provides the Host bridge plugin used by `dsh --profile ide`. The m
 <a id="related-documentation"></a>
 ## Related documentation
 
+- [IDE Host bridge subsystem](../../docs/subsystems/ide-bridge.md) — the dual-channel split, `BridgeFrame` inventory, and published connection state.
 - [dsh-ide bundle](../bundle/ide/README.md) — the profile patch that mounts this bridge.
 
 <a id="dev-note"></a>

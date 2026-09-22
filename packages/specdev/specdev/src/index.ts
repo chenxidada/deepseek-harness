@@ -228,6 +228,7 @@ export class SpecdevService extends Service {
   /**
    * Resolve the SpecDev workspace root per Q-1.
    * @param options - session cwd and optional multi-root folders.
+   * @returns the absolute workspace root.
    */
   resolveRoot(options: ResolveWorkspaceRootOptions = {}): string {
     return resolveWorkspaceRoot(options)
@@ -236,6 +237,7 @@ export class SpecdevService extends Service {
   /**
    * Read the active workflow from `.specdev/active-workflow`, if present.
    * @param options - resolution candidates (defaults to `process.cwd()`).
+   * @returns the active slug with its workspace and layout roots, or null when no slug resolves.
    */
   active(options: ResolveWorkspaceRootOptions = {}): SpecdevActive | null {
     const workspaceRoot = resolveWorkspaceRoot({
@@ -256,6 +258,7 @@ export class SpecdevService extends Service {
    * Read a durable status snapshot for a slug under the resolved layout.
    * @param slug - workflow slug.
    * @param options - workspace resolution options.
+   * @returns the durable status parsed from `.specdev/specs/<slug>/current-status.json`.
    */
   readStatus(slug: string, options: ResolveWorkspaceRootOptions = {}): CurrentStatusJson {
     const workspaceRoot = resolveWorkspaceRoot({
@@ -269,6 +272,7 @@ export class SpecdevService extends Service {
    * Ensure `.specdev` layout + initial `current-status.json` for a slug, and
    * point `active-workflow` at it. Real mkdir + atomic write (not a shell).
    * @param opts - slug, initiating command, optional description / roots.
+   * @returns the ensured slug with its workspace and layout roots.
    */
   async ensureLayout(opts: EnsureLayoutOptions): Promise<SpecdevActive> {
     if (typeof opts.slug !== 'string' || opts.slug.trim().length === 0) {
@@ -320,6 +324,7 @@ export class SpecdevService extends Service {
    * + followup wake (GAP-002).
    * @param parent - Orchestrator / calling agent.
    * @param request - role / slug / optional phaseId / prompt.
+   * @returns the child session id, agent, preset id, and the dispatch outcome flags.
    */
   dispatchRole(
     parent: Agent,
@@ -332,6 +337,9 @@ export class SpecdevService extends Service {
    * Shared wiki dispatch (Q-3 / AC-20): ensure workspace `docs/wiki/` and spawn
    * the wiki role with Standalone or Pipeline prompt. Used by `/wiki` and
    * final Feature HG-3 auto path — no Knowledge Base sync (AC-55).
+   * @param parent - Orchestrator / calling agent.
+   * @param request - wiki dispatch request: slug, standalone/pipeline mode, optional phaseId.
+   * @returns the role dispatch result plus the `docs/wiki/` root and mode it ran with.
    */
   dispatchWiki(
     parent: Agent,
@@ -343,6 +351,9 @@ export class SpecdevService extends Service {
   /**
    * Ensure `impl-<phaseId>` branch exists and is checked out (AC-40 / AC-42).
    * Call **before** dispatching implementer; gate only denies wrong branch.
+   * @param phaseId - DAG `phases[].id` the branch is named after.
+   * @param options - git cwd plus `mode`: `create` (default), `must-fix-stay` for a re-dispatch on the same branch, or `recreate`.
+   * @returns the branch name with whether it was created or stayed.
    */
   ensurePhaseBranch(
     phaseId: string,
@@ -354,6 +365,9 @@ export class SpecdevService extends Service {
   /**
    * HG-3 git complete with explicit file list (AC-41). Orchestrator invokes
    * **after** `confirmGate({ gate:'hg3', decision:'pass' })` — not inside it.
+   * @param request - phase id and the exact files to commit.
+   * @param options - git cwd.
+   * @returns the branch name, the commit/merge/delete flags, and the files committed.
    */
   completePhaseGit(
     request: { readonly phaseId: string; readonly files: readonly string[] },
@@ -367,6 +381,7 @@ export class SpecdevService extends Service {
    * @param session - parent session receiving `specdev/review-verdict`.
    * @param phaseId - DAG phase id.
    * @param options - workspace resolution.
+   * @returns the merged verdict, the contributing perspectives, and the `review.md` markdown.
    */
   mergePhaseReviews(
     session: Session,
@@ -383,6 +398,8 @@ export class SpecdevService extends Service {
 
   /**
    * Parse tech-debt-registry.md for the active (or given) slug.
+   * @param options - workspace resolution, plus a slug override that skips the active workflow.
+   * @returns the registry document as path, markdown, and active items.
    */
   readTechDebt(
     options: ResolveWorkspaceRootOptions & { readonly slug?: string } = {},
@@ -405,6 +422,9 @@ export class SpecdevService extends Service {
 
   /**
    * Blocking inherited debt for Phase Entry Gate (AC-33).
+   * @param phaseId - DAG phase id the debt must target.
+   * @param options - workspace resolution.
+   * @returns the blocking items inherited by `phaseId`.
    */
   listPhaseEntryDebt(
     phaseId: string,
@@ -416,6 +436,9 @@ export class SpecdevService extends Service {
 
   /**
    * Present Phase Entry Gate debt table text.
+   * @param phaseId - DAG phase id the debt must target.
+   * @param options - workspace resolution.
+   * @returns the markdown table, or a placeholder line when nothing blocks.
    */
   presentPhaseEntryDebt(
     phaseId: string,
@@ -428,6 +451,10 @@ export class SpecdevService extends Service {
    * Re-run preparation: reset step + cascade downstream + zero loop_count (AC-44).
    * Archives merged `review.md` when re-running reviewer (scheduler-owned).
    * Never uses git to clear artifacts (AC-45).
+   * @param phaseId - DAG phase id whose step restarts.
+   * @param step - step to reset; later steps cascade with it.
+   * @param options - workspace resolution.
+   * @returns the persisted status with the reset step and zeroed `loop_count`.
    */
   async prepareRerun(
     phaseId: string,
@@ -449,6 +476,8 @@ export class SpecdevService extends Service {
   /**
    * Persist `loop_count+1` after a MUST-FIX re-dispatch of implementer.
    * Distinct from {@link prepareRerun} which zeros `loop_count`.
+   * @param options - workspace resolution.
+   * @returns the persisted status with the incremented `loop_count`.
    */
   async bumpLoopCount(
     options: ResolveWorkspaceRootOptions = {},
@@ -466,6 +495,7 @@ export class SpecdevService extends Service {
    * against the session projection when a session is provided.
    * @param session - optional session whose projection should be consulted.
    * @param options - workspace resolution options.
+   * @returns the bridge snapshot, or null when no workflow is active.
    */
   snapshot(session?: Session, options: ResolveWorkspaceRootOptions = {}): SpecdevSnapshot | null {
     const active = this.active({
@@ -504,6 +534,7 @@ export class SpecdevService extends Service {
    * @param session - owning session receiving the durable event.
    * @param req - gate + decision.
    * @param options - workspace resolution options.
+   * @returns on acceptance `{ ok: true }` with the post-change snapshot; on refusal `{ ok: false }` with the reason code.
    */
   async confirmGate(
     session: Session,
