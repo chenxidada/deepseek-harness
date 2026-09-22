@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-ide-bridge` 是 `dsh --profile ide` 的 Host 侧应答插件。它连接到由扩展持有、由 `DSH_IDE_BRIDGE_SOCK` 命名的 Unix domain socket（或 Windows named pipe），发布连接状态，并注册 `approval/request` 与 `user-questions/request` 的终端监听器。合法 Host 结局回传到瀑布；断连、超时与非法载荷 fail-closed，且不调用 `next()`。Host `permission/select` 与 `permission/list` 帧只经 `dsh-permission-presets` 应用档位。SDK stdout 仍专属于 JSON-RPC；bridge 流量绝不写入 stdout。
+`dsh-ide-bridge` 是 `dsh --profile ide` 的 Host 侧应答插件。它连接到由扩展持有、由 `DSH_IDE_BRIDGE_SOCK` 命名的 Unix domain socket（或 Windows named pipe），发布连接状态，并注册 `approval/request` 与 `user-questions/request` 的终端监听器。合法 Host 结局回传到瀑布；断连、超时与非法载荷 fail-closed，且不调用 `next()`。同一连接还承载扩展的 session、model、settings 与 permission 请求，运行时逐条以结果或失败文本应答；permission 档位仍只由 `dsh-permission-presets` 应用。SDK stdout 仍专属于 JSON-RPC；bridge 流量绝不写入 stdout。
 
 ## 目录
 
@@ -31,7 +31,21 @@ kind: "package-reference"
 | `sockEnv` | `DSH_IDE_BRIDGE_SOCK` | 命名 Host socket 路径的环境变量 |
 | `interactionTimeoutMs` | `120000` | 等待 Host 审批 / 提问应答的上限 |
 
-导出的辅助类 `IdeBridgeHostServer` 与 `IdeBridgeClient` 共享 NDJSON 帧格式，供扩展与测试使用。入站帧经 `parseBridgeFrame` / `validateBridgeFrame` 校验；畸形载荷丢弃（AC-31）。
+导出的辅助类 `IdeBridgeHostServer` 与 `IdeBridgeClient` 共享 NDJSON 帧格式，供扩展与测试使用。入站帧经 `parseBridgeFrame` / `validateBridgeFrame` 校验；畸形载荷丢弃（AC-31）。[src/types.ts](src/types.ts) 中的 `BridgeFrame` 联合类型是完整的帧清单。
+
+### Session、model 与 settings RPC
+
+扩展通过这些请求驱动会话删除、模型选择与设置读写；运行时对每条请求回以配对的 `/response` 帧，`ok: false` 承载下表的失败文本。
+
+| 请求（Host → runtime） | 用途 | Host 看到的失败 |
+|---|---|---|
+| `session/delete` | 经 `sdkSessionDelete` 删除一个会话的持久数据与内存句柄 | 服务返回的消息，或 `sdkSessionDelete service is not available` |
+| `model/list` | 列出各 provider 的模型及其上下文窗口、推理档位，以及当前默认选择 | `llm service is not available`，或列举错误；某模型元数据查询失败只省略该模型的可选字段，缺少 `agentDefaultModel` 时答案报告内置默认选择 |
+| `model/select` | 经 `agentDefaultModel` 保存默认 provider、model 与推理档位 | `agentDefaultModel service is not available`，或写入错误 |
+| `settings/describe` | 读取全部已注册的设置命名空间 | `settings service is not available`，或读取错误 |
+| `settings/update` | 将一个补丁合并进某命名空间的用户层，并回以该命名空间的重读结果 | 写入错误（含 revision 冲突），或 `settings namespace "<ns>" is not registered` |
+
+settings 应答始终脱敏：每次读取都请求 `redactSecrets: true`，运行时把每个描述符逐字段投影为 `ns`、`value`、`base`、`user`、`revision` 与 `secretFields`——被移除值所在的点分路径。序列化 schema 与描述符的其它属性绝不离开运行时。
 
 <a id="replaceability-contract-ad-8"></a>
 ## 可替换性契约（AD-8）
@@ -43,7 +57,7 @@ kind: "package-reference"
 | 通道 | 拥有方 | 可承载内容 |
 |---|---|---|
 | **SDK stdout** | `dsh-sdk-jsonrpc-server`（sdk-app） | 仅 JSON-RPC（`initialize` / `session/prompt` / `shutdown` + 通知） |
-| **Host bridge** | 本包 + 扩展 Host 监听端 | NDJSON `BridgeFrame`：审批、用户提问、permission RPC、`session/dispose`、`hello` |
+| **Host bridge** | 本包 + 扩展 Host 监听端 | NDJSON `BridgeFrame`：审批、用户提问、会话生命周期、model、settings 与 permission RPC、`hello` |
 
 Bridge 流量 **绝不** 写入 SDK stdout。断连、超时与非法载荷 **fail-closed**（终端应答方不调用 `next()`）。
 
@@ -60,7 +74,7 @@ Bridge 流量 **绝不** 写入 SDK stdout。断连、超时与非法载荷 **fa
 <a id="model-experience"></a>
 ## 模型体验
 
-None, as the bridge only relays Host interaction outcomes and registers no prompt, schema, or result text.
+None, as the bridge only relays Host requests and their outcomes without registering any prompt, schema, or result text.
 
 #### KV Cache 影响
 
@@ -68,8 +82,11 @@ None, as the bridge only relays Host interaction outcomes and registers no promp
 
 ## 已知限制与延期工作
 
+<a id="known-limitations-and-deferred-work"></a>
+
 - **Windows named-pipe 延迟** — Host server 支持 pipe 路径；多数 fail-closed 覆盖面向 UDS。
 - **现场审批策略注入** — `permission/select` 调用 `permissionPresets.set(session, name)`（会话日志写入）。`/permission` 使用的 live `approval.setPolicy` 旁白未在 bridge 路径复制。
+- **密钥设置只写** — Host 只收到密钥字段路径，收不到其值，也收不到是否已设置，因此设置页只能提交替换值。
 
 <a id="dev-note"></a>
 ### 开发备注

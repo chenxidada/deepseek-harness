@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-ide-bridge` is the Host-side answerer plugin for `dsh --profile ide`. It connects to the Extension-owned Unix domain socket (or Windows named pipe) named by `DSH_IDE_BRIDGE_SOCK`, publishes connection state, and registers terminal listeners for `approval/request` and `user-questions/request`. Legal Host outcomes map back into the waterfall; disconnect, timeout, and illegal payloads fail closed without calling `next()`. Host `permission/select` and `permission/list` frames apply presets only through `dsh-permission-presets`. SDK stdout stays exclusive to JSON-RPC; bridge traffic never writes there.
+`dsh-ide-bridge` is the Host-side answerer plugin for `dsh --profile ide`. It connects to the Extension-owned Unix domain socket (or Windows named pipe) named by `DSH_IDE_BRIDGE_SOCK`, publishes connection state, and registers terminal listeners for `approval/request` and `user-questions/request`. Legal Host outcomes map back into the waterfall; disconnect, timeout, and illegal payloads fail closed without calling `next()`. The same connection carries the Extension's session, model, settings, and permission requests, and the runtime answers each of them with a result or its failure text; permission presets keep `dsh-permission-presets` as their only authority. SDK stdout stays exclusive to JSON-RPC; bridge traffic never writes there.
 
 ## Table of Contents
 
@@ -31,7 +31,21 @@ Mount through the [`dsh-ide`](../../bundle/ide/README.md) profile bundle. The Ex
 | `sockEnv` | `DSH_IDE_BRIDGE_SOCK` | Environment variable naming the Host socket path |
 | `interactionTimeoutMs` | `120000` | Bound waiting for Host approval / user-questions responses |
 
-Exported helpers `IdeBridgeHostServer` and `IdeBridgeClient` share the NDJSON frame format for Extension and tests. Inbound frames are validated (`parseBridgeFrame` / `validateBridgeFrame`); malformed payloads are dropped (AC-31).
+Exported helpers `IdeBridgeHostServer` and `IdeBridgeClient` share the NDJSON frame format for Extension and tests. Inbound frames are validated (`parseBridgeFrame` / `validateBridgeFrame`); malformed payloads are dropped (AC-31). The `BridgeFrame` union in [src/types.ts](src/types.ts) is the complete frame inventory.
+
+### Session, model, and settings RPC
+
+The Extension drives session deletion, model selection, and settings through these requests; the runtime answers each one with the matching `/response` frame, where `ok: false` carries the failure text below.
+
+| Request (Host → runtime) | Purpose | Failure the Host sees |
+|---|---|---|
+| `session/delete` | Delete one session's stored data and memory handle through `sdkSessionDelete` | The service's message, or `sdkSessionDelete service is not available` |
+| `model/list` | List each provider's models with their context window and reasoning efforts, plus the current default selection | `llm service is not available`, or the listing error; a model whose metadata lookup fails omits only that model's optional fields, and without `agentDefaultModel` the answer reports the built-in default selection |
+| `model/select` | Save the default provider, model, and reasoning effort through `agentDefaultModel` | `agentDefaultModel service is not available`, or the write error |
+| `settings/describe` | Read every registered settings namespace | `settings service is not available`, or the read error |
+| `settings/update` | Merge a patch into one namespace's user layer and answer with that namespace re-read | The write error (a revision conflict included), or `settings namespace "<ns>" is not registered` |
+
+Settings answers stay redacted: every read requests `redactSecrets: true`, and the runtime projects each descriptor onto the wire fields `ns`, `value`, `base`, `user`, `revision`, and `secretFields` — the dotted paths whose values were removed. The serialized schema and the descriptor's other properties never leave the runtime.
 
 <a id="replaceability-contract-ad-8"></a>
 ## Replaceability contract (AD-8)
@@ -43,7 +57,7 @@ This package owns the **Host bridge** face of the ide dual-channel design. Repla
 | Channel | Owner | May carry |
 |---|---|---|
 | **SDK stdout** | `dsh-sdk-jsonrpc-server` (sdk-app) | JSON-RPC only (`initialize` / `session/prompt` / `shutdown` + notifications) |
-| **Host bridge** | this package + Extension Host listener | NDJSON `BridgeFrame`s: approval, user-questions, permission RPC, `session/dispose`, `hello` |
+| **Host bridge** | this package + Extension Host listener | NDJSON `BridgeFrame`s: approval, user-questions, session lifecycle, model, settings, and permission RPC, `hello` |
 
 Bridge traffic **never** writes SDK stdout. Disconnect, timeout, and illegal payloads **fail closed** (terminal answerers do not call `next()`).
 
@@ -60,7 +74,7 @@ Out of replaceability scope for this feature: Spec panels and hooks product pack
 <a id="model-experience"></a>
 ## Model Experience
 
-None, as the bridge only relays Host interaction outcomes and registers no prompt, schema, or result text.
+None, as the bridge only relays Host requests and their outcomes without registering any prompt, schema, or result text.
 
 #### KV Cache effect
 
@@ -68,8 +82,11 @@ No direct model-request effect; Host decisions may change later tool outcomes wi
 
 ## Known Limitations and Deferred Work
 
+<a id="known-limitations-and-deferred-work"></a>
+
 - **Windows named-pipe latency** — Host server supports pipe paths; most fail-closed coverage is UDS-oriented.
 - **Live approval policy injection** — `permission/select` calls `permissionPresets.set(session, name)` (session-log writers). Live-agent `approval.setPolicy` narration used by `/permission` is not duplicated on the bridge path.
+- **Write-only secret settings** — the Host receives secret field paths without their values or whether they are set, so a settings page can submit a replacement but cannot prefill one.
 
 <a id="dev-note"></a>
 ### Dev Note

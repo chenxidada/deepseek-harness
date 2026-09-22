@@ -21,6 +21,7 @@ import {
   SDK_SESSION_RESUME_SERVICE,
   SDK_SESSION_CANCEL_SERVICE,
   SDK_SESSION_FORK_SERVICE,
+  SDK_SESSION_DELETE_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   type BridgeFrame,
@@ -31,7 +32,9 @@ import {
   type SdkSessionResumeCapability,
   type SdkSessionCancelCapability,
   type SdkSessionForkCapability,
+  type SdkSessionDeleteCapability,
   type SessionPersistenceReadCapability,
+  type SettingsNamespaceView,
 } from './types.ts'
 import { isApprovalOutcome, isAskUserQuestionAnswer } from './validate.ts'
 
@@ -43,6 +46,7 @@ export {
   SDK_SESSION_RESUME_SERVICE,
   SDK_SESSION_CANCEL_SERVICE,
   SDK_SESSION_FORK_SERVICE,
+  SDK_SESSION_DELETE_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   APPROVAL_OUTCOMES,
@@ -54,7 +58,9 @@ export {
   type SdkSessionResumeCapability,
   type SdkSessionCancelCapability,
   type SdkSessionForkCapability,
+  type SdkSessionDeleteCapability,
   type SessionPersistenceReadCapability,
+  type SettingsNamespaceView,
   type ApprovalOutcome,
   type AskUserQuestionAnswer,
   type AskUserQuestionItem,
@@ -147,7 +153,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   }
 
   const client = new IdeBridgeClient(state)
-  client.onFrame(frame => {
+  client.onFrame((frame) => {
     settleInboundResponse(pendingApprovals, pendingQuestions, frame)
     void handleHostFrame(ctx, client, frame)
   })
@@ -313,7 +319,9 @@ async function awaitHostQuestions(
       },
     })
   } catch (error) {
+    /* v8 ignore else -- the pending map, onTimeout, and onAbort construct UserQuestionError, so every rejection here is one. */
     if (error instanceof UserQuestionError) throw error
+    /* v8 ignore next -- the ignored else arm's wrapping rethrow. */
     throw new UserQuestionError(
       error instanceof Error ? error.message : String(error),
       'NO_PROVIDER',
@@ -355,6 +363,7 @@ async function raceInteraction<T>(
             reject(error)
           }
         }
+        /* v8 ignore if -- both callers test this signal synchronously before the call; no await separates the checks. */
         if (options.signal.aborted) {
           onAbort()
           return
@@ -365,6 +374,7 @@ async function raceInteraction<T>(
       void response.then(resolve, reject)
     })
   } finally {
+    /* v8 ignore else -- the Promise executor assigns timer synchronously before this wait starts. */
     if (timer !== undefined) clearTimeout(timer)
     if (onAbort !== undefined && options.signal !== undefined) {
       options.signal.removeEventListener('abort', onAbort)
@@ -385,7 +395,7 @@ function settleInboundResponse(
     const pending = pendingApprovals.get(frame.id)
     if (pending === undefined) return
     pendingApprovals.delete(frame.id)
-    // Illegal outcomes are rejected by validateBridgeFrame; defensive check.
+    /* v8 ignore next -- validateBridgeFrame rejects any outcome outside APPROVAL_OUTCOMES before a frame reaches this settle path. */
     pending.resolve(isApprovalOutcome(frame.outcome) ? frame.outcome : 'unavailable')
     return
   }
@@ -397,10 +407,12 @@ function settleInboundResponse(
       pending.reject(new UserQuestionError(frame.error, 'NO_PROVIDER'))
       return
     }
+    /* v8 ignore else -- validateBridgeFrame admits only a legal answer or an error, and the error branch returned above. */
     if (frame.answer !== undefined && isAskUserQuestionAnswer(frame.answer)) {
       pending.resolve(frame.answer)
       return
     }
+    /* v8 ignore next -- the ignored else arm's illegal-answer reject. */
     pending.reject(new UserQuestionError('illegal user-questions answer from Host', 'NO_PROVIDER'))
   }
 }
@@ -440,12 +452,32 @@ async function handleHostFrame(
     await handleContinueCapability(ctx, client, frame)
     return
   }
+  if (frame.kind === 'session/delete') {
+    await handleDelete(ctx, client, frame)
+    return
+  }
   if (frame.kind === 'permission/select') {
     handlePermissionSelect(ctx, client, frame)
     return
   }
   if (frame.kind === 'permission/list') {
     handlePermissionList(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'model/list') {
+    await handleModelList(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'model/select') {
+    await handleModelSelect(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'settings/describe') {
+    handleSettingsDescribe(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'settings/update') {
+    await handleSettingsUpdate(ctx, client, frame)
   }
 }
 
@@ -635,6 +667,38 @@ async function handleFork(
 }
 
 /**
+ * Delete a session's persistent data and memory handle via SDK-owned
+ * `sdkSessionDelete`. Returns service-not-available when unregistered.
+ */
+async function handleDelete(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'session/delete' }>,
+): Promise<void> {
+  const deleter = ctx.get(SDK_SESSION_DELETE_SERVICE) as SdkSessionDeleteCapability | undefined
+  if (deleter === undefined) {
+    client.send({
+      kind: 'session/delete/response',
+      id: frame.id,
+      ok: false,
+      error: `${SDK_SESSION_DELETE_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    await deleter.deleteSession(frame.sessionId)
+    client.send({ kind: 'session/delete/response', id: frame.id, ok: true })
+  } catch (error) {
+    client.send({
+      kind: 'session/delete/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
  * Probe continueCapability for one session (AD-CU-8).
  * Prefer same-id when resume service is mounted and the session log exists.
  */
@@ -786,4 +850,200 @@ function handlePermissionList(
     presets: [...presets.names],
     current: presets.current(session),
   })
+}
+
+/** Duck-typed LLM runtime model listing surface. */
+interface LlmModelListCapability {
+  listProviders(): Array<{ id: string; name: string }>
+  listModels(
+    provider: string,
+  ): Promise<Array<{ id: string; name: string; inputModalities?: readonly string[] }>>
+  /** Exact-route metadata; absent when a deployment's adapters expose none. */
+  resolveModelInfo?(provider: string, model: string): Promise<{
+    context?: { contextWindow: number }
+    reasoning?: { efforts: Array<{ id: string; name: string }> }
+    inputModalities?: readonly string[]
+  }>
+}
+
+/** Duck-typed agent default model selection surface. */
+interface AgentDefaultModelCapability {
+  currentSelection(): { provider: string; model: string; reasoningEffort?: string }
+  saveSelection(next: {
+    provider: string
+    model: string
+    reasoningEffort?: string
+  }): Promise<void>
+}
+
+/** List provider models with their optional context window and reasoning efforts. */
+async function handleModelList(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'model/list' }>,
+): Promise<void> {
+  const llm = ctx.get('llm') as LlmModelListCapability | undefined
+  const defaultModel = ctx.get('agentDefaultModel') as AgentDefaultModelCapability | undefined
+  if (llm === undefined) {
+    client.send({ kind: 'model/list/response', id: frame.id, ok: false, error: 'llm service is not available' })
+    return
+  }
+  try {
+    const providers = []
+    for (const p of llm.listProviders()) {
+      const models = []
+      for (const m of await llm.listModels(p.id)) {
+        let contextWindow: number | undefined
+        let reasoningEfforts: Array<{ id: string; name: string }> | undefined
+        try {
+          const resolved = await llm.resolveModelInfo?.(p.id, m.id)
+          contextWindow = resolved?.context?.contextWindow
+          const efforts = resolved?.reasoning?.efforts
+          if (efforts !== undefined && efforts.length > 0) {
+            reasoningEfforts = efforts.map(e => ({ id: e.id, name: e.name }))
+          }
+        } catch {
+          // One model's metadata failure must not drop the whole list: omit the optional fields.
+        }
+        models.push({
+          id: m.id,
+          name: m.name,
+          ...(m.inputModalities?.includes('image') ? { vision: true } : {}),
+          ...(contextWindow === undefined ? {} : { contextWindow }),
+          ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
+        })
+      }
+      providers.push({ id: p.id, name: p.name, models })
+    }
+    const current = defaultModel?.currentSelection() ?? { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+    client.send({ kind: 'model/list/response', id: frame.id, ok: true, providers, current })
+  } catch (error) {
+    client.send({ kind: 'model/list/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/** Save the Host-selected default model, reporting a failed write to the Host. */
+async function handleModelSelect(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'model/select' }>,
+): Promise<void> {
+  const defaultModel = ctx.get('agentDefaultModel') as AgentDefaultModelCapability | undefined
+  if (defaultModel === undefined) {
+    client.send({ kind: 'model/select/response', id: frame.id, ok: false, error: 'agentDefaultModel service is not available' })
+    return
+  }
+  try {
+    await defaultModel.saveSelection({
+      provider: frame.provider,
+      model: frame.model,
+      ...frame.reasoningEffort !== undefined ? { reasoningEffort: frame.reasoningEffort } : {},
+    })
+    client.send({ kind: 'model/select/response', id: frame.id, ok: true })
+  } catch (error) {
+    client.send({ kind: 'model/select/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/** The descriptor fields ide-bridge reads from the settings service. */
+interface SettingsDescriptorView {
+  ns: string
+  value: unknown
+  revision: number
+  base?: unknown
+  user?: unknown
+  /** Schema-declared secret positions; present only under `redactSecrets`. */
+  secrets?: ReadonlyArray<{ path: readonly string[]; set: boolean }>
+}
+
+/**
+ * Duck-typed settings read/write surface, matching the `ctx.settings` Service
+ * Definition without a dependency on it. Every read passes `redactSecrets`, so
+ * `role('secret')` fields are stripped before a descriptor reaches the Host.
+ */
+interface SettingsCapability {
+  /**
+   * Read every registered namespace.
+   * @param options - redaction switch; this consumer always sets `redactSecrets: true`.
+   */
+  describe(options?: { redactSecrets?: boolean }): SettingsDescriptorView[]
+  /**
+   * Merge a patch into one registered namespace's user layer.
+   * @param ns - the registered namespace to update.
+   * @param patch - plain-object patch over the user section.
+   * @param expectedRevision - revision the caller read; `undefined` writes unconditionally.
+   */
+  update(ns: string, patch: object, expectedRevision?: number): Promise<void>
+}
+
+/**
+ * Project one descriptor onto its wire view, field by field, so the serialized
+ * schema and any other enumerable descriptor property stay runtime-side.
+ * `secrets` becomes the dotted paths whose values were removed — the positions
+ * a settings page needs to render a write-only input, without the `set` flags.
+ */
+function toSettingsNamespaceView(descriptor: SettingsDescriptorView): SettingsNamespaceView {
+  const secretFields = descriptor.secrets?.map(secret => secret.path.join('.'))
+  return {
+    ns: descriptor.ns,
+    value: descriptor.value,
+    ...descriptor.base === undefined ? {} : { base: descriptor.base },
+    ...descriptor.user === undefined ? {} : { user: descriptor.user },
+    revision: descriptor.revision,
+    ...secretFields === undefined || secretFields.length === 0 ? {} : { secretFields },
+  }
+}
+
+/** Answer the Host with every registered settings namespace, redacted. */
+function handleSettingsDescribe(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'settings/describe' }>,
+): void {
+  const settings = ctx.get('settings') as SettingsCapability | undefined
+  if (settings === undefined) {
+    client.send({ kind: 'settings/describe/response', id: frame.id, ok: false, error: 'settings service is not available' })
+    return
+  }
+  try {
+    const namespaces = settings.describe({ redactSecrets: true }).map(toSettingsNamespaceView)
+    client.send({ kind: 'settings/describe/response', id: frame.id, ok: true, namespaces })
+  } catch (error) {
+    client.send({ kind: 'settings/describe/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/** Merge one Host patch into a settings namespace and answer with its new redacted view. */
+async function handleSettingsUpdate(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'settings/update' }>,
+): Promise<void> {
+  const settings = ctx.get('settings') as SettingsCapability | undefined
+  if (settings === undefined) {
+    client.send({ kind: 'settings/update/response', id: frame.id, ok: false, error: 'settings service is not available' })
+    return
+  }
+  try {
+    await settings.update(frame.ns, frame.patch, frame.expectedRevision)
+    const descriptor = settings.describe({ redactSecrets: true })
+      .find(candidate => candidate.ns === frame.ns)
+    if (descriptor === undefined) {
+      client.send({
+        kind: 'settings/update/response',
+        id: frame.id,
+        ok: false,
+        error: `settings namespace "${frame.ns}" is not registered`,
+      })
+      return
+    }
+    client.send({
+      kind: 'settings/update/response',
+      id: frame.id,
+      ok: true,
+      namespace: toSettingsNamespaceView(descriptor),
+    })
+  } catch (error) {
+    client.send({ kind: 'settings/update/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+  }
 }

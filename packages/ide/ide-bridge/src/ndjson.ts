@@ -74,6 +74,7 @@ export class NdjsonSocket {
   }
 
   private readonly onData = (chunk: string): void => {
+    /* v8 ignore next -- the constructor calls setEncoding('utf8'), so Node's Readable decodes every chunk before 'data' fires. */
     this.buffer += typeof chunk === 'string' ? chunk : this.decoder.write(chunk)
     for (;;) {
       const newline = this.buffer.indexOf('\n')

@@ -97,6 +97,7 @@ export class IdeBridgeHostServer {
     await new Promise<void>((resolve, reject) => {
       server.close(error => error === undefined || error === null ? resolve() : reject(error))
     })
+    /* v8 ignore if -- closing the listening handle makes libuv unlink the bound Unix path, and a Windows named pipe is not a file. */
     if (this.path !== undefined && process.platform !== 'win32' && existsSync(this.path)) {
       try {
         unlinkSync(this.path)

@@ -36,6 +36,12 @@ export const SDK_SESSION_CANCEL_SERVICE = 'sdkSessionCancel'
  */
 export const SDK_SESSION_FORK_SERVICE = 'sdkSessionFork'
 
+/**
+ * Cordis service key for server-owned per-session delete.
+ * Published by `@deepseek-ai/dsh-sdk-jsonrpc-server` as `sdkSessionDelete`.
+ */
+export const SDK_SESSION_DELETE_SERVICE = 'sdkSessionDelete'
+
 /** Cordis service key for permission presets (consumed via `ctx.get`). */
 export const PERMISSION_PRESETS_SERVICE = 'permissionPresets'
 
@@ -129,6 +135,18 @@ export interface SdkSessionForkCapability {
   ): Promise<string>
 }
 
+/**
+ * Server-owned session delete capability consumed by ide-bridge.
+ * Must dispose the session from memory AND delete its persistent storage.
+ */
+export interface SdkSessionDeleteCapability {
+  /**
+   * Delete one session's persistent data and memory handle.
+   * @param sessionId - SDK session identity.
+   */
+  deleteSession(sessionId: string): Promise<void>
+}
+
 /** Minimal session handle needed to apply a permission preset. */
 export interface IdeBridgeSessionHandle {
   /** Session identity matching the Host Tab `sessionId`. */
@@ -154,6 +172,29 @@ export interface IdeBridgePermissionPresets {
    * @param session - live session object.
    */
   current(session: IdeBridgeSessionHandle): string
+}
+
+/**
+ * One settings namespace as the runtime projects it onto the wire.
+ * Redaction belongs to the runtime: `value`, `base`, and `user` carry every
+ * `role('secret')` field removed, and `secretFields` names those positions.
+ */
+export interface SettingsNamespaceView {
+  /** Registered namespace key (`llm-deepseek`, `llm-pi-ai`, …). */
+  ns: string
+  /** Redacted resolved value: schema defaults, then composition base, then user layer. */
+  value: unknown
+  /** Redacted composition `base` layer, when the registrant declared one. */
+  base?: unknown
+  /** Redacted raw user section; a key's presence here marks it user-overridden. */
+  user?: unknown
+  /** Monotonic revision of the raw user section, sent back as `expectedRevision`. */
+  revision: number
+  /**
+   * Dotted paths of the schema-declared secret positions removed from the three
+   * layers above; present when the namespace declares any.
+   */
+  secretFields?: string[]
 }
 
 /** Session store lookup used by permission RPC. */
@@ -235,6 +276,31 @@ export type BridgeFrame =
     ok: false
     error: string
   }
+  | { kind: 'session/delete'; id: string; sessionId: string }
+  | { kind: 'session/delete/response'; id: string; ok: true }
+  | { kind: 'session/delete/response'; id: string; ok: false; error: string }
+  | { kind: 'model/list'; id: string }
+  | {
+    kind: 'model/list/response'
+    id: string
+    ok: true
+    providers: Array<{
+      id: string
+      name: string
+      models: Array<{
+        id: string
+        name: string
+        vision?: boolean
+        contextWindow?: number
+        reasoningEfforts?: Array<{ id: string; name: string }>
+      }>
+    }>
+    current: { provider: string; model: string; reasoningEffort?: string }
+  }
+  | { kind: 'model/list/response'; id: string; ok: false; error: string }
+  | { kind: 'model/select'; id: string; provider: string; model: string; reasoningEffort?: string }
+  | { kind: 'model/select/response'; id: string; ok: true }
+  | { kind: 'model/select/response'; id: string; ok: false; error: string }
   | { kind: 'permission/select'; id: string; sessionId: string; preset: string }
   | { kind: 'permission/select/response'; id: string; ok: true; preset: string }
   | { kind: 'permission/select/response'; id: string; ok: false; error: string }
@@ -247,6 +313,30 @@ export type BridgeFrame =
     current: string
   }
   | { kind: 'permission/list/response'; id: string; ok: false; error: string }
+  | { kind: 'settings/describe'; id: string }
+  | {
+    kind: 'settings/describe/response'
+    id: string
+    ok: true
+    /** Redacted projection: value/base/user are the redacted layers; secretFields lists redacted positions. */
+    namespaces: SettingsNamespaceView[]
+  }
+  | { kind: 'settings/describe/response'; id: string; ok: false; error: string }
+  | {
+    kind: 'settings/update'
+    id: string
+    ns: string
+    patch: Record<string, unknown>
+    /** Revision the Host read; omitted writes unconditionally. */
+    expectedRevision?: number
+  }
+  | {
+    kind: 'settings/update/response'
+    id: string
+    ok: true
+    namespace: SettingsNamespaceView
+  }
+  | { kind: 'settings/update/response'; id: string; ok: false; error: string }
   | { kind: 'error'; id?: string; message: string }
 
 /** Closed approval outcomes accepted on the wire. */
