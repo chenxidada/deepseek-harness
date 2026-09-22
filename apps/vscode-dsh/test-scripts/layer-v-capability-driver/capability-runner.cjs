@@ -24,7 +24,9 @@
  *
  * AD-3: the manifest is the machine-readable coverage list — one entry per real product
  * capability, each with `id` / `group` / `ac` / `requiresModel` / `steps` and `路径:行号`
- * evidence. This module selects and drives those entries.
+ * evidence. This module selects and drives those entries. Step arguments are static JSON
+ * except for `$ref:<step>[.<fieldPath>]`, which resolves against an earlier step's result so
+ * a later step can address an id the run only learns at run time (`resolveStepArgs`).
  *
  * AD-4 (assertions): an assertion checks *key-area presence* and *non-degeneration*, never
  * pixel equality. The two concrete forms are (a) `matchesExpect` — a field path resolves to
@@ -145,6 +147,46 @@ function resolvePath(value, fieldPath) {
     }
   }
   return current
+}
+
+/** Prefix marking a step argument as a reference to an earlier step's result. */
+const STEP_REF_PREFIX = '$ref:'
+
+/**
+ * Resolve `$ref:<step>[.<fieldPath>]` step arguments against the results of completed steps.
+ * Manifest args are otherwise static JSON, which cannot express "check the log of the session
+ * this run just created" — the id only exists at run time. A reference that names a step the
+ * run has not completed, or a field that step's result does not carry, fails the step instead
+ * of passing `undefined` to the command, so a renamed or reordered step is diagnosable.
+ * @param {unknown} args - the step's declared arguments.
+ * @param {Map<string, unknown>} stepResults - completed step results, keyed by step name.
+ * @returns {{ok:true, args:unknown[]}|{ok:false, error:string}}
+ */
+function resolveStepArgs(args, stepResults) {
+  if (args === undefined) return { ok: true, args: [] }
+  if (!Array.isArray(args)) {
+    return { ok: false, error: `step args must be an array, got ${JSON.stringify(safeJson(args))}` }
+  }
+  const resolved = []
+  for (const arg of args) {
+    if (typeof arg !== 'string' || !arg.startsWith(STEP_REF_PREFIX)) {
+      resolved.push(arg)
+      continue
+    }
+    const ref = arg.slice(STEP_REF_PREFIX.length)
+    const dot = ref.indexOf('.')
+    const stepName = dot === -1 ? ref : ref.slice(0, dot)
+    const fieldPath = dot === -1 ? '$root' : ref.slice(dot + 1)
+    if (stepName === '' || !stepResults.has(stepName)) {
+      return { ok: false, error: `$ref "${arg}" names step "${stepName}", which has no result yet` }
+    }
+    const value = resolvePath(stepResults.get(stepName), fieldPath)
+    if (value === undefined) {
+      return { ok: false, error: `$ref "${arg}" resolved to undefined` }
+    }
+    resolved.push(value)
+  }
+  return { ok: true, args: resolved }
 }
 
 /**
@@ -487,7 +529,8 @@ function selectCapabilities(manifest, selector) {
  *   `stream`     poll the command until `expect` holds, recording streaming increment evidence;
  *   `replay`     snapshot the active session, close its Tab, reopen it as `mode='replay'`;
  *   `screenshot` capture a PNG and assert it is non-degenerate (`pngVerdict`).
- * A failing step throws a `StageError` carrying the step record; a clean run returns PASS.
+ * A failing step returns a result whose `conclusion` is the staged error's, carrying every step
+ * record up to and including the failure; a clean run returns PASS.
  * Every step — success or failure — is journaled through `opts.journal` *before* control
  * leaves the step, so a mid-run crash (even a hard `SIGKILL` that never writes status.json)
  * still leaves journal lines naming the capability and the last step reached. The runner
@@ -501,6 +544,9 @@ function selectCapabilities(manifest, selector) {
 async function runCapability(cap, host, opts = {}) {
   const steps = Array.isArray(cap.steps) ? cap.steps : []
   const records = []
+  // Completed step results, keyed by step name, so a later step's `$ref:` argument can address
+  // a value the run only learns at run time (a session id, a child id).
+  const stepResults = new Map()
   const emit = opts.journal
     ? entry => opts.journal({ capability: cap.id, ...entry })
     : () => {}
@@ -517,13 +563,28 @@ async function runCapability(cap, host, opts = {}) {
     // line for a known StageError, so the catch only emits for an *unexpected* throw.
     let failEmitted = false
     try {
+      const argsResolution = resolveStepArgs(step.args, stepResults)
+      if (!argsResolution.ok) {
+        emit({
+          step: step.step,
+          kind: step.kind,
+          verdict: 'LINK_FAILURE',
+          evidence: [],
+          detail: argsResolution.error,
+        })
+        failEmitted = true
+        throw linkFailure(argsResolution.error, record)
+      }
+      const stepArgs = argsResolution.args
       if (step.kind === 'command') {
-        const raw = await host.executeCommand(step.command, ...(step.args ?? []))
-        record.value = safeJson(unwrap(raw))
+        const raw = await host.executeCommand(step.command, ...stepArgs)
+        const value = unwrap(raw)
+        record.value = safeJson(value)
         record.ok = true
+        stepResults.set(step.step, value)
         emit({ step: step.step, kind: step.kind, verdict: 'PASS', evidence: [], detail: `command ${step.command} completed` })
       } else if (step.kind === 'assert') {
-        const raw = await host.executeCommand(step.command, ...(step.args ?? []))
+        const raw = await host.executeCommand(step.command, ...stepArgs)
         const value = unwrap(raw)
         const verdict = matchesExpect(value, step.expect)
         record.value = safeJson(value)
@@ -546,9 +607,10 @@ async function runCapability(cap, host, opts = {}) {
           throw linkFailure(`assertion failed at "${step.step}" (${step.command})`, record)
         }
         emit({ step: step.step, kind: step.kind, verdict: 'PASS', evidence: [], detail: `assertion ${step.step} (${step.command}) passed` })
+        stepResults.set(step.step, value)
       } else if (step.kind === 'wait') {
         const value = await poll(`cap-${cap.id}-${step.step}`, async () => {
-          const raw = await host.executeCommand(step.command, ...(step.args ?? []))
+          const raw = await host.executeCommand(step.command, ...stepArgs)
           const v = unwrap(raw)
           const verdict = matchesExpect(v, step.expect)
           if (verdict.ok) return { ok: true, value: v }
@@ -563,10 +625,11 @@ async function runCapability(cap, host, opts = {}) {
         })
         record.value = safeJson(value)
         record.ok = true
+        stepResults.set(step.step, value)
         emit({ step: step.step, kind: step.kind, verdict: 'PASS', evidence: [], detail: `wait ${step.step} (${step.command}) satisfied` })
       } else if (step.kind === 'stream') {
         const value = await pollForStream(`cap-${cap.id}-${step.step}`, async () => {
-          const raw = await host.executeCommand(step.command, ...(step.args ?? []))
+          const raw = await host.executeCommand(step.command, ...stepArgs)
           return unwrap(raw)
         }, step, opts)
         record.value = safeJson(value.value)
@@ -586,13 +649,14 @@ async function runCapability(cap, host, opts = {}) {
           throw linkFailure(`no streaming increment observed at "${step.step}"`, record)
         }
         emit({ step: step.step, kind: step.kind, verdict: 'PASS', evidence: [], detail: `stream ${step.step} satisfied (sawStreaming=${value.sawStreaming}, sawGrowth=${value.sawGrowth})` })
+        stepResults.set(step.step, value.value)
       } else if (step.kind === 'replay') {
         // Continue precondition (AC-9): a replay Tab is built from the *real* session log, not
         // injected events. Snapshot the active session for its id, close its Tab (the authority
         // index row survives the close), then reopen it so `openFromHistory` hydrates
         // `mode='replay'` from `readSessionLog` — the only unattended reach to a replay Tab.
         const snapshotCommand = step.command ?? 'dsh.test.panelSnapshot'
-        const snapRaw = await host.executeCommand(snapshotCommand, ...(step.args ?? []))
+        const snapRaw = await host.executeCommand(snapshotCommand, ...stepArgs)
         const snapshot = unwrap(snapRaw)
         const sessionId = snapshot !== null && typeof snapshot === 'object' && typeof snapshot.sessionId === 'string'
           ? snapshot.sessionId
@@ -632,6 +696,7 @@ async function runCapability(cap, host, opts = {}) {
           throw linkFailure(`replay step "${step.step}" did not reopen as replay`, record)
         }
         emit({ step: step.step, kind: step.kind, verdict: 'PASS', evidence: [sessionId], detail: `replay ${step.step} reopened ${sessionId} as replay` })
+        stepResults.set(step.step, opened)
       } else if (step.kind === 'screenshot') {
         const shot = await host.capture(step.file)
         record.screenshot = safeJson(shot)
@@ -669,7 +734,21 @@ async function runCapability(cap, host, opts = {}) {
       }
       record.error = truncate(String(error?.message ?? error), 400)
       records.push(record)
-      throw error
+      // Return the failure instead of rethrowing: the capability's partial step records —
+      // including the step that failed — then reach status.json, so a failure at step 12 of 20
+      // names the eleven that ran before it. The run moves on to the next capability either way.
+      const staged = error instanceof StageError ? error : harnessError(`unexpected: ${String(error?.message ?? error)}`)
+      return {
+        id: cap.id,
+        group: cap.group,
+        title: cap.title,
+        requiresModel: cap.requiresModel === true,
+        conclusion: staged.conclusion,
+        reason: staged.reason,
+        evidence: safeJson(staged.evidence),
+        steps: records,
+        closedLoop: unclosedLoop(`errored: ${staged.conclusion} — ${staged.reason}`),
+      }
     }
     records.push(record)
   }
@@ -809,6 +888,7 @@ module.exports = {
   assistantStreamingActive,
   // AD-4 assertion primitives
   resolvePath,
+  resolveStepArgs,
   deepEqual,
   MATCHERS,
   resolveMatcher,

@@ -12,8 +12,8 @@
 # per-run isolation, exit-code contract and closure summary unchanged; this entry adds only the
 # cross-batch exit-code aggregation and the per-batch artifact-index row.
 #
-#   batch nonmodel   the 18 `requiresModel:false` capabilities (no key needed)
-#   batch model      the 23 `requiresModel:true` capabilities (real DEEPSEEK_API_KEY round-trips;
+#   batch nonmodel   the 25 `requiresModel:false` capabilities (no key needed)
+#   batch model      the 26 `requiresModel:true` capabilities (real DEEPSEEK_API_KEY round-trips;
 #                    without a key the batch exits 3, SKIPPED_NO_CREDENTIALS)
 #
 # Cross-batch exit code (never merged, never downgraded, never guessed). The capability driver's
@@ -284,13 +284,13 @@ Usage:
 
 Runs the full vscode-dsh real-machine end-to-end closure: every capability in
 layer-v-capabilities.json, driven through run-layer-v-capabilities.sh (per-run isolation,
-exit-code contract, closure summary), split into two batches by requiresModel — 18 non-model
-capabilities then 23 model-gated ones. Each batch appends one row to
+exit-code contract, closure summary), split into two batches by requiresModel — 25 non-model
+capabilities then 26 model-gated ones. Each batch appends one row to
 .specdev/specs/vscode-dsh-e2e-closure/artifact-index.md.
 
 Options:
-  --batch nonmodel   run only the non-model batch (18 capabilities)
-  --batch model      run only the model batch (23 capabilities; needs DEEPSEEK_API_KEY)
+  --batch nonmodel   run only the non-model batch (25 capabilities)
+  --batch model      run only the model batch (26 capabilities; needs DEEPSEEK_API_KEY)
   --list             list the capabilities by batch, then exit
   --help             show this help, then exit
 

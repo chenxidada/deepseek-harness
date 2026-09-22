@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "source": ".specdev/specs/vscode-dsh-e2e-closure/repo-exploration.md §12 (workflow-level code-explorer)",
-  "note": "The 41 real functional capabilities of apps/vscode-dsh, one entry per §12 row. requiresModel marks capabilities whose verification needs a real DEEPSEEK_API_KEY round-trip (AC-9); those fail closed with SKIPPED_NO_CREDENTIALS (exit 3) when no key is present. Steps are EDH operation sequences (command / wait / assert / screenshot); this Phase pilots §12.1 and §12.2, the remaining groups are driven in Phase 2/3.",
+  "note": "The real functional capabilities of apps/vscode-dsh, one entry per capability: the repo-exploration.md §12 rows plus the panel capabilities that landed with the `dsh.test.*` observability hooks (settings page, model selector, image prompt admission, session delete, compaction marker, workflow card, todo panel, reasoning capture, token meter). requiresModel marks capabilities whose verification needs a real DEEPSEEK_API_KEY round-trip (AC-9); those fail closed with SKIPPED_NO_CREDENTIALS (exit 3) when no key is present. Steps are EDH operation sequences (command / wait / stream / replay / assert / screenshot); run-vscode-dsh-e2e-closure.sh derives the per-batch id lists from requiresModel, so a new entry needs no list edit there.",
   "capabilities": [
     {
       "id": "cap-react-spa-root",
@@ -185,7 +185,7 @@
       "title": "扩展激活 activate",
       "ac": ["AC-7", "AC-10"],
       "requiresModel": false,
-      "evidence": [{ "path": "apps/vscode-dsh/src/extension.ts", "line": 374 }],
+      "evidence": [{ "path": "apps/vscode-dsh/src/extension.ts", "line": 401 }],
       "steps": [
         { "kind": "assert", "step": "startup-hook-responsive", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "idle" } },
         { "kind": "screenshot", "step": "extension-activate", "file": "cap-extension-activate.png" }
@@ -597,7 +597,8 @@
         { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的一次真实模型往返。请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-33-OK"] },
         { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-33-OK", "timeoutMs": 300000 },
         { "kind": "assert", "step": "fork-retry", "command": "dsh.test.forkRetry", "args": [{ "turn": 1 }], "expect": { "ok": true, "presentation": "continue-switch", "childSessionId": "$string", "promptText": "$string" } },
-        { "kind": "wait", "step": "child-replied", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-33-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "child-linked", "command": "dsh.test.panelSnapshot", "expect": { "breadcrumb.parentSessionId": "$string" } },
+        { "kind": "wait", "step": "child-produced-output", "command": "dsh.test.lastAssistantText", "expect": { "present": true }, "timeoutMs": 180000 },
         { "kind": "screenshot", "step": "fork-from-closed-turn", "file": "cap-fork-from-closed-turn.png" }
       ]
     },
@@ -740,7 +741,9 @@
         { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
         { "kind": "assert", "step": "inject-approval-for-ui", "command": "dsh.test.injectApproval", "args": [{ "id": "layer-v-approval-31", "toolName": "write", "reason": "Layer V interaction UI probe" }], "expect": { "ok": true, "id": "layer-v-approval-31" } },
         { "kind": "assert", "step": "ui-presented", "command": "dsh.test.listPendingInteractions", "expect": { "0.kind": "approval", "0.id": "layer-v-approval-31", "0.state": "presented", "0.toolName": "write" } },
+        { "kind": "assert", "step": "queue-before-close", "command": "dsh.test.interactionsDebug", "expect": { "ok": true } },
         { "kind": "assert", "step": "close-tab", "command": "dsh.test.closeConversation", "expect": { "outcome": "closed" } },
+        { "kind": "assert", "step": "close-drained-queue", "command": "dsh.test.interactionsDebug", "expect": { "ok": true, "lastFailClosed.matched": 1 } },
         { "kind": "assert", "step": "fail-closed-drains-queue", "command": "dsh.test.listPendingInteractions", "expect": [] },
         { "kind": "assert", "step": "answer-after-fail-closed", "command": "dsh.test.answerApproval", "args": ["layer-v-approval-31", "allowed-once"], "expect": { "ok": false, "reason": "unknown-id" } },
         { "kind": "screenshot", "step": "interaction-ui", "file": "cap-interaction-ui.png" }
@@ -752,10 +755,217 @@
       "title": "dsh.test.* 命令注册（仅测试模式）",
       "ac": ["AC-10"],
       "requiresModel": false,
-      "evidence": [{ "path": "apps/vscode-dsh/src/extension.ts", "line": 1011 }],
+      "evidence": [{ "path": "apps/vscode-dsh/src/extension.ts", "line": 1118 }],
       "steps": [
         { "kind": "assert", "step": "test-hooks-registered", "command": "dsh.test.getStartState", "expect": { "state": "idle" } },
         { "kind": "screenshot", "step": "test-hooks", "file": "cap-test-hooks.png" }
+      ]
+    },
+    {
+      "id": "cap-settings-page",
+      "group": "react-spa-main",
+      "title": "设置页：compaction-basic 命名空间读取与阈值写回",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [
+        { "path": "apps/vscode-dsh/webview/src/components/SettingsPanel.tsx", "line": 6 },
+        { "path": "apps/vscode-dsh/src/session-host.ts", "line": 853 },
+        { "path": "apps/vscode-dsh/src/session-host.ts", "line": 890 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "wait", "step": "settings-namespaces-described", "command": "dsh.test.getSettingsState", "expect": { "ok": true, "hasCompactionNs": true }, "timeoutMs": 60000 },
+        { "kind": "assert", "step": "write-compaction-threshold", "command": "dsh.test.updateSetting", "args": ["compaction-basic", { "thresholdRatio": 0.7 }], "expect": { "ok": true, "thresholdRatio": 0.7 } },
+        { "kind": "assert", "step": "re-read-reports-the-write", "command": "dsh.test.getSettingsState", "expect": { "ok": true, "thresholdRatio": 0.7 } },
+        { "kind": "screenshot", "step": "settings-page", "file": "cap-settings-page.png" }
+      ]
+    },
+    {
+      "id": "cap-model-selector",
+      "group": "react-spa-main",
+      "title": "模型选择器：model/list 容量元数据与 model/select 回读",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [
+        { "path": "packages/ide/ide-bridge/src/index.ts", "line": 918 },
+        { "path": "apps/vscode-dsh/src/session-host.ts", "line": 812 },
+        { "path": "apps/vscode-dsh/webview/src/components/SettingsPanel.tsx", "line": 78 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "wait", "step": "model-catalog-carries-capacity", "command": "dsh.test.getModelState", "expect": { "ok": true, "hasContextWindow": true }, "timeoutMs": 60000 },
+        { "kind": "assert", "step": "select-model", "command": "dsh.test.selectModel", "args": ["deepseek-official", "deepseek-v4-flash"], "expect": { "ok": true, "currentModel": "deepseek-v4-flash" } },
+        { "kind": "screenshot", "step": "model-selector", "file": "cap-model-selector.png" }
+      ]
+    },
+    {
+      "id": "cap-image-prompt-admission",
+      "group": "session-main-path",
+      "title": "图片提示词准入（PNG 内容块 → 持久附件与用户气泡）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [
+        { "path": "packages/sdk/server/src/server.ts", "line": 48 },
+        { "path": "packages/sdk/server/src/server.ts", "line": 53 },
+        { "path": "packages/ide/ide-bridge/src/index.ts", "line": 911 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-image-prompt", "command": "dsh.test.sendImagePrompt", "expect": { "ok": true, "messageId": "$string" } },
+        { "kind": "wait", "step": "user-bubble-carries-the-marker", "command": "dsh.test.panelSnapshot", "expect": { "messages.0.role": "user", "messages.0.text": "$contains:LAYER-V-CAP-IMAGE-OK" }, "timeoutMs": 30000 },
+        { "kind": "screenshot", "step": "image-prompt-admission", "file": "cap-image-prompt-admission.png" }
+      ]
+    },
+    {
+      "id": "cap-session-disk-delete",
+      "group": "history",
+      "title": "会话删除（磁盘日志：删除前存在 → 删除后消失；索引行停用）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [
+        { "path": "apps/vscode-dsh/src/session-host.ts", "line": 702 },
+        { "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1677 },
+        { "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1700 },
+        { "path": "apps/vscode-dsh/src/extension.ts", "line": 1825 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "seed-a-marked-session", "command": "dsh.test.sendImagePrompt", "args": ["LAYER-V-CAP-DELETE-OK"], "expect": { "ok": true, "messageId": "$string" } },
+        { "kind": "wait", "step": "log-exists-before", "command": "dsh.test.sessionLogExists", "args": ["$ref:new-conversation.sessionId"], "expect": { "exists": true }, "timeoutMs": 30000 },
+        { "kind": "assert", "step": "history-lists-the-marked-session", "command": "dsh.test.searchSessions", "args": ["LAYER-V-CAP-DELETE-OK"], "expect": { "outcome": "listed", "hits": "$array:1" } },
+        { "kind": "wait", "step": "host-bridge-ready", "command": "dsh.test.getModelState", "expect": { "ok": true }, "timeoutMs": 60000 },
+        { "kind": "assert", "step": "delete-the-active-session", "command": "dsh.test.deleteConversation", "args": [{ "confirmed": true }], "expect": { "outcome": "deleted", "tabId": "$string", "sessionId": "$string" } },
+        { "kind": "assert", "step": "log-gone-after", "command": "dsh.test.sessionLogExists", "args": ["$ref:new-conversation.sessionId"], "expect": { "exists": false } },
+        { "kind": "assert", "step": "history-no-longer-lists-it", "command": "dsh.test.searchSessions", "args": ["LAYER-V-CAP-DELETE-OK"], "expect": { "outcome": "empty", "hits": [] } },
+        { "kind": "screenshot", "step": "session-disk-delete", "file": "cap-session-disk-delete.png" }
+      ]
+    },
+    {
+      "id": "cap-compaction-marker",
+      "group": "react-spa-main",
+      "title": "压缩标记（compaction/start·summary·end → kind:compaction 气泡）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [
+        { "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 2626 },
+        { "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 2679 },
+        { "path": "apps/vscode-dsh/webview/src/store/chat-ui-store.ts", "line": 66 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "inject-compaction", "command": "dsh.test.injectCompaction", "expect": { "ok": true, "compactionId": "$string" } },
+        { "kind": "assert", "step": "marker-settled-done", "command": "dsh.test.lastCompactionMarker", "expect": { "present": true, "status": "done", "shadowedTokenCount": 1234 } },
+        { "kind": "screenshot", "step": "compaction-marker", "file": "cap-compaction-marker.png" }
+      ]
+    },
+    {
+      "id": "cap-workflow-card",
+      "group": "react-spa-main",
+      "title": "工作流运行卡（tool-workflow/* → kind:workflow 卡片）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [
+        { "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 2715 },
+        { "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 2790 },
+        { "path": "apps/vscode-dsh/webview/src/store/chat-ui-store.ts", "line": 85 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "inject-workflow", "command": "dsh.test.injectWorkflow", "expect": { "ok": true, "runId": "$string" } },
+        { "kind": "assert", "step": "workflow-card-settled", "command": "dsh.test.lastWorkflowCard", "expect": { "present": true, "memberCount": 2, "stopReason": "completed", "completedMembers": 1 } },
+        { "kind": "screenshot", "step": "workflow-card", "file": "cap-workflow-card.png" }
+      ]
+    },
+    {
+      "id": "cap-todo-panel",
+      "group": "session-main-path",
+      "title": "Todo 面板（todo/write → 侧栏视图与状态计数）",
+      "ac": ["AC-7", "AC-10"],
+      "requiresModel": false,
+      "evidence": [
+        { "path": "apps/vscode-dsh/src/extension.ts", "line": 2137 },
+        { "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 1513 },
+        { "path": "apps/vscode-dsh/src/chat-panel/protocol.ts", "line": 275 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "inject-todo", "command": "dsh.test.injectTodo", "expect": { "ok": true, "count": 3 } },
+        { "kind": "assert", "step": "todo-split-reported", "command": "dsh.test.getTodoItems", "expect": { "count": 3, "completed": 1, "inProgress": 1 } },
+        { "kind": "screenshot", "step": "todo-panel", "file": "cap-todo-panel.png" }
+      ]
+    },
+    {
+      "id": "cap-reasoning-capture",
+      "group": "session-main-path",
+      "title": "推理内容捕获（真实回合 + reasoning-delta 注入投影到助手气泡）",
+      "ac": ["AC-7", "AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [
+        { "path": "apps/vscode-dsh/src/extension.ts", "line": 1942 },
+        { "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 2445 },
+        { "path": "apps/vscode-dsh/src/message-store.ts", "line": 182 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的推理内容捕获往返，请先思考再作答。只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-RSN-OK"] },
+        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-RSN-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "upstream-turn-settled", "command": "dsh.test.getTokenStatus", "expect": { "ok": true, "present": true } },
+        { "kind": "assert", "step": "inject-reasoning", "command": "dsh.test.injectReasoning", "expect": { "ok": true, "sessionId": "$string", "length": 24 }, "args": ["LAYER-V-CAP-RSN-INJECTED"] },
+        { "kind": "assert", "step": "reasoning-projected", "command": "dsh.test.lastAssistantReasoning", "expect": { "present": true, "length": 24 } },
+        { "kind": "screenshot", "step": "reasoning-capture", "file": "cap-reasoning-capture.png" }
+      ]
+    },
+    {
+      "id": "cap-token-meter-live",
+      "group": "session-main-path",
+      "title": "Token 计量（真实回合 assistant/message usage → token/status 采样）",
+      "ac": ["AC-7", "AC-9", "AC-10"],
+      "requiresModel": true,
+      "evidence": [
+        { "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 3147 },
+        { "path": "apps/vscode-dsh/src/conversation-controller.ts", "line": 3166 },
+        { "path": "apps/vscode-dsh/src/chat-panel/protocol.ts", "line": 262 }
+      ],
+      "steps": [
+        { "kind": "command", "step": "reveal-editor-panel", "command": "dsh.showPanel" },
+        { "kind": "command", "step": "open-activity-bar", "command": "dsh.test.openActivityBar" },
+        { "kind": "command", "step": "fire-conversation-visible", "command": "dsh.test.fireConversationVisibility", "args": [true] },
+        { "kind": "wait", "step": "host-started", "command": "dsh.test.simulateStartupOnly", "expect": { "ok": true, "startState": "started", "hostStatus": "connected" }, "timeoutMs": 240000 },
+        { "kind": "assert", "step": "new-conversation", "command": "dsh.test.newConversation", "expect": { "outcome": "created" } },
+        { "kind": "assert", "step": "send-prompt", "command": "dsh.test.sendPrompt", "expect": { "ok": true }, "args": ["这是分层V能力验证的 token 计量往返，请只回复下面这一行，不要输出任何其它内容、不要调用任何工具：LAYER-V-CAP-TOKEN-OK"] },
+        { "kind": "wait", "step": "closed-turn", "command": "dsh.test.panelSnapshot", "expect": "$assistantClosed:LAYER-V-CAP-TOKEN-OK", "timeoutMs": 300000 },
+        { "kind": "assert", "step": "token-sample-is-live", "command": "dsh.test.getTokenStatus", "expect": { "ok": true, "present": true, "sane": true } },
+        { "kind": "screenshot", "step": "token-meter-live", "file": "cap-token-meter-live.png" }
       ]
     }
   ]

@@ -1,5 +1,6 @@
 import { foldMessages, foldTimeline } from './spike-t0a-replay-hydrator.ts'
 import { SpikeMockAdapter, prefixUnchanged, textResponse } from './spike-t0b-continue-helpers.ts'
+import { activate, deactivate } from '../src/extension.ts'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
@@ -1637,6 +1638,10 @@ record="$(display_evidence_record_json)"
         options?: { selector?: { only?: string[] }; hasCredential?: boolean; stepTimeoutMs?: number; journal?: (entry: object) => void },
       ) => Promise<{ conclusion: string; capabilities: Array<{ id: string; conclusion: string; steps?: unknown[] }> }>
       overallConclusion: (results: Array<{ conclusion: string }>) => string
+      resolveStepArgs: (
+        args: unknown,
+        stepResults: Map<string, unknown>,
+      ) => { ok: true; args: unknown[] } | { ok: false; error: string }
     }
 
     const {
@@ -1645,6 +1650,7 @@ record="$(display_evidence_record_json)"
       runManifest,
       overallConclusion,
       resolvePath,
+      resolveStepArgs,
       deepEqual,
       MATCHERS,
       resolveMatcher,
@@ -1830,6 +1836,118 @@ record="$(display_evidence_record_json)"
           'cap-1:open:PASS',
           'cap-1:panel-open:LINK_FAILURE',
         ])
+      })
+
+      it('CAP-TEST-HARNESS-137 keeps the partial step records of a failed capability', async () => {
+        const manifest = {
+          capabilities: [
+            {
+              id: 'cap-partial',
+              group: 'session',
+              title: 'partial',
+              requiresModel: false,
+              steps: [
+                { kind: 'command', step: 'open', command: 'dsh.showPanel' },
+                { kind: 'assert', step: 'panel-open', command: 'dsh.showPanel', expect: { panelOpen: true } },
+                { kind: 'screenshot', step: 'shot', file: 'cap-partial.png' },
+              ],
+            },
+          ],
+        }
+        const result = await runManifest(manifest, mockHost({ 'dsh.showPanel': { panelOpen: false } }), { hasCredential: false })
+        expect(result.conclusion).toBe('LINK_FAILURE')
+        // The failure must name the steps that ran, not just the one that died: a driver
+        // diagnosis reads the ids/values those earlier steps returned.
+        const steps = result.capabilities[0].steps as Array<{ step: string; ok: boolean }>
+        expect(steps.map(step => [step.step, step.ok])).toEqual([['open', true], ['panel-open', false]])
+      })
+    })
+
+    describe('$ref step arguments resolve against earlier step results', () => {
+      it('CAP-TEST-HARNESS-133 resolves $ref:step.field and $ref:step, keeping literals verbatim', () => {
+        const results = new Map<string, unknown>([
+          ['new-conversation', { outcome: 'created', sessionId: 'sess-1' }],
+          ['list', ['a', 'b']],
+        ])
+        expect(resolveStepArgs(['$ref:new-conversation.sessionId', 'literal', 7], results))
+          .toEqual({ ok: true, args: ['sess-1', 'literal', 7] })
+        expect(resolveStepArgs(['$ref:list'], results)).toEqual({ ok: true, args: [['a', 'b']] })
+        expect(resolveStepArgs(undefined, results)).toEqual({ ok: true, args: [] })
+      })
+
+      it('CAP-TEST-HARNESS-134 rejects an unknown step, a missing field, and a non-array args list', () => {
+        const results = new Map<string, unknown>([['new-conversation', { sessionId: 'sess-1' }]])
+
+        const unknownStep = resolveStepArgs(['$ref:missing.sessionId'], results)
+        expect(unknownStep.ok).toBe(false)
+        if (unknownStep.ok) throw new Error('expected the unknown step to be rejected')
+        expect(unknownStep.error).toContain('missing')
+
+        const missingField = resolveStepArgs(['$ref:new-conversation.tabId'], results)
+        expect(missingField.ok).toBe(false)
+        if (missingField.ok) throw new Error('expected the missing field to be rejected')
+        expect(missingField.error).toContain('new-conversation.tabId')
+
+        expect(resolveStepArgs({}, results).ok).toBe(false)
+      })
+
+      it('CAP-TEST-HARNESS-135 hands the resolved value to the command and keeps the result addressable', async () => {
+        const calls: Array<{ id: string; args: unknown[] }> = []
+        const host = {
+          executeCommand: async (id: string, ...args: unknown[]) => {
+            calls.push({ id, args })
+            if (id === 'dsh.test.resetToIdle') return { ok: true, startState: 'idle' }
+            if (id === 'dsh.test.newConversation') return { outcome: 'created', sessionId: 'sess-1' }
+            if (id === 'dsh.test.sessionLogExists') return { exists: args[0] === 'sess-1' }
+            throw new Error(`unexpected command ${id}`)
+          },
+          capture: async () => ({ ok: true, file: 'probe.png', verdict: { ok: true, size: 1024 } }),
+        }
+        const manifest = {
+          capabilities: [
+            {
+              id: 'cap-ref',
+              group: 'history',
+              title: 'ref',
+              requiresModel: false,
+              steps: [
+                { kind: 'assert', step: 'new-conversation', command: 'dsh.test.newConversation', expect: { outcome: 'created' } },
+                { kind: 'assert', step: 'log-exists', command: 'dsh.test.sessionLogExists', args: ['$ref:new-conversation.sessionId'], expect: { exists: true } },
+              ],
+            },
+          ],
+        }
+        const result = await runManifest(manifest, host, { hasCredential: false })
+        expect(result.conclusion).toBe('PASS')
+        expect(calls.find(call => call.id === 'dsh.test.sessionLogExists')?.args).toEqual(['sess-1'])
+      })
+
+      it('CAP-TEST-HARNESS-136 fails the step before running the command when a $ref cannot resolve', async () => {
+        const calls: string[] = []
+        const host = {
+          executeCommand: async (id: string) => {
+            calls.push(id)
+            if (id === 'dsh.test.resetToIdle') return { ok: true, startState: 'idle' }
+            return { exists: false }
+          },
+          capture: async () => ({ ok: true, file: 'probe.png', verdict: { ok: true, size: 1024 } }),
+        }
+        const manifest = {
+          capabilities: [
+            {
+              id: 'cap-ref',
+              group: 'history',
+              title: 'ref',
+              requiresModel: false,
+              steps: [
+                { kind: 'assert', step: 'log-exists', command: 'dsh.test.sessionLogExists', args: ['$ref:missing.sessionId'], expect: { exists: true } },
+              ],
+            },
+          ],
+        }
+        const result = await runManifest(manifest, host, { hasCredential: false })
+        expect(result.conclusion).toBe('LINK_FAILURE')
+        expect(calls).not.toContain('dsh.test.sessionLogExists')
       })
     })
 
@@ -2368,6 +2486,91 @@ record="$(display_evidence_record_json)"
         await handle.close()
       }
     }
+  })
+
+  describe('surface hook vocabulary resolves to registered commands', () => {
+    const manifestPath = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'test-scripts',
+      'layer-v-capabilities.json',
+    )
+
+    /** Hooks the newer user-visible surfaces expose to the Layer-V driver. */
+    const SURFACE_HOOKS = [
+      'dsh.test.getSettingsState',
+      'dsh.test.updateSetting',
+      'dsh.test.getModelState',
+      'dsh.test.selectModel',
+      'dsh.test.sendImagePrompt',
+      'dsh.test.sessionLogExists',
+      'dsh.test.getTokenStatus',
+      'dsh.test.lastAssistantReasoning',
+      'dsh.test.lastAssistantText',
+      'dsh.test.injectCompaction',
+      'dsh.test.injectWorkflow',
+      'dsh.test.injectTodo',
+      'dsh.test.injectReasoning',
+      'dsh.test.interactionsDebug',
+      'dsh.test.getTodoItems',
+      'dsh.test.lastCompactionMarker',
+      'dsh.test.lastWorkflowCard',
+    ]
+
+    const commands = new Map<string, (...args: unknown[]) => unknown>()
+
+    afterEach(async () => {
+      await deactivate()
+      commands.clear()
+    })
+
+    it('CAP-TEST-HARNESS-132 every dsh.test.* command the driver names is registered in the test gate', () => {
+      activate({
+        subscriptions: [],
+        extensionPath: '/tmp/dsh-hook-vocabulary',
+        workspaceState: {
+          get() { return undefined },
+          update() {},
+        },
+      }, {
+        window: {
+          async showErrorMessage() {},
+          async showInformationMessage() {},
+          registerWebviewViewProvider() { return { dispose() {} } },
+        },
+        workspace: {
+          workspaceFolders: [{ uri: { fsPath: '/tmp/dsh-hook-vocabulary' } }],
+        },
+        commands: {
+          registerCommand(command: string, callback: (...args: unknown[]) => unknown) {
+            commands.set(command, callback)
+            return { dispose() {} }
+          },
+        },
+      })
+
+      for (const id of SURFACE_HOOKS) {
+        expect(commands.has(id), `missing ${id}`).toBe(true)
+      }
+
+      // The manifest is the other half of the driver's contract: a hook it names that
+      // no activation registers would fail the run as an unknown command.
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+        capabilities: Array<{ steps?: Array<{ command?: unknown }> }>
+      }
+      const manifestHooks = new Set<string>()
+      for (const capability of manifest.capabilities) {
+        for (const step of capability.steps ?? []) {
+          if (typeof step.command === 'string' && step.command.startsWith('dsh.test.')) {
+            manifestHooks.add(step.command)
+          }
+        }
+      }
+      expect(manifestHooks.size).toBeGreaterThan(0)
+      for (const id of manifestHooks) {
+        expect(commands.has(id), `manifest names unregistered ${id}`).toBe(true)
+      }
+    })
   })
 
 })
