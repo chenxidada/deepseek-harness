@@ -25,6 +25,7 @@ import {
   type AskUserQuestionAnswer,
   type BridgeFrame,
   type IdeBridgeHostConnection,
+  type SettingsNamespaceView,
 } from '@deepseek-ai/dsh-ide-bridge'
 import type { StartErrorKind } from './auto-start-orchestrator.ts'
 import { buildIdeChildEnv } from './env.ts'
@@ -204,6 +205,8 @@ export interface IdeSessionHostStartOptions {
   forkTimeoutMs?: number
   /** Bound (ms) for permission RPC round-trips (default 5000). */
   permissionTimeoutMs?: number
+  /** Bound (ms) for settings RPC round-trips (default 5000). */
+  settingsTimeoutMs?: number
   /** Resolved Node executable to pre-flight and spawn; resolved from the fields below when omitted (AD-1). */
   nodeExecutable?: ResolvedNodeExecutable
   /** `dsh.nodeBin` setting value used when no resolved executable is supplied. */
@@ -216,6 +219,8 @@ export interface IdeSessionHostStartOptions {
  * Multiple conversation Tabs share this process and route by `sessionId` (AD-1).
  */
 export class IdeSessionHost {
+  /** Identity of this Host instance; a reader compares it with the Tab controller's Host. */
+  readonly instanceId: string = randomUUID()
   /** Redacted diagnostic message when status is `error`. */
   errorMessage: string | undefined
   /** Coordinates approval / questions UI waits bound to Tabs. */
@@ -239,6 +244,7 @@ export class IdeSessionHost {
   private forkTimeoutMs = 5_000
   private permissionTimeoutMs = 5_000
   private readLogTimeoutMs = 15_000
+  private settingsTimeoutMs = 5_000
   private readonly pendingDispose = new Map<string, {
     resolve: () => void
     reject: (error: Error) => void
@@ -263,7 +269,31 @@ export class IdeSessionHost {
     resolve: () => void
     reject: (error: Error) => void
   }>()
+  private readonly pendingDelete = new Map<string, {
+    resolve: (ok: boolean) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingModelList = new Map<string, {
+    resolve: (value: ModelListResult) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingModelSelect = new Map<string, {
+    resolve: () => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingSettingsDescribe = new Map<string, {
+    resolve: (namespaces: SettingsNamespaceView[]) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingSettingsUpdate = new Map<string, {
+    resolve: (namespace: SettingsNamespaceView) => void
+    reject: (error: Error) => void
+  }>()
   private resumeTimeoutMs = 15_000
+  private deleteTimeoutMs = 5_000
+  private modelRpcTimeoutMs = 5_000
+  /** Latest successful `model/list` payload, reused by token-status context window. */
+  private modelListCache: ModelListResult | undefined
   private transportWatch: (() => void) | undefined
   private readonly errorListeners = new Set<(message: string) => void>()
   private readonly notificationListeners = new Set<(notification: HarnessNotification) => void>()
@@ -386,6 +416,7 @@ export class IdeSessionHost {
     this.cancelTimeoutMs = options.cancelTimeoutMs ?? 5_000
     this.forkTimeoutMs = options.forkTimeoutMs ?? 5_000
     this.permissionTimeoutMs = options.permissionTimeoutMs ?? 5_000
+    this.settingsTimeoutMs = options.settingsTimeoutMs ?? 5_000
     // The bound the child is given is also the bound recorded on a timeout, so
     // the record cannot claim a bound the runtime never had (AC-15).
     const initializeTimeoutMs = options.initializeTimeoutMs ?? DEFAULT_INITIALIZE_TIMEOUT_MS
@@ -666,6 +697,41 @@ export class IdeSessionHost {
   }
 
   /**
+   * Delete one session's persisted data via Host bridge `session/delete`.
+   * @param sessionId - Tab-bound SDK session identity.
+   * @returns true when the runtime confirmed deletion.
+   */
+  async deleteSession(sessionId: string): Promise<boolean> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot delete session')
+    }
+    const id = randomUUID()
+    const response = new Promise<boolean>((resolve, reject) => {
+      this.pendingDelete.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingDelete.get(id)
+      if (pending === undefined) return
+      this.pendingDelete.delete(id)
+      pending.reject(new Error(`session/delete timed out after ${this.deleteTimeoutMs}ms`))
+    }, this.deleteTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'session/delete', id, sessionId })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive session/delete')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingDelete.delete(id)
+    }
+  }
+
+  /**
    * Apply a permission-presets name for a session via Host bridge (AC-21 / AC-22).
    * @param sessionId - Tab-bound SDK session identity.
    * @param preset - preset table key owned by dsh-permission-presets.
@@ -693,6 +759,174 @@ export class IdeSessionHost {
     if (!result.ok) throw new Error(result.error)
     if (!('presets' in result)) throw new Error('unexpected permission/select response for list')
     return { presets: result.presets, current: result.current }
+  }
+
+  /**
+   * List available model providers and the current selection via Host bridge `model/list`.
+   * @returns providers with models and the current default selection.
+   */
+  async listModels(): Promise<ModelListResult> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot list models')
+    }
+    const id = randomUUID()
+    const response = new Promise<ModelListResult>((resolve, reject) => {
+      this.pendingModelList.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingModelList.get(id)
+      if (pending === undefined) return
+      this.pendingModelList.delete(id)
+      pending.reject(new Error(`model/list timed out after ${this.modelRpcTimeoutMs}ms`))
+    }, this.modelRpcTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'model/list', id })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive model/list')
+      }
+      const result = await response
+      this.modelListCache = result
+      return result
+    } finally {
+      clearTimeout(timer)
+      this.pendingModelList.delete(id)
+    }
+  }
+
+  /**
+   * Latest successful `model/list` payload, without another bridge round-trip.
+   * @returns the cached catalog, or `undefined` before the first successful list.
+   */
+  cachedModelList(): ModelListResult | undefined {
+    return this.modelListCache
+  }
+
+  /**
+   * Select a model via Host bridge `model/select`.
+   * @param provider - provider id.
+   * @param model - model id.
+   * @param reasoningEffort - optional reasoning effort level.
+   */
+  async selectModel(provider: string, model: string, reasoningEffort?: string): Promise<void> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot select model')
+    }
+    const id = randomUUID()
+    const response = new Promise<void>((resolve, reject) => {
+      this.pendingModelSelect.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingModelSelect.get(id)
+      if (pending === undefined) return
+      this.pendingModelSelect.delete(id)
+      pending.reject(new Error(`model/select timed out after ${this.modelRpcTimeoutMs}ms`))
+    }, this.modelRpcTimeoutMs)
+    try {
+      const sent = bridge.broadcast({
+        kind: 'model/select',
+        id,
+        provider,
+        model,
+        ...reasoningEffort !== undefined ? { reasoningEffort } : {},
+      })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive model/select')
+      }
+      await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingModelSelect.delete(id)
+    }
+  }
+
+  /**
+   * Read every settings namespace via Host bridge `settings/describe`.
+   * The runtime redacts `role('secret')` fields before answering.
+   * @returns redacted namespace projections.
+   */
+  async describeSettings(): Promise<SettingsNamespaceView[]> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot describe settings')
+    }
+    const id = randomUUID()
+    const response = new Promise<SettingsNamespaceView[]>((resolve, reject) => {
+      this.pendingSettingsDescribe.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingSettingsDescribe.get(id)
+      if (pending === undefined) return
+      this.pendingSettingsDescribe.delete(id)
+      pending.reject(new Error(`settings/describe timed out after ${this.settingsTimeoutMs}ms`))
+    }, this.settingsTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'settings/describe', id })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive settings/describe')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingSettingsDescribe.delete(id)
+    }
+  }
+
+  /**
+   * Merge one patch into a settings namespace via Host bridge `settings/update`.
+   * @param ns - registered namespace key.
+   * @param patch - fields to merge into the namespace's user section.
+   * @param expectedRevision - revision the caller read; omitted writes unconditionally.
+   * @returns the namespace's redacted view after the write.
+   */
+  async updateSetting(
+    ns: string,
+    patch: Record<string, unknown>,
+    expectedRevision?: number,
+  ): Promise<SettingsNamespaceView> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot update settings')
+    }
+    const id = randomUUID()
+    const response = new Promise<SettingsNamespaceView>((resolve, reject) => {
+      this.pendingSettingsUpdate.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingSettingsUpdate.get(id)
+      if (pending === undefined) return
+      this.pendingSettingsUpdate.delete(id)
+      pending.reject(new Error(`settings/update timed out after ${this.settingsTimeoutMs}ms`))
+    }, this.settingsTimeoutMs)
+    try {
+      const sent = bridge.broadcast({
+        kind: 'settings/update',
+        id,
+        ns,
+        patch,
+        ...expectedRevision === undefined ? {} : { expectedRevision },
+      })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive settings/update')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingSettingsUpdate.delete(id)
+    }
   }
 
   /**
@@ -816,6 +1050,26 @@ export class IdeSessionHost {
       this.pendingResume.delete(id)
       pending.reject(new Error(reason))
     }
+    for (const [id, pending] of this.pendingDelete) {
+      this.pendingDelete.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingModelList) {
+      this.pendingModelList.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingModelSelect) {
+      this.pendingModelSelect.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingSettingsDescribe) {
+      this.pendingSettingsDescribe.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingSettingsUpdate) {
+      this.pendingSettingsUpdate.delete(id)
+      pending.reject(new Error(reason))
+    }
     this.notifyError(this.errorMessage)
   }
 
@@ -927,11 +1181,66 @@ export class IdeSessionHost {
       pending.reject(new Error(frame.error))
       return
     }
+    if (frame.kind === 'session/delete/response') {
+      const pending = this.pendingDelete.get(frame.id)
+      if (pending === undefined) return
+      this.pendingDelete.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(true)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'model/list/response') {
+      const pending = this.pendingModelList.get(frame.id)
+      if (pending === undefined) return
+      this.pendingModelList.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve({ ok: true, providers: frame.providers, current: frame.current })
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'model/select/response') {
+      const pending = this.pendingModelSelect.get(frame.id)
+      if (pending === undefined) return
+      this.pendingModelSelect.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve()
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
     if (frame.kind === 'permission/select/response' || frame.kind === 'permission/list/response') {
       const pending = this.pendingPermission.get(frame.id)
       if (pending === undefined) return
       this.pendingPermission.delete(frame.id)
       pending.resolve(frameToPermissionResult(frame))
+      return
+    }
+    if (frame.kind === 'settings/describe/response') {
+      const pending = this.pendingSettingsDescribe.get(frame.id)
+      if (pending === undefined) return
+      this.pendingSettingsDescribe.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.namespaces)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'settings/update/response') {
+      const pending = this.pendingSettingsUpdate.get(frame.id)
+      if (pending === undefined) return
+      this.pendingSettingsUpdate.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.namespace)
+        return
+      }
+      pending.reject(new Error(frame.error))
       return
     }
     if (frame.kind === 'approval/request') {
@@ -1050,6 +1359,26 @@ export class IdeSessionHost {
       this.pendingResume.delete(id)
       pending.reject(new Error(`${reason} during session/resume`))
     }
+    for (const [id, pending] of this.pendingDelete) {
+      this.pendingDelete.delete(id)
+      pending.reject(new Error(`${reason} during session/delete`))
+    }
+    for (const [id, pending] of this.pendingModelList) {
+      this.pendingModelList.delete(id)
+      pending.reject(new Error(`${reason} during model/list`))
+    }
+    for (const [id, pending] of this.pendingModelSelect) {
+      this.pendingModelSelect.delete(id)
+      pending.reject(new Error(`${reason} during model/select`))
+    }
+    for (const [id, pending] of this.pendingSettingsDescribe) {
+      this.pendingSettingsDescribe.delete(id)
+      pending.reject(new Error(`${reason} during settings/describe`))
+    }
+    for (const [id, pending] of this.pendingSettingsUpdate) {
+      this.pendingSettingsUpdate.delete(id)
+      pending.reject(new Error(`${reason} during settings/update`))
+    }
     this.transportWatch?.()
     this.transportWatch = undefined
     const client = this.client
@@ -1083,6 +1412,25 @@ type PermissionRpcResult =
   | { ok: true; presets: string[]; current: string }
   | { ok: false; error: string }
 
+/** Successful model/list bridge response payload. */
+export type ModelListResult = {
+  ok: true
+  providers: Array<{
+    id: string
+    name: string
+    models: Array<{
+      id: string
+      name: string
+      vision?: boolean
+      /** Provider-declared prompt capacity for this route, when the runtime reports one. */
+      contextWindow?: number
+      /** Adapter-declared reasoning efforts this route accepts, when the runtime reports any. */
+      reasoningEfforts?: Array<{ id: string; name: string }>
+    }>
+  }>
+  current: { provider: string; model: string; reasoningEffort?: string }
+}
+
 function frameToPermissionResult(
   frame: Extract<BridgeFrame, { kind: 'permission/select/response' | 'permission/list/response' }>,
 ): PermissionRpcResult {
@@ -1096,3 +1444,6 @@ function frameToPermissionResult(
 
 /** Re-export answer type for tests. */
 export type { AskUserQuestionAnswer }
+
+/** Re-export the redacted settings namespace projection the panel forwards. */
+export type { SettingsNamespaceView }

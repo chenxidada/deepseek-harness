@@ -2,11 +2,18 @@
  * Product ReplayHydrator: one-shot fold of authoritative session events into
  * MessageStore + TimelineStore projections (AD-CU-2 / T-0a).
  * Phase-3: also folds tool/call|result into conversation activity messages (AC-28).
+ * Compaction lifecycle events fold into ordered `kind:'compaction'` markers.
+ * Workflow lifecycle events fold into ordered `kind:'workflow'` run cards.
  * @module @deepseek-ai/dsh-vscode-dsh/replay-hydrator
  */
 
 import { randomUUID } from 'node:crypto'
-import type { ChatMessage } from './message-store.ts'
+import type {
+  ChatMessage,
+  CompactionMarker,
+  WorkflowMarker,
+  WorkflowMember,
+} from './message-store.ts'
 import type { TimelineDiffHunk, TimelineItem } from './timeline-store.ts'
 import {
   activityMessageId,
@@ -43,6 +50,22 @@ export interface FoldedMessage {
   text: string
   /** Log seq of the source event (ordering oracle). */
   seq: number
+}
+
+/** One folded compaction marker row for replay UI hydration. */
+export interface FoldedCompaction {
+  /** Log seq of the `compaction/start` event (ordering oracle). */
+  seq: number
+  /** Complete marker message, shaped like the live projection's. */
+  message: ChatMessage
+}
+
+/** One folded workflow run card for replay UI hydration. */
+export interface FoldedWorkflowRun {
+  /** Log seq of the `tool-workflow/run-start` event (ordering oracle). */
+  seq: number
+  /** Complete marker message, shaped like the live projection's. */
+  message: ChatMessage
 }
 
 /** One Timeline turn/step/tool row derived from the log. */
@@ -87,17 +110,29 @@ export function hydrateFromAuthoritativeLog(
   const foldedMessages = foldMessages(events)
   const foldedTimeline = foldTimeline(events)
   const incomplete = detectIncomplete(events)
-  const messages: ChatMessage[] = foldedMessages.map((bar, index) => {
+  const rows: Array<{ seq: number; message: ChatMessage }> = foldedMessages.map((bar, index) => {
     const isLast = index === foldedMessages.length - 1
     return {
-      id: bar.id ?? randomUUID(),
-      sessionId,
-      role: bar.role,
-      kind: 'text' as const,
-      text: bar.text,
-      ...incomplete && isLast ? { incomplete: true as const } : {},
+      seq: bar.seq,
+      message: {
+        id: bar.id ?? randomUUID(),
+        sessionId,
+        role: bar.role,
+        kind: 'text' as const,
+        text: bar.text,
+        ...incomplete && isLast ? { incomplete: true as const } : {},
+      },
     }
   })
+  for (const marker of foldCompactionMarkers(sessionId, events)) {
+    rows.push({ seq: marker.seq, message: marker.message })
+  }
+  for (const run of foldWorkflowRuns(sessionId, events)) {
+    rows.push({ seq: run.seq, message: run.message })
+  }
+  // Stable by seq: message bars keep their log order and each marker lands at its own start event.
+  rows.sort((left, right) => left.seq - right.seq)
+  const messages: ChatMessage[] = rows.map(row => row.message)
 
   // AC-28: rebuild conversation-inline activity items from tool events.
   for (const activity of foldActivities(sessionId, events)) {
@@ -249,6 +284,259 @@ export function foldMessages(events: readonly HydratorSessionEvent[]): FoldedMes
     bars.push({ id, role, text, seq: Number(event.seq ?? 0) })
   }
   return bars
+}
+
+/**
+ * Fold `compaction/start|summary|end` into ordered marker messages.
+ * A repeated start for one compactionId keeps the first marker; summary/end
+ * without an in-log start produce none.
+ * @param sessionId - SDK session identity for ChatMessage.sessionId.
+ * @param events - authoritative session events (raw or cold-balanced).
+ * @returns marker rows in start order, each carrying its start seq.
+ */
+export function foldCompactionMarkers(
+  sessionId: string,
+  events: readonly HydratorSessionEvent[],
+): FoldedCompaction[] {
+  const ordered: Array<{ seq: number; id: string }> = []
+  const states = new Map<string, { marker: CompactionMarker; turn?: number }>()
+  for (const event of events) {
+    if (event.type !== 'compaction/start'
+      && event.type !== 'compaction/summary'
+      && event.type !== 'compaction/end') continue
+    const data = asRecord(event.data) ?? {}
+    const compactionId = typeof data.compactionId === 'string' && data.compactionId !== ''
+      ? data.compactionId
+      : undefined
+    if (compactionId === undefined) continue
+    const state = states.get(compactionId)
+    if (event.type === 'compaction/start') {
+      if (state !== undefined) continue
+      const turn = asNumber(data.turn)
+      states.set(compactionId, {
+        marker: {
+          trigger: turn === undefined ? 'manual' : 'auto',
+          status: 'running',
+          shadowedTokenCount: 0,
+          summary: '',
+        },
+        ...turn === undefined ? {} : { turn },
+      })
+      ordered.push({ seq: Number(event.seq ?? 0), id: compactionId })
+      continue
+    }
+    if (state === undefined) continue
+    if (event.type === 'compaction/summary') {
+      state.marker.shadowedTokenCount = asNumber(data.shadowedTokenCount) ?? 0
+      state.marker.summary = compactionSummaryText(data.summary)
+      continue
+    }
+    const error = typeof data.error === 'string' ? data.error : undefined
+    state.marker.status = error === undefined ? 'done' : 'failed'
+    if (error !== undefined) state.marker.error = error
+  }
+  const folded: FoldedCompaction[] = []
+  for (const row of ordered) {
+    const state = states.get(row.id)
+    if (state === undefined) continue
+    folded.push({
+      seq: row.seq,
+      message: compactionMarkerMessage(sessionId, row.id, state.marker, state.turn),
+    })
+  }
+  return folded
+}
+
+/**
+ * Build one `kind:'compaction'` marker message; the live projection and the
+ * replay fold share this construction so both produce the same bubble.
+ * @param sessionId - SDK session identity.
+ * @param compactionId - compaction identity, also the panel message id.
+ * @param marker - marker payload.
+ * @param turn - owning turn when the compaction is turn-scoped.
+ * @returns complete marker message for MessageStore.append / replace.
+ */
+export function compactionMarkerMessage(
+  sessionId: string,
+  compactionId: string,
+  marker: CompactionMarker,
+  turn?: number,
+): ChatMessage {
+  return {
+    id: compactionId,
+    sessionId,
+    role: 'notice',
+    kind: 'compaction',
+    text: '',
+    ...turn === undefined ? {} : { turn },
+    compaction: marker,
+  }
+}
+
+/** Framing tag the compaction backend wraps around the model-facing summary. */
+const COMPACTED_SUMMARY_OPEN = '<compacted-summary>'
+/** Closing counterpart of {@link COMPACTED_SUMMARY_OPEN}. */
+const COMPACTED_SUMMARY_CLOSE = '</compacted-summary>'
+
+/**
+ * Extract display text from a `compaction/summary` content-block list.
+ * Text blocks are joined with newlines, and an outer `<compacted-summary>`
+ * frame is stripped: the marker shows the summary body, not the instruction frame.
+ * @param summary - raw `summary` payload of the session event.
+ * @returns display text; '' when the payload carries no text block.
+ */
+export function compactionSummaryText(summary: unknown): string {
+  if (!Array.isArray(summary)) return ''
+  const parts: string[] = []
+  for (const block of summary) {
+    if (block === null || typeof block !== 'object') continue
+    const record = block as { type?: unknown; text?: unknown }
+    if (record.type === 'text' && typeof record.text === 'string') parts.push(record.text)
+  }
+  const text = parts.join('\n')
+  const trimmed = text.trim()
+  if (!trimmed.startsWith(COMPACTED_SUMMARY_OPEN) || !trimmed.endsWith(COMPACTED_SUMMARY_CLOSE)) {
+    return text
+  }
+  return trimmed
+    .slice(COMPACTED_SUMMARY_OPEN.length, trimmed.length - COMPACTED_SUMMARY_CLOSE.length)
+    .trim()
+}
+
+/**
+ * Fold `tool-workflow/*` events into ordered run cards.
+ * A repeated run-start for one runId keeps the first card; member and run-end
+ * events without an in-log start produce none.
+ * @param sessionId - SDK session identity for ChatMessage.sessionId.
+ * @param events - authoritative session events (raw or cold-balanced).
+ * @returns run rows in start order, each carrying its start seq.
+ */
+export function foldWorkflowRuns(
+  sessionId: string,
+  events: readonly HydratorSessionEvent[],
+): FoldedWorkflowRun[] {
+  const ordered: Array<{ seq: number; runId: string }> = []
+  const states = new Map<string, WorkflowMarker>()
+  for (const event of events) {
+    if (event.type !== 'tool-workflow/run-start'
+      && event.type !== 'tool-workflow/agent-start'
+      && event.type !== 'tool-workflow/agent-end'
+      && event.type !== 'tool-workflow/run-end') continue
+    const data = asRecord(event.data) ?? {}
+    const runId = typeof data.runId === 'string' && data.runId !== '' ? data.runId : undefined
+    if (runId === undefined) continue
+    const marker = states.get(runId)
+    if (event.type === 'tool-workflow/run-start') {
+      if (marker !== undefined) continue
+      states.set(runId, {
+        runId,
+        name: typeof data.name === 'string' ? data.name : '',
+        status: 'running',
+        members: [],
+      })
+      ordered.push({ seq: Number(event.seq ?? 0), runId })
+      continue
+    }
+    if (marker === undefined) continue
+    if (event.type === 'tool-workflow/agent-start') {
+      const member = workflowMemberFrom(data)
+      if (member === undefined) continue
+      marker.members = withWorkflowMember(marker.members, member)
+      continue
+    }
+    if (event.type === 'tool-workflow/agent-end') {
+      const seq = asNumber(data.seq)
+      const outcome = workflowOutcomeFrom(data.outcome)
+      if (seq === undefined || outcome === undefined) continue
+      marker.members = marker.members.map(m => m.seq === seq ? { ...m, outcome } : { ...m })
+      continue
+    }
+    const stopReason = workflowStopReasonFrom(data.stopReason)
+    marker.status = 'done'
+    if (stopReason !== undefined) marker.stopReason = stopReason
+  }
+  const folded: FoldedWorkflowRun[] = []
+  for (const row of ordered) {
+    const marker = states.get(row.runId)
+    if (marker === undefined) continue
+    folded.push({ seq: row.seq, message: workflowMarkerMessage(sessionId, marker) })
+  }
+  return folded
+}
+
+/**
+ * Build one `kind:'workflow'` run card; the live projection and the replay fold
+ * share this construction so both produce the same card.
+ * @param sessionId - SDK session identity.
+ * @param marker - marker payload, whose runId also forms the panel message id.
+ * @returns complete card message for MessageStore.append / replace.
+ */
+export function workflowMarkerMessage(
+  sessionId: string,
+  marker: WorkflowMarker,
+): ChatMessage {
+  return {
+    id: `workflow:${marker.runId}`,
+    sessionId,
+    role: 'notice',
+    kind: 'workflow',
+    text: '',
+    workflow: marker,
+  }
+}
+
+/**
+ * Read one `tool-workflow/agent-start` payload as a member row.
+ * A payload without a numeric seq or a child session id carries no member.
+ * @param data - `tool-workflow/agent-start` payload.
+ * @returns the member row, or undefined when the payload is incomplete.
+ */
+export function workflowMemberFrom(data: Record<string, unknown>): WorkflowMember | undefined {
+  const seq = asNumber(data.seq)
+  const childId = typeof data.childId === 'string' ? data.childId : undefined
+  if (seq === undefined || childId === undefined) return undefined
+  const phase = typeof data.phase === 'string' ? data.phase : undefined
+  return {
+    seq,
+    label: typeof data.label === 'string' ? data.label : '',
+    ...phase === undefined ? {} : { phase },
+    childId,
+  }
+}
+
+/**
+ * Replace or append one member, keeping the table in seq order.
+ * A repeated seq overwrites that member in place.
+ * @param members - current member table.
+ * @param member - member row to place.
+ * @returns a new table in ascending seq order.
+ */
+export function withWorkflowMember(
+  members: readonly WorkflowMember[],
+  member: WorkflowMember,
+): WorkflowMember[] {
+  return members
+    .filter(m => m.seq !== member.seq)
+    .concat([{ ...member }])
+    .sort((left, right) => left.seq - right.seq)
+}
+
+/**
+ * Narrow a `tool-workflow/agent-end` outcome to the closed set the card projects.
+ * @param value - raw `outcome` payload field.
+ * @returns the outcome, or undefined when the value is outside the closed set.
+ */
+export function workflowOutcomeFrom(value: unknown): WorkflowMember['outcome'] {
+  return value === 'completed' || value === 'failed' || value === 'cancelled' ? value : undefined
+}
+
+/**
+ * Narrow a `tool-workflow/run-end` stop reason to the closed set the card projects.
+ * @param value - raw `stopReason` payload field.
+ * @returns the stop reason, or undefined when the value is outside the closed set.
+ */
+export function workflowStopReasonFrom(value: unknown): WorkflowMarker['stopReason'] {
+  return value === 'completed' || value === 'cancelled' || value === 'error' ? value : undefined
 }
 
 /**

@@ -6,7 +6,7 @@
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/protocol
  */
 
-import type { ChatMessage } from '../message-store.ts'
+import type { ChatMessage, CompactionMarker, WorkflowMarker } from '../message-store.ts'
 
 /** Panel chrome mode pushed via panel/state. */
 export type PanelMode = 'empty' | 'waiting-host' | 'replay' | 'live' | 'readonly-live' | 'error'
@@ -129,6 +129,10 @@ export type HostToWebviewMessage =
     streaming?: boolean
     /** Activity status transition for kind:activity bubbles. */
     activityStatus?: 'running' | 'done' | 'failed' | 'aborted'
+    /** Compaction marker merge for kind:compaction bubbles. */
+    compaction?: Partial<CompactionMarker>
+    /** Workflow run marker merge for kind:workflow cards. */
+    workflow?: Partial<WorkflowMarker>
   }
   | {
     type: 'status/set'
@@ -236,10 +240,79 @@ export type HostToWebviewMessage =
     }>
   }
   | {
+    /** Model selection state pushed from Host (feature: model-selector). */
+    type: 'model/state'
+    providers: Array<{
+      id: string
+      name: string
+      models: Array<{
+        id: string
+        name: string
+        vision?: boolean
+        /** Provider-owned context capacity for this exact route, when declared. */
+        contextWindow?: number
+        /** Adapter-owned reasoning efforts this route accepts. */
+        reasoningEfforts?: Array<{ id: string; name: string }>
+      }>
+    }>
+    current: { provider: string; model: string; reasoningEffort?: string }
+  }
+  | {
+    /** Token usage status pushed from Host (feature: token-status). */
+    type: 'token/status'
+    /** Session the sample belongs to; omitted only by legacy senders. */
+    sessionId?: string
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+    cacheReadTokens?: number
+    reasoningTokens?: number
+    contextWindow: number
+    thresholdRatio: number
+  }
+  | {
+    /** Todo list state pushed from Host (feature: todo-panel). */
+    type: 'todo/state'
+    sessionId: string
+    /** Whole-list snapshot: the latest `todo/write` payload, verbatim. */
+    items: Array<{
+      content: string
+      status: 'pending' | 'in_progress' | 'completed'
+    }>
+  }
+  | {
+    /** Settings document projection for the in-panel settings page (feature: settings-page).
+     * Values are always redacted by the runtime before they reach this frame. */
+    type: 'settings/state'
+    namespaces: Array<{
+      ns: string
+      /** Redacted resolved value (schema defaults, then composition base, then user layer). */
+      value: unknown
+      /** Composition base layer, when one was declared. */
+      base?: unknown
+      /** Raw user section; a key's presence here marks it user-overridden. */
+      user?: unknown
+      /** Namespace revision for optimistic-concurrency writes. */
+      revision: number
+      /** Schema-declared secret positions, when the namespace declares any. */
+      secretFields?: string[]
+    }>
+  }
+  | {
     /** Host-side render-detection request (DEBT-7). The webview answers with
      * `probe/render-state`; carries no presentation state. */
     type: 'probe/query-render-state'
   }
+
+/** One image attached to a composer send (feature: image-upload). */
+export interface PromptImage {
+  /** Base64 payload, without a data-URL prefix. */
+  data: string
+  /** Image MIME type, e.g. `image/png`. */
+  mimeType: string
+  /** Original file name, when the Webview knows one. */
+  name?: string
+}
 
 /** Webview → Host frames (Phase 1–4 + change protocol + editor chrome). */
 export type WebviewToHostMessage =
@@ -297,6 +370,27 @@ export type WebviewToHostMessage =
   | { type: 'nav/back' }
   /** Promote the in-panel child context into its own pinned Tab (phase-4). */
   | { type: 'action/pin-subagent'; childSessionId: string }
+  | {
+    /** User selected a different model (feature: model-selector). */
+    type: 'action/select-model'
+    provider: string
+    model: string
+    reasoningEffort?: string
+  }
+  | {
+    /** User triggered manual compaction (feature: compact-button). */
+    type: 'action/compact'
+  }
+  | {
+    /** Composer send with optional image attachments (feature: image-upload). */
+    type: 'composer/send-rich'
+    text: string
+    images?: PromptImage[]
+  }
+  /** Open the in-panel settings page and request a fresh settings projection. */
+  | { type: 'settings/open' }
+  /** Merge a partial patch into one settings namespace's user layer. */
+  | { type: 'settings/update'; ns: string; patch: Record<string, unknown>; expectedRevision?: number }
   /** Host-side render-detection response (DEBT-7). */
   | { type: 'probe/render-state'; testIds: string[]; renderState: Record<string, boolean> }
 
@@ -461,6 +555,45 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
       renderState[key] = val
     }
     return { type: 'probe/render-state', testIds, renderState }
+  }
+  if (type === 'action/select-model') {
+    if (typeof record.provider !== 'string' || typeof record.model !== 'string') return undefined
+    return {
+      type: 'action/select-model',
+      provider: record.provider,
+      model: record.model,
+      ...typeof record.reasoningEffort === 'string' ? { reasoningEffort: record.reasoningEffort } : {},
+    }
+  }
+  if (type === 'action/compact') return { type: 'action/compact' }
+  if (type === 'composer/send-rich') {
+    if (typeof record.text !== 'string') return undefined
+    const images = Array.isArray(record.images)
+      ? (record.images as unknown[]).filter((img): img is PromptImage =>
+        typeof img === 'object' && img !== null
+        && typeof (img as Record<string, unknown>).data === 'string'
+        && typeof (img as Record<string, unknown>).mimeType === 'string')
+      : undefined
+    return {
+      type: 'composer/send-rich',
+      text: record.text,
+      ...images !== undefined && images.length > 0 ? { images } : {},
+    }
+  }
+  if (type === 'settings/open') return { type: 'settings/open' }
+  if (type === 'settings/update') {
+    if (typeof record.ns !== 'string' || record.ns === '') return undefined
+    if (typeof record.patch !== 'object' || record.patch === null || Array.isArray(record.patch)) {
+      return undefined
+    }
+    return {
+      type: 'settings/update',
+      ns: record.ns,
+      patch: record.patch as Record<string, unknown>,
+      ...typeof record.expectedRevision === 'number' && Number.isSafeInteger(record.expectedRevision)
+        ? { expectedRevision: record.expectedRevision }
+        : {},
+    }
   }
   return undefined
 }

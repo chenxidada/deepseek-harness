@@ -1460,4 +1460,735 @@ describe('cap:webview — editor chat shell React rendering', () => {
     })
   })
 
+  describe('ui/compaction-marker + token-meter', () => {
+    describe('compaction marker in the message flow / context meter in the status row', () => {
+      let bridge: ReturnType<typeof createMessageBridge>
+
+      beforeEach(() => {
+        cleanup()
+        resetChatUiState()
+        bridge = createMessageBridge({
+          postToHost: () => {},
+          onHostMessage: () => () => {},
+        })
+      })
+
+      afterEach(() => {
+        bridge.dispose()
+        cleanup()
+      })
+
+      it('CAP-WEBVIEW-037 renders a compaction marker from messages/append and expands its summary', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's1',
+            message: {
+              id: 'cmp-1',
+              role: 'notice',
+              kind: 'compaction',
+              sessionId: 's1',
+              text: '',
+              compaction: {
+                trigger: 'auto',
+                status: 'done',
+                shadowedTokenCount: 4200,
+                summary: '<compacted-summary>earlier turns were folded</compacted-summary>',
+              },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('compaction-marker')).toBeTruthy()
+        })
+        const marker = screen.getByTestId('compaction-marker')
+        expect(marker.getAttribute('data-status')).toBe('done')
+        expect(marker.getAttribute('data-trigger')).toBe('auto')
+        expect(screen.getByTestId('compaction-title').textContent).toBe('上下文已压缩')
+        expect(screen.getByTestId('compaction-shadowed').textContent).toBe('释放 4200 tokens')
+        // Centered separator, not a left/right chat bubble
+        expect(screen.queryByTestId('msg')).toBeNull()
+        expect(marker.style.alignSelf).toBe('stretch')
+        expect(marker.style.textAlign).toBe('center')
+
+        const summary = screen.getByTestId('compaction-summary')
+        expect(summary.querySelector('summary')?.textContent).toBe('查看摘要')
+        expect(summary.querySelector('pre')?.textContent).toBe('earlier turns were folded')
+        expect(summary.querySelector('compacted-summary')).toBeNull()
+        expect(summary.hasAttribute('open')).toBe(false)
+        fireEvent.click(summary.querySelector('summary')!)
+        await waitFor(() => {
+          expect(screen.getByTestId('compaction-summary').hasAttribute('open')).toBe(true)
+        })
+      })
+
+      it('CAP-WEBVIEW-038 shows the failure copy and omits the released-token segment at zero', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's1',
+            message: {
+              id: 'cmp-failed',
+              role: 'notice',
+              kind: 'compaction',
+              sessionId: 's1',
+              text: '',
+              compaction: {
+                trigger: 'manual',
+                status: 'failed',
+                shadowedTokenCount: 0,
+                summary: '',
+                error: 'summarizer request timed out',
+              },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('compaction-error')).toBeTruthy()
+        })
+        const marker = screen.getByTestId('compaction-marker')
+        expect(marker.getAttribute('data-status')).toBe('failed')
+        expect(marker.getAttribute('data-trigger')).toBe('manual')
+        expect(marker.textContent).toContain('手动压缩')
+        expect(screen.getByTestId('compaction-error').textContent).toBe('summarizer request timed out')
+        expect(screen.getByTestId('compaction-error').style.color).toContain('--dsh-danger')
+        expect(screen.queryByTestId('compaction-shadowed')).toBeNull()
+        expect(screen.queryByTestId('compaction-summary')).toBeNull()
+      })
+
+      it('CAP-WEBVIEW-039 renders the token meter only after token/status and reports counts', async () => {
+        render(<App bridge={bridge} />)
+        expect(screen.queryByTestId('token-meter')).toBeNull()
+
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'token/status',
+            sessionId: 's1',
+            inputTokens: 9000,
+            outputTokens: 3300,
+            totalTokens: 12300,
+            contextWindow: 128000,
+            thresholdRatio: 0.8,
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('token-meter')).toBeTruthy()
+        })
+        const meter = screen.getByTestId('token-meter')
+        expect(screen.getByTestId('token-meter-text').textContent).toBe('12.3k / 128k · 9.6%')
+        expect(screen.getByTestId('token-meter-bar').style.width).toBe('9.6%')
+        expect(meter.getAttribute('data-warn')).toBe('false')
+        expect(meter.getAttribute('title')).toBe('input 9000 · output 3300')
+        // Shares the status row instead of pushing the composer down
+        expect(screen.getByTestId('status').contains(meter)).toBe(true)
+      })
+
+      it('CAP-WEBVIEW-040 flags the warning token at/over thresholdRatio and clamps the bar at 100%', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'token/status',
+            sessionId: 's1',
+            inputTokens: 120000,
+            outputTokens: 8000,
+            totalTokens: 128000,
+            contextWindow: 128000,
+            thresholdRatio: 0.8,
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('token-meter').getAttribute('data-warn')).toBe('true')
+        })
+        expect(screen.getByTestId('token-meter-bar').style.background).toContain('--dsh-warning')
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'token/status',
+            sessionId: 's1',
+            inputTokens: 190000,
+            outputTokens: 10000,
+            totalTokens: 200000,
+            contextWindow: 128000,
+            thresholdRatio: 0.8,
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('token-meter-bar').style.width).toBe('100%')
+        })
+        expect(screen.getByTestId('token-meter').getAttribute('data-warn')).toBe('true')
+      })
+
+      it('CAP-WEBVIEW-041 messages/patch updates compaction status, released tokens, and summary', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's1',
+            message: {
+              id: 'cmp-patch',
+              role: 'notice',
+              kind: 'compaction',
+              sessionId: 's1',
+              text: '',
+              compaction: { trigger: 'auto', status: 'running', shadowedTokenCount: 0, summary: '' },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('compaction-title').textContent).toBe('上下文已压缩…')
+        })
+        expect(screen.queryByTestId('compaction-summary')).toBeNull()
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'messages/patch',
+            sessionId: 's1',
+            messageId: 'cmp-patch',
+            compaction: {
+              status: 'done',
+              shadowedTokenCount: 3100,
+              summary: '<compacted-summary>older context folded</compacted-summary>',
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('compaction-marker').getAttribute('data-status')).toBe('done')
+        })
+        expect(screen.getByTestId('compaction-title').textContent).toBe('上下文已压缩')
+        expect(screen.getByTestId('compaction-shadowed').textContent).toBe('释放 3100 tokens')
+        expect(screen.getByTestId('compaction-summary').textContent).toContain('older context folded')
+      })
+
+      it('CAP-WEBVIEW-042 drops a malformed compaction payload instead of rendering a partial marker', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's1',
+            message: {
+              id: 'bad-compaction',
+              role: 'assistant',
+              kind: 'text',
+              sessionId: 's1',
+              text: 'plain reply',
+              compaction: {
+                trigger: 'auto',
+                status: 'half-done',
+                shadowedTokenCount: 'many',
+                summary: 'ignored',
+              },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('msg')).toBeTruthy()
+        })
+        expect(screen.getByTestId('msg').textContent).toContain('plain reply')
+        expect(screen.queryByTestId('compaction-marker')).toBeNull()
+      })
+
+      it('CAP-WEBVIEW-043 keeps the previous marker when a patch carries an out-of-set status', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's1',
+            message: {
+              id: 'cmp-keep',
+              role: 'notice',
+              kind: 'compaction',
+              sessionId: 's1',
+              text: '',
+              compaction: { trigger: 'manual', status: 'running', shadowedTokenCount: 700, summary: '' },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('compaction-marker').getAttribute('data-status')).toBe('running')
+        })
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'messages/patch',
+            sessionId: 's1',
+            messageId: 'cmp-keep',
+            compaction: { status: 'half-done', shadowedTokenCount: 999 },
+          })
+        })
+        expect(screen.getByTestId('compaction-marker').getAttribute('data-status')).toBe('running')
+        expect(screen.getByTestId('compaction-shadowed').textContent).toBe('释放 700 tokens')
+      })
+    })
+  })
+
+  describe('ui/workflow-run-card', () => {
+    describe('workflow run card in the message flow', () => {
+      const posts: unknown[] = []
+      let bridge: ReturnType<typeof createMessageBridge>
+
+      beforeEach(() => {
+        cleanup()
+        posts.length = 0
+        resetChatUiState()
+        bridge = createMessageBridge({
+          postToHost: (msg) => {
+            posts.push(msg)
+          },
+          onHostMessage: () => () => {},
+        })
+      })
+
+      afterEach(() => {
+        bridge.dispose()
+        cleanup()
+      })
+
+      it('CAP-WEBVIEW-044 renders a workflow run card from messages/append with name, members, and progress', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's1',
+            message: {
+              id: 'wf-1',
+              role: 'notice',
+              kind: 'workflow',
+              sessionId: 's1',
+              text: '',
+              workflow: {
+                runId: 'run-7',
+                name: 'Release sweep',
+                status: 'running',
+                members: [
+                  { seq: 0, label: '起草方案', phase: 'plan', childId: 'child-a', outcome: 'completed' },
+                  { seq: 1, label: '实现', phase: 'impl', childId: 'child-b' },
+                  { seq: 2, label: '校验', childId: 'child-c', outcome: 'cancelled' },
+                ],
+              },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('workflow-card')).toBeTruthy()
+        })
+        const card = screen.getByTestId('workflow-card')
+        expect(card.getAttribute('data-status')).toBe('running')
+        expect(screen.getByTestId('workflow-title').textContent).toBe('⚙ Release sweep')
+        expect(screen.getByTestId('workflow-status').textContent).toBe('运行中')
+        expect(screen.getByTestId('workflow-progress').textContent).toBe('已完成 1 / 共 3')
+
+        const members = screen.getAllByTestId('workflow-member')
+        expect(members.length).toBe(3)
+        expect(members[0]!.getAttribute('data-child-session-id')).toBe('child-a')
+        expect(members[0]!.getAttribute('data-outcome')).toBe('completed')
+        expect(members[0]!.textContent).toBe('✓ 起草方案 · plan')
+        expect(members[1]!.getAttribute('data-outcome')).toBe('pending')
+        expect(members[1]!.textContent).toBe('○ 实现 · impl')
+        expect(members[2]!.getAttribute('data-outcome')).toBe('cancelled')
+        expect(members[2]!.textContent).toBe('⊘ 校验')
+        expect(screen.queryByTestId('workflow-empty')).toBeNull()
+        expect(screen.queryByTestId('workflow-error')).toBeNull()
+        // Card semantics, not a left/right chat bubble
+        expect(screen.queryByTestId('msg')).toBeNull()
+        expect(card.style.alignSelf).toBe('stretch')
+      })
+
+      it('CAP-WEBVIEW-045 clicking a member emits nav/open-subagent for that child session', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's1',
+            message: {
+              id: 'wf-2',
+              role: 'notice',
+              kind: 'workflow',
+              sessionId: 's1',
+              text: '',
+              workflow: {
+                runId: 'run-8',
+                name: 'Fan-out',
+                status: 'running',
+                members: [
+                  { seq: 0, label: 'left', childId: 'child-left', outcome: 'completed' },
+                  { seq: 1, label: 'right', childId: 'child-right' },
+                ],
+              },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getAllByTestId('workflow-member').length).toBe(2)
+        })
+
+        const members = screen.getAllByTestId('workflow-member')
+        fireEvent.click(members[1]!)
+        fireEvent.click(members[0]!)
+        const navs = posts.filter(p =>
+          (p as { type?: string }).type === 'nav/open-subagent') as Array<{ childSessionId?: string }>
+        expect(navs.map(n => n.childSessionId)).toEqual(['child-right', 'child-left'])
+      })
+
+      it('CAP-WEBVIEW-046 messages/patch replaces members wholesale and settles the run as done', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's1',
+            message: {
+              id: 'wf-patch',
+              role: 'notice',
+              kind: 'workflow',
+              sessionId: 's1',
+              text: '',
+              workflow: {
+                runId: 'run-9',
+                name: 'Nightly',
+                status: 'running',
+                members: [{ seq: 0, label: 'build', phase: 'build', childId: 'child-b1' }],
+              },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('workflow-status').textContent).toBe('运行中')
+        })
+        expect(screen.getByTestId('workflow-progress').textContent).toBe('已完成 0 / 共 1')
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'messages/patch',
+            sessionId: 's1',
+            messageId: 'wf-patch',
+            workflow: {
+              status: 'done',
+              stopReason: 'completed',
+              members: [
+                { seq: 0, label: 'build', phase: 'build', childId: 'child-b1', outcome: 'completed' },
+                { seq: 1, label: 'test', phase: 'test', childId: 'child-b2', outcome: 'failed' },
+              ],
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('workflow-card').getAttribute('data-status')).toBe('done')
+        })
+        expect(screen.getByTestId('workflow-card').getAttribute('data-stop-reason')).toBe('completed')
+        expect(screen.getByTestId('workflow-status').textContent).toBe('已完成')
+        expect(screen.getByTestId('workflow-progress').textContent).toBe('已完成 1 / 共 2')
+        // Partial patch: run identity survives a members-only replacement
+        expect(screen.getByTestId('workflow-title').textContent).toBe('⚙ Nightly')
+
+        const members = screen.getAllByTestId('workflow-member')
+        expect(members.length).toBe(2)
+        expect(members[1]!.getAttribute('data-child-session-id')).toBe('child-b2')
+        expect(members[1]!.getAttribute('data-outcome')).toBe('failed')
+        expect(members[1]!.style.color).toContain('--dsh-danger')
+        expect(members[0]!.style.color).toContain('--dsh-muted')
+      })
+
+      it('CAP-WEBVIEW-047 drops a malformed workflow payload and keeps the previous card on a bad patch', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's1',
+            message: {
+              id: 'bad-workflow',
+              role: 'assistant',
+              kind: 'text',
+              sessionId: 's1',
+              text: 'plain reply',
+              workflow: {
+                runId: 'run-bad',
+                name: 'Broken',
+                status: 'running',
+                members: 'not-an-array',
+              },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('msg')).toBeTruthy()
+        })
+        expect(screen.getByTestId('msg').textContent).toContain('plain reply')
+        expect(screen.queryByTestId('workflow-card')).toBeNull()
+        expect(getChatUiState().messages[0]?.workflow).toBeUndefined()
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's1',
+            message: {
+              id: 'wf-keep',
+              role: 'notice',
+              kind: 'workflow',
+              sessionId: 's1',
+              text: '',
+              workflow: {
+                runId: 'run-keep',
+                name: 'Keep me',
+                status: 'running',
+                members: [
+                  { seq: 0, label: 'kept', childId: 'child-ok' },
+                  { seq: 'one', label: 5, childId: 7 },
+                ],
+              },
+            },
+          })
+        })
+        // A member failing its own checks drops alone; the card still renders
+        await waitFor(() => {
+          expect(screen.getAllByTestId('workflow-member').length).toBe(1)
+        })
+        expect(screen.getByTestId('workflow-title').textContent).toBe('⚙ Keep me')
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'messages/patch',
+            sessionId: 's1',
+            messageId: 'wf-keep',
+            workflow: { status: 'half-done', members: 'nope' },
+          })
+        })
+        expect(screen.getByTestId('workflow-card').getAttribute('data-status')).toBe('running')
+        expect(screen.getAllByTestId('workflow-member').length).toBe(1)
+        expect(screen.getByTestId('workflow-progress').textContent).toBe('已完成 0 / 共 1')
+      })
+    })
+  })
+
+  describe('ui/settings-page', () => {
+    describe('in-panel settings page (model route + compaction policy)', () => {
+      const posts: unknown[] = []
+      let bridge: ReturnType<typeof createMessageBridge>
+
+      beforeEach(() => {
+        cleanup()
+        posts.length = 0
+        resetChatUiState()
+        bridge = createMessageBridge({
+          postToHost: (msg) => {
+            posts.push(msg)
+          },
+          onHostMessage: () => () => {},
+        })
+      })
+
+      afterEach(() => {
+        bridge.dispose()
+        cleanup()
+      })
+
+      const modelStateFrame = () => ({
+        type: 'model/state',
+        providers: [
+          {
+            id: 'deepseek',
+            name: 'DeepSeek',
+            models: [
+              {
+                id: 'deepseek-chat',
+                name: 'DeepSeek Chat',
+                contextWindow: 128000,
+                reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }],
+              },
+              { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' },
+            ],
+          },
+          { id: 'local', name: 'Local', models: [{ id: 'small', name: 'Small' }] },
+        ],
+        current: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' },
+      })
+
+      const settingsStateFrame = () => ({
+        type: 'settings/state',
+        namespaces: [
+          {
+            ns: 'compaction-basic',
+            value: { auto: true, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 8192 },
+            base: { auto: false },
+            user: { maxTokens: 4096 },
+            revision: 3,
+          },
+          { ns: 'llm-deepseek', value: {}, revision: 7 },
+        ],
+      })
+
+      /** One captured `settings/update` intent from the settings page. */
+      interface SettingsUpdatePost {
+        ns: string
+        patch: Record<string, unknown>
+        expectedRevision?: number
+      }
+
+      const settingsUpdates = (): SettingsUpdatePost[] => posts.filter(p =>
+        (p as { type?: string }).type === 'settings/update') as SettingsUpdatePost[]
+
+      it('CAP-WEBVIEW-048 opens the settings page from chrome and closes it without inventing data', async () => {
+        render(<App bridge={bridge} />)
+        expect(screen.queryByTestId('settings-panel')).toBeNull()
+
+        fireEvent.click(screen.getByTestId('btn-settings'))
+        expect(posts.some(p => (p as { type?: string }).type === 'settings/open')).toBe(true)
+        await waitFor(() => {
+          expect(screen.getByTestId('settings-panel')).toBeTruthy()
+        })
+        // No pushed state yet: the page waits for the Host instead of fabricating values
+        expect(screen.getByTestId('settings-model-unavailable')).toBeTruthy()
+        expect(screen.getByTestId('settings-compaction-unavailable')).toBeTruthy()
+        expect(screen.queryByTestId('settings-provider')).toBeNull()
+
+        fireEvent.click(screen.getByTestId('settings-close'))
+        await waitFor(() => {
+          expect(screen.queryByTestId('settings-panel')).toBeNull()
+        })
+      })
+
+      it('CAP-WEBVIEW-049 seeds both sections from model/state and settings/state', async () => {
+        render(<App bridge={bridge} />)
+        fireEvent.click(screen.getByTestId('btn-settings'))
+        await act(async () => {
+          applyHostFrame(modelStateFrame())
+          applyHostFrame(settingsStateFrame())
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('settings-model-select')).toBeTruthy()
+        })
+
+        const providerSelect = screen.getByTestId<HTMLSelectElement>('settings-provider')
+        expect(providerSelect.value).toBe('deepseek')
+        expect([...providerSelect.options].map(o => o.textContent)).toEqual(['DeepSeek', 'Local'])
+        const modelSelect = screen.getByTestId<HTMLSelectElement>('settings-model-select')
+        expect(modelSelect.value).toBe('deepseek-chat')
+        expect([...modelSelect.options].map(o => o.value))
+          .toEqual(['deepseek-chat', 'deepseek-reasoner'])
+        const effortSelect = screen.getByTestId<HTMLSelectElement>('settings-effort')
+        expect(effortSelect.value).toBe('high')
+        expect([...effortSelect.options].map(o => o.value)).toEqual(['low', 'high'])
+        expect(effortSelect.disabled).toBe(false)
+
+        expect(screen.getByTestId<HTMLInputElement>('settings-compact-auto').checked).toBe(true)
+        expect(screen.getByTestId<HTMLInputElement>('settings-threshold').value).toBe('0.8')
+        expect(screen.getByTestId<HTMLInputElement>('settings-retain-mode-ratio').checked).toBe(true)
+        expect(screen.getByTestId<HTMLInputElement>('settings-retain-ratio').value).toBe('0.16')
+        expect(screen.getByTestId<HTMLInputElement>('settings-retain-ratio').disabled).toBe(false)
+        expect(screen.getByTestId<HTMLInputElement>('settings-retain-tokens').disabled).toBe(true)
+        expect(screen.getByTestId<HTMLInputElement>('settings-max-tokens').value).toBe('8192')
+        // Unset cap reads as an empty field — the placeholder carries the meaning
+        const cap = screen.getByTestId<HTMLInputElement>('settings-window-cap')
+        expect(cap.value).toBe('')
+        expect(cap.placeholder).toBe('留空 = 使用模型自身窗口')
+        expect(screen.getByTestId('settings-revision').textContent).toBe('3')
+        // Only the field the user layer carries is marked as overridden
+        expect(screen.getByTestId('settings-user-override').getAttribute('data-field')).toBe('maxTokens')
+      })
+
+      it('CAP-WEBVIEW-050 applies only the edited compaction fields with the read revision', async () => {
+        render(<App bridge={bridge} />)
+        fireEvent.click(screen.getByTestId('btn-settings'))
+        await act(async () => {
+          applyHostFrame(settingsStateFrame())
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('settings-apply-compaction')).toBeTruthy()
+        })
+
+        fireEvent.change(screen.getByTestId('settings-threshold'), { target: { value: '0.7' } })
+        fireEvent.click(screen.getByTestId('settings-apply-compaction'))
+        expect(settingsUpdates()).toHaveLength(1)
+        expect(settingsUpdates()[0]!.ns).toBe('compaction-basic')
+        expect(settingsUpdates()[0]!.patch).toEqual({ thresholdRatio: 0.7 })
+        expect(settingsUpdates()[0]!.expectedRevision).toBe(3)
+
+        // Ratio retention is the active form, so the tokens key must stay out
+        expect('retainTokens' in settingsUpdates()[0]!.patch).toBe(false)
+
+        fireEvent.click(screen.getByTestId('settings-retain-mode-tokens'))
+        fireEvent.change(screen.getByTestId('settings-retain-tokens'), { target: { value: '2048' } })
+        fireEvent.click(screen.getByTestId('settings-apply-compaction'))
+        expect(settingsUpdates()).toHaveLength(2)
+        expect(settingsUpdates()[1]!.patch).toEqual({ thresholdRatio: 0.7, retainTokens: 2048 })
+        expect('retainRatio' in settingsUpdates()[1]!.patch).toBe(false)
+      })
+
+      it('CAP-WEBVIEW-051 switches the model route and emits action/select-model', async () => {
+        render(<App bridge={bridge} />)
+        fireEvent.click(screen.getByTestId('btn-settings'))
+        await act(async () => {
+          applyHostFrame(modelStateFrame())
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('settings-effort')).toBeTruthy()
+        })
+
+        // A route without efforts disables the effort select instead of keeping a stale value
+        fireEvent.change(screen.getByTestId('settings-model-select'), { target: { value: 'deepseek-reasoner' } })
+        const effortSelect = screen.getByTestId<HTMLSelectElement>('settings-effort')
+        expect(effortSelect.disabled).toBe(true)
+        expect(effortSelect.textContent).toContain('该模型不支持')
+
+        fireEvent.change(screen.getByTestId('settings-provider'), { target: { value: 'local' } })
+        expect(screen.getByTestId<HTMLSelectElement>('settings-model-select').value).toBe('small')
+        fireEvent.click(screen.getByTestId('settings-apply-model'))
+        const modelIntents = () => posts.filter(p =>
+          (p as { type?: string }).type === 'action/select-model')
+        expect(modelIntents()).toHaveLength(1)
+        expect(modelIntents()[0]).toEqual({ type: 'action/select-model', provider: 'local', model: 'small' })
+
+        // Returning to a supporting route resets the effort to that model's first entry
+        fireEvent.change(screen.getByTestId('settings-provider'), { target: { value: 'deepseek' } })
+        expect(screen.getByTestId<HTMLSelectElement>('settings-model-select').value).toBe('deepseek-chat')
+        expect(screen.getByTestId<HTMLSelectElement>('settings-effort').value).toBe('low')
+        fireEvent.click(screen.getByTestId('settings-apply-model'))
+        expect(modelIntents()).toHaveLength(2)
+        expect(modelIntents()[1]).toEqual({
+          type: 'action/select-model',
+          provider: 'deepseek',
+          model: 'deepseek-chat',
+          reasoningEffort: 'low',
+        })
+      })
+
+      it('CAP-WEBVIEW-052 shows compaction-unavailable without that namespace and drops malformed namespaces', async () => {
+        render(<App bridge={bridge} />)
+        fireEvent.click(screen.getByTestId('btn-settings'))
+        await act(async () => {
+          applyHostFrame({
+            type: 'settings/state',
+            namespaces: [
+              { ns: 'llm-deepseek', value: { apiKey: '' }, revision: 2 },
+              { ns: '', value: {}, revision: 1 },
+              { ns: 'no-revision', value: {} },
+              { ns: 'scalar-layer', value: 'nope', revision: 4 },
+            ],
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('settings-compaction-unavailable')).toBeTruthy()
+        })
+        expect(getChatUiState().settingsState?.namespaces.map(ns => ns.ns)).toEqual(['llm-deepseek'])
+
+        // A frame whose whole list is unusable keeps the previous state
+        await act(async () => {
+          applyHostFrame({ type: 'settings/state', namespaces: 'nope' })
+        })
+        expect(getChatUiState().settingsState?.namespaces.map(ns => ns.ns)).toEqual(['llm-deepseek'])
+      })
+    })
+  })
+
 })

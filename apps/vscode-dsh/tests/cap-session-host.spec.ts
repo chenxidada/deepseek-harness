@@ -4700,4 +4700,282 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
     })
   })
 
+  describe('settings-rpc.spec.ts', () => {
+    const fakeSdkRuntime = fileURLToPath(new URL('./fixtures/fake-sdk-runtime.mjs', import.meta.url))
+    const dirs: string[] = []
+
+    afterEach(async () => {
+      while (dirs.length > 0) {
+        await rm(dirs.pop()!, { recursive: true, force: true })
+      }
+    })
+
+    it('CAP-SESSION-HOST-145 settings RPC fails closed while the Host holds no live bridge', async () => {
+      const host = new IdeSessionHost()
+      await expect(host.describeSettings()).rejects.toThrow('IdeSessionHost is not connected')
+      await expect(host.updateSetting('fake-settings', { model: 'x' }))
+        .rejects.toThrow('IdeSessionHost is not connected')
+    })
+
+    it('CAP-SESSION-HOST-146 settings describe/update round-trip through the Host bridge', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-settings-e2e-'))
+      dirs.push(dir)
+      const settingsLog = join(dir, 'settings.ndjson')
+      const host = new IdeSessionHost()
+      await host.start({
+        cwd: dir,
+        dshHome: join(dir, '.dsh'),
+        bridgeSockPath: join(dir, 'bridge.sock'),
+        dshBin: fakeSdkRuntime,
+        initializeTimeoutMs: 5_000,
+        credentials: {
+          DEEPSEEK_API_KEY: 'keyless-settings-no-call',
+          DSH_TELEMETRY_DISABLED: '1',
+          FAKE_SETTINGS_LOG: settingsLog,
+        },
+      })
+      await waitFor(() => host.bridgeConnected(), 3_000)
+
+      const described = await host.describeSettings()
+      expect(described).toEqual([
+        {
+          ns: 'fake-settings',
+          value: { model: 'fake-model' },
+          revision: 1,
+          secretFields: ['apiKey'],
+        },
+      ])
+
+      const updated = await host.updateSetting('fake-settings', { model: 'next-model' }, 1)
+      expect(updated).toMatchObject({
+        ns: 'fake-settings',
+        value: { model: 'next-model' },
+        revision: 2,
+      })
+
+      const lines = (await readFile(settingsLog, 'utf8')).trim().split('\n')
+        .map(line => JSON.parse(line) as {
+          kind: string
+          ns?: string
+          expectedRevision?: number
+        })
+      expect(lines.some(line => line.kind === 'describe')).toBe(true)
+      expect(lines.some(line =>
+        line.kind === 'update' && line.ns === 'fake-settings' && line.expectedRevision === 1)).toBe(true)
+
+      await host.shutdown()
+    })
+  })
+
+  describe('dsh.test.* settings, model, and session-log hooks', () => {
+    const commands = new Map<string, (...args: unknown[]) => unknown>()
+    const mem = new Map<string, unknown>()
+
+    function makeVscode() {
+      return {
+        window: {
+          async showErrorMessage() {},
+          async showInformationMessage() {},
+          registerWebviewViewProvider() { return { dispose() {} } },
+        },
+        workspace: {
+          workspaceFolders: [{ uri: { fsPath: '/tmp/dsh-hook-settings' } }],
+          getConfiguration() { return { get: () => undefined } },
+        },
+        commands: {
+          registerCommand(command: string, callback: (...args: unknown[]) => unknown) {
+            commands.set(command, callback)
+            return { dispose() {} }
+          },
+        },
+      }
+    }
+
+    /** Activate with (or without) a Host that reports itself connected, without a runtime. */
+    async function activateWithHost(connected: boolean): Promise<void> {
+      if (connected) {
+        vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (
+          this: IdeSessionHost,
+        ) {
+          this.status = 'connected'
+        })
+      }
+      activate({
+        subscriptions: [],
+        extensionPath: '/tmp/dsh-hook-settings',
+        workspaceState: {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
+          get<T>(key: string) { return mem.get(key) as T | undefined },
+          update(key: string, value: unknown) { mem.set(key, value) },
+        },
+      }, makeVscode())
+      if (!connected) return
+      await commands.get('dsh.test.setCredentialPresence')!(true)
+      await commands.get('dsh.test.requestStart')!('command-start')
+    }
+
+    beforeEach(() => {
+      commands.clear()
+      mem.clear()
+    })
+
+    afterEach(async () => {
+      await deactivate()
+      vi.restoreAllMocks()
+    })
+
+    it('CAP-SESSION-HOST-147 settings hooks refuse without a Host and surface a refused write', async () => {
+      await activateWithHost(false)
+      expect(await commands.get('dsh.test.getSettingsState')!())
+        .toEqual({ ok: false, reason: 'host-not-ready' })
+      expect(await commands.get('dsh.test.updateSetting')!('compaction-basic', { thresholdRatio: 0.5 }))
+        .toEqual({ ok: false, reason: 'host-not-ready' })
+
+      await deactivate()
+      commands.clear()
+      await activateWithHost(true)
+      vi.spyOn(IdeSessionHost.prototype, 'updateSetting').mockRejectedValue(
+        new Error('settings namespace "compaction-basic" changed since it was read'),
+      )
+
+      expect(await commands.get('dsh.test.updateSetting')!('compaction-basic', { thresholdRatio: 0.5 }))
+        .toEqual({
+          ok: false,
+          reason: 'settings namespace "compaction-basic" changed since it was read',
+        })
+      expect(await commands.get('dsh.test.updateSetting')!('', {}))
+        .toEqual({ ok: false, reason: 'invalid-ns' })
+      expect(await commands.get('dsh.test.updateSetting')!('compaction-basic', 'nope'))
+        .toEqual({ ok: false, reason: 'invalid-patch' })
+    })
+
+    it('CAP-SESSION-HOST-148 getSettingsState and updateSetting report the compaction namespace values', async () => {
+      await activateWithHost(true)
+      let revision = 1
+      let thresholdRatio = 0.8
+      const describeSettings = vi.spyOn(IdeSessionHost.prototype, 'describeSettings')
+        .mockImplementation(async () => [
+          { ns: 'compaction-basic', value: { thresholdRatio }, revision },
+          { ns: 'llm-deepseek', value: { model: 'deepseek-v4-flash' }, revision: 4 },
+        ])
+      const updateSetting = vi.spyOn(IdeSessionHost.prototype, 'updateSetting')
+        .mockImplementation(async (ns, patch) => {
+          if (ns !== 'compaction-basic') throw new Error(`unknown namespace ${ns}`)
+          thresholdRatio = Number(patch.thresholdRatio)
+          revision += 1
+          return { ns, value: { thresholdRatio }, revision }
+        })
+
+      expect(await commands.get('dsh.test.getSettingsState')!()).toEqual({
+        ok: true,
+        namespaceCount: 2,
+        hasCompactionNs: true,
+        thresholdRatio: 0.8,
+        revision: 1,
+      })
+
+      expect(await commands.get('dsh.test.updateSetting')!('compaction-basic', { thresholdRatio: 0.5 }))
+        .toEqual({ ok: true, revision: 2, thresholdRatio: 0.5 })
+      expect(updateSetting).toHaveBeenCalledWith('compaction-basic', { thresholdRatio: 0.5 })
+      expect(await commands.get('dsh.test.getSettingsState')!()).toEqual({
+        ok: true,
+        namespaceCount: 2,
+        hasCompactionNs: true,
+        thresholdRatio: 0.5,
+        revision: 2,
+      })
+      expect(describeSettings).toHaveBeenCalled()
+
+      // A runtime without the compaction namespace keeps the sentinels a driver asserts.
+      describeSettings.mockResolvedValue([
+        { ns: 'llm-deepseek', value: { model: 'deepseek-v4-flash' }, revision: 4 },
+      ])
+      expect(await commands.get('dsh.test.getSettingsState')!()).toEqual({
+        ok: true,
+        namespaceCount: 1,
+        hasCompactionNs: false,
+        thresholdRatio: -1,
+        revision: -1,
+      })
+    })
+
+    it('CAP-SESSION-HOST-149 model hooks refuse without a Host, then report the catalog and the selection', async () => {
+      await activateWithHost(false)
+      expect(await commands.get('dsh.test.getModelState')!())
+        .toEqual({ ok: false, reason: 'host-not-ready' })
+      expect(await commands.get('dsh.test.selectModel')!('deepseek-official', 'deepseek-v4-pro'))
+        .toEqual({ ok: false, reason: 'host-not-ready' })
+
+      await deactivate()
+      commands.clear()
+      await activateWithHost(true)
+      let current = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+      vi.spyOn(IdeSessionHost.prototype, 'listModels').mockImplementation(async () => ({
+        ok: true,
+        providers: [
+          {
+            id: 'deepseek-official',
+            name: 'DeepSeek',
+            models: [
+              {
+                id: 'deepseek-v4-flash',
+                name: 'Flash',
+                contextWindow: 128_000,
+                reasoningEfforts: [{ id: 'high', name: 'High' }],
+              },
+              { id: 'deepseek-v4-pro', name: 'Pro' },
+            ],
+          },
+          { id: 'local', name: 'Local', models: [{ id: 'tiny', name: 'Tiny' }] },
+        ],
+        current,
+      }))
+      const selectModel = vi.spyOn(IdeSessionHost.prototype, 'selectModel')
+        .mockImplementation(async (provider, model) => {
+          current = { provider, model }
+        })
+
+      expect(await commands.get('dsh.test.getModelState')!()).toEqual({
+        ok: true,
+        providerCount: 2,
+        modelCount: 3,
+        hasContextWindow: true,
+        hasReasoningEfforts: true,
+        currentProvider: 'deepseek-official',
+        currentModel: 'deepseek-v4-flash',
+      })
+      const pushed = getChatPanelHost()?.getOutboundLog().find(m => m.type === 'model/state')
+      expect(pushed?.type === 'model/state' ? pushed.current.model : '').toBe('deepseek-v4-flash')
+
+      expect(await commands.get('dsh.test.selectModel')!('deepseek-official', 'deepseek-v4-pro'))
+        .toEqual({ ok: true, currentModel: 'deepseek-v4-pro' })
+      expect(selectModel).toHaveBeenCalledWith('deepseek-official', 'deepseek-v4-pro', undefined)
+      expect(await commands.get('dsh.test.selectModel')!('deepseek-official', ''))
+        .toEqual({ ok: false, reason: 'invalid-model' })
+    })
+
+    it('CAP-SESSION-HOST-150 sessionLogExists reports an unreadable log as exists=false with the error text', async () => {
+      await activateWithHost(false)
+      expect(await commands.get('dsh.test.sessionLogExists')!('sess-1'))
+        .toEqual({ exists: false, error: 'host-not-ready' })
+
+      await deactivate()
+      commands.clear()
+      await activateWithHost(true)
+      const readSessionLog = vi.spyOn(IdeSessionHost.prototype, 'readSessionLog')
+      readSessionLog.mockRejectedValueOnce(new Error('no session log for sess-missing'))
+      expect(await commands.get('dsh.test.sessionLogExists')!('sess-missing'))
+        .toEqual({ exists: false, error: 'no session log for sess-missing' })
+
+      readSessionLog.mockResolvedValueOnce([])
+      expect(await commands.get('dsh.test.sessionLogExists')!('sess-empty')).toEqual({ exists: false })
+
+      readSessionLog.mockResolvedValueOnce([{ type: 'turn/start', seq: 0, data: { turn: 0 } }])
+      expect(await commands.get('dsh.test.sessionLogExists')!('sess-live')).toEqual({ exists: true })
+
+      expect(await commands.get('dsh.test.sessionLogExists')!(''))
+        .toEqual({ exists: false, error: 'invalid-session-id' })
+    })
+  })
+
 })

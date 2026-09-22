@@ -12,6 +12,58 @@ export type { ActivityItem, ActivityStatus } from './chat-panel/activity-types.t
 /** Lifecycle status projected onto a `kind:'subagent'` card (phase-4). */
 export type SubagentCardStatus = 'running' | 'ended' | 'deleted'
 
+/**
+ * Compaction marker payload of a `kind:'compaction'` bubble.
+ * Mirrors the runtime `compaction/*` lifecycle: `auto` is the in-turn pressure
+ * compaction, `manual` the standalone between-turn one.
+ */
+export interface CompactionMarker {
+  /** `auto` when the compaction is enclosed by a turn; `manual` between turns. */
+  trigger: 'auto' | 'manual'
+  /** Lifecycle status; `failed` carries `error`. */
+  status: 'running' | 'done' | 'failed'
+  /** Tokens released by the shadowed range; 0 until `compaction/summary` arrives. */
+  shadowedTokenCount: number
+  /** Summary text the model received; '' until `compaction/summary` arrives. */
+  summary: string
+  /** Error text reported by `compaction/end` when the compaction failed. */
+  error?: string
+}
+
+/** One member row of a `kind:'workflow'` run card. */
+export interface WorkflowMember {
+  /** Member sequence within the run; the card keeps members in this order. */
+  seq: number
+  /** Display label from `tool-workflow/agent-start`. */
+  label: string
+  /** Optional phase grouping from `tool-workflow/agent-start`. */
+  phase?: string
+  /** Child session identity, used for click-through navigation. */
+  childId: string
+  /** Settlement from `tool-workflow/agent-end`; absent while the member runs. */
+  outcome?: 'completed' | 'failed' | 'cancelled'
+}
+
+/**
+ * Workflow run marker payload of a `kind:'workflow'` bubble.
+ * Mirrors the runtime `tool-workflow/*` lifecycle: `run-start` opens the run,
+ * `agent-start` / `agent-end` maintain its member table, `run-end` settles it.
+ */
+export interface WorkflowMarker {
+  /** Durable run identity from `tool-workflow/run-start`. */
+  runId: string
+  /** Run name from `tool-workflow/run-start`; '' until that event arrives. */
+  name: string
+  /** Lifecycle status; `done` once `tool-workflow/run-end` arrives. */
+  status: 'running' | 'done'
+  /** Terminal reason from `tool-workflow/run-end`; absent while the run is open. */
+  stopReason?: 'completed' | 'cancelled' | 'error'
+  /** Failure text when the run stopped on an error; absent when none was reported. */
+  error?: string
+  /** Member table in `seq` order; a patch carrying members replaces the whole array. */
+  members: WorkflowMember[]
+}
+
 /** One projected chat bubble for the Conversation Webview. */
 export interface ChatMessage {
   /** Stable message id within the session projection. */
@@ -21,7 +73,7 @@ export interface ChatMessage {
   /** Speaker role. */
   role: 'user' | 'assistant' | 'notice'
   /** Content kind (text primary + activity stream). */
-  kind: 'text' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity'
+  kind: 'text' | 'reasoning' | 'compaction' | 'workflow' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity'
   /** Full readable text (user prompt or complete assistant turn). */
   text: string
   /** Optional turn index when known. */
@@ -46,6 +98,12 @@ export interface ChatMessage {
   childSessionId?: string
   /** Subagent card lifecycle status (phase-4). */
   subagentStatus?: SubagentCardStatus
+  /** Accumulated reasoning text from `reasoning-delta` chunks. */
+  reasoning?: string
+  /** Compaction marker payload; present only on `kind:'compaction'` bubbles. */
+  compaction?: CompactionMarker
+  /** Workflow run marker payload; present only on `kind:'workflow'` cards. */
+  workflow?: WorkflowMarker
 }
 
 /** Incremental patch for a projected message (AD-CUX-10). `text` XOR `appendText`. */
@@ -54,12 +112,21 @@ export interface MessagePatch {
   text?: string
   /** Append to existing bubble text. */
   appendText?: string
+  /** Append to existing reasoning text. */
+  appendReasoning?: string
   /** Incomplete / aborted marker. */
   incomplete?: boolean
   /** Streaming chrome flag on the message. */
   streaming?: boolean
   /** Activity status transition (running → done|failed|aborted). */
   activityStatus?: ActivityStatus
+  /** Merge into a `kind:'compaction'` bubble's marker payload. */
+  compaction?: Partial<CompactionMarker>
+  /**
+   * Merge into a `kind:'workflow'` card's marker payload.
+   * Present `members` replaces the whole member table; other fields shallow-merge.
+   */
+  workflow?: Partial<WorkflowMarker>
 }
 
 /**
@@ -111,6 +178,9 @@ export class MessageStore {
     const next: ChatMessage = { ...current }
     if (update.text !== undefined) next.text = update.text
     else if (update.appendText !== undefined) next.text = `${current.text}${update.appendText}`
+    if (update.appendReasoning !== undefined) {
+      next.reasoning = `${current.reasoning ?? ''}${update.appendReasoning}`
+    }
     if (update.incomplete !== undefined) next.incomplete = update.incomplete
     if (update.streaming !== undefined) {
       if (update.streaming) next.streaming = true
@@ -119,6 +189,17 @@ export class MessageStore {
     if (update.activityStatus !== undefined && next.activity !== undefined) {
       next.activity = { ...next.activity, status: update.activityStatus }
       next.text = activityLabel(next.activity)
+    }
+    if (update.compaction !== undefined && next.compaction !== undefined) {
+      next.compaction = { ...next.compaction, ...update.compaction }
+    }
+    if (update.workflow !== undefined && next.workflow !== undefined) {
+      const { members, ...fields } = update.workflow
+      next.workflow = {
+        ...next.workflow,
+        ...fields,
+        ...members === undefined ? {} : { members: members.map(m => ({ ...m })) },
+      }
     }
     list[idx] = next
     this.emit()
@@ -259,6 +340,15 @@ function copyMessage(message: ChatMessage): ChatMessage {
         },
       },
     ...message.activity === undefined ? {} : { activity: { ...message.activity } },
+    ...message.compaction === undefined ? {} : { compaction: { ...message.compaction } },
+    ...message.workflow === undefined
+      ? {}
+      : {
+        workflow: {
+          ...message.workflow,
+          members: message.workflow.members.map(m => ({ ...m })),
+        },
+      },
   }
 }
 

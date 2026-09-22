@@ -8,6 +8,22 @@ import { applyHostFrame, markHostFrameDelivered } from '../store/chat-ui-store.t
 export type ChromeIntent =
   | { type: 'ready' }
   | { type: 'composer/send'; text: string }
+  | {
+    /** Composer send carrying inline image attachments (feature: image-upload). */
+    type: 'composer/send-rich'
+    text: string
+    images?: Array<{ data: string; mimeType: string; name?: string }>
+  }
+  | {
+    /** Switch the routed provider/model for this session (feature: model-selector). */
+    type: 'action/select-model'
+    provider: string
+    model: string
+    reasoningEffort?: string
+  }
+  | { type: 'action/compact' }
+  | { type: 'settings/open' }
+  | { type: 'settings/update'; ns: string; patch: Record<string, unknown>; expectedRevision?: number }
   | { type: 'ui/tab-select'; tabId: string }
   | { type: 'ui/tab-close'; tabId: string }
   | { type: 'ui/tab-new' }

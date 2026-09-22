@@ -10,6 +10,7 @@ import {
   type AskUserQuestionAnswer,
   type AskUserQuestionItem,
 } from '@deepseek-ai/dsh-ide-bridge'
+import { randomUUID } from 'node:crypto'
 import type { ConversationRegistry } from './conversation-registry.ts'
 
 /**
@@ -129,11 +130,23 @@ type QuestionsEntry = {
 
 type QueueEntry = ApprovalEntry | QuestionsEntry
 
+/** Queue and fail-closed state of one {@link InteractionCoordinator} (test hooks / diagnostics). */
+export interface InteractionCoordinatorDebug {
+  /** Identity of the coordinator that produced this snapshot. */
+  instanceId: string
+  /** Projected queue entries, including the settle flag the reader shape omits. */
+  queue: Array<{ id: string; sessionId: string; tabId?: string; state: string; settled: boolean }>
+  /** Last {@link InteractionCoordinator.failClosedSession} call, so a drain that matched nothing is visible. */
+  lastFailClosed?: { instanceId: string; sessionId: string; matched: number; queueLength: number }
+}
+
 /**
  * Routes bridge interaction frames to the correct Tab and UI with a global
  * serial soft-priority presentation queue (AD-CU-7).
  */
 export class InteractionCoordinator {
+  /** Identity of this coordinator instance. */
+  readonly instanceId: string = randomUUID()
   private readonly queue: QueueEntry[] = []
   private presentedId: string | undefined
   private pumping = false
@@ -141,6 +154,7 @@ export class InteractionCoordinator {
   private registry: ConversationRegistry | undefined
   private activeSessionId: string | undefined
   private lastError: string | undefined
+  private lastFailClosed: InteractionCoordinatorDebug['lastFailClosed']
   private readonly listeners = new Set<() => void>()
 
   /**
@@ -218,6 +232,26 @@ export class InteractionCoordinator {
     return this.queue
       .filter(entry => entry.state === 'pending' || entry.state === 'presented')
       .map(entry => this.projectEntry(entry))
+  }
+
+  /**
+   * Read the queue plus the last fail-closed call of this coordinator (test hooks / status).
+   * `listPending` alone cannot show which coordinator answered a drain, so a queue that
+   * outlives its Tab needs the instance id, the settle flags and the drain's own record.
+   * @returns the instance id, the projected queue, and the last fail-closed record.
+   */
+  debugSnapshot(): InteractionCoordinatorDebug {
+    return {
+      instanceId: this.instanceId,
+      queue: this.queue.map(entry => ({
+        id: entry.id,
+        sessionId: entry.sessionId,
+        ...entry.tabId === undefined ? {} : { tabId: entry.tabId },
+        state: entry.state,
+        settled: entry.settled,
+      })),
+      ...this.lastFailClosed === undefined ? {} : { lastFailClosed: this.lastFailClosed },
+    }
   }
 
   /**
@@ -390,6 +424,12 @@ export class InteractionCoordinator {
   failClosedSession(sessionId: string, reason: string): void {
     this.lastError = reason
     const doomed = this.queue.filter(entry => entry.sessionId === sessionId)
+    this.lastFailClosed = {
+      instanceId: this.instanceId,
+      sessionId,
+      matched: doomed.length,
+      queueLength: this.queue.length,
+    }
     for (const entry of doomed) {
       const index = this.queue.indexOf(entry)
       if (index >= 0) this.queue.splice(index, 1)

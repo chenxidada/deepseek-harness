@@ -117,6 +117,38 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
         await expect(wait).resolves.toBe('allowed-once')
       })
 
+      it('CAP-INTERACTION-021 reports the queue and the last drain through debugSnapshot', async () => {
+        const { coordinator } = coordinatorWithOpenPopup()
+        const wait = coordinator.handleApproval({ id: 'a', sessionId: 's1', toolName: 'bash' })
+        await Promise.resolve()
+
+        const before = coordinator.debugSnapshot()
+        expect(before.queue.map(entry => [entry.id, entry.state, entry.settled]))
+          .toEqual([['a', 'presented', false]])
+        expect(before.lastFailClosed).toBeUndefined()
+
+        // A drain for another session must leave this wait alone, and must be visible as a
+        // zero-match drain — that is the fact a "queue outlived its Tab" diagnosis reads.
+        coordinator.failClosedSession('s2', 'other session')
+        expect(coordinator.debugSnapshot().lastFailClosed).toEqual({
+          instanceId: coordinator.instanceId,
+          sessionId: 's2',
+          matched: 0,
+          queueLength: 1,
+        })
+        expect(coordinator.listPending().map(entry => entry.id)).toEqual(['a'])
+
+        coordinator.failClosedSession('s1', 'tab closed')
+        expect(coordinator.debugSnapshot().lastFailClosed).toEqual({
+          instanceId: coordinator.instanceId,
+          sessionId: 's1',
+          matched: 1,
+          queueLength: 1,
+        })
+        expect(coordinator.debugSnapshot().queue).toEqual([])
+        await expect(wait).resolves.toBe('unavailable')
+      })
+
       it('CAP-INTERACTION-004 dismisses an open popup without answering the runtime a second time', async () => {
         const { coordinator, presented, signals } = coordinatorWithOpenPopup()
         const wait = coordinator.handleApproval({ id: 'a', sessionId: 's1', toolName: 'bash' })

@@ -1,21 +1,22 @@
-import { ChatPanelHost, FakeWebviewPort, type HostToWebviewMessage, buildThinChatHtml, parseWebviewToHostMessage, resolveComposerKeydown } from '../src/chat-panel/index.ts'
+import { ChatPanelHost, FakeWebviewPort, type ChatPanelHostDeps, type HostToWebviewMessage, buildThinChatHtml, parseWebviewToHostMessage, resolveComposerKeydown } from '../src/chat-panel/index.ts'
 import { continueChromeFor } from '../src/continue-capability.ts'
 import { ConversationController } from '../src/conversation-controller.ts'
 import { ConversationRegistry } from '../src/conversation-registry.ts'
 import { UNREAD_INDICATOR, conversationTreeItems } from '../src/conversation-tab-bar.ts'
 import { EMPTY_LIVE_TITLE } from '../src/conversation-titles.ts'
 import { ExtensionIndex, isHistoryEligibleSession } from '../src/extension-index.ts'
-import { activate, deactivate, getChatPanelHost } from '../src/extension.ts'
+import { activate, deactivate, getChatPanelHost, getConversationController } from '../src/extension.ts'
 import { listHistoryFromIndex } from '../src/history-view.ts'
 import { containsUnsafeHtml, renderSafeMarkdown, safeMarkdownBrowserSource } from '../src/markdown/safe-markdown.ts'
+import { MessageStore } from '../src/message-store.ts'
 import { detectIncomplete, hydrateFromAuthoritativeLog } from '../src/replay-hydrator.ts'
-import { IdeSessionHost } from '../src/session-host.ts'
+import { IdeSessionHost, type SettingsNamespaceView } from '../src/session-host.ts'
 import { TimelineStore } from '../src/timeline-store.ts'
 import { type HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createContext, runInContext } from 'node:vm'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 function sessionEvent(
   sessionId: string,
@@ -76,6 +77,24 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         cancelCalls: string[]
         revertCalls: string[]
       }
+    }
+
+    function createLivePanel() {
+      const host = createEmitHost()
+      const controller = new ConversationController(host)
+      const tab = controller.newConversation('live')
+      const panel = new ChatPanelHost({
+        registry: controller.registry,
+        messages: controller.messages,
+        isHostReady: () => true,
+        acceptSend: text => controller.promptActive(text),
+      })
+      controller.setPanelHost(panel)
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      panel.clearOutboundLog()
+      fake.receivedFromHost.length = 0
+      return { host, controller, tab, fake }
     }
 
     describe('layer-B activity stream', () => {
@@ -325,6 +344,390 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         expect(rejects.some(m => m.type === 'ui/reject-send' && m.reason === 'replay')).toBe(true)
       })
     })
+
+    describe('compaction markers / live + replay projection', () => {
+      it('CAP-CHAT-PANEL-062 compaction/start appends kind:compaction with trigger from turn', () => {
+        const { host, controller, tab, fake } = createLivePanel()
+
+        host.emit(sessionEvent(tab.sessionId, 'compaction/start', { compactionId: 'cp-auto', turn: 3 }))
+        host.emit(sessionEvent(tab.sessionId, 'compaction/start', { compactionId: 'cp-manual', turn: null }))
+
+        const markers = controller.messages.get(tab.sessionId).filter(m => m.kind === 'compaction')
+        expect(markers).toHaveLength(2)
+        expect(markers[0]).toMatchObject({
+          id: 'cp-auto',
+          sessionId: tab.sessionId,
+          role: 'notice',
+          kind: 'compaction',
+          text: '',
+          turn: 3,
+        })
+        expect(markers[0]?.compaction).toEqual({
+          trigger: 'auto',
+          status: 'running',
+          shadowedTokenCount: 0,
+          summary: '',
+        })
+        expect(markers[1]).toMatchObject({ id: 'cp-manual', role: 'notice', kind: 'compaction' })
+        expect(markers[1]?.compaction?.trigger).toBe('manual')
+        expect(markers[1]?.turn).toBeUndefined()
+
+        const appends = fake.receivedFromHost.filter(m => m.type === 'messages/append')
+        expect(appends.some(m => m.type === 'messages/append' && m.message.id === 'cp-auto')).toBe(true)
+        expect(appends.some(m => m.type === 'messages/append' && m.message.id === 'cp-manual')).toBe(true)
+      })
+
+      it('CAP-CHAT-PANEL-063 compaction/summary fills tokens and strips the frame tags', () => {
+        const { host, controller, tab, fake } = createLivePanel()
+
+        host.emit(sessionEvent(tab.sessionId, 'compaction/start', { compactionId: 'cp-framed', turn: 1 }))
+        host.emit(sessionEvent(tab.sessionId, 'compaction/summary', {
+          compactionId: 'cp-framed',
+          summary: [{
+            type: 'text',
+            text: '<compacted-summary>\nCheckpoint body\n</compacted-summary>',
+          }],
+          shadowedTokenCount: 1234,
+        }))
+
+        const framed = controller.messages.get(tab.sessionId).find(m => m.id === 'cp-framed')
+        expect(framed?.compaction).toEqual({
+          trigger: 'auto',
+          status: 'running',
+          shadowedTokenCount: 1234,
+          summary: 'Checkpoint body',
+        })
+        const patch = fake.receivedFromHost.find(m => m.type === 'messages/patch' && m.messageId === 'cp-framed')
+        expect(patch).toMatchObject({
+          type: 'messages/patch',
+          compaction: { shadowedTokenCount: 1234, summary: 'Checkpoint body' },
+        })
+
+        // Unframed blocks join with newlines and keep their text verbatim.
+        host.emit(sessionEvent(tab.sessionId, 'compaction/start', { compactionId: 'cp-plain', turn: null }))
+        host.emit(sessionEvent(tab.sessionId, 'compaction/summary', {
+          compactionId: 'cp-plain',
+          summary: [{ type: 'text', text: 'first' }, { type: 'text', text: 'second' }],
+          shadowedTokenCount: 7,
+        }))
+        const plain = controller.messages.get(tab.sessionId).find(m => m.id === 'cp-plain')
+        expect(plain?.compaction?.summary).toBe('first\nsecond')
+        expect(plain?.compaction?.shadowedTokenCount).toBe(7)
+      })
+
+      it('CAP-CHAT-PANEL-064 compaction/end marks done; a reported error marks failed and raises a banner', () => {
+        const { host, controller, tab, fake } = createLivePanel()
+
+        host.emit(sessionEvent(tab.sessionId, 'compaction/start', { compactionId: 'cp-ok', turn: 0 }))
+        host.emit(sessionEvent(tab.sessionId, 'compaction/end', { compactionId: 'cp-ok', turn: 0 }))
+        expect(controller.messages.get(tab.sessionId).find(m => m.id === 'cp-ok')?.compaction?.status).toBe('done')
+        expect(fake.receivedFromHost.some(m => m.type === 'ui/banner' && m.kind === 'compaction-failed')).toBe(false)
+
+        host.emit(sessionEvent(tab.sessionId, 'compaction/start', { compactionId: 'cp-bad', turn: 0 }))
+        host.emit(sessionEvent(tab.sessionId, 'compaction/end', {
+          compactionId: 'cp-bad',
+          turn: 0,
+          error: 'summarize call timed out',
+        }))
+        const failed = controller.messages.get(tab.sessionId).find(m => m.id === 'cp-bad')
+        expect(failed?.compaction?.status).toBe('failed')
+        expect(failed?.compaction?.error).toBe('summarize call timed out')
+        const banner = fake.receivedFromHost.find(m => m.type === 'ui/banner' && m.kind === 'compaction-failed')
+        expect(banner?.type === 'ui/banner' ? banner.text : '').toContain('summarize call timed out')
+      })
+
+      it('CAP-CHAT-PANEL-065 repeated compaction/start for one id appends nothing new', () => {
+        const { host, controller, tab, fake } = createLivePanel()
+
+        host.emit(sessionEvent(tab.sessionId, 'compaction/start', { compactionId: 'cp-dup', turn: 2 }))
+        host.emit(sessionEvent(tab.sessionId, 'compaction/start', { compactionId: 'cp-dup', turn: 2 }))
+
+        expect(controller.messages.get(tab.sessionId).filter(m => m.id === 'cp-dup')).toHaveLength(1)
+        const appends = fake.receivedFromHost.filter(m =>
+          m.type === 'messages/append' && m.message.id === 'cp-dup')
+        expect(appends).toHaveLength(1)
+      })
+
+      it('CAP-CHAT-PANEL-066 hydrate folds compaction markers in log order with the live shape', () => {
+        const hydrated = hydrateFromAuthoritativeLog('sess-compaction', [
+          {
+            type: 'user/message',
+            seq: 1,
+            data: { role: 'user', id: 'u1', content: [{ type: 'text', text: 'hello' }] },
+          },
+          { type: 'compaction/start', seq: 2, data: { compactionId: 'cp-1', turn: 0 } },
+          {
+            type: 'compaction/summary',
+            seq: 3,
+            data: {
+              compactionId: 'cp-1',
+              summary: [{
+                type: 'text',
+                text: '<compacted-summary>log body</compacted-summary>',
+              }],
+              shadowedTokenCount: 42,
+            },
+          },
+          { type: 'compaction/end', seq: 4, data: { compactionId: 'cp-1', turn: 0 } },
+          {
+            type: 'assistant/message',
+            seq: 5,
+            data: {
+              message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+            },
+          },
+          { type: 'compaction/start', seq: 6, data: { compactionId: 'cp-2', turn: null } },
+          { type: 'compaction/end', seq: 7, data: { compactionId: 'cp-2', turn: null, error: 'boom' } },
+          { type: 'compaction/prune', seq: 8, data: { shadowedTokenCount: 9 } },
+        ])
+
+        expect(hydrated.messages.map(m => m.id)).toEqual(['u1', 'cp-1', 'a1', 'cp-2'])
+        const auto = hydrated.messages.find(m => m.id === 'cp-1')
+        expect(auto).toMatchObject({
+          sessionId: 'sess-compaction',
+          role: 'notice',
+          kind: 'compaction',
+          text: '',
+          turn: 0,
+        })
+        expect(auto?.compaction).toEqual({
+          trigger: 'auto',
+          status: 'done',
+          shadowedTokenCount: 42,
+          summary: 'log body',
+        })
+        const manual = hydrated.messages.find(m => m.id === 'cp-2')
+        expect(manual?.compaction).toEqual({
+          trigger: 'manual',
+          status: 'failed',
+          shadowedTokenCount: 0,
+          summary: '',
+          error: 'boom',
+        })
+        expect(manual?.turn).toBeUndefined()
+
+        // Hydrated markers survive MessageStore.replace with the same payload (live/store shape parity).
+        const store = new MessageStore()
+        store.replace('sess-compaction', hydrated.messages)
+        expect(store.get('sess-compaction').find(m => m.id === 'cp-1')?.compaction)
+          .toEqual(auto?.compaction)
+      })
+    })
+
+    describe('workflow run cards / live + replay projection', () => {
+      it('CAP-CHAT-PANEL-067 run-start appends a kind:workflow card carrying the run name', () => {
+        const { host, controller, tab, fake } = createLivePanel()
+
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/run-start', {
+          runId: 'wf-1',
+          name: 'nightly audit',
+        }))
+
+        const cards = controller.messages.get(tab.sessionId).filter(m => m.kind === 'workflow')
+        expect(cards).toHaveLength(1)
+        expect(cards[0]).toMatchObject({
+          id: 'workflow:wf-1',
+          sessionId: tab.sessionId,
+          role: 'notice',
+          kind: 'workflow',
+          text: '',
+        })
+        expect(cards[0]?.workflow).toEqual({
+          runId: 'wf-1',
+          name: 'nightly audit',
+          status: 'running',
+          members: [],
+        })
+
+        const appends = fake.receivedFromHost.filter(m => m.type === 'messages/append')
+        expect(appends.some(m => m.type === 'messages/append' && m.message.id === 'workflow:wf-1'))
+          .toBe(true)
+      })
+
+      it('CAP-CHAT-PANEL-068 agent-start orders members by seq and agent-end settles one', () => {
+        const { host, controller, tab, fake } = createLivePanel()
+
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/run-start', {
+          runId: 'wf-2',
+          name: 'fan-out',
+        }))
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/agent-start', {
+          runId: 'wf-2',
+          seq: 2,
+          label: 'reviewer',
+          phase: 'review',
+          childId: 'child-2',
+        }))
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/agent-start', {
+          runId: 'wf-2',
+          seq: 1,
+          label: 'planner',
+          childId: 'child-1',
+        }))
+
+        const card = controller.messages.get(tab.sessionId).find(m => m.id === 'workflow:wf-2')
+        expect(card?.workflow?.members).toEqual([
+          { seq: 1, label: 'planner', childId: 'child-1' },
+          { seq: 2, label: 'reviewer', phase: 'review', childId: 'child-2' },
+        ])
+
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/agent-end', {
+          runId: 'wf-2',
+          seq: 2,
+          outcome: 'failed',
+        }))
+
+        const settled = controller.messages.get(tab.sessionId).find(m => m.id === 'workflow:wf-2')
+        expect(settled?.workflow?.members).toEqual([
+          { seq: 1, label: 'planner', childId: 'child-1' },
+          { seq: 2, label: 'reviewer', phase: 'review', childId: 'child-2', outcome: 'failed' },
+        ])
+
+        const patches = fake.receivedFromHost.filter(m =>
+          m.type === 'messages/patch' && m.messageId === 'workflow:wf-2')
+        expect(patches).toHaveLength(3)
+        expect(patches[2]).toMatchObject({
+          type: 'messages/patch',
+          workflow: {
+            members: [
+              { seq: 1, label: 'planner', childId: 'child-1' },
+              { seq: 2, label: 'reviewer', phase: 'review', childId: 'child-2', outcome: 'failed' },
+            ],
+          },
+        })
+      })
+
+      it('CAP-CHAT-PANEL-069 run-end closes the card with the reported stop reason', () => {
+        const { host, controller, tab, fake } = createLivePanel()
+
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/run-start', { runId: 'wf-3', name: 'sweep' }))
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/run-end', {
+          runId: 'wf-3',
+          stopReason: 'cancelled',
+        }))
+
+        const card = controller.messages.get(tab.sessionId).find(m => m.id === 'workflow:wf-3')
+        expect(card?.workflow?.status).toBe('done')
+        expect(card?.workflow?.stopReason).toBe('cancelled')
+        expect(card?.workflow?.error).toBeUndefined()
+        const patch = fake.receivedFromHost.find(m =>
+          m.type === 'messages/patch' && m.messageId === 'workflow:wf-3')
+        expect(patch).toMatchObject({
+          type: 'messages/patch',
+          workflow: { status: 'done', stopReason: 'cancelled' },
+        })
+
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/run-start', { runId: 'wf-4', name: 'clean' }))
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/run-end', {
+          runId: 'wf-4',
+          stopReason: 'completed',
+        }))
+        const clean = controller.messages.get(tab.sessionId).find(m => m.id === 'workflow:wf-4')
+        expect(clean?.workflow).toEqual({
+          runId: 'wf-4',
+          name: 'clean',
+          status: 'done',
+          stopReason: 'completed',
+          members: [],
+        })
+      })
+
+      it('CAP-CHAT-PANEL-070 repeated run-start opens one card; events without a card are ignored', () => {
+        const { host, controller, tab, fake } = createLivePanel()
+
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/run-start', { runId: 'wf-5', name: 'once' }))
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/run-start', { runId: 'wf-5', name: 'once' }))
+
+        expect(controller.messages.get(tab.sessionId).filter(m => m.id === 'workflow:wf-5')).toHaveLength(1)
+        const appends = fake.receivedFromHost.filter(m =>
+          m.type === 'messages/append' && m.message.id === 'workflow:wf-5')
+        expect(appends).toHaveLength(1)
+
+        // A settlement for a seq that was never projected leaves the member table unchanged.
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/agent-end', {
+          runId: 'wf-5',
+          seq: 9,
+          outcome: 'completed',
+        }))
+        expect(controller.messages.get(tab.sessionId).find(m => m.id === 'workflow:wf-5')?.workflow?.members)
+          .toEqual([])
+
+        // Member and run events for a run this projection never opened are dropped whole.
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/agent-start', {
+          runId: 'wf-missing',
+          seq: 1,
+          label: 'ghost',
+          childId: 'child-x',
+        }))
+        host.emit(sessionEvent(tab.sessionId, 'tool-workflow/run-end', {
+          runId: 'wf-missing',
+          stopReason: 'completed',
+        }))
+        expect(controller.messages.get(tab.sessionId).filter(m => m.kind === 'workflow')).toHaveLength(1)
+        expect(fake.receivedFromHost.some(m => m.type === 'messages/patch')).toBe(false)
+      })
+
+      it('CAP-CHAT-PANEL-071 hydrate folds workflow cards in log order with the live shape', () => {
+        const hydrated = hydrateFromAuthoritativeLog('sess-workflow', [
+          {
+            type: 'user/message',
+            seq: 1,
+            data: { role: 'user', id: 'u1', content: [{ type: 'text', text: 'run it' }] },
+          },
+          { type: 'tool-workflow/run-start', seq: 2, data: { runId: 'wf-log', name: 'log run' } },
+          {
+            type: 'tool-workflow/agent-start',
+            seq: 3,
+            data: { runId: 'wf-log', seq: 2, label: 'reviewer', phase: 'review', childId: 'child-2' },
+          },
+          {
+            type: 'tool-workflow/agent-start',
+            seq: 4,
+            data: { runId: 'wf-log', seq: 1, label: 'planner', childId: 'child-1' },
+          },
+          { type: 'tool-workflow/agent-end', seq: 5, data: { runId: 'wf-log', seq: 1, outcome: 'completed' } },
+          {
+            type: 'assistant/message',
+            seq: 6,
+            data: {
+              message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+            },
+          },
+          { type: 'tool-workflow/run-end', seq: 7, data: { runId: 'wf-log', stopReason: 'error' } },
+          {
+            type: 'tool-workflow/agent-start',
+            seq: 8,
+            data: { runId: 'wf-other', seq: 1, label: 'ghost', childId: 'child-x' },
+          },
+          { type: 'tool-workflow/run-start', seq: 9, data: { runId: 'wf-log', name: 'second start' } },
+        ])
+
+        expect(hydrated.messages.map(m => m.id)).toEqual(['u1', 'workflow:wf-log', 'a1'])
+        const card = hydrated.messages.find(m => m.id === 'workflow:wf-log')
+        expect(card).toMatchObject({
+          sessionId: 'sess-workflow',
+          role: 'notice',
+          kind: 'workflow',
+          text: '',
+        })
+        expect(card?.workflow).toEqual({
+          runId: 'wf-log',
+          name: 'log run',
+          status: 'done',
+          stopReason: 'error',
+          members: [
+            { seq: 1, label: 'planner', childId: 'child-1', outcome: 'completed' },
+            { seq: 2, label: 'reviewer', phase: 'review', childId: 'child-2' },
+          ],
+        })
+
+        // Hydrated cards survive MessageStore.replace with the same payload (live/store shape parity).
+        const store = new MessageStore()
+        store.replace('sess-workflow', hydrated.messages)
+        expect(store.get('sess-workflow').find(m => m.id === 'workflow:wf-log')?.workflow)
+          .toEqual(card?.workflow)
+      })
+    })
   })
 
   describe('chat-ux-streaming-cancel-follow.spec.ts', () => {
@@ -428,7 +831,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         expect(after[0]?.streaming).toBeUndefined()
       })
 
-      it('CAP-CHAT-PANEL-007 T6: reasoning-delta is ignored (no thinking projection)', () => {
+      it('CAP-CHAT-PANEL-007 T6: reasoning-delta projects into assistant bubble reasoning field', () => {
         const host = createEmitHost()
         const controller = new ConversationController(host)
         const tab = controller.newConversation('live')
@@ -444,13 +847,19 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
           turn: 0,
           chunk: { type: 'reasoning-delta', text: 'secret thoughts' },
         }))
-        expect(controller.messages.get(tab.sessionId)).toHaveLength(0)
+        // reasoning-delta now creates a streaming assistant bubble with reasoning content
+        const afterReasoning = controller.messages.get(tab.sessionId)
+        expect(afterReasoning).toHaveLength(1)
+        expect(afterReasoning[0]?.reasoning).toBe('secret thoughts')
+        expect(afterReasoning[0]?.text).toBe('')
 
         host.emit(sessionEvent(tab.sessionId, 'assistant/chunk', {
           turn: 0,
           chunk: { type: 'text-delta', text: 'visible' },
         }))
+        // text-delta appends to the same bubble created by reasoning-delta
         expect(controller.messages.get(tab.sessionId)[0]?.text).toBe('visible')
+        expect(controller.messages.get(tab.sessionId)[0]?.reasoning).toBe('secret thoughts')
       })
 
       it('CAP-CHAT-PANEL-008 action/stop calls host.cancelSession (I-真)', async () => {
@@ -1420,6 +1829,396 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
           mode: 'replay',
           probes: { parentReadonly: true, continueSealed: true },
         })
+      })
+    })
+  })
+
+  describe('settings-page.spec.ts', () => {
+    describe('settings read/write routing (feature: settings-page)', () => {
+      function namespace(revision: number): SettingsNamespaceView {
+        return {
+          ns: 'llm-deepseek',
+          value: { model: 'deepseek-v4-flash' },
+          user: { model: 'deepseek-v4-pro' },
+          revision,
+          secretFields: ['apiKey'],
+        }
+      }
+
+      function createPanel(settings: Partial<ChatPanelHostDeps>): ChatPanelHost {
+        return new ChatPanelHost({
+          registry: new ConversationRegistry(),
+          messages: new MessageStore(),
+          isHostReady: () => true,
+          acceptSend: async () => ({ messageId: 'm', sessionId: 's', tabId: 't' }),
+          ...settings,
+        })
+      }
+
+      it('CAP-CHAT-PANEL-072 settings/open describes through the Host and pushes settings/state', async () => {
+        let describeCalls = 0
+        const panel = createPanel({
+          requestSettingsDescribe: async () => {
+            describeCalls += 1
+            return [namespace(4)]
+          },
+        })
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+
+        expect(parseWebviewToHostMessage({ type: 'settings/open' })).toEqual({ type: 'settings/open' })
+        fake.emitFromWebview({ type: 'settings/open' })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'settings/state'), 1_000)
+
+        expect(describeCalls).toBe(1)
+        expect(fake.receivedFromHost.find(m => m.type === 'settings/state')).toMatchObject({
+          namespaces: [
+            {
+              ns: 'llm-deepseek',
+              value: { model: 'deepseek-v4-flash' },
+              user: { model: 'deepseek-v4-pro' },
+              revision: 4,
+              secretFields: ['apiKey'],
+            },
+          ],
+        })
+      })
+
+      it('CAP-CHAT-PANEL-073 settings/update forwards ns/patch/revision and re-pushes the returned list', async () => {
+        const calls: Array<{ ns: string; patch: Record<string, unknown>; expectedRevision?: number }> = []
+        const panel = createPanel({
+          requestSettingsUpdate: async (ns, patch, expectedRevision) => {
+            calls.push({ ns, patch, ...expectedRevision === undefined ? {} : { expectedRevision } })
+            return [namespace(5)]
+          },
+        })
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+
+        fake.emitFromWebview({
+          type: 'settings/update',
+          ns: 'llm-deepseek',
+          patch: { model: 'deepseek-v4-pro' },
+          expectedRevision: 4,
+        })
+        await waitFor(() => calls.length === 1, 1_000)
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'settings/state'), 1_000)
+
+        expect(calls).toEqual([
+          { ns: 'llm-deepseek', patch: { model: 'deepseek-v4-pro' }, expectedRevision: 4 },
+        ])
+        expect(fake.receivedFromHost.find(m => m.type === 'settings/state')).toMatchObject({
+          namespaces: [{ ns: 'llm-deepseek', revision: 5 }],
+        })
+      })
+
+      it('CAP-CHAT-PANEL-074 an unanswered read/write banners instead of pushing an empty state', async () => {
+        const panel = createPanel({
+          isHostReady: () => false,
+          requestSettingsDescribe: async () => undefined,
+          requestSettingsUpdate: async () => undefined,
+        })
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+        fake.emitFromWebview({ type: 'settings/open' })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
+        expect(fake.receivedFromHost.filter(m => m.type === 'settings/state').length).toBe(0)
+        expect(fake.receivedFromHost.find(m => m.type === 'ui/banner')).toMatchObject({ kind: 'settings' })
+
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+        fake.emitFromWebview({ type: 'settings/update', ns: 'llm-deepseek', patch: { model: 'x' } })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
+        expect(fake.receivedFromHost.filter(m => m.type === 'settings/state').length).toBe(0)
+        expect(fake.receivedFromHost.find(m => m.type === 'ui/banner')).toMatchObject({ kind: 'settings' })
+      })
+
+      it('CAP-CHAT-PANEL-075 a refused write banners the runtime message and pushes no state', async () => {
+        const panel = createPanel({
+          requestSettingsUpdate: async () => {
+            throw new Error('settings namespace "llm-deepseek" changed since it was read (expected revision 4, now 6)')
+          },
+        })
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+
+        fake.emitFromWebview({
+          type: 'settings/update',
+          ns: 'llm-deepseek',
+          patch: { model: 'deepseek-v4-pro' },
+          expectedRevision: 4,
+        })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
+
+        expect(fake.receivedFromHost.filter(m => m.type === 'settings/state').length).toBe(0)
+        const banner = fake.receivedFromHost.find(m => m.type === 'ui/banner')
+        expect(banner).toMatchObject({ kind: 'settings' })
+        expect(banner?.type === 'ui/banner' ? banner.text : '').toContain('expected revision 4, now 6')
+      })
+    })
+  })
+
+  describe('dsh.test.* hooks for the newer user-visible surfaces', () => {
+    const commands = new Map<string, (...args: unknown[]) => unknown>()
+    const mem = new Map<string, unknown>()
+
+    function makeVscode() {
+      return {
+        window: {
+          async showErrorMessage() {},
+          async showInformationMessage() {},
+          registerWebviewViewProvider() { return { dispose() {} } },
+        },
+        workspace: {
+          workspaceFolders: [{ uri: { fsPath: '/tmp/dsh-surface-hooks' } }],
+          getConfiguration() { return { get: () => undefined } },
+        },
+        commands: {
+          registerCommand(command: string, callback: (...args: unknown[]) => unknown) {
+            commands.set(command, callback)
+            return { dispose() {} }
+          },
+        },
+      }
+    }
+
+    /** Bind a controller without spawning a runtime, then create the active live Tab. */
+    async function startWithLiveTab(): Promise<{ tabId: string; sessionId: string }> {
+      vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (
+        this: IdeSessionHost,
+      ) {
+        this.status = 'connected'
+      })
+      activate({
+        subscriptions: [],
+        extensionPath: '/tmp/dsh-surface-hooks',
+        workspaceState: {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
+          get<T>(key: string) { return mem.get(key) as T | undefined },
+          update(key: string, value: unknown) { mem.set(key, value) },
+        },
+      }, makeVscode())
+      await commands.get('dsh.test.setCredentialPresence')!(true)
+      await commands.get('dsh.test.requestStart')!('command-start')
+      return await commands.get('dsh.test.newConversation')!() as { tabId: string; sessionId: string }
+    }
+
+    beforeEach(() => {
+      commands.clear()
+      mem.clear()
+    })
+
+    afterEach(async () => {
+      await deactivate()
+      vi.restoreAllMocks()
+    })
+
+    it('CAP-CHAT-PANEL-076 injectTodo drives the todo panel and getTodoItems reports the split', async () => {
+      const tab = await startWithLiveTab()
+
+      // Missing-surface sentinels, which a driver asserts before any event lands.
+      expect(commands.get('dsh.test.getTodoItems')!()).toEqual({
+        count: 0,
+        completed: 0,
+        inProgress: 0,
+      })
+      expect(commands.get('dsh.test.lastCompactionMarker')!()).toEqual({
+        present: false,
+        status: '',
+        shadowedTokenCount: -1,
+      })
+      expect(commands.get('dsh.test.lastWorkflowCard')!()).toEqual({
+        present: false,
+        memberCount: -1,
+        stopReason: '',
+        completedMembers: -1,
+      })
+
+      const panel = getChatPanelHost()
+      panel?.clearOutboundLog()
+      expect(commands.get('dsh.test.injectTodo')!()).toEqual({ ok: true, count: 3 })
+
+      expect(commands.get('dsh.test.getTodoItems')!()).toEqual({
+        count: 3,
+        completed: 1,
+        inProgress: 1,
+      })
+      const frame = panel?.getOutboundLog().find(m => m.type === 'todo/state')
+      expect(frame?.type === 'todo/state' ? frame.sessionId : '').toBe(tab.sessionId)
+      expect(frame?.type === 'todo/state' ? frame.items.length : 0).toBe(3)
+    })
+
+    it('CAP-CHAT-PANEL-077 injectCompaction lands a done marker whose framed summary was stripped', async () => {
+      const tab = await startWithLiveTab()
+
+      const injected = commands.get('dsh.test.injectCompaction')!() as {
+        ok: boolean
+        compactionId: string
+      }
+      expect(injected.ok).toBe(true)
+      expect(injected.compactionId).not.toBe('')
+
+      expect(commands.get('dsh.test.lastCompactionMarker')!()).toEqual({
+        present: true,
+        status: 'done',
+        shadowedTokenCount: 1234,
+      })
+      // Two summary blocks joined and the outer `<compacted-summary>` frame removed.
+      const marker = getConversationController()?.messages.get(tab.sessionId)
+        .find(message => message.id === injected.compactionId)
+      expect(marker?.compaction?.summary).toBe('LAYER-V-CAP-COMPACTION-OK')
+    })
+
+    it('CAP-CHAT-PANEL-078 injectCompaction honours a caller-supplied shadowed token count', async () => {
+      await startWithLiveTab()
+
+      expect(commands.get('dsh.test.injectCompaction')!({ shadowedTokenCount: 4321 }))
+        .toMatchObject({ ok: true })
+      expect(commands.get('dsh.test.lastCompactionMarker')!()).toEqual({
+        present: true,
+        status: 'done',
+        shadowedTokenCount: 4321,
+      })
+    })
+
+    it('CAP-CHAT-PANEL-079 injectWorkflow lands a two-member run card settled as completed', async () => {
+      const tab = await startWithLiveTab()
+
+      const injected = commands.get('dsh.test.injectWorkflow')!() as { ok: boolean; runId: string }
+      expect(injected.ok).toBe(true)
+
+      expect(commands.get('dsh.test.lastWorkflowCard')!()).toEqual({
+        present: true,
+        memberCount: 2,
+        stopReason: 'completed',
+        completedMembers: 1,
+      })
+      const card = getConversationController()?.messages.get(tab.sessionId)
+        .find(message => message.kind === 'workflow')
+      expect(card?.workflow?.members.map(member => member.label))
+        .toEqual(['member-a', 'member-b'])
+      expect(card?.workflow?.members.map(member => member.phase)).toEqual(['scan', 'scan'])
+    })
+
+    it('CAP-CHAT-PANEL-080 getTokenStatus refuses a sample without usage and accepts a real one', async () => {
+      const tab = await startWithLiveTab()
+      const controller = getConversationController()
+      expect(controller).toBeDefined()
+
+      expect(commands.get('dsh.test.getTokenStatus')!()).toEqual({
+        ok: true,
+        present: false,
+        totalTokens: 0,
+        contextWindow: 0,
+        sane: false,
+      })
+
+      controller!.applyTestSessionEvent(tab.sessionId, 'assistant/message', {
+        turn: 0,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'TOKEN-PROBE' }] },
+        usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
+      })
+
+      expect(commands.get('dsh.test.getTokenStatus')!()).toEqual({
+        ok: true,
+        present: true,
+        totalTokens: 15,
+        contextWindow: 128_000,
+        sane: true,
+      })
+    })
+
+    it('CAP-CHAT-PANEL-081 lastAssistantReasoning reports the latest assistant bubble reasoning', async () => {
+      const tab = await startWithLiveTab()
+      const controller = getConversationController()
+      expect(controller).toBeDefined()
+      expect(commands.get('dsh.test.lastAssistantReasoning')!()).toEqual({ present: false, length: 0 })
+
+      const reasoning = 'LAYER-V-CAP-REASONING'
+      controller!.applyTestSessionEvent(tab.sessionId, 'assistant/chunk', {
+        turn: 0,
+        chunk: { type: 'reasoning-delta', text: reasoning },
+      })
+
+      expect(commands.get('dsh.test.lastAssistantReasoning')!())
+        .toEqual({ present: true, length: reasoning.length })
+    })
+
+    it('CAP-CHAT-PANEL-082 sendImagePrompt sends a PNG content block with the default or given text', async () => {
+      const tab = await startWithLiveTab()
+      const captured: unknown[][] = []
+      vi.spyOn(IdeSessionHost.prototype, 'prompt').mockImplementation(async (_sessionId, blocks) => {
+        captured.push([...blocks])
+        return `msg-image-${captured.length}`
+      })
+
+      expect(await commands.get('dsh.test.sendImagePrompt')!()).toEqual({
+        ok: true,
+        messageId: 'msg-image-1',
+        sessionId: tab.sessionId,
+      })
+      expect(await commands.get('dsh.test.sendImagePrompt')!('LAYER-V-CAP-IMAGE-CUSTOM')).toEqual({
+        ok: true,
+        messageId: 'msg-image-2',
+        sessionId: tab.sessionId,
+      })
+
+      expect(captured).toHaveLength(2)
+      for (const blocks of captured) {
+        const image = blocks.find(block => (block as { type?: string }).type === 'image')
+        expect(image).toMatchObject({ type: 'image', mimeType: 'image/png' })
+        expect((image as { data?: string }).data).toBeTruthy()
+      }
+      expect(captured[0]?.find(block => (block as { type?: string }).type === 'text'))
+        .toMatchObject({ type: 'text', text: 'LAYER-V-CAP-IMAGE-OK' })
+      expect(captured[1]?.find(block => (block as { type?: string }).type === 'text'))
+        .toMatchObject({ type: 'text', text: 'LAYER-V-CAP-IMAGE-CUSTOM' })
+    })
+
+    it('CAP-CHAT-PANEL-083 lastAssistantText reports the latest assistant bubble text', async () => {
+      const tab = await startWithLiveTab()
+      const controller = getConversationController()
+      expect(controller).toBeDefined()
+      expect(commands.get('dsh.test.lastAssistantText')!()).toEqual({ present: false, length: 0 })
+
+      const text = 'LAYER-V-CAP-ASSISTANT-TEXT'
+      controller!.applyTestSessionEvent(tab.sessionId, 'assistant/chunk', {
+        turn: 0,
+        chunk: { type: 'text-delta', text },
+      })
+
+      expect(commands.get('dsh.test.lastAssistantText')!())
+        .toEqual({ present: true, length: text.length })
+    })
+
+    it('CAP-CHAT-PANEL-084 injectReasoning streams a reasoning delta through the chunk projection', async () => {
+      const tab = await startWithLiveTab()
+      expect(commands.get('dsh.test.lastAssistantReasoning')!()).toEqual({ present: false, length: 0 })
+
+      const body = 'LAYER-V-CAP-RSN-INJECTED'
+      expect(commands.get('dsh.test.injectReasoning')!(body)).toEqual({
+        ok: true,
+        sessionId: tab.sessionId,
+        length: body.length,
+      })
+      expect(commands.get('dsh.test.lastAssistantReasoning')!())
+        .toEqual({ present: true, length: body.length })
+
+      // No argument takes the hook's default body; the driver's manifest passes the
+      // explicit argument form above and asserts that length concretely.
+      expect(commands.get('dsh.test.injectReasoning')!()).toEqual({
+        ok: true,
+        sessionId: tab.sessionId,
+        length: 'LAYER-V-CAP-REASONING-OK'.length,
       })
     })
   })

@@ -2,7 +2,8 @@
  * Minimal JSON-RPC SDK runtime stand-in for IdeSessionHost unit/integration tests.
  * Answers `initialize` / `session/prompt` / `shutdown` on stdio; ignores argv.
  * When `DSH_IDE_BRIDGE_SOCK` is set, connects as an ide-bridge runtime and answers
- * Host `session/dispose` / permission frames; optionally emits approval/questions.
+ * Host `session/dispose` / `session/delete` / permission frames; optionally emits
+ * approval/questions.
  *
  * Env knobs:
  * - `FAKE_FAIL_INIT_WITH_API_KEY`: answer initialize with a JSON-RPC error whose
@@ -22,6 +23,8 @@
  * - `FAKE_EMIT_QUESTIONS_SESSION`: after bridge hello, emit one user-questions/request.
  * - `FAKE_EXIT_AFTER_MS`: exit the process after N ms (AC-30 child-death probe).
  * - `FAKE_PERMISSION_LOG`: append permission RPC lines.
+ * - `FAKE_SETTINGS_LOG`: append settings RPC lines; `settings/describe` answers
+ *   one `fake-settings` namespace whose revision moves on each `settings/update`.
  * - `FAKE_EMIT_TURN_EVENTS`: after each prompt, stream session.status + session.event
  *   (turn / step / assistant / optional write tool) for timeline tests (Phase 4).
  * - `FAKE_EMIT_WRITE_DIFF`: with turn events, include write tool/call + tool/result
@@ -123,6 +126,20 @@ const sessions = new Set()
 let bridgeSocket
 let bridgeBuffer = ''
 
+/**
+ * Settings state the runtime answers `settings/describe` with. `settings/update`
+ * moves the revision, so a Host round-trip observes the write.
+ */
+let fakeSettingsRevision = 1
+function fakeSettingsNamespaces() {
+  return [{
+    ns: 'fake-settings',
+    value: { model: 'fake-model' },
+    revision: fakeSettingsRevision,
+    secretFields: ['apiKey'],
+  }]
+}
+
 function sendBridge(frame) {
   if (bridgeSocket === undefined || bridgeSocket.destroyed) return false
   bridgeSocket.write(`${JSON.stringify(frame)}\n`)
@@ -186,6 +203,13 @@ function connectBridge() {
         sendBridge({ kind: 'session/dispose/response', id: frame.id, ok: true })
         continue
       }
+      if (frame?.kind === 'session/delete' && typeof frame.id === 'string') {
+        // The stand-in holds no session files, so erasing is bookkeeping only; the
+        // confirmation is what an explicit delete waits on.
+        sessions.delete(frame.sessionId)
+        sendBridge({ kind: 'session/delete/response', id: frame.id, ok: true })
+        continue
+      }
       if (frame?.kind === 'approval/response' && typeof frame.id === 'string') {
         logLine('FAKE_APPROVAL_LOG', { id: frame.id, outcome: frame.outcome })
         continue
@@ -220,6 +244,32 @@ function connectBridge() {
           ok: true,
           presets: ['workspace-write', 'danger-full-access'],
           current: 'workspace-write',
+        })
+        continue
+      }
+      if (frame?.kind === 'settings/describe' && typeof frame.id === 'string') {
+        logLine('FAKE_SETTINGS_LOG', { kind: 'describe' })
+        sendBridge({
+          kind: 'settings/describe/response',
+          id: frame.id,
+          ok: true,
+          namespaces: fakeSettingsNamespaces(),
+        })
+        continue
+      }
+      if (frame?.kind === 'settings/update' && typeof frame.id === 'string') {
+        logLine('FAKE_SETTINGS_LOG', {
+          kind: 'update',
+          ns: frame.ns,
+          patch: frame.patch,
+          expectedRevision: frame.expectedRevision,
+        })
+        fakeSettingsRevision += 1
+        sendBridge({
+          kind: 'settings/update/response',
+          id: frame.id,
+          ok: true,
+          namespace: { ns: frame.ns, value: frame.patch, revision: fakeSettingsRevision },
         })
       }
     }

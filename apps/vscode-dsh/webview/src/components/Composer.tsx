@@ -25,6 +25,7 @@ export function Composer({
   mode,
 }: ComposerProps) {
   const [local, setLocal] = useState(text)
+  const [images, setImages] = useState<Array<{ data: string; mimeType: string; name?: string }>>([])
   useEffect(() => {
     setLocal(text)
   }, [text])
@@ -36,12 +37,34 @@ export function Composer({
     && continueChrome !== undefined
     && continueChrome.visibility !== 'hidden'
 
+  const addImageFromFile = (file: File): void => {
+    if (!file.type.startsWith('image/')) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result
+      if (typeof result !== 'string') return
+      // data:image/png;base64,... → 提取 base64 部分
+      const base64 = result.split(',')[1] ?? ''
+      setImages(prev => [...prev, { data: base64, mimeType: file.type, name: file.name }])
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const removeImage = (index: number): void => {
+    setImages(prev => prev.filter((_, i) => i !== index))
+  }
+
   const send = (): void => {
     const trimmed = value.trim()
-    if (!trimmed || disabled) return
-    bridge.emitIntent({ type: 'composer/send', text: trimmed })
+    if ((!trimmed && images.length === 0) || disabled) return
+    if (images.length > 0) {
+      bridge.emitIntent({ type: 'composer/send-rich', text: trimmed, images })
+    } else {
+      bridge.emitIntent({ type: 'composer/send', text: trimmed })
+    }
     setLocal('')
     setComposerText('')
+    setImages([])
   }
 
   const stop = (): void => {
@@ -72,12 +95,64 @@ export function Composer({
         </div>
       ) : null}
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+        {images.length > 0 ? (
+          <div data-testid="image-preview-area" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+            {images.map((img, i) => (
+              <div key={i} style={{ position: 'relative', width: 48, height: 48 }}>
+                <img
+                  src={`data:${img.mimeType};base64,${img.data}`}
+                  alt={img.name ?? 'attachment'}
+                  style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4 }}
+                />
+                <button
+                  type="button"
+                  data-testid="remove-image"
+                  onClick={() => removeImage(i)}
+                  style={{
+                    position: 'absolute', top: -4, right: -4,
+                    width: 16, height: 16, borderRadius: '50%',
+                    background: 'var(--dsh-danger, #f44)', color: '#fff',
+                    border: 'none', fontSize: 10, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <textarea
           data-testid="composer-input"
           value={value}
           disabled={disabled}
           placeholder={disabled ? (disabledReason ?? composerPlaceholder(state, mode)) : '输入消息…'}
           rows={2}
+          onPaste={(event) => {
+            const items = event.clipboardData?.items
+            if (!items) return
+            for (const item of items) {
+              if (item.type.startsWith('image/')) {
+                event.preventDefault()
+                const file = item.getAsFile()
+                if (file) addImageFromFile(file)
+                return
+              }
+            }
+          }}
+          onDrop={(event) => {
+            const files = event.dataTransfer?.files
+            if (!files) return
+            for (const file of files) {
+              if (file.type.startsWith('image/')) {
+                event.preventDefault()
+                addImageFromFile(file)
+              }
+            }
+          }}
+          onDragOver={(event) => {
+            event.preventDefault()
+          }}
           onChange={(event) => {
             setLocal(event.target.value)
             setComposerText(event.target.value)
@@ -118,12 +193,12 @@ export function Composer({
           <button
             type="button"
             data-testid="btn-send"
-            disabled={disabled || value.trim() === ''}
+            disabled={disabled || (value.trim() === '' && images.length === 0)}
             onClick={send}
             className="dsh-primary-btn"
             style={{
               alignSelf: 'flex-end',
-              opacity: disabled || value.trim() === '' ? 0.5 : 1,
+              opacity: disabled || (value.trim() === '' && images.length === 0) ? 0.5 : 1,
               cursor: disabled ? 'not-allowed' : 'pointer',
             }}
           >

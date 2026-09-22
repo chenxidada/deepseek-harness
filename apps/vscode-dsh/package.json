@@ -48,6 +48,7 @@
     "onCommand:dsh.reviewWorkspaceDiffs",
     "onCommand:dsh.openTimelineDiff",
     "onCommand:dsh.askAboutSelection",
+    "onCommand:dsh.openSettingsPage",
     "onView:dsh.conversations",
     "onView:dsh.history",
     "onView:dsh.timeline",
@@ -140,6 +141,10 @@
         "title": "DeepSeek Harness: Open Extension Settings"
       },
       {
+        "command": "dsh.openSettingsPage",
+        "title": "DeepSeek Harness: Open Settings Page"
+      },
+      {
         "command": "dsh.showHostDiagnostics",
         "title": "DeepSeek Harness: Show Host Start Diagnostics"
       },
@@ -213,6 +218,12 @@
         "command": "dsh.newConversation",
         "key": "ctrl+shift+alt+n",
         "mac": "cmd+shift+alt+n",
+        "when": "true"
+      },
+      {
+        "command": "dsh.selectModel",
+        "key": "ctrl+shift+alt+m",
+        "mac": "cmd+shift+alt+m",
         "when": "true"
       }
     ]

@@ -17,7 +17,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -2392,6 +2392,97 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(disposed).toEqual([])
         expect(controller.registry.get(drop.tabId)).toBeUndefined()
       })
+
+      it('CAP-CONVERSATION-064 explicit delete erases the persisted data after disposeSession', async () => {
+        const order: string[] = []
+        const host = {
+          status: 'connected',
+          interactions: { failClosedSession() {} },
+          setConversationRegistry() {},
+          onNotification() { return () => {} },
+          async disposeSession(sessionId: string): Promise<void> {
+            order.push(`dispose:${sessionId}`)
+          },
+          async deleteSession(sessionId: string): Promise<boolean> {
+            order.push(`delete:${sessionId}`)
+            return true
+          },
+        } as unknown as IdeSessionHost
+        const controller = new ConversationController(host)
+        const keep = controller.newConversation('keep')
+        const drop = controller.newConversation('drop')
+
+        const result = await controller.deleteConversation(drop.tabId, { confirmed: true })
+
+        // Dispose unloads the live session first, then the runtime erases the log.
+        expect(order).toEqual([`dispose:${drop.sessionId}`, `delete:${drop.sessionId}`])
+        expect(order.some(entry => entry.endsWith(keep.sessionId))).toBe(false)
+        expect(result).toEqual({ outcome: 'deleted', tabId: drop.tabId, sessionId: drop.sessionId })
+        expect(controller.registry.get(drop.tabId)).toBeUndefined()
+      })
+
+      it('CAP-CONVERSATION-065 closeConversation does not call deleteSession (recoverable close)', async () => {
+        const deleted: string[] = []
+        const host = {
+          status: 'connected',
+          interactions: { failClosedSession() {} },
+          setConversationRegistry() {},
+          onNotification() { return () => {} },
+          async disposeSession() {
+            throw new Error('close must not dispose')
+          },
+          async deleteSession(sessionId: string): Promise<boolean> {
+            deleted.push(sessionId)
+            return true
+          },
+        } as unknown as IdeSessionHost
+        const controller = new ConversationController(host)
+        const drop = controller.newConversation('drop')
+
+        const closed = await controller.closeConversation(drop.tabId)
+
+        expect(closed.outcome).toBe('closed')
+        expect(deleted).toEqual([])
+        expect(controller.registry.get(drop.tabId)).toBeUndefined()
+      })
+
+      it('CAP-CONVERSATION-066 failed session/delete still clears projections and banners the runtime text', async () => {
+        const host = {
+          status: 'connected',
+          interactions: { failClosedSession() {} },
+          setConversationRegistry() {},
+          onNotification() { return () => {} },
+          async disposeSession() {},
+          async prompt() { return 'mid' },
+          async deleteSession(): Promise<boolean> {
+            throw new Error('session/delete exploded')
+          },
+        } as unknown as IdeSessionHost
+        const controller = new ConversationController(host)
+        const drop = controller.newConversation('drop')
+        await controller.promptTab(drop.tabId, 'content to drop')
+        const panel = new ChatPanelHost({
+          registry: controller.registry,
+          messages: controller.messages,
+          isHostReady: () => true,
+          acceptSend: text => controller.promptActive(text),
+        })
+        controller.setPanelHost(panel)
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+        fake.receivedFromHost.length = 0
+
+        const result = await controller.deleteConversation(drop.tabId, { confirmed: true })
+
+        expect(result.outcome).toBe('deleted')
+        if (result.outcome !== 'deleted') throw new Error('expected deleted')
+        expect(result.deleteError).toBe('session/delete exploded')
+        expect(controller.registry.get(drop.tabId)).toBeUndefined()
+        expect(controller.index.isDeleted(drop.sessionId)).toBe(true)
+        expect(controller.messages.hasContent(drop.sessionId)).toBe(false)
+        const banner = fake.receivedFromHost.find(m => m.type === 'ui/banner' && m.kind === 'delete-failed')
+        expect(banner?.type === 'ui/banner' ? banner.text : '').toContain('session/delete exploded')
+      })
     })
 
     describe('TreeView item command wires switchConversation', () => {
@@ -2447,6 +2538,254 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(captured.map(item => item.command?.arguments?.[0])).toEqual([t1.tabId, t2.tabId])
         bar.dispose()
       })
+    })
+  })
+
+  describe('dsh.selectModel / dsh.triggerCompact (keyboard entries)', () => {
+    const commands = new Map<string, (...args: unknown[]) => unknown>()
+    const mem = new Map<string, unknown>()
+    const executed: string[] = []
+    let infoMessages: string[] = []
+    let errorMessages: string[] = []
+
+    function makeVscode() {
+      return {
+        window: {
+          async showErrorMessage(text: string) { errorMessages.push(text) },
+          async showInformationMessage(text: string) { infoMessages.push(text) },
+          registerWebviewViewProvider() { return { dispose() {} } },
+        },
+        workspace: {
+          workspaceFolders: [{ uri: { fsPath: '/tmp/dsh-command-stubs' } }],
+          getConfiguration() { return { get: () => undefined } },
+        },
+        commands: {
+          registerCommand(command: string, callback: (...args: unknown[]) => unknown) {
+            commands.set(command, callback)
+            return { dispose() {} }
+          },
+          async executeCommand(command: string) { executed.push(`exec:${command}`) },
+        },
+      }
+    }
+
+    function activateWith(vscode: ReturnType<typeof makeVscode>): void {
+      activate({
+        subscriptions: [],
+        extensionPath: '/tmp/dsh-command-stubs',
+        workspaceState: {
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
+          get<T>(key: string) { return mem.get(key) as T | undefined },
+          update(key: string, value: unknown) { mem.set(key, value) },
+        },
+      }, vscode)
+    }
+
+    /** Bind a controller without spawning a runtime, then create the active Tab. */
+    async function startWithLiveTab(): Promise<{ tabId: string; sessionId: string }> {
+      vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (
+        this: IdeSessionHost,
+      ) {
+        this.status = 'connected'
+      })
+      activateWith(makeVscode())
+      await commands.get('dsh.test.setCredentialPresence')!(true)
+      await commands.get('dsh.test.requestStart')!('command-start')
+      return await commands.get('dsh.test.newConversation')!() as {
+        tabId: string
+        sessionId: string
+      }
+    }
+
+    beforeEach(() => {
+      commands.clear()
+      mem.clear()
+      executed.length = 0
+      infoMessages = []
+      errorMessages = []
+    })
+
+    afterEach(async () => {
+      await deactivate()
+      vi.restoreAllMocks()
+    })
+
+    it('CAP-CONVERSATION-067 dsh.triggerCompact prompts /compact on the active session', async () => {
+      const prompt = vi.spyOn(IdeSessionHost.prototype, 'prompt').mockResolvedValue('msg-compact-1')
+      const tab = await startWithLiveTab()
+
+      const result = await commands.get('dsh.triggerCompact')!()
+
+      expect(result).toEqual({ ok: true })
+      expect(prompt).toHaveBeenCalledWith(tab.sessionId, [{ type: 'text', text: '/compact' }])
+    })
+
+    it('CAP-CONVERSATION-068 dsh.triggerCompact without an active Tab reports no-active', async () => {
+      const prompt = vi.spyOn(IdeSessionHost.prototype, 'prompt').mockResolvedValue('msg-compact-2')
+      vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (
+        this: IdeSessionHost,
+      ) {
+        this.status = 'connected'
+      })
+      activateWith(makeVscode())
+      await commands.get('dsh.test.setCredentialPresence')!(true)
+      await commands.get('dsh.test.requestStart')!('command-start')
+      expect(getConversationController()).toBeDefined()
+      expect(getConversationController()?.registry.getActive()).toBeUndefined()
+
+      const result = await commands.get('dsh.triggerCompact')!()
+
+      expect(result).toEqual({ ok: false, reason: 'no-active' })
+      expect(prompt).not.toHaveBeenCalled()
+      expect(infoMessages.some(text => text.includes('No active conversation'))).toBe(true)
+    })
+
+    it('CAP-CONVERSATION-069 dsh.triggerCompact surfaces a failed send as an error message', async () => {
+      vi.spyOn(IdeSessionHost.prototype, 'prompt').mockRejectedValue(new Error('bridge send failed'))
+      await startWithLiveTab()
+
+      const result = await commands.get('dsh.triggerCompact')!()
+
+      expect(result).toMatchObject({ ok: false, reason: 'error' })
+      expect(errorMessages.some(text => text.includes('bridge send failed'))).toBe(true)
+    })
+
+    it('CAP-CONVERSATION-070 dsh.selectModel reveals the panel and pushes settings namespaces', async () => {
+      const describeSettings = vi.spyOn(IdeSessionHost.prototype, 'describeSettings').mockResolvedValue([
+        { ns: 'fake-settings', value: { model: 'fake-model' }, revision: 3 },
+      ])
+      vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (
+        this: IdeSessionHost,
+      ) {
+        this.status = 'connected'
+      })
+      activateWith(makeVscode())
+      await commands.get('dsh.test.setCredentialPresence')!(true)
+      await commands.get('dsh.test.requestStart')!('command-start')
+      const panel = getChatPanelHost()
+      expect(panel).toBeDefined()
+      panel!.clearOutboundLog()
+
+      const result = await commands.get('dsh.selectModel')!()
+
+      expect(result).toEqual({ ok: true })
+      expect(describeSettings).toHaveBeenCalled()
+      expect(executed).toContain('exec:dsh.chat.focus')
+      const state = panel!.getOutboundLog().find(m => m.type === 'settings/state')
+      expect(state?.type === 'settings/state' ? state.namespaces.map(row => row.ns) : []).toEqual(['fake-settings'])
+    })
+  })
+
+  describe('applyTestSessionEvent (dsh.test.* injection entry)', () => {
+    type Notification = { method: string; params: Record<string, unknown> }
+
+    /** Host whose notifications the test drives itself, for the projection-parity checks. */
+    function createEmitHost(): IdeSessionHost & { emit(notification: Notification): void } {
+      const listeners = new Set<(notification: Notification) => void>()
+      const host = {
+        status: 'connected' as const,
+        interactions: {
+          failClosedSession() {},
+          listPending() { return [] },
+          onChange() { return () => {} },
+        },
+        setConversationRegistry() {},
+        onNotification(listener: (notification: Notification) => void) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+        onStatusChange() { return () => {} },
+        async prompt() { return 'msg' },
+        async disposeSession() {},
+        emit(notification: Notification) {
+          for (const listener of listeners) listener(notification)
+        },
+      }
+      return host as unknown as IdeSessionHost & { emit(notification: Notification): void }
+    }
+
+    function sessionEvent(
+      sessionId: string,
+      type: string,
+      data: Record<string, unknown>,
+    ): Notification {
+      return { method: 'session.event', params: { sessionId, event: { type, data } } }
+    }
+
+    /** Payload fields both paths must produce identically (ids/timestamps are per-path). */
+    function projectableMessages(controller: ConversationController, sessionId: string) {
+      return controller.messages.get(sessionId).map(message => ({
+        kind: message.kind,
+        role: message.role,
+        text: message.text,
+        compaction: message.compaction,
+        workflow: message.workflow,
+      }))
+    }
+
+    it('CAP-CONVERSATION-071 a synthetic todo/write lands on the same todo projection as a real notification', () => {
+      const host = createEmitHost()
+      const controller = new ConversationController(host)
+      const live = controller.newConversation('live')
+      const synthetic = controller.newConversation('synthetic')
+      const todos = [
+        { content: 'done item', status: 'completed' },
+        { content: 'active item', status: 'in_progress' },
+        { content: 'queued item', status: 'pending' },
+      ]
+
+      host.emit(sessionEvent(live.sessionId, 'todo/write', { todos }))
+      controller.applyTestSessionEvent(synthetic.sessionId, 'todo/write', { todos })
+
+      expect(controller.todoItemsForSession(synthetic.sessionId))
+        .toEqual(controller.todoItemsForSession(live.sessionId))
+      expect(controller.todoItemsForSession(synthetic.sessionId)).toHaveLength(3)
+      expect(controller.todoItemsForSession('never-seen')).toEqual([])
+    })
+
+    it('CAP-CONVERSATION-072 a synthetic compaction and workflow fold into the same bubbles as a real notification', () => {
+      const host = createEmitHost()
+      const controller = new ConversationController(host)
+      const live = controller.newConversation('live')
+      const synthetic = controller.newConversation('synthetic')
+      const events: Array<[string, Record<string, unknown>]> = [
+        ['compaction/start', { compactionId: 'cp-parity', turn: null }],
+        ['compaction/summary', {
+          compactionId: 'cp-parity',
+          summary: [
+            { type: 'text', text: '<compacted-summary>' },
+            { type: 'text', text: 'parity body\n</compacted-summary>' },
+          ],
+          shadowedTokenCount: 77,
+        }],
+        ['compaction/end', { compactionId: 'cp-parity', turn: null }],
+        ['tool-workflow/run-start', { runId: 'wf-parity', name: 'parity run' }],
+        ['tool-workflow/agent-start', {
+          runId: 'wf-parity', seq: 0, label: 'member-a', phase: 'scan', childId: 'child-a',
+        }],
+        ['tool-workflow/agent-end', { runId: 'wf-parity', seq: 0, outcome: 'completed' }],
+        ['tool-workflow/run-end', { runId: 'wf-parity', stopReason: 'completed' }],
+      ]
+
+      for (const [type, data] of events) {
+        host.emit(sessionEvent(live.sessionId, type, data))
+        controller.applyTestSessionEvent(synthetic.sessionId, type, data)
+      }
+
+      expect(projectableMessages(controller, synthetic.sessionId))
+        .toEqual(projectableMessages(controller, live.sessionId))
+      const marker = projectableMessages(controller, synthetic.sessionId)
+        .find(message => message.kind === 'compaction')
+      expect(marker?.compaction).toEqual({
+        trigger: 'manual',
+        status: 'done',
+        shadowedTokenCount: 77,
+        summary: 'parity body',
+      })
+      const card = projectableMessages(controller, synthetic.sessionId)
+        .find(message => message.kind === 'workflow')
+      expect(card?.workflow?.members.map(member => member.label)).toEqual(['member-a'])
+      expect(card?.workflow?.stopReason).toBe('completed')
     })
   })
 

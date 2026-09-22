@@ -5,11 +5,12 @@
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/chat-panel-host
  */
 
-import type { ChatMessage, MessageStore } from '../message-store.ts'
+import type { ChatMessage, CompactionMarker, MessageStore, WorkflowMarker } from '../message-store.ts'
 import type { ConversationRegistry } from '../conversation-registry.ts'
 import type { ExtensionIndex } from '../extension-index.ts'
 import type { InteractionCoordinator } from '../interaction-coordinator.ts'
 import type { ConnectionUiState } from '../connection-ui.ts'
+import type { SettingsNamespaceView } from '../session-host.ts'
 import { validateComposerAtPaths, type ResolveAtPathOptions } from '../code-context/at-path.ts'
 import {
   parseWebviewToHostMessage,
@@ -18,6 +19,7 @@ import {
   type PanelBreadcrumb,
   type PanelMode,
   type PanelStatus,
+  type PromptImage,
   type RejectSendReason,
   type WebviewToHostMessage,
 } from './protocol.ts'
@@ -32,6 +34,15 @@ export interface WebviewMessagePort {
 export type SendGateResult =
   | { ok: true; messageId: string; sessionId: string; tabId: string }
   | { ok: false; reason: RejectSendReason }
+
+/** One todo entry pushed via todo/state (feature: todo-panel). */
+export type TodoStateItem = Extract<HostToWebviewMessage, { type: 'todo/state' }>['items'][number]
+
+/** Model catalog + current selection pushed via model/state (feature: model-selector). */
+export type ModelStatePayload = Omit<Extract<HostToWebviewMessage, { type: 'model/state' }>, 'type'>
+
+/** Token usage pushed via token/status (feature: token-status). */
+export type TokenStatusPayload = Omit<Extract<HostToWebviewMessage, { type: 'token/status' }>, 'type'>
 
 /**
  * Host-decision projection for the active panel (phase-4 subagent context).
@@ -73,7 +84,7 @@ export interface ChatPanelHostDeps {
    * Accept a non-empty live send into the existing prompt path.
    * @param text - trimmed user text.
    */
-  acceptSend: (text: string) => Promise<{ messageId: string; sessionId: string; tabId: string }>
+  acceptSend: (text: string, images?: PromptImage[]) => Promise<{ messageId: string; sessionId: string; tabId: string }>
   /** Optional delete action requested from the panel (may still native-confirm). */
   requestDelete?: () => Promise<void>
   /**
@@ -195,6 +206,38 @@ export interface ChatPanelHostDeps {
    * Typically `dsh.reviewWorkspaceDiffs`.
    */
   requestOpenWorkspaceDiffs?: () => Promise<void>
+  /**
+   * Select a model via bridge RPC (model-selector feature).
+   * @param provider - provider id.
+   * @param model - model id.
+   * @param reasoningEffort - optional reasoning effort level.
+   */
+  requestSelectModel?: (provider: string, model: string, reasoningEffort?: string) => Promise<void>
+  /**
+   * Model catalog + current selection for the model selector (feature: model-selector).
+   * Resolves `undefined` when the bridge cannot list models (disconnected / runtime not ready).
+   */
+  requestModelList?: () => Promise<ModelStatePayload | undefined>
+  /**
+   * Redacted settings namespaces for the in-panel settings page (feature: settings-page).
+   * Resolves `undefined` when no live Host can describe them; an absent or
+   * not-yet-connected Host is reported that way rather than by a rejection.
+   */
+  requestSettingsDescribe?: () => Promise<SettingsNamespaceView[] | undefined>
+  /**
+   * Merge a patch into one settings namespace (feature: settings-page).
+   * Resolves the whole namespace list after the write, or `undefined` when no
+   * live Host could answer; a refusal the runtime reported rejects with its
+   * message, which the panel surfaces as a banner.
+   * @param ns - registered namespace key.
+   * @param patch - fields to merge into the user section.
+   * @param expectedRevision - revision the page read; omitted writes unconditionally.
+   */
+  requestSettingsUpdate?: (
+    ns: string,
+    patch: Record<string, unknown>,
+    expectedRevision?: number,
+  ) => Promise<SettingsNamespaceView[] | undefined>
   /**
    * Reveal message-attached change-list (AC-30 primary / AD-CCD-4).
    * @param sourceMessageId - optional assistant id from the summary bubble's turn.
@@ -560,6 +603,39 @@ export class ChatPanelHost {
   }
 
   /**
+   * Push token usage status to the Webview.
+   * @param status - token/status payload fields.
+   */
+  pushTokenStatus(status: TokenStatusPayload): void {
+    this.post({ type: 'token/status', ...status })
+  }
+
+  /**
+   * Push todo list state to the Webview.
+   * @param sessionId - owning session.
+   * @param items - current todo items (whole-list snapshot).
+   */
+  pushTodoState(sessionId: string, items: TodoStateItem[]): void {
+    this.post({ type: 'todo/state', sessionId, items })
+  }
+
+  /**
+   * Push the model catalog and current selection to the Webview.
+   * @param state - providers + current selection from `model/list`.
+   */
+  pushModelState(state: ModelStatePayload): void {
+    this.post({ type: 'model/state', ...state })
+  }
+
+  /**
+   * Push the redacted settings namespaces to the Webview settings page.
+   * @param namespaces - whole-list snapshot the runtime described.
+   */
+  pushSettingsState(namespaces: SettingsNamespaceView[]): void {
+    this.post({ type: 'settings/state', namespaces })
+  }
+
+  /**
    * Push a single complete message append for the active session (live turn).
    * @param message - complete chat message.
    */
@@ -573,7 +649,7 @@ export class ChatPanelHost {
    * Rejects frames that include both `text` and `appendText`.
    * @param sessionId - SDK session identity.
    * @param messageId - stable bubble id.
-   * @param update - text XOR appendText plus optional flags.
+   * @param update - text XOR appendText plus optional flags / marker merges.
    */
   pushPatch(
     sessionId: string,
@@ -581,9 +657,12 @@ export class ChatPanelHost {
     update: {
       text?: string
       appendText?: string
+      appendReasoning?: string
       incomplete?: boolean
       streaming?: boolean
       activityStatus?: 'running' | 'done' | 'failed' | 'aborted'
+      compaction?: Partial<CompactionMarker>
+      workflow?: Partial<WorkflowMarker>
     },
   ): void {
     if (update.text !== undefined && update.appendText !== undefined) return
@@ -594,11 +673,14 @@ export class ChatPanelHost {
       messageId,
       ...update.text !== undefined ? { text: update.text } : {},
       ...update.appendText !== undefined ? { appendText: update.appendText } : {},
+      ...update.appendReasoning !== undefined ? { appendReasoning: update.appendReasoning } : {},
       ...update.incomplete !== undefined ? { incomplete: update.incomplete } : {},
       ...update.streaming !== undefined ? { streaming: update.streaming } : {},
       ...update.activityStatus !== undefined
         ? { activityStatus: update.activityStatus }
         : {},
+      ...update.compaction !== undefined ? { compaction: update.compaction } : {},
+      ...update.workflow !== undefined ? { workflow: update.workflow } : {},
     })
   }
 
@@ -750,6 +832,16 @@ export class ChatPanelHost {
     }
     if (message.type === 'ready') {
       this.pushFullState()
+      // The catalog needs a bridge round-trip, so the mount path answers it after full state.
+      void (async () => {
+        const list = await this.deps.requestModelList?.()
+        if (list !== undefined) this.pushModelState(list)
+      })()
+      // Same for the settings page, so it opens onto data instead of an empty form.
+      void (async () => {
+        const namespaces = await this.deps.requestSettingsDescribe?.()
+        if (namespaces !== undefined) this.pushSettingsState(namespaces)
+      })()
       return
     }
     if (message.type === 'composer/send') {
@@ -890,6 +982,58 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/open-workspace-diffs') {
       await this.deps.requestOpenWorkspaceDiffs?.()
+      return
+    }
+    if (message.type === 'action/select-model') {
+      await this.deps.requestSelectModel?.(message.provider, message.model, message.reasoningEffort)
+      return
+    }
+    if (message.type === 'settings/open') {
+      const namespaces = await this.deps.requestSettingsDescribe?.()
+      if (namespaces === undefined) {
+        // An unanswered read must not clear the page with an empty list.
+        this.pushBanner('设置暂不可用：Host 未就绪', 'settings')
+        return
+      }
+      this.pushSettingsState(namespaces)
+      return
+    }
+    if (message.type === 'settings/update') {
+      let namespaces: SettingsNamespaceView[] | undefined
+      try {
+        namespaces = await this.deps.requestSettingsUpdate?.(
+          message.ns,
+          message.patch,
+          message.expectedRevision,
+        )
+      } catch (error) {
+        // The refusal text is what the page has to show — a stale-revision
+        // conflict among them — and dropping the rejection would leave the
+        // write looking pending.
+        this.pushBanner(
+          `设置保存失败：${error instanceof Error ? error.message : String(error)}`,
+          'settings',
+        )
+        return
+      }
+      if (namespaces === undefined) {
+        this.pushBanner('设置保存失败：Host 未就绪', 'settings')
+        return
+      }
+      this.pushSettingsState(namespaces)
+      return
+    }
+    if (message.type === 'action/compact') {
+      void this.sendPrompt('/compact')
+      return
+    }
+    if (message.type === 'composer/send-rich') {
+      const images = message.images?.map(img => ({ data: img.data, mimeType: img.mimeType }))
+      try {
+        await this.deps.acceptSend(message.text, images)
+      } catch {
+        // fail-closed: send gate already validated; surface-level errors stay in the prompt path.
+      }
       return
     }
     if (message.type === 'action/reveal-change-list') {

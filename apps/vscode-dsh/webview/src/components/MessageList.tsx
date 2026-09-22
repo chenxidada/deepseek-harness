@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { renderSafeMarkdown } from '@dsh/safe-markdown'
 import { decideFollowState } from '../../../src/chat-panel/render/follow-state.ts'
 import type { MessageBridge } from '../bridge/message-bridge.ts'
@@ -179,6 +179,12 @@ function MessageBubble({
   if (msg.kind === 'change-list' || msg.changeList) {
     return <ChangeListBubble msg={msg} bridge={bridge} />
   }
+  if (msg.kind === 'compaction' || msg.compaction) {
+    return <CompactionMarker msg={msg} />
+  }
+  if (msg.kind === 'workflow' || msg.workflow) {
+    return <WorkflowCard msg={msg} bridge={bridge} />
+  }
   if (msg.kind === 'diff-summary') {
     return (
       <article
@@ -226,6 +232,26 @@ function MessageBubble({
         wordBreak: 'break-word',
       }}
     >
+      {!isUser && msg.reasoning ? (
+        <details
+          data-testid="reasoning-block"
+          style={{
+            marginBottom: 8,
+            padding: '8px 12px',
+            background: 'var(--dsh-reasoning-bg, rgba(128,128,128,0.08))',
+            borderRadius: 'var(--dsh-radius-sm, 4px)',
+            fontSize: '0.9em',
+            color: 'var(--dsh-muted)',
+          }}
+        >
+          <summary style={{ cursor: 'pointer', userSelect: 'none' }}>
+            思考过程{msg.streaming ? '…' : ''}
+          </summary>
+          <pre style={{ whiteSpace: 'pre-wrap', margin: '8px 0 0', fontFamily: 'inherit' }}>
+            {msg.reasoning}
+          </pre>
+        </details>
+      ) : null}
       {isUser ? (
         <UserBody text={msg.text} bridge={bridge} />
       ) : settled ? (
@@ -642,6 +668,162 @@ function ChangeListBubble({ msg, bridge }: { msg: UiMessage; bridge: MessageBrid
           </div>
         ))
       )}
+    </article>
+  )
+}
+
+/**
+ * Compaction marker: a centered separator row inside the message flow, deliberately not a
+ * left/right chat bubble (feature: compaction-marker).
+ */
+function CompactionMarker({ msg }: { msg: UiMessage }) {
+  const compaction = msg.compaction
+  const trigger = compaction?.trigger ?? 'auto'
+  const status = compaction?.status ?? 'done'
+  const shadowedTokenCount = compaction?.shadowedTokenCount ?? 0
+  const summary = stripCompactedSummaryTag(compaction?.summary ?? '')
+  return (
+    <article
+      data-testid="compaction-marker"
+      data-message-id={msg.id}
+      data-status={status}
+      data-trigger={trigger}
+      className="dsh-msg dsh-msg-compaction"
+      style={{
+        alignSelf: 'stretch',
+        padding: '4px 10px',
+        borderRadius: 'var(--dsh-radius-sm)',
+        background: 'var(--dsh-bubble-notice, rgba(128,128,128,0.06))',
+        color: 'var(--dsh-muted)',
+        fontSize: '0.85em',
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+        <span data-testid="compaction-trigger">
+          {trigger === 'manual' ? '手动压缩' : '自动压缩'}
+        </span>
+        <span data-testid="compaction-title">
+          上下文已压缩{status === 'running' ? '…' : ''}
+        </span>
+        {shadowedTokenCount > 0 ? (
+          <span data-testid="compaction-shadowed">{`释放 ${shadowedTokenCount} tokens`}</span>
+        ) : null}
+      </div>
+      {status === 'failed' ? (
+        <div
+          data-testid="compaction-error"
+          style={{ marginTop: 4, color: 'var(--dsh-danger, #f44)' }}
+        >
+          {compaction?.error ?? '压缩失败'}
+        </div>
+      ) : null}
+      {summary ? (
+        <details data-testid="compaction-summary" style={{ marginTop: 4, textAlign: 'left' }}>
+          <summary style={{ cursor: 'pointer', userSelect: 'none' }}>查看摘要</summary>
+          <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0', fontFamily: 'inherit' }}>
+            {summary}
+          </pre>
+        </details>
+      ) : null}
+    </article>
+  )
+}
+
+/** Host already strips the wrapper tag; drop any stray one instead of rendering it as markup. */
+function stripCompactedSummaryTag(summary: string): string {
+  return summary.replace(/<\/?compacted-summary[^>]*>/gi, '').trim()
+}
+
+const WORKFLOW_OUTCOME_SYMBOL: Record<'pending' | 'completed' | 'failed' | 'cancelled', string> = {
+  pending: '○',
+  completed: '✓',
+  failed: '✕',
+  cancelled: '⊘',
+}
+
+/** Finished members read as history: muted when completed, faded when cancelled, danger when failed. */
+function workflowMemberStyle(outcome?: 'completed' | 'failed' | 'cancelled'): CSSProperties {
+  if (outcome === 'failed') return { color: 'var(--dsh-danger, #f44)' }
+  if (outcome === 'cancelled') return { opacity: 0.55 }
+  if (outcome === 'completed') return { color: 'var(--dsh-muted)' }
+  return {}
+}
+
+/**
+ * Workflow run card: run name, run status badge, member rows, and stop reason. Members are
+ * interactive — each row opens the child session that ran it (feature: workflow-run-card).
+ */
+function WorkflowCard({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge }) {
+  const workflow = msg.workflow
+  const status = workflow?.status ?? 'running'
+  const stopReason = workflow?.stopReason
+  const members = workflow?.members ?? []
+  const completedCount = members.filter(member => member.outcome === 'completed').length
+  const statusCopy = status === 'running'
+    ? '运行中'
+    : stopReason === 'cancelled'
+      ? '已取消'
+      : stopReason === 'error'
+        ? '失败'
+        : '已完成'
+  return (
+    <article
+      data-testid="workflow-card"
+      data-message-id={msg.id}
+      data-status={status}
+      data-stop-reason={stopReason ?? ''}
+      className="dsh-msg dsh-msg-workflow"
+      style={{
+        alignSelf: 'stretch',
+        padding: '8px 10px',
+        borderRadius: 'var(--dsh-radius-sm)',
+        border: '1px solid var(--dsh-border)',
+        background: 'var(--dsh-bubble-notice, rgba(128,128,128,0.06))',
+        fontSize: '0.9em',
+      }}
+    >
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span data-testid="workflow-title">{`⚙ ${workflow?.name || '工作流'}`}</span>
+        <span data-testid="workflow-status" className="dsh-muted">{statusCopy}</span>
+        <span data-testid="workflow-progress" className="dsh-muted">
+          {`已完成 ${completedCount} / 共 ${members.length}`}
+        </span>
+      </div>
+      {members.length === 0 ? (
+        <div data-testid="workflow-empty" className="dsh-muted" style={{ marginTop: 4 }}>
+          暂无成员
+        </div>
+      ) : (
+        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {members.map(member => (
+            <button
+              key={`${member.seq}-${member.childId}`}
+              type="button"
+              data-testid="workflow-member"
+              data-child-session-id={member.childId}
+              data-outcome={member.outcome ?? 'pending'}
+              className="dsh-link-btn"
+              style={{ width: '100%', ...workflowMemberStyle(member.outcome) }}
+              onClick={() => bridge.emitIntent({
+                type: 'nav/open-subagent',
+                childSessionId: member.childId,
+              })}
+            >
+              {`${WORKFLOW_OUTCOME_SYMBOL[member.outcome ?? 'pending']} ${member.label}`}
+              {member.phase ? ` · ${member.phase}` : ''}
+            </button>
+          ))}
+        </div>
+      )}
+      {stopReason === 'error' ? (
+        <div
+          data-testid="workflow-error"
+          style={{ marginTop: 4, color: 'var(--dsh-danger, #f44)' }}
+        >
+          {workflow?.error ?? statusCopy}
+        </div>
+      ) : null}
     </article>
   )
 }

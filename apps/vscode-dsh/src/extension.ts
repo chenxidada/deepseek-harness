@@ -6,7 +6,7 @@
 
 import { ConversationController } from './conversation-controller.ts'
 import { ConversationRegistry } from './conversation-registry.ts'
-import { MessageStore } from './message-store.ts'
+import { MessageStore, type ChatMessage } from './message-store.ts'
 import type { ForkBoundary, ForkIntent, ForkRequest } from './fork/fork-orchestrator.ts'
 import {
   canRegisterConversationTabBar,
@@ -32,7 +32,7 @@ import {
   reviewWorkspaceDiffs,
   type DiffVsCodeLike,
 } from './diff-entry.ts'
-import { HostStartError, IdeSessionHost } from './session-host.ts'
+import { HostStartError, IdeSessionHost, type ModelListResult, type SettingsNamespaceView } from './session-host.ts'
 import {
   HOST_DIAGNOSTICS_CHANNEL_NAME,
   HostDiagnosticRecorder,
@@ -85,6 +85,7 @@ import {
   type AutoReadyRestoreOptions,
 } from './auto-ready-coordinator.ts'
 import { createRequire } from 'node:module'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
@@ -332,8 +333,10 @@ let changeStorageRoot: string | undefined
 let tabBarRefresh: (() => void) | undefined
 let timelineRefresh: (() => void) | undefined
 let historyRefresh: (() => void) | undefined
+let todoRefresh: (() => void) | undefined
 let stopRegistryWatch: (() => void) | undefined
 let stopTimelineWatch: (() => void) | undefined
+let stopTodoWatch: (() => void) | undefined
 let stopErrorWatch: (() => void) | undefined
 let stopStatusWatch: (() => void) | undefined
 let stopOrchestratorWatch: (() => void) | undefined
@@ -358,6 +361,27 @@ let hostCreateCount = 0
 let hostDiagnostics: HostDiagnosticRecorder | undefined
 /** Output Channel the diagnostics render into, when this VS Code surface exposes one (AC-13). */
 let hostDiagnosticsChannel: OutputChannelLike | undefined
+
+/** 1x1 transparent PNG the image-prompt hook sends, so a vision round-trip needs no fixture file. */
+const TEST_VISION_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+/** Settings namespace whose `thresholdRatio` the compaction observability hooks report. */
+const COMPACTION_SETTINGS_NAMESPACE = 'compaction-basic'
+
+/**
+ * Body of the summary the compaction-injection hook frames with
+ * `<compacted-summary>`, so the reading hook can prove the frame was stripped.
+ */
+const TEST_COMPACTION_SUMMARY_BODY = 'LAYER-V-CAP-COMPACTION-OK'
+
+/**
+ * Reasoning body the reasoning-injection hook streams through the real
+ * `assistant/chunk` projection. The upstream model does not always emit
+ * reasoning, so the capability cannot wait on one; injection keeps the
+ * assertion on the projection instead of on model sampling.
+ */
+const TEST_REASONING_BODY = 'LAYER-V-CAP-REASONING-OK'
 
 /**
  * Resolve the vscode module when the Extension Host activates without an
@@ -410,6 +434,16 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     const history = createHistoryView(vscode, () => listHistoryFromIndex(resolveWorkspaceIndex()))
     historyRefresh = () => history.refresh()
     context.subscriptions.push(history)
+  }
+  if (typeof vscode.window.createTreeView === 'function') {
+    const todoView = createTodoTreeView(vscode)
+    todoRefresh = () => todoView.refresh()
+    context.subscriptions.push({
+      dispose: () => {
+        todoRefresh = undefined
+        todoView.dispose()
+      },
+    })
   }
 
   // Chat panel Host is created eagerly so L2 hooks work before/without a Webview.
@@ -531,6 +565,19 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       '@ext:deepseek-ai.dsh-vscode-dsh',
     )
     return { ok: true as const }
+  })
+
+  /**
+   * Open the in-panel settings page (feature: settings-page). The reveal is the
+   * product entry; the namespaces the page renders need a bridge round-trip, so
+   * the command pushes them as well instead of leaving the page empty until the
+   * Webview asks on its own `settings/open`.
+   */
+  const openSettingsPage = vscode.commands.registerCommand('dsh.openSettingsPage', async () => {
+    await revealConversationPanel(vscode)
+    const namespaces = await readSettingsNamespaces(host)
+    if (namespaces !== undefined) panelHost?.pushSettingsState(namespaces)
+    return { ok: true as const, namespaces: namespaces?.length ?? 0 }
   })
 
   /**
@@ -1007,6 +1054,65 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   }
   const deleteHistory = vscode.commands.registerCommand('dsh.deleteHistory', deleteHistorySession)
 
+  /**
+   * Keyboard entry (ctrl+shift+alt+m) to model selection. The model dropdown is a
+   * control on the in-panel settings page, so the command opens that page the way
+   * `dsh.openSettingsPage` does: reveal, then push the namespaces it renders.
+   */
+  const selectModel = vscode.commands.registerCommand('dsh.selectModel', async () => {
+    await revealConversationPanel(vscode)
+    const namespaces = await readSettingsNamespaces(host)
+    if (namespaces !== undefined) panelHost?.pushSettingsState(namespaces)
+    return { ok: true as const }
+  })
+
+  /**
+   * Keyboard entry to manual compaction. The panel's `/compact` action sends the
+   * slash prompt into the same active-session prompt path, so the command reuses
+   * `promptActive` instead of adding a separate runtime call.
+   */
+  const triggerCompact = vscode.commands.registerCommand('dsh.triggerCompact', async () => {
+    const controller = requireConversations()
+    if (controller === undefined || controller.registry.getActive() === undefined) {
+      await vscode.window.showInformationMessage('No active conversation to compact.')
+      return { ok: false as const, reason: 'no-active' as const }
+    }
+    try {
+      await controller.promptActive('/compact')
+      return { ok: true as const }
+    } catch (error) {
+      const message = redactSecrets(error instanceof Error ? error.message : String(error))
+      await vscode.window.showErrorMessage(`Failed to compact: ${message}`)
+      return { ok: false as const, reason: 'error' as const, error: message }
+    }
+  })
+
+  const deleteSessionFromDisk = vscode.commands.registerCommand('dsh.deleteSessionFromDisk', async () => {
+    const controller = conversations
+    if (controller === undefined) {
+      await vscode.window.showErrorMessage('Host 连接后可删除')
+      return { outcome: 'host-not-ready' as const }
+    }
+    const active = controller.registry.getActive()
+    if (active === undefined) {
+      await vscode.window.showInformationMessage('No active session to delete.')
+      return { outcome: 'missing' as const }
+    }
+    const sessionId = active.sessionId
+    if (typeof sessionId !== 'string') {
+      await vscode.window.showInformationMessage('Active session has no sessionId.')
+      return { outcome: 'missing' as const }
+    }
+    const result = await controller.deleteSession(sessionId, { confirmed: true })
+    if (result.outcome === 'host-not-ready') {
+      await vscode.window.showErrorMessage('Host 连接后可删除')
+      return result
+    }
+    hostDiagnosticsChannel?.appendLine(`[session] deleteSessionFromDisk: ${sessionId} → ${result.outcome}`)
+    historyRefresh?.()
+    return result
+  })
+
   // --- L2 Host test hooks (AD-CR-10: VSCODE_DSH_TEST / injected vscode harness only) ---
   const testDisposables: { dispose(): void }[] = []
   if (shouldRegisterTestHooks(vscodeArg)) {
@@ -1120,6 +1226,23 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         'dsh.test.listPendingInteractions',
         () => host?.interactions.listPending() ?? [],
       ),
+      /**
+       * Queue + drain state of the Host's interaction coordinator (test hooks only). Written
+       * for the case a Tab close leaves a presented wait behind: the coordinator's instance id
+       * and its last drain record tell a stale queue apart from a sessionId mismatch.
+       */
+      vscode.commands.registerCommand('dsh.test.interactionsDebug', () => {
+        const liveHost = host
+        if (liveHost === undefined) return { ok: false as const, reason: 'no-host' as const }
+        // The Tab controller's Host is read as well: a Tab close that drains nothing while
+        // the panel's queue keeps the wait means the two sides are no longer the same Host.
+        return {
+          ok: true as const,
+          ...liveHost.interactions.debugSnapshot(),
+          hostId: liveHost.instanceId,
+          controllerHostId: conversations?.hostInstanceId ?? null,
+        }
+      }),
       /**
        * Answer a pending approval by id, without a UI round trip (AD-12).
        *
@@ -1611,6 +1734,276 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
           }
         }
       }),
+      /**
+       * Observability and injection hooks for the newer user-visible surfaces
+       * (settings page, model selector, vision prompt, token status, reasoning,
+       * compaction markers, workflow cards, todo panel). Every hook answers a value —
+       * a stable `{ ok: false, reason }`, or the -1 / '' missing-field sentinels — and
+       * never throws, so an unattended driver can assert a refusal instead of
+       * interpreting an exception.
+       */
+      vscode.commands.registerCommand('dsh.test.getSettingsState', async () => {
+        const liveHost = connectedHost()
+        if (liveHost === undefined) return { ok: false as const, reason: 'host-not-ready' as const }
+        try {
+          const namespaces = await liveHost.describeSettings()
+          return { ok: true as const, ...compactionSettingsSummary(namespaces) }
+        } catch (error) {
+          return { ok: false as const, reason: testHookReason(error) }
+        }
+      }),
+      vscode.commands.registerCommand(
+        'dsh.test.updateSetting',
+        async (ns?: unknown, patch?: unknown) => {
+          const liveHost = connectedHost()
+          if (liveHost === undefined) return { ok: false as const, reason: 'host-not-ready' as const }
+          if (typeof ns !== 'string' || ns === '') {
+            return { ok: false as const, reason: 'invalid-ns' as const }
+          }
+          if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+            return { ok: false as const, reason: 'invalid-patch' as const }
+          }
+          try {
+            await liveHost.updateSetting(ns, patch as Record<string, unknown>)
+            // The write returns only the patched namespace; the re-read is what shows
+            // the namespace list a settings page would render after the save.
+            const summary = compactionSettingsSummary(await liveHost.describeSettings())
+            return {
+              ok: true as const,
+              revision: summary.revision,
+              thresholdRatio: summary.thresholdRatio,
+            }
+          } catch (error) {
+            return { ok: false as const, reason: testHookReason(error) }
+          }
+        },
+      ),
+      vscode.commands.registerCommand('dsh.test.getModelState', async () => {
+        const liveHost = connectedHost()
+        if (liveHost === undefined) return { ok: false as const, reason: 'host-not-ready' as const }
+        try {
+          const list = await liveHost.listModels()
+          panelHost?.pushModelState(list)
+          const models = list.providers.flatMap(provider => provider.models)
+          return {
+            ok: true as const,
+            providerCount: list.providers.length,
+            modelCount: models.length,
+            hasContextWindow: models.some(model => (model.contextWindow ?? 0) > 0),
+            hasReasoningEfforts: models.some(model => (model.reasoningEfforts?.length ?? 0) > 0),
+            currentProvider: list.current.provider,
+            currentModel: list.current.model,
+          }
+        } catch (error) {
+          return { ok: false as const, reason: testHookReason(error) }
+        }
+      }),
+      vscode.commands.registerCommand(
+        'dsh.test.selectModel',
+        async (provider?: unknown, model?: unknown, reasoningEffort?: unknown) => {
+          const liveHost = connectedHost()
+          if (liveHost === undefined) return { ok: false as const, reason: 'host-not-ready' as const }
+          if (typeof provider !== 'string' || provider === ''
+            || typeof model !== 'string' || model === '') {
+            return { ok: false as const, reason: 'invalid-model' as const }
+          }
+          try {
+            await liveHost.selectModel(
+              provider,
+              model,
+              typeof reasoningEffort === 'string' && reasoningEffort !== ''
+                ? reasoningEffort
+                : undefined,
+            )
+            // `model/select` is a write; re-listing is what shows the runtime adopted it.
+            const list = await liveHost.listModels()
+            return { ok: true as const, currentModel: list.current.model }
+          } catch (error) {
+            return { ok: false as const, reason: testHookReason(error) }
+          }
+        },
+      ),
+      vscode.commands.registerCommand('dsh.test.sendImagePrompt', async (text?: unknown) => {
+        const controller = conversations
+        const sessionId = activeSessionId()
+        if (controller === undefined || sessionId === undefined) {
+          return { ok: false as const, reason: 'no-active' as const }
+        }
+        const body = typeof text === 'string' && text.trim() !== '' ? text : 'LAYER-V-CAP-IMAGE-OK'
+        try {
+          const result = await controller.promptActive(body, [
+            { data: TEST_VISION_PNG_BASE64, mimeType: 'image/png' },
+          ])
+          return { ok: true as const, messageId: result.messageId, sessionId: result.sessionId }
+        } catch (error) {
+          return { ok: false as const, reason: testHookReason(error) }
+        }
+      }),
+      vscode.commands.registerCommand('dsh.test.sessionLogExists', async (sessionId?: unknown) => {
+        const liveHost = connectedHost()
+        if (liveHost === undefined) return { exists: false, error: 'host-not-ready' as const }
+        if (typeof sessionId !== 'string' || sessionId === '') {
+          return { exists: false, error: 'invalid-session-id' as const }
+        }
+        try {
+          const events = await liveHost.readSessionLog(sessionId)
+          return { exists: events.length > 0 }
+        } catch (error) {
+          return { exists: false, error: testHookReason(error) }
+        }
+      }),
+      /**
+       * Latest `token/status` sample the projection pushed. `sane` folds the two
+       * degenerate cases a driver must reject: no sample at all, and zeroed counters.
+       */
+      vscode.commands.registerCommand('dsh.test.getTokenStatus', () => {
+        const controller = conversations
+        if (controller === undefined) return { ok: false as const, reason: 'no-active' as const }
+        const status = controller.lastTokenStatus()
+        if (status === undefined) {
+          return {
+            ok: true as const,
+            present: false as const,
+            totalTokens: 0,
+            contextWindow: 0,
+            sane: false,
+          }
+        }
+        return {
+          ok: true as const,
+          present: true as const,
+          totalTokens: status.totalTokens,
+          contextWindow: status.contextWindow,
+          sane: status.totalTokens > 0 && status.contextWindow > 0,
+        }
+      }),
+      vscode.commands.registerCommand('dsh.test.lastAssistantReasoning', () => {
+        const reasoning = lastActiveMessage(message => message.role === 'assistant')?.reasoning ?? ''
+        return { present: reasoning !== '', length: reasoning.length }
+      }),
+      vscode.commands.registerCommand('dsh.test.lastAssistantText', () => {
+        const text = lastActiveMessage(message => message.role === 'assistant')?.text ?? ''
+        return { present: text !== '', length: text.length }
+      }),
+      vscode.commands.registerCommand('dsh.test.injectCompaction', (opts?: unknown) => {
+        const controller = conversations
+        const sessionId = activeSessionId()
+        if (controller === undefined || sessionId === undefined) {
+          return { ok: false as const, reason: 'no-active' as const }
+        }
+        const rawShadowed = typeof opts === 'object' && opts !== null
+          ? (opts as { shadowedTokenCount?: unknown }).shadowedTokenCount
+          : undefined
+        const shadowedTokenCount = typeof rawShadowed === 'number' ? rawShadowed : 1234
+        const compactionId = randomUUID()
+        controller.applyTestSessionEvent(sessionId, 'compaction/start', { compactionId, turn: null })
+        // Two blocks inside one `<compacted-summary>` frame: the projection joins the
+        // blocks and strips the frame, which a single pre-stripped block could not show.
+        controller.applyTestSessionEvent(sessionId, 'compaction/summary', {
+          compactionId,
+          summary: [
+            { type: 'text', text: '<compacted-summary>' },
+            { type: 'text', text: `${TEST_COMPACTION_SUMMARY_BODY}\n</compacted-summary>` },
+          ],
+          shadowedTokenCount,
+        })
+        controller.applyTestSessionEvent(sessionId, 'compaction/end', { compactionId, turn: null })
+        return { ok: true as const, compactionId }
+      }),
+      vscode.commands.registerCommand('dsh.test.injectWorkflow', () => {
+        const controller = conversations
+        const sessionId = activeSessionId()
+        if (controller === undefined || sessionId === undefined) {
+          return { ok: false as const, reason: 'no-active' as const }
+        }
+        const runId = randomUUID()
+        controller.applyTestSessionEvent(sessionId, 'tool-workflow/run-start', {
+          runId,
+          name: 'LAYER-V-CAP-WORKFLOW',
+        })
+        for (const member of [{ seq: 0, label: 'member-a' }, { seq: 1, label: 'member-b' }]) {
+          controller.applyTestSessionEvent(sessionId, 'tool-workflow/agent-start', {
+            runId,
+            seq: member.seq,
+            label: member.label,
+            phase: 'scan',
+            // A member row needs a child session id; the card uses it for click-through.
+            childId: `${runId}:${member.label}`,
+          })
+        }
+        controller.applyTestSessionEvent(sessionId, 'tool-workflow/agent-end', {
+          runId,
+          seq: 0,
+          outcome: 'completed',
+        })
+        controller.applyTestSessionEvent(sessionId, 'tool-workflow/run-end', {
+          runId,
+          stopReason: 'completed',
+        })
+        return { ok: true as const, runId }
+      }),
+      vscode.commands.registerCommand('dsh.test.injectTodo', () => {
+        const controller = conversations
+        const sessionId = activeSessionId()
+        if (controller === undefined || sessionId === undefined) {
+          return { ok: false as const, reason: 'no-active' as const }
+        }
+        const todos = [
+          { content: 'LAYER-V-CAP-TODO-DONE', status: 'completed' },
+          { content: 'LAYER-V-CAP-TODO-ACTIVE', status: 'in_progress' },
+          { content: 'LAYER-V-CAP-TODO-PENDING', status: 'pending' },
+        ]
+        controller.applyTestSessionEvent(sessionId, 'todo/write', { todos })
+        return { ok: true as const, count: todos.length }
+      }),
+      vscode.commands.registerCommand('dsh.test.injectReasoning', (text?: unknown) => {
+        const controller = conversations
+        const sessionId = activeSessionId()
+        if (controller === undefined || sessionId === undefined) {
+          return { ok: false as const, reason: 'no-active' as const }
+        }
+        const body = typeof text === 'string' && text !== '' ? text : TEST_REASONING_BODY
+        controller.applyTestSessionEvent(sessionId, 'assistant/chunk', {
+          turn: 0,
+          chunk: { type: 'reasoning-delta', index: 0, text: body },
+        })
+        return { ok: true as const, sessionId, length: body.length }
+      }),
+      vscode.commands.registerCommand('dsh.test.getTodoItems', () => {
+        const controller = conversations
+        const sessionId = activeSessionId()
+        const items = controller === undefined || sessionId === undefined
+          ? []
+          : controller.todoItemsForSession(sessionId)
+        return {
+          count: items.length,
+          completed: items.filter(item => item.status === 'completed').length,
+          inProgress: items.filter(item => item.status === 'in_progress').length,
+        }
+      }),
+      vscode.commands.registerCommand('dsh.test.lastCompactionMarker', () => {
+        const marker = lastActiveMessage(message => message.kind === 'compaction')?.compaction
+        if (marker === undefined) {
+          return { present: false as const, status: '', shadowedTokenCount: -1 }
+        }
+        return {
+          present: true as const,
+          status: marker.status,
+          shadowedTokenCount: marker.shadowedTokenCount,
+        }
+      }),
+      vscode.commands.registerCommand('dsh.test.lastWorkflowCard', () => {
+        const card = lastActiveMessage(message => message.kind === 'workflow')?.workflow
+        if (card === undefined) {
+          return { present: false as const, memberCount: -1, stopReason: '', completedMembers: -1 }
+        }
+        return {
+          present: true as const,
+          memberCount: card.members.length,
+          stopReason: card.stopReason ?? '',
+          completedMembers: card.members.filter(member => member.outcome === 'completed').length,
+        }
+      }),
     )
   }
 
@@ -1618,6 +2011,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     showPanel,
     statusBarAction,
     openSettings,
+    openSettingsPage,
     showHostDiagnostics,
     copyToClipboard,
     start,
@@ -1636,6 +2030,9 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     selectPermission,
     reviewDiffs,
     openDiff,
+    selectModel,
+    triggerCompact,
+    deleteSessionFromDisk,
     ...testDisposables,
   )
 }
@@ -1748,6 +2145,68 @@ export function getLastCopiedText(): string | undefined {
 }
 
 /**
+ * Create the sidebar Todo view over the active session's latest `todo/write`
+ * snapshot (feature: todo-panel). Rows are read on demand; the Conversation
+ * controller drives `refresh` on writes and Tab switches.
+ * @param vscode - duck-typed vscode module with TreeView APIs.
+ * @returns handle with dispose + refresh.
+ */
+function createTodoTreeView(vscode: VsCodeLike): { dispose(): void; refresh(): void } {
+  const change = vscode.EventEmitter === undefined ? undefined : new vscode.EventEmitter<void>()
+  const view = vscode.window.createTreeView?.('dsh.todo', {
+    treeDataProvider: {
+      ...change === undefined ? {} : { onDidChangeTreeData: change.event },
+      getTreeItem(element: unknown) { return element },
+      getChildren(): unknown[] {
+        return todoTreeItems(vscode)
+      },
+    },
+  })
+  return {
+    refresh() {
+      change?.fire()
+    },
+    dispose() {
+      change?.dispose()
+      view?.dispose()
+    },
+  }
+}
+
+/**
+ * Todo rows for the active conversation Tab.
+ * @param vscode - duck-typed vscode module.
+ * @returns one row per todo item (empty without an active session or a written list).
+ */
+function todoTreeItems(vscode: VsCodeLike): unknown[] {
+  const controller = conversations
+  const activeSessionId = controller?.registry.getActive()?.sessionId
+  if (controller === undefined || activeSessionId === undefined) return []
+  const TreeItem = vscode.TreeItem
+  const collapsibleState = vscode.TreeItemCollapsibleState?.None
+  return controller.todoItemsForSession(activeSessionId).map((item) => {
+    const description = todoStatusLabel(item.status)
+    if (TreeItem === undefined) {
+      return { label: item.content, ...description === undefined ? {} : { description } }
+    }
+    const row = new TreeItem(item.content, collapsibleState)
+    if (description !== undefined) row.description = description
+    return row
+  })
+}
+
+/**
+ * Sidebar description for one todo status (feature: todo-panel).
+ * @param status - todo lifecycle state.
+ * @returns the status label, or `undefined` for pending (unadorned row).
+ */
+function todoStatusLabel(status: 'pending' | 'in_progress' | 'completed'): string | undefined {
+  if (status === 'in_progress') return '进行中'
+  if (status === 'completed') return '已完成'
+  return undefined
+}
+
+/**
  * Map VS Code ColorTheme.kind to a stable label for Webview class refresh (AC-8a).
  * @param vscode - duck-typed vscode module.
  */
@@ -1779,10 +2238,10 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       return conversations?.messages ?? emptyMessages
     },
     isHostReady: () => host?.status === 'connected',
-    acceptSend: async (text) => {
+    acceptSend: async (text, images) => {
       const controller = requireConversations()
       if (controller === undefined) throw new Error('no-host')
-      return controller.promptActive(text)
+      return controller.promptActive(text, images)
     },
     requestDelete: async () => {
       await runDeleteActive(vscode)
@@ -2067,6 +2526,14 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestOpenSearch: async () => {
       await vscode.commands.executeCommand?.('dsh.searchSessions')
     },
+    requestModelList: async () => readModelList(host),
+    requestSettingsDescribe: async () => readSettingsNamespaces(host),
+    requestSettingsUpdate: async (ns, patch, expectedRevision) => {
+      const liveHost = host
+      if (liveHost === undefined || liveHost.status !== 'connected') return undefined
+      await liveHost.updateSetting(ns, patch, expectedRevision)
+      return await liveHost.describeSettings()
+    },
     resolveContinueChrome: () => conversations?.continueChromeForTab(),
     resolveDeferredRestoreCount: () => conversations?.panelSnapshot().deferredRestoreCount ?? 0,
     resolveReveal: (callId) => {
@@ -2091,6 +2558,7 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
 function bindConversations(controller: ConversationController): void {
   stopRegistryWatch?.()
   stopTimelineWatch?.()
+  stopTodoWatch?.()
   conversations = controller
   wireChangePipeline(controller)
   controller.setPanelHost(panelHost)
@@ -2098,15 +2566,20 @@ function bindConversations(controller: ConversationController): void {
     tabBarRefresh?.()
     timelineRefresh?.()
     historyRefresh?.()
+    todoRefresh?.()
     panelHost?.pushFullState()
   })
   stopTimelineWatch = controller.timeline.onChange(() => {
     timelineRefresh?.()
     panelHost?.pushStatus()
   })
+  stopTodoWatch = controller.onTodoChange(() => {
+    todoRefresh?.()
+  })
   tabBarRefresh?.()
   timelineRefresh?.()
   historyRefresh?.()
+  todoRefresh?.()
   panelHost?.pushFullState()
 }
 
@@ -2403,12 +2876,15 @@ function unbindConversations(): void {
   stopRegistryWatch = undefined
   stopTimelineWatch?.()
   stopTimelineWatch = undefined
+  stopTodoWatch?.()
+  stopTodoWatch = undefined
   conversations?.setPanelHost(undefined)
   conversations?.clearLocal()
   conversations = undefined
   tabBarRefresh?.()
   timelineRefresh?.()
   historyRefresh?.()
+  todoRefresh?.()
   panelHost?.pushFullState()
 }
 
@@ -2427,6 +2903,113 @@ function requireConversations(): ConversationController | undefined {
     return undefined
   }
   return conversations
+}
+
+/**
+ * Read the model catalog for the panel selector (feature: model-selector).
+ * A bridge whose runtime has not connected yet cannot answer, and the Webview
+ * mount path asks again, so the failure stays silent instead of failing a Start.
+ * @param liveHost - Host serving `model/list`, when one exists.
+ * @returns the catalog, or `undefined` when no Host answered.
+ */
+async function readModelList(liveHost: IdeSessionHost | undefined): Promise<ModelListResult | undefined> {
+  if (liveHost === undefined) return undefined
+  try {
+    return await liveHost.listModels()
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Read the settings namespaces for the in-panel settings page (feature: settings-page).
+ * A bridge whose runtime has not connected yet cannot answer, and the page asks
+ * again on its `settings/open`, so the failure stays silent here and the panel
+ * reports it as an unavailable Host.
+ * @param liveHost - Host serving `settings/describe`, when one exists.
+ * @returns the redacted namespaces, or `undefined` when no Host answered.
+ */
+async function readSettingsNamespaces(
+  liveHost: IdeSessionHost | undefined,
+): Promise<SettingsNamespaceView[] | undefined> {
+  if (liveHost === undefined) return undefined
+  try {
+    return await liveHost.describeSettings()
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Host able to answer the settings / model / session-log observability hooks. A Host
+ * that exists but is not connected cannot: a driver reads the hook's stable refusal
+ * rather than a transport message that depends on the call it happened to make.
+ * @returns the connected Host, or undefined.
+ */
+function connectedHost(): IdeSessionHost | undefined {
+  return host?.status === 'connected' ? host : undefined
+}
+
+/**
+ * Failure text for a `dsh.test.*` hook, which answers a value instead of throwing.
+ * @param error - thrown value.
+ * @returns redacted message text.
+ */
+function testHookReason(error: unknown): string {
+  return redactSecrets(error instanceof Error ? error.message : String(error))
+}
+
+/** Settings fields the compaction observability hooks report. */
+interface CompactionSettingsSummary {
+  /** Namespaces the runtime described. */
+  namespaceCount: number
+  /** Whether {@link COMPACTION_SETTINGS_NAMESPACE} was among them. */
+  hasCompactionNs: boolean
+  /** Its `value.thresholdRatio`, or -1 when the namespace or field is absent. */
+  thresholdRatio: number
+  /** Its revision, or -1 when the namespace is absent. */
+  revision: number
+}
+
+/**
+ * Read the compaction namespace out of a `settings/describe` answer.
+ * @param namespaces - redacted namespaces the runtime described.
+ * @returns the fields the settings hooks report.
+ */
+function compactionSettingsSummary(
+  namespaces: readonly SettingsNamespaceView[],
+): CompactionSettingsSummary {
+  const found = namespaces.find(entry => entry.ns === COMPACTION_SETTINGS_NAMESPACE)
+  const value = typeof found?.value === 'object' && found.value !== null
+    ? found.value as Record<string, unknown>
+    : undefined
+  const thresholdRatio = value?.thresholdRatio
+  return {
+    namespaceCount: namespaces.length,
+    hasCompactionNs: found !== undefined,
+    thresholdRatio: typeof thresholdRatio === 'number' ? thresholdRatio : -1,
+    revision: found?.revision ?? -1,
+  }
+}
+
+/**
+ * Session of the active Conversation Tab, for the session-scoped `dsh.test.*` hooks.
+ * @returns the active session id, or undefined when no Tab is active.
+ */
+function activeSessionId(): string | undefined {
+  return conversations?.registry.getActive()?.sessionId
+}
+
+/**
+ * Newest projected message matching a predicate on the active Tab's session.
+ * @param match - predicate over the session's projected messages.
+ * @returns the matching message, or undefined without an active session or match.
+ */
+function lastActiveMessage(match: (message: ChatMessage) => boolean): ChatMessage | undefined {
+  const controller = conversations
+  const sessionId = activeSessionId()
+  if (controller === undefined || sessionId === undefined) return undefined
+  return [...controller.messages.get(sessionId)].reverse().find(match)
 }
 
 async function runCloseTab(
@@ -2784,6 +3367,11 @@ function createStartHostPort(
         ))
         // AutoReady owns restore/New when Conversation is visible (AD-CR-3 / DEBT-001).
         panelHost?.pushFullState()
+        // Populate the model selector without waiting for the Webview to remount.
+        void (async () => {
+          const list = await readModelList(next)
+          if (list !== undefined) panelHost?.pushModelState(list)
+        })()
       } catch (error) {
         stopErrorWatch?.()
         stopErrorWatch = undefined

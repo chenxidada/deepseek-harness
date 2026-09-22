@@ -8,6 +8,7 @@ import {
   setSearchOpen,
   setSearchOrigin,
   setSearchQuery,
+  setSettingsOpen,
 } from '../store/chat-ui-store.ts'
 
 export interface TabChromeProps {
@@ -22,6 +23,7 @@ export interface TabChromeProps {
   searchHits: SearchHit[]
   searchLoading: boolean
   overflowOpen: boolean
+  settingsOpen: boolean
   forkParentTitle?: string
   contextSessionId?: string
   breadcrumb?: BreadcrumbState
@@ -45,6 +47,7 @@ export function TabChrome({
   searchHits,
   searchLoading,
   overflowOpen,
+  settingsOpen,
   forkParentTitle,
   contextSessionId,
   breadcrumb,
@@ -255,6 +258,19 @@ export function TabChrome({
           style={chromeBtnStyle}
         >
           搜索
+        </button>
+        <button
+          type="button"
+          data-testid="btn-settings"
+          title="设置"
+          aria-pressed={settingsOpen}
+          onClick={() => {
+            bridge.emitIntent({ type: 'settings/open' })
+            setSettingsOpen(true)
+          }}
+          style={chromeBtnStyle}
+        >
+          设置
         </button>
         <div style={{ position: 'relative' }}>
           <button

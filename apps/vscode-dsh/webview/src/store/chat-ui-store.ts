@@ -63,15 +63,48 @@ export interface UiChangeList {
   emptyNotice: boolean
 }
 
+/** Context-compaction marker mirrored from Host (feature: compaction-marker). */
+export interface UiCompaction {
+  trigger: 'auto' | 'manual'
+  status: 'running' | 'done' | 'failed'
+  shadowedTokenCount: number
+  summary: string
+  error?: string
+}
+
+/** One workflow run member mirrored from Host (feature: workflow-run-card). */
+export interface UiWorkflowMember {
+  seq: number
+  label: string
+  phase?: string
+  /** Child session opened by clicking the member row. */
+  childId: string
+  outcome?: 'completed' | 'failed' | 'cancelled'
+}
+
+/** Workflow run card mirrored from Host (feature: workflow-run-card). */
+export interface UiWorkflow {
+  runId: string
+  name: string
+  status: 'running' | 'done'
+  stopReason?: 'completed' | 'cancelled' | 'error'
+  error?: string
+  members: UiWorkflowMember[]
+}
+
 export interface UiMessage {
   id: string
   role: string
   text: string
-  kind?: 'text' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity'
+  kind?: 'text' | 'reasoning' | 'compaction' | 'workflow' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity'
   streaming?: boolean
+  /** Reasoning/thinking text from model. */
+  reasoning?: string
   incomplete?: boolean
   activity?: UiActivity
   changeList?: UiChangeList
+  compaction?: UiCompaction
+  workflow?: UiWorkflow
   sourceMessageId?: string
   turn?: number
   /** Subagent child session identity for `kind:'subagent'` cards (phase-4). */
@@ -103,6 +136,62 @@ export interface DeleteConfirmState {
   title?: string
   /** chrome = overflow; tab-context = Tab right-click; history = history row. */
   source: 'chrome' | 'tab-context' | 'history'
+}
+
+/** One model route offered by a provider, mirrored from Host `model/state`. */
+export interface ModelOption {
+  id: string
+  name: string
+  vision?: boolean
+  /** Provider-owned context capacity for this exact route, when declared. */
+  contextWindow?: number
+  /** Adapter-owned reasoning efforts this route accepts. */
+  reasoningEfforts?: Array<{ id: string; name: string }>
+}
+
+/** Model providers and current selection mirrored from Host `model/state`. */
+export interface ModelState {
+  providers: Array<{ id: string; name: string; models: ModelOption[] }>
+  current: { provider: string; model: string; reasoningEffort?: string }
+}
+
+/** One redacted settings namespace mirrored from Host `settings/state`. */
+export interface SettingsNamespaceState {
+  ns: string
+  /** Redacted resolved value: schema defaults, then composition base, then user layer. */
+  value: unknown
+  /** Redacted composition base layer, when the namespace declares one. */
+  base?: unknown
+  /** Redacted raw user section; a key's presence here marks it user-overridden. */
+  user?: unknown
+  /** Revision of the raw user section this value was read at. */
+  revision: number
+  /** Dotted paths of the schema-declared secret positions removed from the layers. */
+  secretFields?: string[]
+}
+
+/** Settings namespaces mirrored from Host `settings/state`. */
+export interface SettingsState {
+  namespaces: SettingsNamespaceState[]
+}
+
+/** Token usage sample mirrored from Host `token/status` (feature: token-status). */
+export interface TokenStatus {
+  /** Session the sample belongs to; omitted only by legacy senders. */
+  sessionId?: string
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  cacheReadTokens?: number
+  reasoningTokens?: number
+  contextWindow: number
+  thresholdRatio: number
+}
+
+/** Todo list entry mirrored from Host `todo/state` (feature: todo-panel). */
+export interface TodoItem {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
 }
 
 export interface ChatUiState {
@@ -144,7 +233,17 @@ export interface ChatUiState {
   /** Host tier-1/2 hits for history-surface search (do not force top search-panel). */
   historySearchHits: SearchHit[]
   deleteConfirm?: DeleteConfirmState
+  /** Current model selection state (feature: model-selector). */
+  modelState?: ModelState
+  /** Current token usage (feature: token-status). */
+  tokenStatus?: TokenStatus
+  /** Todo items for active session (feature: todo-panel). */
+  todoItems: TodoItem[]
   overflowOpen: boolean
+  /** In-panel settings page visibility (local chrome; the Host pushes state on `settings/open`). */
+  settingsOpen: boolean
+  /** Redacted settings namespaces mirrored from Host `settings/state`. */
+  settingsState?: SettingsState
   /** After history open, auto-fire Continue once Host chrome is ready. */
   pendingContinueSessionId?: string
 }
@@ -173,7 +272,9 @@ const initialState: ChatUiState = {
   searchLoading: false,
   searchOrigin: null,
   historySearchHits: [],
+  todoItems: [],
   overflowOpen: false,
+  settingsOpen: false,
 }
 
 let state: ChatUiState = { ...initialState }
@@ -255,9 +356,78 @@ function mapChangeList(raw: unknown): UiChangeList | undefined {
   }
 }
 
+/**
+ * Parse a compaction marker; a payload missing any closed-set or numeric field is
+ * dropped whole, so the marker never renders a half-known status.
+ */
+function mapCompaction(raw: unknown): UiCompaction | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const rec = raw as Record<string, unknown>
+  if (rec.trigger !== 'auto' && rec.trigger !== 'manual') return undefined
+  if (rec.status !== 'running' && rec.status !== 'done' && rec.status !== 'failed') return undefined
+  if (typeof rec.shadowedTokenCount !== 'number') return undefined
+  if (typeof rec.summary !== 'string') return undefined
+  return {
+    trigger: rec.trigger,
+    status: rec.status,
+    shadowedTokenCount: rec.shadowedTokenCount,
+    summary: rec.summary,
+    ...typeof rec.error === 'string' ? { error: rec.error } : {},
+  }
+}
+
+/**
+ * Parse a workflow run card; a payload missing any closed-set or string field is dropped
+ * whole, and members failing their own checks are dropped one by one.
+ */
+function mapWorkflow(raw: unknown): UiWorkflow | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const rec = raw as Record<string, unknown>
+  if (typeof rec.runId !== 'string' || typeof rec.name !== 'string') return undefined
+  if (rec.status !== 'running' && rec.status !== 'done') return undefined
+  if (!Array.isArray(rec.members)) return undefined
+  const stopReason = rec.stopReason
+  if (stopReason !== undefined && stopReason !== 'completed' && stopReason !== 'cancelled' && stopReason !== 'error') {
+    return undefined
+  }
+  const members: UiWorkflowMember[] = []
+  for (const entry of rec.members) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const member = entry as Record<string, unknown>
+    if (typeof member.seq !== 'number') continue
+    if (typeof member.label !== 'string' || typeof member.childId !== 'string') continue
+    if (member.phase !== undefined && typeof member.phase !== 'string') continue
+    const outcome = member.outcome
+    if (outcome !== undefined && outcome !== 'completed' && outcome !== 'failed' && outcome !== 'cancelled') {
+      continue
+    }
+    members.push({
+      seq: member.seq,
+      label: member.label,
+      childId: member.childId,
+      ...typeof member.phase === 'string' ? { phase: member.phase } : {},
+      ...outcome === 'completed' || outcome === 'failed' || outcome === 'cancelled' ? { outcome } : {},
+    })
+  }
+  return {
+    runId: rec.runId,
+    name: rec.name,
+    status: rec.status,
+    members,
+    ...stopReason === 'completed' || stopReason === 'cancelled' || stopReason === 'error'
+      ? { stopReason }
+      : {},
+    ...typeof rec.error === 'string' ? { error: rec.error } : {},
+  }
+}
+
 function mapMessage(m: unknown, index: number): UiMessage {
   const rec = (typeof m === 'object' && m !== null ? m : {}) as Record<string, unknown>
   const kind = typeof rec.kind === 'string' ? rec.kind as UiMessage['kind'] : 'text'
+  const activity = mapActivity(rec.activity)
+  const changeList = mapChangeList(rec.changeList)
+  const compaction = mapCompaction(rec.compaction)
+  const workflow = mapWorkflow(rec.workflow)
   return {
     id: typeof rec.id === 'string' ? rec.id : `msg-${index}`,
     role: typeof rec.role === 'string' ? rec.role : 'assistant',
@@ -271,8 +441,120 @@ function mapMessage(m: unknown, index: number): UiMessage {
     ...(rec.subagentStatus === 'running' || rec.subagentStatus === 'ended' || rec.subagentStatus === 'deleted')
       ? { subagentStatus: rec.subagentStatus }
       : {},
-    ...mapActivity(rec.activity) ? { activity: mapActivity(rec.activity) } : {},
-    ...mapChangeList(rec.changeList) ? { changeList: mapChangeList(rec.changeList) } : {},
+    ...activity ? { activity } : {},
+    ...changeList ? { changeList } : {},
+    ...compaction ? { compaction } : {},
+    ...workflow ? { workflow } : {},
+  }
+}
+
+/** Drop items whose `content` is not a string or whose `status` is outside the closed set. */
+function mapTodoItems(raw: unknown): TodoItem[] {
+  if (!Array.isArray(raw)) return []
+  const items: TodoItem[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const { content, status } = entry as Record<string, unknown>
+    if (typeof content !== 'string') continue
+    if (status !== 'pending' && status !== 'in_progress' && status !== 'completed') continue
+    items.push({ content, status })
+  }
+  return items
+}
+
+/**
+ * Treat a namespace layer as an object, or as absent. A layer holding anything
+ * other than a JSON object is not a readable settings layer.
+ */
+function readSettingsLayer(raw: unknown): Record<string, unknown> | undefined {
+  return typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : undefined
+}
+
+/**
+ * Parse the `settings/state` namespace list. `undefined` means the frame itself is
+ * unusable (`namespaces` is not an array) and the caller keeps the previous state;
+ * a namespace failing `ns` / `revision` / layer checks is dropped alone.
+ */
+function mapSettingsNamespaces(raw: unknown): SettingsNamespaceState[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const namespaces: SettingsNamespaceState[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+    const rec = entry as Record<string, unknown>
+    if (typeof rec.ns !== 'string' || rec.ns === '') continue
+    if (typeof rec.revision !== 'number') continue
+    const value = readSettingsLayer(rec.value)
+    if (rec.value !== undefined && value === undefined) continue
+    const base = readSettingsLayer(rec.base)
+    if (rec.base !== undefined && base === undefined) continue
+    const user = readSettingsLayer(rec.user)
+    if (rec.user !== undefined && user === undefined) continue
+    const secretFields = Array.isArray(rec.secretFields)
+      ? rec.secretFields.filter((field): field is string => typeof field === 'string')
+      : undefined
+    namespaces.push({
+      ns: rec.ns,
+      value,
+      revision: rec.revision,
+      ...base === undefined ? {} : { base },
+      ...user === undefined ? {} : { user },
+      ...secretFields === undefined ? {} : { secretFields },
+    })
+  }
+  return namespaces
+}
+
+function mapModelOption(raw: unknown): ModelOption | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const rec = raw as Record<string, unknown>
+  if (typeof rec.id !== 'string' || typeof rec.name !== 'string') return undefined
+  const efforts: Array<{ id: string; name: string }> = []
+  if (Array.isArray(rec.reasoningEfforts)) {
+    for (const entry of rec.reasoningEfforts) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const effort = entry as Record<string, unknown>
+      if (typeof effort.id !== 'string' || typeof effort.name !== 'string') continue
+      efforts.push({ id: effort.id, name: effort.name })
+    }
+  }
+  return {
+    id: rec.id,
+    name: rec.name,
+    ...rec.vision === true ? { vision: true } : {},
+    ...typeof rec.contextWindow === 'number' ? { contextWindow: rec.contextWindow } : {},
+    ...Array.isArray(rec.reasoningEfforts) ? { reasoningEfforts: efforts } : {},
+  }
+}
+
+/** Keep only providers/models carrying string `id` and `name`; entries without them are dropped. */
+function mapModelState(frame: Record<string, unknown>): ModelState {
+  const providers: ModelState['providers'] = []
+  if (Array.isArray(frame.providers)) {
+    for (const providerRaw of frame.providers) {
+      if (typeof providerRaw !== 'object' || providerRaw === null) continue
+      const provider = providerRaw as Record<string, unknown>
+      if (typeof provider.id !== 'string' || typeof provider.name !== 'string') continue
+      const models: ModelOption[] = []
+      if (Array.isArray(provider.models)) {
+        for (const modelRaw of provider.models) {
+          const model = mapModelOption(modelRaw)
+          if (model !== undefined) models.push(model)
+        }
+      }
+      providers.push({ id: provider.id, name: provider.name, models })
+    }
+  }
+  return { providers, current: mapModelCurrent(frame.current) }
+}
+
+function mapModelCurrent(raw: unknown): ModelState['current'] {
+  const rec = typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {}
+  return {
+    provider: typeof rec.provider === 'string' ? rec.provider : '',
+    model: typeof rec.model === 'string' ? rec.model : '',
+    ...typeof rec.reasoningEffort === 'string' ? { reasoningEffort: rec.reasoningEffort } : {},
   }
 }
 
@@ -360,6 +642,11 @@ export function setSearchQuery(query: string): void {
 
 export function setOverflowOpen(open: boolean): void {
   state = { ...state, overflowOpen: open }
+  emit()
+}
+
+export function setSettingsOpen(open: boolean): void {
+  state = { ...state, settingsOpen: open }
   emit()
 }
 
@@ -472,10 +759,10 @@ export function applyHostFrame(raw: unknown): void {
       breadcrumb,
     }
   } else if (type === 'panel/tabs') {
-    const tabs = Array.isArray(frame.tabs)
+    const tabs: TabChromeItem[] = Array.isArray(frame.tabs)
       ? frame.tabs.filter((t): t is TabChromeItem =>
         typeof t === 'object' && t !== null && typeof (t as TabChromeItem).tabId === 'string')
-        .map(t => ({
+        .map((t): TabChromeItem => ({
           tabId: (t as TabChromeItem).tabId,
           title: String((t as TabChromeItem).title ?? ''),
           status: (t as TabChromeItem).status ?? 'idle',
@@ -555,6 +842,10 @@ export function applyHostFrame(raw: unknown): void {
           let text = m.text
           if (typeof frame.text === 'string') text = frame.text
           else if (typeof frame.appendText === 'string') text = `${m.text}${frame.appendText}`
+          let reasoning = m.reasoning
+          if (typeof frame.appendReasoning === 'string') {
+            reasoning = (reasoning ?? '') + frame.appendReasoning
+          }
           let activity = m.activity
           if (typeof frame.activityStatus === 'string' && activity) {
             const s = frame.activityStatus
@@ -562,13 +853,34 @@ export function applyHostFrame(raw: unknown): void {
               activity = { ...activity, status: s }
             }
           }
+          // Partial compaction patch: the merged marker is re-parsed, so a field outside
+          // the closed set keeps the previous marker instead of a half-known one.
+          let compaction = m.compaction
+          const compactionPatch = typeof frame.compaction === 'object' && frame.compaction !== null
+            ? frame.compaction as Record<string, unknown>
+            : undefined
+          if (compaction && compactionPatch) {
+            compaction = mapCompaction({ ...compaction, ...compactionPatch }) ?? compaction
+          }
+          // Partial workflow patch: same re-parse as compaction, and a `members` array in the
+          // patch replaces the member list wholesale.
+          let workflow = m.workflow
+          const workflowPatch = typeof frame.workflow === 'object' && frame.workflow !== null
+            ? frame.workflow as Record<string, unknown>
+            : undefined
+          if (workflow && workflowPatch) {
+            workflow = mapWorkflow({ ...workflow, ...workflowPatch }) ?? workflow
+          }
           return {
             ...m,
             text,
+            reasoning,
             // Only overwrite streaming when Host explicitly sends the field
             ...(frame.streaming !== undefined ? { streaming: frame.streaming === true } : {}),
             incomplete: frame.incomplete === true ? true : m.incomplete,
             ...activity ? { activity } : {},
+            ...compaction ? { compaction } : {},
+            ...workflow ? { workflow } : {},
           }
         }),
         streaming: frame.streaming === true
@@ -648,6 +960,39 @@ export function applyHostFrame(raw: unknown): void {
           searchHits: hits,
           ...typeof frame.text === 'string' ? { searchQuery: frame.text } : {},
         }),
+    }
+  } else if (type === 'model/state') {
+    state = {
+      ...state,
+      modelState: mapModelState(frame),
+    }
+  } else if (type === 'settings/state') {
+    const namespaces = mapSettingsNamespaces(frame.namespaces)
+    if (namespaces === undefined) return
+    state = {
+      ...state,
+      settingsState: { namespaces },
+    }
+  } else if (type === 'token/status') {
+    state = {
+      ...state,
+      tokenStatus: {
+        ...typeof frame.sessionId === 'string' && frame.sessionId !== ''
+          ? { sessionId: frame.sessionId }
+          : {},
+        inputTokens: typeof frame.inputTokens === 'number' ? frame.inputTokens : 0,
+        outputTokens: typeof frame.outputTokens === 'number' ? frame.outputTokens : 0,
+        totalTokens: typeof frame.totalTokens === 'number' ? frame.totalTokens : 0,
+        ...typeof frame.cacheReadTokens === 'number' ? { cacheReadTokens: frame.cacheReadTokens } : {},
+        ...typeof frame.reasoningTokens === 'number' ? { reasoningTokens: frame.reasoningTokens } : {},
+        contextWindow: typeof frame.contextWindow === 'number' ? frame.contextWindow : 0,
+        thresholdRatio: typeof frame.thresholdRatio === 'number' ? frame.thresholdRatio : 0.8,
+      },
+    }
+  } else if (type === 'todo/state') {
+    state = {
+      ...state,
+      todoItems: mapTodoItems(frame.items),
     }
   } else {
     return

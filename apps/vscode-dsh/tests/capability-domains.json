@@ -201,7 +201,13 @@
             "CAP-SESSION-HOST-141",
             "CAP-SESSION-HOST-142",
             "CAP-SESSION-HOST-143",
-            "CAP-SESSION-HOST-144"
+            "CAP-SESSION-HOST-144",
+            "CAP-SESSION-HOST-145",
+            "CAP-SESSION-HOST-146",
+            "CAP-SESSION-HOST-147",
+            "CAP-SESSION-HOST-148",
+            "CAP-SESSION-HOST-149",
+            "CAP-SESSION-HOST-150"
           ]
         }
       ],
@@ -290,7 +296,16 @@
             "CAP-CONVERSATION-060",
             "CAP-CONVERSATION-061",
             "CAP-CONVERSATION-062",
-            "CAP-CONVERSATION-063"
+            "CAP-CONVERSATION-063",
+            "CAP-CONVERSATION-064",
+            "CAP-CONVERSATION-065",
+            "CAP-CONVERSATION-066",
+            "CAP-CONVERSATION-067",
+            "CAP-CONVERSATION-068",
+            "CAP-CONVERSATION-069",
+            "CAP-CONVERSATION-070",
+            "CAP-CONVERSATION-071",
+            "CAP-CONVERSATION-072"
           ]
         }
       ],
@@ -402,7 +417,8 @@
             "CAP-INTERACTION-017",
             "CAP-INTERACTION-018",
             "CAP-INTERACTION-019",
-            "CAP-INTERACTION-020"
+            "CAP-INTERACTION-020",
+            "CAP-INTERACTION-021"
           ]
         }
       ],
@@ -588,7 +604,30 @@
             "CAP-CHAT-PANEL-058",
             "CAP-CHAT-PANEL-059",
             "CAP-CHAT-PANEL-060",
-            "CAP-CHAT-PANEL-061"
+            "CAP-CHAT-PANEL-061",
+            "CAP-CHAT-PANEL-062",
+            "CAP-CHAT-PANEL-063",
+            "CAP-CHAT-PANEL-064",
+            "CAP-CHAT-PANEL-065",
+            "CAP-CHAT-PANEL-066",
+            "CAP-CHAT-PANEL-067",
+            "CAP-CHAT-PANEL-068",
+            "CAP-CHAT-PANEL-069",
+            "CAP-CHAT-PANEL-070",
+            "CAP-CHAT-PANEL-071",
+            "CAP-CHAT-PANEL-072",
+            "CAP-CHAT-PANEL-073",
+            "CAP-CHAT-PANEL-074",
+            "CAP-CHAT-PANEL-075",
+            "CAP-CHAT-PANEL-076",
+            "CAP-CHAT-PANEL-077",
+            "CAP-CHAT-PANEL-078",
+            "CAP-CHAT-PANEL-079",
+            "CAP-CHAT-PANEL-080",
+            "CAP-CHAT-PANEL-081",
+            "CAP-CHAT-PANEL-082",
+            "CAP-CHAT-PANEL-083",
+            "CAP-CHAT-PANEL-084"
           ]
         }
       ],
@@ -643,7 +682,23 @@
             "CAP-WEBVIEW-033",
             "CAP-WEBVIEW-034",
             "CAP-WEBVIEW-035",
-            "CAP-WEBVIEW-036"
+            "CAP-WEBVIEW-036",
+            "CAP-WEBVIEW-037",
+            "CAP-WEBVIEW-038",
+            "CAP-WEBVIEW-039",
+            "CAP-WEBVIEW-040",
+            "CAP-WEBVIEW-041",
+            "CAP-WEBVIEW-042",
+            "CAP-WEBVIEW-043",
+            "CAP-WEBVIEW-044",
+            "CAP-WEBVIEW-045",
+            "CAP-WEBVIEW-046",
+            "CAP-WEBVIEW-047",
+            "CAP-WEBVIEW-048",
+            "CAP-WEBVIEW-049",
+            "CAP-WEBVIEW-050",
+            "CAP-WEBVIEW-051",
+            "CAP-WEBVIEW-052"
           ]
         }
       ],
@@ -810,7 +865,13 @@
             "CAP-TEST-HARNESS-128",
             "CAP-TEST-HARNESS-129",
             "CAP-TEST-HARNESS-130",
-            "CAP-TEST-HARNESS-131"
+            "CAP-TEST-HARNESS-131",
+            "CAP-TEST-HARNESS-132",
+            "CAP-TEST-HARNESS-133",
+            "CAP-TEST-HARNESS-134",
+            "CAP-TEST-HARNESS-135",
+            "CAP-TEST-HARNESS-136",
+            "CAP-TEST-HARNESS-137"
           ]
         }
       ],

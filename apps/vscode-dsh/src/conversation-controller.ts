@@ -16,7 +16,7 @@ import {
 } from './conversation-registry.ts'
 import type { IdeSessionHost } from './session-host.ts'
 import { TimelineStore } from './timeline-store.ts'
-import { MessageStore, type ChatMessage } from './message-store.ts'
+import { MessageStore, type ChatMessage, type MessagePatch } from './message-store.ts'
 import {
   activityMessageId,
   activityStatusFromToolResult,
@@ -28,10 +28,22 @@ import {
   type OpenTabRecord,
   type WorkspaceStateLike,
 } from './extension-index.ts'
-import type { ChatPanelHost, PanelProjection } from './chat-panel/chat-panel-host.ts'
-import type { PanelBreadcrumb, PanelMode } from './chat-panel/protocol.ts'
+import type {
+  ChatPanelHost,
+  PanelProjection,
+  TodoStateItem,
+  TokenStatusPayload,
+} from './chat-panel/chat-panel-host.ts'
+import type { PanelBreadcrumb, PanelMode, PromptImage } from './chat-panel/protocol.ts'
 import {
+  compactionMarkerMessage,
+  compactionSummaryText,
   hydrateFromAuthoritativeLog,
+  withWorkflowMember,
+  workflowMarkerMessage,
+  workflowMemberFrom,
+  workflowOutcomeFrom,
+  workflowStopReasonFrom,
   type HydratorSessionEvent,
 } from './replay-hydrator.ts'
 import { planRestoreOpenTabs } from './restore-planner.ts'
@@ -135,7 +147,16 @@ export type CloseConversationResult =
 
 /** Outcome of a delete attempt (AC-26/60/72/73). */
 export type DeleteConversationResult =
-  | { outcome: 'deleted'; tabId: string; sessionId: string }
+  | {
+    outcome: 'deleted'
+    tabId: string
+    sessionId: string
+    /**
+     * Runtime `session/delete` failure text. Present when the persisted log
+     * survived an otherwise completed delete; the caller can surface it again.
+     */
+    deleteError?: string
+  }
   | { outcome: 'needs-confirm'; tabId: string; sessionId: string; running: boolean }
   | { outcome: 'cancelled' }
   | { outcome: 'host-not-ready' }
@@ -256,6 +277,12 @@ export class ConversationController {
   private streamingAssistant = new Map<string, { messageId: string; turn?: number }>()
   /** Duck-typed workspace write surface for revert (AD-CCD-10); set by extension / L2. */
   private revertWorkspace: RevertWorkspace | undefined
+  /** Session-scoped latest `todo/write` snapshot (feature: todo-panel). */
+  private readonly todoBySession = new Map<string, TodoStateItem[]>()
+  /** Latest `token/status` payload pushed to the panel (feature: token-status). */
+  private lastTokenPayload: TokenStatusPayload | undefined
+  /** Sidebar refresh listeners notified after a todo snapshot lands (feature: todo-panel). */
+  private readonly todoListeners = new Set<() => void>()
 
   /**
    * @param host - window-scoped ide process owner (one process, many sessionIds).
@@ -1479,6 +1506,60 @@ export class ConversationController {
   }
 
   /**
+   * Latest `todo/write` snapshot for a session (feature: todo-panel).
+   * @param sessionId - session to read.
+   * @returns the whole-list snapshot, or an empty array before the first write.
+   */
+  todoItemsForSession(sessionId: string): TodoStateItem[] {
+    return this.todoBySession.get(sessionId) ?? []
+  }
+
+  /**
+   * Latest `token/status` sample this controller pushed (feature: token-status).
+   * Retained so an unattended driver can assert the sample a Webview received
+   * without scraping the panel outbound log.
+   * @returns the last payload, or `undefined` before the first usage event.
+   */
+  lastTokenStatus(): TokenStatusPayload | undefined {
+    return this.lastTokenPayload
+  }
+
+  /**
+   * Identity of the Host this controller is bound to (test hooks / diagnostics). A reader
+   * compares it with the extension's current Host: two different ids mean the Tab controller
+   * and the Host that serves the panel's commands drifted apart.
+   * @returns the bound Host's instance id.
+   */
+  get hostInstanceId(): string {
+    return this.host.instanceId
+  }
+
+  /**
+   * Subscribe to todo snapshot updates (feature: todo-panel sidebar).
+   * @param listener - called after each stored snapshot.
+   * @returns disposer removing the listener.
+   */
+  onTodoChange(listener: () => void): () => void {
+    this.todoListeners.add(listener)
+    return () => {
+      this.todoListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Context window of the current model from the cached `model/list` payload
+   * (feature: token-status). Absent when no list was read or the route declares none.
+   * @returns declared prompt capacity in tokens, or `undefined`.
+   */
+  private resolveContextWindow(): number | undefined {
+    const list = this.host.cachedModelList()
+    if (list === undefined) return undefined
+    const provider = list.providers.find(entry => entry.id === list.current.provider)
+    const model = provider?.models.find(entry => entry.id === list.current.model)
+    return model?.contextWindow
+  }
+
+  /**
    * Unload a Tab UI without disposing the session (AD-CU-3 / AC-23).
    * Empty Tabs never enter persisted openTabSet. Running Tabs need confirmStopClose.
    * @param tabId - Tab to close.
@@ -1511,11 +1592,12 @@ export class ConversationController {
   }
 
   /**
-   * Explicitly delete a conversation: dispose + clear authority index (AC-26/60/72/73).
+   * Explicitly delete a conversation: dispose, erase the persisted log, clear the
+   * authority index (AC-26/60/72/73).
    * Does not cascade to child session authority (AC-61).
    * @param tabId - Tab whose session to delete.
    * @param options - confirmation flag (required before dispose).
-   * @returns delete outcome.
+   * @returns delete outcome, carrying `deleteError` when only the erase failed.
    */
   async deleteConversation(
     tabId: string,
@@ -1541,11 +1623,16 @@ export class ConversationController {
       `conversation deleted (${tabId})`,
     )
     // Dispose before registry close so a failed dispose leaves the Tab for retry (GAP-003).
-    await this.teardownDeletedSession(tab.sessionId)
+    const deleteError = await this.teardownDeletedSession(tab.sessionId)
     this.registry.close(tabId)
     this.persistOpenTabs()
     this.panelHost?.pushFullState()
-    return { outcome: 'deleted', tabId: tab.tabId, sessionId: tab.sessionId }
+    return {
+      outcome: 'deleted',
+      tabId: tab.tabId,
+      sessionId: tab.sessionId,
+      ...deleteError === undefined ? {} : { deleteError },
+    }
   }
 
   /**
@@ -1573,14 +1660,20 @@ export class ConversationController {
       }
     }
     this.host.interactions.failClosedSession(sessionId, `conversation deleted (${sessionId})`)
-    await this.teardownDeletedSession(sessionId)
+    const deleteError = await this.teardownDeletedSession(sessionId)
     this.persistOpenTabs()
     this.panelHost?.pushFullState()
-    return { outcome: 'deleted', tabId: '', sessionId }
+    return {
+      outcome: 'deleted',
+      tabId: '',
+      sessionId,
+      ...deleteError === undefined ? {} : { deleteError },
+    }
   }
 
   /**
-   * Dispose a session and drop every projection it owns (AC-26 / AC-36b).
+   * Dispose a session, erase its persisted log, and drop every projection it owns
+   * (AC-26 / AC-36b).
    *
    * Every await runs before the clear block, and `markDeleted` sits in that same synchronous
    * block: a turn that settles while the session is being torn down appends to these stores from
@@ -1588,12 +1681,25 @@ export class ConversationController {
    * session the user had just deleted. `settleChangeListProjection` additionally refuses to run
    * against a tombstoned session.
    * @param sessionId - session being deleted.
+   * @returns the runtime `session/delete` failure text, or `undefined` when the
+   *   persisted data was erased; a failed erase never aborts the local teardown.
    */
-  private async teardownDeletedSession(sessionId: string): Promise<void> {
+  private async teardownDeletedSession(sessionId: string): Promise<string | undefined> {
     // Capture parent before clearing timeline links (AC-74/75 card → deleted marker).
     const parentSessionId = this.timeline.getParent(sessionId)
       ?? this.index.read().sessions.find(s => s.sessionId === sessionId)?.parentSessionId
     await this.host.disposeSession(sessionId)
+    // Erase the persisted log after the runtime dropped the live session, so nothing it
+    // still holds can re-append. A failure here must not abort the clears below — the Tab
+    // and its index entries still have to go — so the text travels back to the caller and
+    // to the panel, which is where the user can read it.
+    let deleteError: string | undefined
+    try {
+      await this.host.deleteSession(sessionId)
+    } catch (error) {
+      deleteError = error instanceof Error ? error.message : String(error)
+      this.panelHost?.pushBanner(`删除会话数据失败：${deleteError}`, 'delete-failed')
+    }
     await this.snapshotStore.clearSession(sessionId)
     // No await below this line — nothing can interleave with this clear + tombstone.
     this.messages.clearSession(sessionId)
@@ -1607,19 +1713,21 @@ export class ConversationController {
     if (parentSessionId !== undefined && !this.index.isDeleted(parentSessionId)) {
       this.markSubagentCardDeleted(parentSessionId, sessionId)
     }
+    return deleteError
   }
 
   /**
    * Prompt the active Tab's session and project the user bubble (AC-7 / AC-10).
    * @param text - user text content.
+   * @param images - images the composer attached, in send order.
    * @returns message id and the targeted session id.
    */
-  async promptActive(text: string): Promise<{ messageId: string; sessionId: string; tabId: string }> {
+  async promptActive(text: string, images?: PromptImage[]): Promise<{ messageId: string; sessionId: string; tabId: string }> {
     const active = this.registry.getActive()
     if (active === undefined) {
       throw new Error('no active conversation Tab')
     }
-    return this.promptTab(active.tabId, text).then(result => ({ ...result, tabId: active.tabId }))
+    return this.promptTab(active.tabId, text, images).then(result => ({ ...result, tabId: active.tabId }))
   }
 
   /**
@@ -1627,12 +1735,18 @@ export class ConversationController {
    * Projects an optimistic user message when the runtime omits user/message (A-1).
    * @param tabId - Tab whose session receives the prompt.
    * @param text - user text.
+   * @param images - images the composer attached, in send order.
    * @returns message id and session id.
    */
-  async promptTab(tabId: string, text: string): Promise<{ messageId: string; sessionId: string }> {
+  async promptTab(tabId: string, text: string, images?: PromptImage[]): Promise<{ messageId: string; sessionId: string }> {
     const tab = this.registry.get(tabId)
     if (tab === undefined) throw new Error(`unknown conversation Tab: ${tabId}`)
     const blocks: SdkPromptContentBlock[] = [{ type: 'text', text }]
+    if (images !== undefined) {
+      for (const img of images) {
+        blocks.push({ type: 'image', data: img.data, mimeType: img.mimeType } as SdkPromptContentBlock)
+      }
+    }
     const messageId = await this.host.prompt(tab.sessionId, blocks)
     this.projectUserMessage(tab.sessionId, text, messageId)
     if (tab.title === undefined) {
@@ -2029,6 +2143,20 @@ export class ConversationController {
     await this.onSubagentFinished(parentSessionId, childSessionId)
   }
 
+  /**
+   * Apply one synthetic session event through the same projection path as a real
+   * `session.event` notification (test hooks only).
+   * @param sessionId - owning session.
+   * @param type - session event type, e.g. 'todo/write'.
+   * @param data - event payload.
+   */
+  applyTestSessionEvent(sessionId: string, type: string, data: Record<string, unknown>): void {
+    this.onSdkNotification({
+      method: 'session.event',
+      params: { sessionId, event: { type, data } },
+    })
+  }
+
   /** Clear local Tabs on window shutdown (process teardown owns remote sessions). */
   clearLocal(): void {
     this.stopNotifications?.()
@@ -2319,14 +2447,54 @@ export class ConversationController {
 
   /**
    * Project a live `assistant/chunk` text-delta onto a stable assistant bubble (AC-10).
-   * Ignores reasoning-delta (AD-CUX-7 / T6 lock B).
+   * Projects reasoning-delta onto the same bubble's reasoning field.
    */
   private projectAssistantChunk(
     sessionId: string,
     chunk: Record<string, unknown>,
     turn: number | undefined,
   ): void {
-    if (chunk.type === 'reasoning-delta') return
+    if (chunk.type === 'reasoning-delta') {
+      const delta = typeof chunk.text === 'string' ? chunk.text : ''
+      if (delta === '') return
+      let streaming = this.streamingAssistant.get(sessionId)
+      if (streaming === undefined) {
+        const messageId = randomUUID()
+        const message: ChatMessage = {
+          id: messageId,
+          sessionId,
+          role: 'assistant',
+          kind: 'text',
+          text: '',
+          reasoning: delta,
+          streaming: true,
+          ...turn === undefined ? {} : { turn },
+        }
+        this.messages.append(sessionId, message)
+        this.streamingAssistant.set(sessionId, { messageId, ...turn === undefined ? {} : { turn } })
+        streaming = { messageId, ...turn === undefined ? {} : { turn } }
+        const active = this.registry.getActive()
+        if (this.isProjectedSession(active, sessionId)) {
+          this.panelHost?.pushAppend(message)
+        } else {
+          const tab = this.registry.getBySessionId(sessionId)
+          if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
+        }
+        this.attributor.noteAssistant(sessionId, messageId, turn)
+        const tab = this.registry.getBySessionId(sessionId)
+        if (tab !== undefined && tab.status !== 'running') {
+          this.registry.setStatus(tab.tabId, 'running')
+        }
+        this.panelHost?.pushStatus()
+        return
+      }
+      this.messages.patch(sessionId, streaming.messageId, { appendReasoning: delta })
+      const active = this.registry.getActive()
+      if (this.isProjectedSession(active, sessionId)) {
+        this.panelHost?.pushPatch(sessionId, streaming.messageId, { appendReasoning: delta })
+      }
+      return
+    }
     if (chunk.type !== 'text-delta') return
     const delta = typeof chunk.text === 'string' ? chunk.text : ''
     if (delta === '') return
@@ -2457,6 +2625,196 @@ export class ConversationController {
       if (this.isProjectedSession(active, sessionId)) {
         this.panelHost?.pushPatch(sessionId, message.id, { activityStatus: 'aborted' })
       }
+    }
+  }
+
+  /**
+   * Project `compaction/start` into a running `kind:'compaction'` marker.
+   * A repeated start for one compactionId keeps the first marker, matching the replay fold.
+   * @param sessionId - owning session.
+   * @param data - event payload.
+   * @param turn - owning turn when the compaction is enclosed by one.
+   */
+  private projectCompactionStart(
+    sessionId: string,
+    data: Record<string, unknown>,
+    turn: number | undefined,
+  ): void {
+    const compactionId = typeof data.compactionId === 'string' ? data.compactionId : undefined
+    if (compactionId === undefined) return
+    if (this.messages.get(sessionId).some(m => m.id === compactionId)) return
+    const message = compactionMarkerMessage(sessionId, compactionId, {
+      trigger: turn === undefined ? 'manual' : 'auto',
+      status: 'running',
+      shadowedTokenCount: 0,
+      summary: '',
+    }, turn)
+    this.messages.append(sessionId, message)
+    const active = this.registry.getActive()
+    if (this.isProjectedSession(active, sessionId)) {
+      this.panelHost?.pushAppend(message)
+    } else {
+      const tab = this.registry.getBySessionId(sessionId)
+      if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
+    }
+  }
+
+  /**
+   * Fill the shadowed token count and display summary on an existing marker.
+   * @param sessionId - owning session.
+   * @param data - `compaction/summary` payload.
+   */
+  private projectCompactionSummary(sessionId: string, data: Record<string, unknown>): void {
+    const compactionId = typeof data.compactionId === 'string' ? data.compactionId : undefined
+    if (compactionId === undefined) return
+    const update: MessagePatch = {
+      compaction: {
+        shadowedTokenCount: typeof data.shadowedTokenCount === 'number'
+          ? data.shadowedTokenCount
+          : 0,
+        summary: compactionSummaryText(data.summary),
+      },
+    }
+    if (this.messages.patch(sessionId, compactionId, update) === undefined) return
+    const active = this.registry.getActive()
+    if (this.isProjectedSession(active, sessionId)) {
+      this.panelHost?.pushPatch(sessionId, compactionId, update)
+    }
+  }
+
+  /**
+   * Close the marker from `compaction/end`. A reported error flips it to failed and
+   * raises a banner carrying that error text.
+   * @param sessionId - owning session.
+   * @param data - `compaction/end` payload.
+   */
+  private projectCompactionEnd(sessionId: string, data: Record<string, unknown>): void {
+    const compactionId = typeof data.compactionId === 'string' ? data.compactionId : undefined
+    if (compactionId === undefined) return
+    const error = typeof data.error === 'string' ? data.error : undefined
+    const update: MessagePatch = {
+      compaction: {
+        status: error === undefined ? 'done' : 'failed',
+        ...error === undefined ? {} : { error },
+      },
+    }
+    if (this.messages.patch(sessionId, compactionId, update) === undefined) return
+    const active = this.registry.getActive()
+    if (!this.isProjectedSession(active, sessionId)) return
+    this.panelHost?.pushPatch(sessionId, compactionId, update)
+    if (error !== undefined) {
+      this.panelHost?.pushBanner(`压缩失败：${error}`, 'compaction-failed')
+    }
+  }
+
+  /**
+   * The `kind:'workflow'` card of one run, when the projection holds it.
+   * @param sessionId - owning session.
+   * @param runId - durable run identity.
+   * @returns the projected card, or undefined when no card was opened for the run.
+   */
+  private workflowCard(sessionId: string, runId: string): ChatMessage | undefined {
+    return this.messages.get(sessionId)
+      .find(m => m.kind === 'workflow' && m.workflow?.runId === runId)
+  }
+
+  /**
+   * Project `tool-workflow/run-start` into a running `kind:'workflow'` card.
+   * A repeated start for one runId keeps the first card, matching the replay fold.
+   * @param sessionId - owning session.
+   * @param data - `tool-workflow/run-start` payload.
+   */
+  private projectWorkflowRunStart(sessionId: string, data: Record<string, unknown>): void {
+    const runId = typeof data.runId === 'string' ? data.runId : undefined
+    if (runId === undefined) return
+    if (this.workflowCard(sessionId, runId) !== undefined) return
+    const message = workflowMarkerMessage(sessionId, {
+      runId,
+      name: typeof data.name === 'string' ? data.name : '',
+      status: 'running',
+      members: [],
+    })
+    this.messages.append(sessionId, message)
+    const active = this.registry.getActive()
+    if (this.isProjectedSession(active, sessionId)) {
+      this.panelHost?.pushAppend(message)
+    } else {
+      const tab = this.registry.getBySessionId(sessionId)
+      if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
+    }
+  }
+
+  /**
+   * Upsert one member on an existing card from `tool-workflow/agent-start`.
+   * A repeated seq overwrites that member; the table stays in seq order.
+   * @param sessionId - owning session.
+   * @param data - `tool-workflow/agent-start` payload.
+   */
+  private projectWorkflowAgentStart(sessionId: string, data: Record<string, unknown>): void {
+    const runId = typeof data.runId === 'string' ? data.runId : undefined
+    if (runId === undefined) return
+    const card = this.workflowCard(sessionId, runId)
+    if (card === undefined) return
+    const member = workflowMemberFrom(data)
+    if (member === undefined) return
+    const update: MessagePatch = {
+      workflow: { members: withWorkflowMember(card.workflow?.members ?? [], member) },
+    }
+    if (this.messages.patch(sessionId, card.id, update) === undefined) return
+    const active = this.registry.getActive()
+    if (this.isProjectedSession(active, sessionId)) {
+      this.panelHost?.pushPatch(sessionId, card.id, update)
+    }
+  }
+
+  /**
+   * Settle one member on an existing card from `tool-workflow/agent-end`.
+   * A seq without a projected member is ignored, keeping out-of-order arrivals harmless.
+   * @param sessionId - owning session.
+   * @param data - `tool-workflow/agent-end` payload.
+   */
+  private projectWorkflowAgentEnd(sessionId: string, data: Record<string, unknown>): void {
+    const runId = typeof data.runId === 'string' ? data.runId : undefined
+    if (runId === undefined) return
+    const card = this.workflowCard(sessionId, runId)
+    if (card === undefined) return
+    const members = card.workflow?.members
+    if (members === undefined) return
+    const seq = typeof data.seq === 'number' ? data.seq : undefined
+    const outcome = workflowOutcomeFrom(data.outcome)
+    if (seq === undefined || outcome === undefined) return
+    if (!members.some(m => m.seq === seq)) return
+    const update: MessagePatch = {
+      workflow: { members: members.map(m => m.seq === seq ? { ...m, outcome } : { ...m }) },
+    }
+    if (this.messages.patch(sessionId, card.id, update) === undefined) return
+    const active = this.registry.getActive()
+    if (this.isProjectedSession(active, sessionId)) {
+      this.panelHost?.pushPatch(sessionId, card.id, update)
+    }
+  }
+
+  /**
+   * Close the card from `tool-workflow/run-end`.
+   * @param sessionId - owning session.
+   * @param data - `tool-workflow/run-end` payload.
+   */
+  private projectWorkflowRunEnd(sessionId: string, data: Record<string, unknown>): void {
+    const runId = typeof data.runId === 'string' ? data.runId : undefined
+    if (runId === undefined) return
+    const card = this.workflowCard(sessionId, runId)
+    if (card === undefined) return
+    const stopReason = workflowStopReasonFrom(data.stopReason)
+    const update: MessagePatch = {
+      workflow: {
+        status: 'done',
+        ...stopReason === undefined ? {} : { stopReason },
+      },
+    }
+    if (this.messages.patch(sessionId, card.id, update) === undefined) return
+    const active = this.registry.getActive()
+    if (this.isProjectedSession(active, sessionId)) {
+      this.panelHost?.pushPatch(sessionId, card.id, update)
     }
   }
 
@@ -2713,6 +3071,36 @@ export class ConversationController {
     const data = (record.data as Record<string, unknown> | undefined) ?? {}
     const turn = typeof data.turn === 'number' ? data.turn : undefined
 
+    if (record.type === 'compaction/start') {
+      this.projectCompactionStart(sessionId, data, turn)
+      return
+    }
+    if (record.type === 'compaction/summary') {
+      this.projectCompactionSummary(sessionId, data)
+      return
+    }
+    if (record.type === 'compaction/end') {
+      this.projectCompactionEnd(sessionId, data)
+      return
+    }
+    // compaction/prune: model-free replacement — no model-visible compaction to mark.
+    if (record.type === 'compaction/prune') return
+    if (record.type === 'tool-workflow/run-start') {
+      this.projectWorkflowRunStart(sessionId, data)
+      return
+    }
+    if (record.type === 'tool-workflow/agent-start') {
+      this.projectWorkflowAgentStart(sessionId, data)
+      return
+    }
+    if (record.type === 'tool-workflow/agent-end') {
+      this.projectWorkflowAgentEnd(sessionId, data)
+      return
+    }
+    if (record.type === 'tool-workflow/run-end') {
+      this.projectWorkflowRunEnd(sessionId, data)
+      return
+    }
     if (record.type === 'tool/call') {
       const args = typeof data.arguments === 'string' ? data.arguments : undefined
       void this.attributor.noteToolCall(sessionId, args)
@@ -2728,6 +3116,26 @@ export class ConversationController {
       const chunk = data.chunk as Record<string, unknown> | undefined
       if (chunk === undefined || typeof chunk !== 'object' || chunk === null) return
       this.projectAssistantChunk(sessionId, chunk, turn)
+      return
+    }
+    if (record.type === 'todo/write') {
+      const todos = data.todos
+      if (Array.isArray(todos)) {
+        const items = todos.flatMap((item): TodoStateItem[] => {
+          if (typeof item !== 'object' || item === null) return []
+          const entry = item as Record<string, unknown>
+          return [{
+            content: String(entry.content),
+            status: entry.status === 'pending' || entry.status === 'in_progress'
+              || entry.status === 'completed'
+              ? entry.status
+              : 'pending',
+          }]
+        })
+        this.todoBySession.set(sessionId, items)
+        this.panelHost?.pushTodoState(sessionId, items)
+        for (const listener of this.todoListeners) listener()
+      }
       return
     }
     if (record.type === 'turn/end') {
@@ -2748,6 +3156,27 @@ export class ConversationController {
       return
     }
     if (record.type !== 'assistant/message') return
+    const usage = data.usage as Record<string, unknown> | undefined
+    if (usage !== undefined && typeof usage.inputTokens === 'number'
+      && typeof usage.outputTokens === 'number') {
+      const inputTokens = usage.inputTokens
+      const outputTokens = usage.outputTokens
+      const totalTokens = typeof usage.totalTokens === 'number'
+        ? usage.totalTokens
+        : inputTokens + outputTokens
+      const payload: TokenStatusPayload = {
+        sessionId,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        ...typeof usage.cacheReadTokens === 'number' ? { cacheReadTokens: usage.cacheReadTokens } : {},
+        ...typeof usage.reasoningTokens === 'number' ? { reasoningTokens: usage.reasoningTokens } : {},
+        contextWindow: this.resolveContextWindow() ?? 128_000,
+        thresholdRatio: 0.8,
+      }
+      this.lastTokenPayload = payload
+      this.panelHost?.pushTokenStatus(payload)
+    }
     const message = data.message as Record<string, unknown> | undefined
     const text = firstAssistantText(message)
     // AC-6: never invent assistant body when the event has no text.

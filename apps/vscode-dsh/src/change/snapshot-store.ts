@@ -16,6 +16,15 @@ export const SNAPSHOT_STORE = {
   perBlobSoftCap: 2 * 1024 * 1024,
 } as const
 
+/**
+ * Retry policy for session-directory removal. A concurrent writer sharing the
+ * same storage root — another extension window, or a parallel spec worker on the
+ * shared temp default — can repopulate the directory between readdir and rmdir,
+ * which surfaces as ENOTEMPTY. Node retries the retryable removal errors
+ * (ENOTEMPTY/EBUSY/EPERM/EMFILE/ENFILE) with linear backoff.
+ */
+const REMOVE_DIR_RETRY = { maxRetries: 3, retryDelay: 50 } as const
+
 /** On-disk blob envelope (v0). */
 interface SnapshotBlobFile {
   v: 0
@@ -144,7 +153,11 @@ export class SnapshotStore {
    * @param sessionId - session to clear.
    */
   async clearSession(sessionId: string): Promise<void> {
-    await rm(snapshotSessionDir(this.options.storageRoot, sessionId), { recursive: true, force: true })
+    await rm(snapshotSessionDir(this.options.storageRoot, sessionId), {
+      recursive: true,
+      force: true,
+      ...REMOVE_DIR_RETRY,
+    })
   }
 
   /**
@@ -201,9 +214,10 @@ export class SnapshotStore {
       return a.mtimeMs - b.mtimeMs
     })
     const prunedSessions: string[] = []
-    while (total > budget && dirs.length > 0) {
-      const victim = dirs.shift()!
-      await rm(join(root, victim.sessionId), { recursive: true, force: true })
+    while (total > budget) {
+      const victim = dirs.shift()
+      if (victim === undefined) break
+      await rm(join(root, victim.sessionId), { recursive: true, force: true, ...REMOVE_DIR_RETRY })
       total -= victim.bytes
       prunedSessions.push(victim.sessionId)
     }
