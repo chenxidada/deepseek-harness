@@ -26,8 +26,9 @@ import type {
 import SessionStore, { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
-import { agentEvents, type Agent, type RequestErrorAction } from '@deepseek-ai/dsh-agent'
+import { agentEvents, type Agent, type PreStepDecision, type RequestErrorAction } from '@deepseek-ai/dsh-agent'
 import ToolResultPruner from '@deepseek-ai/dsh-compaction-tool-result-pruner'
+import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 
 const SIGNAL = new AbortController().signal
 const MODEL = 'test-model'
@@ -301,10 +302,76 @@ describe('compact configuration and defaults', () => {
       maxTokens: 8192,
       compactionRetries: 1,
       maxOverflowRetries: 1,
+      contextWindowCap: undefined,
       modelPolicies: [],
       auto: true,
     })
     expect(Object.isFrozen(resolved)).toBe(true)
+  })
+
+  it('caps the effective window used for pressure and retention math', () => {
+    const capped = resolveTargetPolicy(resolveConfig({
+      thresholdRatio: 0.8,
+      retainRatio: 0.16,
+      contextWindowCap: 65_536,
+    }), { provider: MODEL, model: MODEL })
+    expect(resolveCompactSpec(capped, 100_000)).toMatchObject({
+      contextWindow: 65_536,
+      thresholdTokens: 52_428,
+      retainTokens: 10_485,
+    })
+  })
+
+  it('never raises the effective window above the routed model capacity', () => {
+    const capped = resolveTargetPolicy(resolveConfig({
+      thresholdRatio: 0.5,
+      contextWindowCap: 200_000,
+    }), { provider: MODEL, model: MODEL })
+    expect(resolveCompactSpec(capped, 100_000)).toMatchObject({
+      contextWindow: 100_000,
+      thresholdTokens: 50_000,
+      retainTokens: 16_000,
+    })
+  })
+
+  it('scales by the model window when no cap is configured', () => {
+    const uncapped = resolveTargetPolicy(resolveConfig({
+      thresholdRatio: 0.8,
+      retainRatio: 0.16,
+    }), { provider: MODEL, model: MODEL })
+    expect(resolveCompactSpec(uncapped, 100_000)).toMatchObject({
+      contextWindow: 100_000,
+      thresholdTokens: 80_000,
+      retainTokens: 16_000,
+      contextWindowCap: undefined,
+    })
+  })
+
+  it('lets an exact model policy cap its own route without capping others', () => {
+    const config = resolveConfig({
+      thresholdRatio: 0.8,
+      contextWindowCap: 65_536,
+      modelPolicies: [{
+        provider: 'small-provider',
+        model: 'small-model',
+        contextWindowCap: 8_192,
+      }],
+    })
+
+    expect(resolveCompactSpec(
+      resolveTargetPolicy(config, { provider: 'small-provider', model: 'small-model' }),
+      100_000,
+    )).toMatchObject({
+      contextWindow: 8_192,
+      thresholdTokens: 6_553,
+    })
+    expect(resolveCompactSpec(
+      resolveTargetPolicy(config, { provider: 'other-provider', model: 'other-model' }),
+      100_000,
+    )).toMatchObject({
+      contextWindow: 65_536,
+      thresholdTokens: 52_428,
+    })
   })
 
   it('resolves threshold and retention overrides independently', () => {
@@ -418,6 +485,9 @@ describe('compact configuration and defaults', () => {
   it('validates common values and pressure-policy invariants', () => {
     const bad = [
       [{ maxTokens: 0 }, /maxTokens/],
+      [{ contextWindowCap: 0 }, /contextWindowCap \(0\) must be a positive integer/],
+      [{ contextWindowCap: -1 }, /contextWindowCap \(-1\) must be a positive integer/],
+      [{ contextWindowCap: 1.5 }, /contextWindowCap \(1.5\) must be a positive integer/],
       [{ compactionRetries: -1 }, /compactionRetries/],
       [{ maxOverflowRetries: -1 }, /maxOverflowRetries/],
       [{ auto: 'yes' }, /auto must be a boolean/],
@@ -453,6 +523,10 @@ describe('compact configuration and defaults', () => {
         modelPolicies: [{ provider: MODEL, model: MODEL, summarizationProvider: '' }],
       }, /modelPolicies\[0\].*must be set together/],
       [{ modelPolicies: [{ provider: MODEL, model: MODEL, retainRatio: 0.2, retainTokens: 100 }] }, /mutually exclusive/],
+      [
+        { modelPolicies: [{ provider: MODEL, model: MODEL, contextWindowCap: 0 }] },
+        /modelPolicies\[0\]\.contextWindowCap \(0\) must be a positive integer/,
+      ],
       [
         { modelPolicies: [{ provider: MODEL, model: MODEL, thresholdRatio: 0.1 }] },
         /modelPolicies\[0\]: retainRatio \(0.16\).*thresholdRatio \(0.1\)/,
@@ -1844,7 +1918,7 @@ describe('automatic listener and loader composition', () => {
     expect(session.snapshotEvents().filter(event => event.type === 'compaction/summary')).toHaveLength(summaries)
   })
 
-  it('auto:false installs neither automatic listener', async () => {
+  it('auto:false skips both automatic compaction paths', async () => {
     const ctx = createContext()
     void new TestCompactionEngine(ctx, {
       auto: false,
@@ -2031,5 +2105,151 @@ describe('route-priced image pressure', () => {
       .filter(node => result?.shadowedSeqs.includes(node.seq))
       .reduce((total, node) => total + node.heuristicTokens, 0)
     expect(summaryEvent?.data.shadowedTokenCount).toBe(shadowedHeuristic)
+  })
+})
+
+/** Writable in-memory settings provider for the `compaction-basic` section specs. */
+class MemorySettings extends SettingsProvider {
+  private readonly doc: Record<string, unknown> = {}
+
+  readonly writable = true
+
+  protected load(): Promise<Record<string, unknown>> {
+    return Promise.resolve(structuredClone(this.doc))
+  }
+
+  protected persist(ns: SettingsNamespace, section: Record<string, unknown>): Promise<void> {
+    this.doc[ns] = structuredClone(section)
+    return Promise.resolve()
+  }
+}
+
+describe('settings section', () => {
+  const NS = 'compaction-basic'
+
+  /** The section attaches through an injected child fiber, which starts asynchronously. */
+  async function settingsReady(ctx: Context): Promise<void> {
+    await vi.waitFor(() => {
+      expect(ctx.settings.describe().map(row => String(row.ns))).toContain(NS)
+    })
+  }
+
+  it('applies a stored threshold ratio to the next pressure decision', async () => {
+    const ctx = createContext(10_000)
+    await ctx.plugin(MemorySettings)
+    const compact = service({
+      auto: false,
+      thresholdRatio: 0.9,
+      retainRatio: 0.01,
+    }, ctx)
+    await settingsReady(ctx)
+    const session = conversation(4)
+
+    expect(await compactIfNeeded(compact, session)).toBeNull()
+
+    await ctx.settings.update(NS, { thresholdRatio: 0.05 })
+
+    expect(compact.config.thresholdRatio).toBe(0.05)
+    expect(await compactIfNeeded(compact, session)).not.toBeNull()
+  })
+
+  it('applies a stored window cap to the effective pressure threshold', async () => {
+    const ctx = createContext(10_000)
+    await ctx.plugin(MemorySettings)
+    const compact = service({
+      auto: false,
+      thresholdRatio: 0.5,
+      retainRatio: 0.01,
+    }, ctx)
+    await settingsReady(ctx)
+    const session = conversation(4)
+
+    expect(await compactIfNeeded(compact, session)).toBeNull()
+
+    await ctx.settings.update(NS, { contextWindowCap: 1_000 })
+
+    expect(compact.config.contextWindowCap).toBe(1_000)
+    expect(await compactIfNeeded(compact, session)).not.toBeNull()
+  })
+
+  it('keeps the last good configuration after a section fails to resolve', async () => {
+    const ctx = createContext(10_000)
+    const errors: unknown[] = []
+    ctx.logger.error = ((message: unknown) => void errors.push(message)) as typeof ctx.logger.error
+    await ctx.plugin(MemorySettings)
+    const compact = service({
+      auto: false,
+      thresholdRatio: 0.1,
+      retainRatio: 0.01,
+    }, ctx)
+    await settingsReady(ctx)
+
+    // Schema-valid but self-contradictory: retention above the threshold.
+    await ctx.settings.update(NS, { retainRatio: 0.9 })
+
+    expect(compact.config).toMatchObject({ thresholdRatio: 0.1, retainRatio: 0.01 })
+    expect(errors).toContainEqual(expect.stringContaining('keeping the last good configuration'))
+
+    await ctx.settings.update(NS, { retainRatio: 0.005 })
+    expect(compact.config.retainRatio).toBe(0.005)
+
+    // A schema-invalid value is refused at the write, so nothing invalid is stored.
+    await expect(ctx.settings.update(NS, { contextWindowCap: 0 })).rejects.toThrow(/contextWindowCap/)
+    expect(compact.config.contextWindowCap).toBeUndefined()
+  })
+
+  it('falls back to the composition entry when the settings provider detaches', async () => {
+    const ctx = createContext(10_000)
+    const settingsFiber = await ctx.plugin(MemorySettings)
+    const compact = service({ auto: false, thresholdRatio: 0.1, retainRatio: 0.05 }, ctx)
+    await settingsReady(ctx)
+
+    await ctx.settings.update(NS, { thresholdRatio: 0.9 })
+    expect(compact.config.thresholdRatio).toBe(0.9)
+
+    await settingsFiber.dispose()
+
+    expect(compact.config.thresholdRatio).toBe(0.1)
+    expect(compact.config.contextWindowCap).toBeUndefined()
+  })
+
+  it('registers its namespace only while the plugin is loaded', async () => {
+    const ctx = createContext(10_000)
+    await ctx.plugin(MemorySettings)
+    await ctx.plugin(SessionStore)
+    const fiber = await ctx.plugin(BasicCompactionEngine, { auto: false })
+    await settingsReady(ctx)
+
+    await fiber.dispose()
+
+    expect(ctx.settings.describe().map(row => String(row.ns))).not.toContain(NS)
+  })
+
+  it('starts and stops automatic compaction as the settings toggle auto', async () => {
+    const ctx = createContext(1_000)
+    await ctx.plugin(MemorySettings)
+    const compact = new TestCompactionEngine(ctx, {
+      auto: false,
+      thresholdRatio: 0.5,
+      retainRatio: 0.05,
+    })
+    await settingsReady(ctx)
+    const preStep = (session: Session): Promise<PreStepDecision> => agentEvents(ctx, agent(session, MODEL))
+      .waterfall(
+        'agent/pre-step', { messages: [], turn: 1, step: 1, signal: SIGNAL },
+        () => Promise.resolve({ kind: 'enter' as const, messages: [] }),
+      )
+    const idle = conversation(4)
+
+    await preStep(idle)
+    expect(idle.snapshotEvents().some(event => event.type === 'compaction/start')).toBe(false)
+
+    await ctx.settings.update(NS, { auto: true })
+    await preStep(idle)
+    expect(compact.calls).toHaveLength(1)
+
+    await ctx.settings.update(NS, { auto: false })
+    await preStep(conversation(4))
+    expect(compact.calls).toHaveLength(1)
   })
 })

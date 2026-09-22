@@ -32,6 +32,7 @@ const POLICY_CONFIG_KEYS = [
   'maxTokens',
   'compactionRetries',
   'maxOverflowRetries',
+  'contextWindowCap',
 ] as const
 
 /** Complete public top-level configuration key set. */
@@ -91,6 +92,7 @@ export function resolveConfig(config: BasicCompactionConfig = {}): ResolvedConfi
     maxTokens: config.maxTokens ?? 8192,
     compactionRetries: config.compactionRetries ?? 1,
     maxOverflowRetries: config.maxOverflowRetries ?? 1,
+    contextWindowCap: config.contextWindowCap,
     modelPolicies,
     auto: config.auto ?? true,
   })
@@ -121,14 +123,17 @@ export function resolveTargetPolicy(
     maxTokens: override?.maxTokens ?? config.maxTokens,
     compactionRetries: override?.compactionRetries ?? config.compactionRetries,
     maxOverflowRetries: override?.maxOverflowRetries ?? config.maxOverflowRetries,
+    contextWindowCap: override?.contextWindowCap ?? config.contextWindowCap,
   })
 }
 
 /**
- * Scale one routed policy into concrete token budgets for its model capacity.
+ * Scale one routed policy into concrete token budgets for its model capacity,
+ * lowered by the policy's `contextWindowCap` when one is set.
  * @param policy - merged policy for the exact routed target.
  * @param contextWindow - positive adapter-owned capacity for that target.
- * @returns detached immutable pressure and retention budgets.
+ * @returns detached immutable pressure and retention budgets, whose
+ * `contextWindow` is the effective window the budgets were derived from.
  */
 export function resolveCompactSpec(
   policy: ResolvedTargetPolicy,
@@ -141,9 +146,12 @@ export function resolveCompactSpec(
       `BasicCompactionConfig: contextWindow (${contextWindow}) must be a positive integer`,
     )
   }
-  const thresholdTokens = Math.floor(contextWindow * policy.thresholdRatio)
+  const effectiveWindow = policy.contextWindowCap === undefined
+    ? contextWindow
+    : Math.min(contextWindow, policy.contextWindowCap)
+  const thresholdTokens = Math.floor(effectiveWindow * policy.thresholdRatio)
   const retainTokens = policy.retainTokens === undefined
-    ? Math.floor(contextWindow * policy.retainRatio)
+    ? Math.floor(effectiveWindow * policy.retainRatio)
     : policy.retainTokens
   if (retainTokens >= thresholdTokens) {
     throw new TargetPressureConfigError(
@@ -154,7 +162,7 @@ export function resolveCompactSpec(
   }
   return deepFreeze({
     target: { ...policy.target },
-    contextWindow,
+    contextWindow: effectiveWindow,
     thresholdRatio: policy.thresholdRatio,
     thresholdTokens,
     retainTokens,
@@ -163,6 +171,7 @@ export function resolveCompactSpec(
     maxTokens: policy.maxTokens,
     compactionRetries: policy.compactionRetries,
     maxOverflowRetries: policy.maxOverflowRetries,
+    contextWindowCap: policy.contextWindowCap,
   })
 }
 
@@ -234,6 +243,7 @@ function validatePolicy(
   const maxTokens = config.maxTokens
   const compactionRetries = config.compactionRetries
   const maxOverflowRetries = config.maxOverflowRetries
+  const contextWindowCap = config.contextWindowCap
   if (thresholdRatio !== undefined) assertRatio(`${name}.thresholdRatio`, thresholdRatio)
   if (retainRatio !== undefined) assertRatio(`${name}.retainRatio`, retainRatio)
   if (retainTokens !== undefined) assertNonNegativeInteger(`${name}.retainTokens`, retainTokens)
@@ -241,6 +251,9 @@ function validatePolicy(
     throw new Error(`${name}: retainRatio and retainTokens are mutually exclusive`)
   }
   if (maxTokens !== undefined) assertPositiveInteger(`${name}.maxTokens`, maxTokens)
+  if (contextWindowCap !== undefined) {
+    assertPositiveInteger(`${name}.contextWindowCap`, contextWindowCap)
+  }
   if (compactionRetries !== undefined) {
     assertNonNegativeInteger(`${name}.compactionRetries`, compactionRetries)
   }

@@ -71,10 +71,17 @@ kind: "package-reference"
 | `maxTokens` | `8192` | 摘要请求的输出上限；可包含推理 token。 |
 | `compactionRetries` | `1` | 压力仍高于阈值时，在首次压缩后进行的额外尝试次数。 |
 | `maxOverflowRetries` | `1` | 已确认上下文窗口溢出后的最大重试次数；`0` 只禁用恢复。 |
+| `contextWindowCap` | — | 用于压力与保留计算的生效上下文窗口上限；省略则使用已路由模型自身的窗口。 |
 | `modelPolicies` | `[]` | 针对个别模型路由的精确 `{ provider, model, ...partialPolicy }` 覆盖。 |
 | `auto` | `true` | 启用自动压缩与溢出恢复；设为 `false` 则仅手动执行。 |
 
 配置错误会快速失败：未知设置、重复的按模型覆盖、两种保留形式同时出现，或比例保留量不低于阈值，都会在加载时拒绝插件。任何绝对 `retainTokens` 预算——顶层或按模型——不低于其阈值时，都会在该模型首次使用时失败，因为该比较需要模型的上下文大小。
+
+### 用户设置
+
+每个策略字段也都可以从用户设置文档设置：插件通过 `ctx.settings` 注册 `compaction-basic` 命名空间，把 `settings.yaml` 层叠在 entry 配置之上。引擎在每次压力检查与手动压缩时读取已解析策略，因此保存后的改动能作用于下一次决策——降低 `thresholdRatio` 或 `contextWindowCap` 会更快触发压缩，`auto` 会在下一个步骤边界或失败请求处启动或停止自动路径——全程无需重启。通过 schema 但未通过策略校验的已存储 section（保留量不低于阈值、摘要目标不成对）会保留上一份有效配置并记录失败。没有 settings provider 时，entry 配置保持权威。
+
+设置上限时生效窗口为 `min(routedModelWindow, contextWindowCap)`；`thresholdRatio` 与 `retainRatio` 都以该生效窗口为基准缩放，因此上限会同时降低压缩起点与逐字保留的尾部预算。
 
 ### 压缩运行时会发生什么
 
@@ -123,7 +130,7 @@ kind: "package-reference"
 
 ### 配置解析
 
-`resolveConfig` 验证并分离默认值，`resolveTargetPolicy` 将精确的提供方／模型覆盖合并到默认值之上，`resolveCompactSpec` 使用适配器拥有的上下文容量将合并后的策略缩放为具体 token 预算。策略解析绝不咨询模型发现（`listModels()`）；只有持久路由的容量才重要。
+`resolveConfig` 验证并分离默认值，`resolveTargetPolicy` 将精确的提供方／模型覆盖合并到默认值之上，`resolveCompactSpec` 使用被 `contextWindowCap` 下调后的适配器拥有上下文容量，将合并后的策略缩放为具体 token 预算。策略解析绝不咨询模型发现（`listModels()`）；只有持久路由的容量才重要。引擎的 `config` 访问器会解析当前权威来源——挂载了 settings 服务时是已注册的 settings section，否则是组合 entry——并按快照记忆化，因此未通过策略校验的 settings section 会保留上一份配置。
 
 ### 源码地图
 
@@ -240,6 +247,7 @@ Rules:
 - **计量准确度取决于固定启发式规则**——可复用提供方用量缺失时，会回退到字符数加结构开销，而非精确的 token 化；只有在适配器声明了请求图片定价的路由上，图片出现处才携带提供方精确的视觉 token。
 - **溢出分类由适配器维护**——提供方措辞可能改变；两个 DeepSeek 适配器将可识别的上下文限制失败规范化为 `CONTEXT_WINDOW_EXCEEDED`。
 - **部分不可分单元与仅 envelope 溢出仍不在表层压缩范围内**——恢复无法缩减系统／工具／前缀、拆分不可分的非工具节点，或修复不可剪枝剩余部分仍超出窗口的工具单元。可选 pruner 可以缩减原本不可分工具对内的文本型工具结果主体。
+- **`contextWindowCap` 约束的是策略，而非模型请求**——它按小于模型自身窗口的生效窗口下调阈值与保留尾部；它不约束请求可携带的内容，因此在表层完成压缩之前，压力仍可能超出该上限。
 - **`compactRegion` 要求存在未结束的轮次**——在完全关闭的会话上手动调用会抛出异常（「no open turn」），而不是执行压缩。
 - **摘要失败会保留最新持久表层**——任何替换前，自动路径会记录警告，并携带完整超预算历史继续。如果剪枝已落地，后续摘要失败会从该持久剪枝表层继续。因达到 `maxTokens` 而发生的摘要截断（隐藏推理 token 可能会耗尽该额度）遵循同一规则。
 

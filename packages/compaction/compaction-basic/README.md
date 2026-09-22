@@ -71,10 +71,17 @@ All settings are optional. The defaults start condensing at 80% of the routed mo
 | `maxTokens` | `8192` | Output cap for the summarization request; may include reasoning tokens. |
 | `compactionRetries` | `1` | Extra condensation attempts after the first when pressure remains above threshold. |
 | `maxOverflowRetries` | `1` | Maximum retries after a confirmed context-window overflow; `0` disables recovery only. |
+| `contextWindowCap` | — | Cap on the effective context window used for pressure and retention math; omit to use the routed model's own window. |
 | `modelPolicies` | `[]` | Exact `{ provider, model, ...partialPolicy }` overrides for individual model routes. |
 | `auto` | `true` | Enable automatic condensation and overflow recovery; set `false` for manual-only operation. |
 
 Misconfiguration fails fast: an unknown setting, a duplicate per-model override, both retention forms together, or a ratio retention that is not below the threshold all reject the plugin at load. An absolute `retainTokens` budget — top-level or per-model — that is not below its threshold fails when that model is first used, because the comparison needs the model's context size.
+
+### User settings
+
+Every policy field is also settable from the user settings document: the plugin registers the `compaction-basic` namespace through `ctx.settings`, which layers `settings.yaml` over the entry config. The engine reads the resolved policy at each pressure check and manual compaction, so a saved change applies to the next decision — a lowered `thresholdRatio` or `contextWindowCap` condenses sooner, and `auto` starts or stops the automatic paths at the next step boundary or failed request — without restarting anything. A stored section that passes its schema but fails policy validation (retention at or above its threshold, an unpaired summarization target) keeps the last good configuration and logs the failure. Without a settings provider the entry config stays authoritative.
+
+The effective window is `min(routedModelWindow, contextWindowCap)` when a cap is set; `thresholdRatio` and `retainRatio` scale that effective window, so a cap lowers the point where condensation starts and the verbatim tail with it.
 
 ### What happens when condensation runs
 
@@ -123,7 +130,7 @@ The transaction validates the surface span and the durable lock, appends `compac
 
 ### Config resolution
 
-`resolveConfig` validates and detaches the defaults, `resolveTargetPolicy` merges an exact provider/model override over them, and `resolveCompactSpec` scales the merged policy into concrete token budgets using the adapter-owned context capacity. Model discovery (`listModels()`) is never consulted for policy; only the durable route's capacity matters.
+`resolveConfig` validates and detaches the defaults, `resolveTargetPolicy` merges an exact provider/model override over them, and `resolveCompactSpec` scales the merged policy into concrete token budgets using the adapter-owned context capacity lowered by `contextWindowCap`. Model discovery (`listModels()`) is never consulted for policy; only the durable route's capacity matters. The engine's `config` accessor resolves the active source — the registered settings section while one is attached, the composition entry otherwise — and memoizes per snapshot, so a settings section that fails policy validation keeps the previous configuration.
 
 ### Source map
 
@@ -240,6 +247,7 @@ These limits define when automatic condensation is a poor fit or needs special c
 - **Meter accuracy follows the fixed heuristic** — missing reusable provider usage falls back to character count plus structural overhead rather than exact tokenization; image occurrences carry provider-exact visual tokens only on routes whose adapter declares request-image pricing.
 - **Overflow classification is adapter-maintained** — provider wording can change; both DeepSeek adapters normalize recognized context-limit failures to `CONTEXT_WINDOW_EXCEEDED`.
 - **Some indivisible-unit and envelope-only overflow remains outside surface compaction** — recovery cannot shrink system/tools/prefix, split an indivisible non-tool node, or repair a tool unit whose non-prunable remainder still exceeds the window. The optional pruner can shrink text-bearing tool-result bulk inside an otherwise indivisible pair.
+- **`contextWindowCap` bounds the policy, not the model request** — it lowers the threshold and retained tail against a window smaller than the model's own; it does not bound what a request may carry, so pressure can still exceed the cap until the surface compacts.
 - **`compactRegion` requires an open turn** — a manual call on a fully-closed session throws ("no open turn") rather than compacting.
 - **Summarization failure preserves the latest durable surface** — before any replacement, the auto path logs a warning and proceeds with full over-budget history. If pruning already landed, a later summarization failure proceeds from that durable pruned surface. Summarization truncation at `maxTokens`, which hidden reasoning tokens can consume, follows the same rule.
 

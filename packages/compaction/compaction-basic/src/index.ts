@@ -1,5 +1,9 @@
 /**
- * Basic replay-aware compaction backend.
+ * Basic replay-aware compaction backend. The plugin layers its `cordis.yml`
+ * entry config under the optional `compaction-basic` user-settings section
+ * (`ctx.settings`), so a changed threshold, retention budget, or window cap
+ * reaches the next pressure check or manual compaction through the engine's
+ * live configuration, while an invalid section keeps the previous one.
  *
  * @module @deepseek-ai/dsh-compaction-basic
  */
@@ -17,6 +21,8 @@ import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 // Type-only: makes the optional sibling service available to `ctx.get()`.
 import type {} from '@deepseek-ai/dsh-compaction-tool-result-pruner'
+// Type-only: makes the optional settings service available to `ctx.inject()`.
+import type {} from '@deepseek-ai/dsh-settings'
 import {
   resolveCompactSpec,
   resolveConfig,
@@ -79,6 +85,10 @@ const summarizationModelSchema = z.string()
 const maxTokensSchema = z.number().step(1).min(1)
 const compactionRetriesSchema = z.number().step(1).min(0)
 const maxOverflowRetriesSchema = z.number().step(1).min(0)
+const contextWindowCapSchema = z.number().step(1).min(1)
+
+/** Settings namespace carrying this plugin's user-settable policy overrides. */
+const NS = 'compaction-basic'
 
 const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   provider: z.string().required(),
@@ -91,6 +101,7 @@ const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   maxTokens: maxTokensSchema,
   compactionRetries: compactionRetriesSchema,
   maxOverflowRetries: maxOverflowRetriesSchema,
+  contextWindowCap: contextWindowCapSchema,
 })
 
 /**
@@ -113,12 +124,19 @@ export class BasicCompactionEngine extends CompactionEngine {
     maxTokens: maxTokensSchema,
     compactionRetries: compactionRetriesSchema,
     maxOverflowRetries: maxOverflowRetriesSchema,
+    contextWindowCap: contextWindowCapSchema,
     modelPolicies: z.array(modelPolicy),
     auto: z.boolean(),
   })
 
-  /** Resolved and validated compaction configuration. */
-  readonly config: ResolvedConfig
+  /** Currently authoritative configuration: the settings section, or the composition entry. */
+  private source: () => BasicCompactionConfig
+
+  /** Source value the last resolution ran on, identity-compared to detect a snapshot change. */
+  private resolvedSource: BasicCompactionConfig
+
+  /** Last successfully resolved configuration; a rejected snapshot leaves it in place. */
+  private resolved: ResolvedConfig
 
   private readonly warnedPressureConfigTargets = new Set<string>()
   private readonly overflowRetries = new WeakMap<Agent, number>()
@@ -126,14 +144,49 @@ export class BasicCompactionEngine extends CompactionEngine {
 
   constructor(ctx: Context, config: BasicCompactionConfig = {}) {
     super(ctx)
-    this.config = resolveConfig(config)
-    if (this.config.auto) this._registerAutomaticCompaction()
+    this.resolved = resolveConfig(config)
+    this.resolvedSource = config
+    this.source = () => config
+    this._registerAutomaticCompaction()
+    ctx.inject(['settings'], (settingsCtx) => {
+      settingsCtx.settings.installSection(ctx, NS, BasicCompactionEngine.Config, config, {
+        setSource: (current) => {
+          this.source = current
+        },
+        // Every read resolves the active source, so no derived fact is built at
+        // attach time and nothing needs rebuilding when the document changes.
+        onChange: () => {},
+      })
+    })
+  }
+
+  /**
+   * Resolved and validated compaction configuration, re-resolved whenever the
+   * active source changes. A section that passes its schema but fails the
+   * resolve step keeps the last good configuration and logs the failure once
+   * per snapshot, so an invalid stored document cannot strand the engine.
+   */
+  get config(): ResolvedConfig {
+    const raw = this.source()
+    if (raw === this.resolvedSource) return this.resolved
+    this.resolvedSource = raw
+    try {
+      this.resolved = resolveConfig(raw)
+    } catch (error: unknown) {
+      this.ctx.logger.error(
+        'compaction-basic: keeping the last good configuration after an invalid settings section',
+      )
+      this.ctx.logger.error(error)
+    }
+    return this.resolved
   }
 
   /**
    * Register automatic between-step pressure and model-request overflow
-   * recovery. `compactIfNeeded` stays dynamically dispatched so subclass
-   * overrides are honored at event time.
+   * recovery. Each listener reads `auto` from the live configuration at event
+   * time, so a settings change applies from the next step or request.
+   * `compactIfNeeded` stays dynamically dispatched so subclass overrides are
+   * honored at event time.
    */
   private _registerAutomaticCompaction(): void {
     const { ctx } = this
@@ -149,7 +202,7 @@ export class BasicCompactionEngine extends CompactionEngine {
       { agent, signal },
       next,
     ): Promise<PreStepDecision> => {
-      if (!signal.aborted) {
+      if (this.config.auto && !signal.aborted) {
         try {
           const result = await this.compactIfNeeded(agent, 'pressure', signal)
           if (result !== null) logResult(result, 'step pressure')
@@ -181,7 +234,9 @@ export class BasicCompactionEngine extends CompactionEngine {
       { agent, failure, signal },
       next,
     ) => {
-      if (failure.code !== CONTEXT_WINDOW_EXCEEDED_CODE || signal.aborted) return next()
+      if (!this.config.auto
+        || failure.code !== CONTEXT_WINDOW_EXCEEDED_CODE
+        || signal.aborted) return next()
       this.overflowAgents.set(agent.session, agent)
       const target = routedTarget(agent.session)
       if (target === undefined) return next()

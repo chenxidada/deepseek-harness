@@ -24,6 +24,8 @@ export interface CompactionPolicyConfig {
   compactionRetries?: number
   /** Maximum retries after canonical context overflow; `0` disables recovery. Defaults to `1`. */
   maxOverflowRetries?: number
+  /** Cap on the effective context window used for pressure and retention math; defaults to the routed model's own window. */
+  contextWindowCap?: number
 }
 
 /** Exact provider/model override merged over the default compaction policy. */
@@ -55,6 +57,7 @@ interface ResolvedPolicyFields {
   readonly maxTokens: number
   readonly compactionRetries: number
   readonly maxOverflowRetries: number
+  readonly contextWindowCap: number | undefined
 }
 
 /** Validated immutable config whose target-specific defaults remain unresolved. */
