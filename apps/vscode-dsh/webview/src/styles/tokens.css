@@ -119,6 +119,10 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  /* VS Code injects `body { padding: 0 20px }` in `@layer vscode-default`. An
+     unlayered declaration beats a layered one, so this keeps every surface
+     flush with the view instead of framing it in the editor background. */
+  padding: 0;
 }
 
 body {
