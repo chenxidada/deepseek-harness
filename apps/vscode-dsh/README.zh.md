@@ -144,6 +144,7 @@ bash apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh --check-shadow-preset
 | `dsh.continueConversation` | 继续本会话（需要时自动启动 Host） |
 | `dsh.restoreMoreTabs` | 注入被推迟的恢复页签（「查看更多 / 全部恢复」） |
 | `dsh.promptActiveConversation` | 向 active 页签的 `sessionId` 发提示词（测试 / 脚本用；需要时自动启动） |
+| `dsh.insertFileReference` | 输入工作区相对路径，把它的 `@path` mention 插入输入框（需要时自动启动） |
 | `dsh.selectPermissionPreset` | 为 active 页签选择一个 permission-presets 档位 |
 | `dsh.reviewWorkspaceDiffs` | 为 active 页签上的 write/edit 路径打开事后 Diff |
 | `dsh.openTimelineDiff` | 从 Timeline 的 write 行打开 Diff（AC-25） |
@@ -211,16 +212,32 @@ AutoReady 仅在 **Conversation 可见 ∧ Host ready** 时运行：
 
 | 视图 id | 内容 |
 |---|---|
-| `dsh.chat` | Conversation 面板（实时消息 + 输入区） |
-| `dsh.conversations` | 会话页签栏 |
-| `dsh.timeline` | active 页签的时间线（简短标签；Diff 入口）—— **不是**聊天记录 |
+| `dsh.history` | 会话历史列表 —— 本扩展自绘的 WebviewView：会话行（打开 / 行菜单）、新建会话、空态 |
+
+对话界面是编辑器面板（`dsh.editorChat`）；Activity Bar 只贡献 History。Activity Bar 图标只负责显示这个视图，因此首次显示它时同时打开对话面板 —— 每个窗口一次，且只在用户打开该容器时发生。
+
+History 是 **WebviewView** 而非 `TreeView`：行的字号与行菜单归本扩展所有，而原生树的字体由 VS Code 决定。每行显示记录时间与首句用户输入，运行时能恢复该会话时另加「可继续」。右键点击某行（或在行上按 `Shift+F10`）打开行菜单 —— **打开回放 / 继续本会话 / 复制会话 ID / 删除会话**。运行时无法恢复的会话，**继续本会话** 为禁用；该操作先打开回放再继续，因为继续作用于当前活动 Tab。**删除会话** 先请求确认，然后走与面板相同的已确认删除路径。没有可用会话时，该视图渲染自己的空态，其按钮用于新建会话或打开面板。
+
+## Composer `@path` 引用
+
+在输入框键入 `@` 会为工作区根目录打开候选列表。候选来自 Host 挂在 `ctx.fileReferences` 背后的同一套搜索，因此面板、Web 客户端与模型自身的 `@` 指引在排序和排除上完全一致。`↑`/`↓` 移动高亮，`Enter` 或 `Tab` 接受，`Escape` 关闭；接受目录会让列表向下展开一级，含空格的路径以 `@"path with spaces"` 形式插入。
+
+把文件拖入输入框会把每个落下的路径转成一条 `@path` mention。Host 用发送门禁同一套工作区校验解析路径，因此工作区之外的落文件会被跳过，而不会变成本该被拒绝的 token。`dsh.insertFileReference` 无需拖拽即可插入一条 mention。
+
+## Composer `/` 命令
+
+在输入框行首键入 `/` 会打开候选列表，按 **命令 / 智能体 / 技能** 分组。命令来自该会话的命令注册表，智能体来自部署的 preset 名册，技能来自该会话中用户可调用的集合；三者都经 Host bridge 从运行时自己使用的注册表读取，因此列表给出的名字就是运行时能解析的名字。命令与技能按会话寻址，读取它们会物化该页签的会话 —— 走的是它首条 prompt 会用的同一条创建路径。`↑`/`↓` 移动高亮，`Enter` 或 `Tab` 插入，`Escape` 关闭，查询随输入收窄。
+
+命令行与技能行插入 `/名字 `；智能体行插入 preset id，因为 preset 在会话创建时绑定，该行只是 prompt 提示而非命令。对命令行按 Enter 会在运行时**真正执行它**，而不是把这一行发给模型；结果 —— 成功文本、usage 错误或失败 —— 作为消息流中的本地提示出现，而不是模型看得到的消息。没有命令认领的行仍是 prompt，行首的 `/skill-name` 就在那里解析。命令行带图片附件时无法走本桥，因此面板会说明这一点，并把它当普通消息发送，而不是静默丢弃图片。
+
+输入框的「压缩上下文」按钮与 `dsh.triggerCompact` 走同一条路径：它们在运行时执行 `/compact`，只有在没有命令认领时才回落到 prompt 路径。
 
 ## 面板与 Timeline
 
 | 界面 | 职责 |
 |---|---|
-| Conversation 面板（`dsh.chat`） | 完整的用户 / assistant 消息文本；实时输入区；等待交互 / 生成中状态 |
-| Timeline（`dsh.timeline`） | 紧凑的轮次/步骤/工具/状态/subagent 标签；工具 Diff 入口 —— 不含 assistant 长正文 |
+| Conversation 面板（编辑器页签） | 完整的用户 / assistant 消息文本；实时输入区；等待交互 / 生成中状态 |
+| Timeline（`dsh.openTimelineDiff`） | 紧凑的轮次/步骤/工具/状态/subagent 标签；工具 Diff 入口 —— 不含 assistant 长正文 |
 
 ## 关闭与删除策略（AD-CU-3）
 

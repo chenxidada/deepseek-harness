@@ -3,6 +3,7 @@ import { App } from './App.tsx'
 import { createMessageBridge } from './bridge/message-bridge.ts'
 import { mountDshProbes } from './probes.ts'
 import './styles/tokens.css'
+import './styles/v2-enhancements.css'
 
 mountDshProbes()
 

@@ -520,10 +520,13 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
       it('CAP-INTERACTION-013 vscode-dsh package.json does not depend on agent-loop', async () => {
         const pkg = JSON.parse(
           await readFile(new URL('../package.json', import.meta.url), 'utf8'),
-        ) as { dependencies: Record<string, string> }
-        const deps = Object.keys(pkg.dependencies ?? {})
-        expect(deps).toContain('@deepseek-ai/dsh-ide-bridge')
-        expect(deps.some(name => name.includes('agent-loop'))).toBe(false)
+        ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }
+        const declared = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies })
+        // tsdown bundles these into the VSIX, so they are build-time dependencies and the packaged
+        // extension ships no runtime dependency for vsce to resolve.
+        expect(declared).toContain('@deepseek-ai/dsh-ide-bridge')
+        expect(Object.keys(pkg.dependencies ?? {})).toEqual([])
+        expect(declared.some(name => name.includes('agent-loop'))).toBe(false)
       })
     })
 

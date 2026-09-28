@@ -1,0 +1,252 @@
+/**
+ * DSH Webview polish layer.
+ * Layered on top of tokens.css — motion, gradients, and interactive affordances.
+ * Every value derives from --dsh-* tokens so both light and dark themes hold.
+ */
+
+/* ---------- Message entrance ---------- */
+@keyframes dsh-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.dsh-msg {
+  animation: dsh-msg-in 160ms ease-out;
+}
+
+/* Streaming cursor on the in-flight assistant bubble */
+[data-streaming="true"] .dsh-pre-wrap::after {
+  content: "▍";
+  margin-left: 2px;
+  color: var(--dsh-accent);
+  font-weight: 700;
+  animation: dsh-blink 0.9s steps(2, start) infinite;
+}
+
+@keyframes dsh-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Directional gradient wash over the bubble surfaces */
+.dsh-msg-user {
+  background-image: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--dsh-accent) 9%, transparent) 0%,
+    transparent 70%
+  );
+}
+
+.dsh-msg-assistant {
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--dsh-fg) 3%, transparent) 0%,
+    transparent 60%
+  );
+}
+
+/* ---------- Context ring ---------- */
+.dsh-ring {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.dsh-ring-track {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform var(--dsh-transition), box-shadow var(--dsh-transition);
+}
+
+.dsh-ring-track:hover {
+  transform: scale(1.06);
+  box-shadow: var(--dsh-shadow-sm);
+}
+
+.dsh-ring-track:focus-visible {
+  outline: 1px solid var(--dsh-focus);
+  outline-offset: 2px;
+}
+
+.dsh-ring-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--dsh-bg);
+  color: var(--dsh-fg);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.dsh-ring-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 208px;
+  padding: 5px;
+  border: 1px solid var(--dsh-border);
+  border-radius: var(--dsh-radius-md);
+  background: var(--dsh-bg);
+  box-shadow: var(--dsh-shadow-lg);
+  z-index: 100;
+  animation: dsh-msg-in 130ms ease-out;
+}
+
+.dsh-ring-item {
+  display: block;
+  width: 100%;
+  padding: 7px 11px;
+  border: none;
+  border-radius: var(--dsh-radius-sm);
+  background: none;
+  color: var(--dsh-fg);
+  font: inherit;
+  font-size: var(--dsh-text-sm);
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dsh-transition);
+}
+
+.dsh-ring-item:hover:not(:disabled) {
+  background: var(--dsh-list-hover);
+}
+
+.dsh-ring-item[data-static="true"] {
+  cursor: default;
+  color: var(--dsh-muted);
+}
+
+.dsh-ring-item[data-static="true"]:hover {
+  background: none;
+}
+
+/* ---------- Image attachments ---------- */
+.dsh-attachments {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.dsh-attach {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--dsh-radius-md);
+  overflow: visible;
+}
+
+.dsh-attach img {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: var(--dsh-radius-md);
+  border: 1px solid var(--dsh-border);
+  box-shadow: var(--dsh-shadow-sm);
+  transition: transform var(--dsh-transition), box-shadow var(--dsh-transition);
+}
+
+.dsh-attach:hover img {
+  transform: translateY(-1px);
+  box-shadow: var(--dsh-shadow-md);
+}
+
+.dsh-attach-remove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border: none;
+  border-radius: 50%;
+  background: var(--dsh-danger);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--dsh-shadow-sm);
+  transition: transform var(--dsh-transition);
+}
+
+.dsh-attach-remove:hover {
+  transform: scale(1.12);
+}
+
+/* ---------- Mermaid diagram frame ---------- */
+.code-block[data-mermaid="true"] .mermaid-target {
+  background: var(--dsh-bg);
+}
+
+/* ---------- Scroll-to-bottom affordance ---------- */
+.dsh-scroll-resume {
+  position: absolute;
+  right: 20px;
+  bottom: 16px;
+  z-index: 2;
+  border-radius: var(--dsh-radius-pill);
+  padding: 6px 14px;
+  background: var(--dsh-bg);
+  box-shadow: var(--dsh-shadow-md);
+  animation: dsh-msg-in 150ms ease-out;
+}
+
+/* ---------- Message area wrapper ---------- */
+.dsh-msg-area {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Popover menus ---------- */
+.dsh-popover {
+  animation: dsh-msg-in 130ms ease-out;
+}
+
+/* ---------- Modal ---------- */
+.dsh-modal-backdrop {
+  animation: dsh-fade-in 140ms ease-out;
+}
+
+@keyframes dsh-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ---------- Status dot ---------- */
+.dsh-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dsh-muted);
+  flex-shrink: 0;
+}
+
+.dsh-status-dot[data-state="connected"] { background: var(--dsh-ok); }
+.dsh-status-dot[data-state="starting"] { background: var(--dsh-warn); }
+.dsh-status-dot[data-state="error"] { background: var(--dsh-danger); }

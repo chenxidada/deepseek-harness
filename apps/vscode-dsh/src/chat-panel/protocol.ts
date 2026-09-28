@@ -7,6 +7,38 @@
  */
 
 import type { ChatMessage, CompactionMarker, WorkflowMarker } from '../message-store.ts'
+import type { FileReferenceCandidate } from '@deepseek-ai/dsh-file-reference/types'
+
+/**
+ * One `@` completion candidate pushed to the composer. This is the record the Host's
+ * `ctx.fileReferences` service returns, so the panel ranks and filters paths exactly as
+ * the Web client does.
+ */
+export type AtPathCandidate = FileReferenceCandidate
+
+/** Which runtime catalog a `/` menu row came from; the composer groups rows by it. */
+export type SlashCandidateGroup = 'command' | 'agent' | 'skill'
+
+/**
+ * One `/` menu candidate.
+ *
+ * A `command` or `skill` row is slash text: the composer inserts `/<name> `, and
+ * the Host routes the line through the runtime's command registry, which keeps a
+ * line no command resolves on the prompt path — that is where the runtime's
+ * `agent/pre-step` boundary reads a leading `/name` as a skill invocation. An
+ * `agent` row is prompt guidance only: the roster names compositions, and a
+ * preset is chosen when a session is created, so the composer inserts the bare id.
+ */
+export interface SlashCandidate {
+  /** Name without the leading slash. */
+  name: string
+  /** One-line summary shown beside the name. */
+  description: string
+  /** Catalog the row came from. */
+  group: SlashCandidateGroup
+  /** Free-form input placeholder for a command; absent otherwise. */
+  inputHint?: string
+}
 
 /** Panel chrome mode pushed via panel/state. */
 export type PanelMode = 'empty' | 'waiting-host' | 'replay' | 'live' | 'readonly-live' | 'error'
@@ -125,10 +157,14 @@ export type HostToWebviewMessage =
     messageId: string
     text?: string
     appendText?: string
+    /** Append to existing reasoning text. */
+    appendReasoning?: string
     incomplete?: boolean
     streaming?: boolean
     /** Activity status transition for kind:activity bubbles. */
     activityStatus?: 'running' | 'done' | 'failed' | 'aborted'
+    /** Rendered result preview for the activity row's expanded body. */
+    activityResultPreview?: string
     /** Compaction marker merge for kind:compaction bubbles. */
     compaction?: Partial<CompactionMarker>
     /** Workflow run marker merge for kind:workflow cards. */
@@ -299,10 +335,39 @@ export type HostToWebviewMessage =
     }>
   }
   | {
+    /** Present an interaction (approval or question) in-panel (phase-5). */
+    type: 'interaction/present'
+    interactionType: 'approval' | 'question'
+    id: string
+    sessionId: string
+    /** Approval: tool name requiring a decision. */
+    toolName?: string
+    /** Approval: optional asker reason. */
+    reason?: string
+    /** Question: items to present. */
+    questions?: Array<{
+      id: string
+      question: string
+      detail?: string
+      header?: string
+      options?: Array<{ label: string; description?: string }>
+      multiSelect?: boolean
+    }>
+  }
+  | {
+    /** Resolve (remove) a previously presented interaction (phase-5). */
+    type: 'interaction/resolved'
+    id: string
+  }
+  | {
     /** Host-side render-detection request (DEBT-7). The webview answers with
      * `probe/render-state`; carries no presentation state. */
     type: 'probe/query-render-state'
   }
+  /** `@` completion candidates for one composer query; `requestId` pairs it with its query. */
+  | { type: 'composer/at-candidates'; requestId: string; candidates: AtPathCandidate[] }
+  /** `/` menu candidates for one composer query; `requestId` pairs it with its query. */
+  | { type: 'composer/slash-candidates'; requestId: string; candidates: SlashCandidate[] }
 
 /** One image attached to a composer send (feature: image-upload). */
 export interface PromptImage {
@@ -391,8 +456,20 @@ export type WebviewToHostMessage =
   | { type: 'settings/open' }
   /** Merge a partial patch into one settings namespace's user layer. */
   | { type: 'settings/update'; ns: string; patch: Record<string, unknown>; expectedRevision?: number }
+  /** Approve or reject an in-panel interaction (phase-5). */
+  | { type: 'interaction/approve'; id: string; outcome: 'allowed-once' | 'rejected' | 'cancelled' }
+  /** Answer an in-panel question interaction (phase-5). */
+  | { type: 'interaction/answer'; id: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }
+  /** Dismiss an in-panel question interaction with an error (phase-5). */
+  | { type: 'interaction/dismiss'; id: string; error: string }
   /** Host-side render-detection response (DEBT-7). */
   | { type: 'probe/render-state'; testIds: string[]; renderState: Record<string, boolean> }
+  /** Ask the Host for `@` completion candidates; the Host answers with the same `requestId`. */
+  | { type: 'composer/at-query'; requestId: string; query: string }
+  /** Ask the Host for `/` menu candidates; the Host answers with the same `requestId`. */
+  | { type: 'composer/slash-query'; requestId: string; query: string }
+  /** Files dropped on the composer; the Host turns them into `@` mentions and re-prefills. */
+  | { type: 'composer/drop-paths'; paths: string[]; text: string }
 
 /**
  * Narrow an unknown postMessage payload to a Webview→Host frame.
@@ -556,6 +633,23 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
     }
     return { type: 'probe/render-state', testIds, renderState }
   }
+  if (type === 'composer/at-query') {
+    if (typeof record.requestId !== 'string' || record.requestId === '') return undefined
+    if (typeof record.query !== 'string') return undefined
+    return { type: 'composer/at-query', requestId: record.requestId, query: record.query }
+  }
+  if (type === 'composer/slash-query') {
+    if (typeof record.requestId !== 'string' || record.requestId === '') return undefined
+    if (typeof record.query !== 'string') return undefined
+    return { type: 'composer/slash-query', requestId: record.requestId, query: record.query }
+  }
+  if (type === 'composer/drop-paths') {
+    if (!Array.isArray(record.paths)) return undefined
+    const paths = record.paths.filter((path): path is string => typeof path === 'string' && path !== '')
+    if (paths.length === 0 || paths.length !== record.paths.length) return undefined
+    if (typeof record.text !== 'string') return undefined
+    return { type: 'composer/drop-paths', paths, text: record.text }
+  }
   if (type === 'action/select-model') {
     if (typeof record.provider !== 'string' || typeof record.model !== 'string') return undefined
     return {
@@ -594,6 +688,34 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
         ? { expectedRevision: record.expectedRevision }
         : {},
     }
+  }
+  if (type === 'interaction/approve') {
+    if (typeof record.id !== 'string' || record.id === '') return undefined
+    const outcome = record.outcome
+    if (outcome !== 'allowed-once' && outcome !== 'rejected' && outcome !== 'cancelled') return undefined
+    return { type: 'interaction/approve', id: record.id, outcome }
+  }
+  if (type === 'interaction/answer') {
+    if (typeof record.id !== 'string' || record.id === '') return undefined
+    if (typeof record.answer !== 'object' || record.answer === null) return undefined
+    const answerRec = record.answer as Record<string, unknown>
+    if (!Array.isArray(answerRec.answers)) return undefined
+    const answers = (answerRec.answers as unknown[])
+      .filter((a): a is Record<string, unknown> => typeof a === 'object' && a !== null)
+      .filter(a => typeof a.id === 'string')
+      .map(a => ({
+        id: a.id as string,
+        selected: Array.isArray(a.selected)
+          ? (a.selected as unknown[]).filter((s): s is string => typeof s === 'string')
+          : [],
+        ...typeof a.custom === 'string' ? { custom: a.custom } : {},
+      }))
+    return { type: 'interaction/answer', id: record.id, answer: { answers } }
+  }
+  if (type === 'interaction/dismiss') {
+    if (typeof record.id !== 'string' || record.id === '') return undefined
+    if (typeof record.error !== 'string') return undefined
+    return { type: 'interaction/dismiss', id: record.id, error: record.error }
   }
   return undefined
 }

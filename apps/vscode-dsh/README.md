@@ -144,6 +144,7 @@ Step 5 has to produce the model's own `meta.diffs`, and the shipped orchestrator
 | `dsh.continueConversation` | Continue this session (auto-starts Host if needed) |
 | `dsh.restoreMoreTabs` | Hydrate deferred restore Tabs（「查看更多 / 全部恢复」） |
 | `dsh.promptActiveConversation` | Prompt the active Tab's `sessionId` (tests / scripting; auto-starts if needed) |
+| `dsh.insertFileReference` | Type a workspace-relative path and insert its `@path` mention into the composer (auto-starts if needed) |
 | `dsh.selectPermissionPreset` | Pick a permission-presets name for the active Tab |
 | `dsh.reviewWorkspaceDiffs` | Open post-hoc Diff for write/edit paths on the active Tab |
 | `dsh.openTimelineDiff` | Open Diff from a Timeline write row (AC-25) |
@@ -156,7 +157,7 @@ Step 5 has to produce the model's own `meta.diffs`, and the shipped orchestrator
 | Class | Commands | Auto Start? |
 |---|---|:---:|
 | **Start** | `dsh.startSession` | ✅ (`command-start`) |
-| **Send / New** | `dsh.newConversation`, `dsh.promptActiveConversation`, `dsh.continueConversation`; Webview `action/new-conversation` / `action/continue` | ✅ (`command-send`) |
+| **Send / New** | `dsh.newConversation`, `dsh.promptActiveConversation`, `dsh.continueConversation`, `dsh.insertFileReference`; Webview `action/new-conversation` / `action/continue` | ✅ (`command-send`) |
 | **Query / browse** | `dsh.openHistory`, `dsh.searchSessions`, `dsh.switchConversation`, History/Conversations refresh | ❌ |
 | **Delete** | `dsh.deleteConversation`, `dsh.deleteHistory` | ❌ — offline shows「Host 连接后可删除」; never fake-deletes authority |
 | **Panel / settings** | `dsh.showPanel`, `dsh.openExtensionSettings` | ❌ (show details / settings only) |
@@ -211,16 +212,32 @@ Registered **only** when `VSCODE_DSH_TEST=1` or when `activate` receives an inje
 
 | View id | Contents |
 |---|---|
-| `dsh.chat` | Conversation panel (live messages + composer) |
-| `dsh.conversations` | Conversation Tab bar |
-| `dsh.timeline` | Active Tab timeline (short labels; Diff entry) — **not** the chat transcript |
+| `dsh.history` | Session history list — this Extension's own WebviewView: session rows (open / row menu), New conversation, empty state |
+
+The conversation surface is the editor panel (`dsh.editorChat`); the Activity Bar contributes History only. The Activity Bar icon reveals this view and nothing else, so the first reveal also opens the Conversation Panel — once per window, and only when the user opens the container.
+
+History is a **WebviewView**, not a `TreeView`: the row typography and the row menu belong to this Extension, and VS Code owns the native tree's font. Each row shows the recorded time and the first user text, plus 「可继续」when the runtime can resume that session. Right-clicking a row (or `Shift+F10` with the row focused) opens the row menu — **打开回放 / 继续本会话 / 复制会话 ID / 删除会话**. **继续本会话** is disabled for a session the runtime cannot resume, and it opens the replay first, then continues, because continue acts on the active Tab. **删除会话** asks for confirmation and then takes the same confirmed delete path as the panel. With no eligible sessions the view renders its own empty state, whose buttons start a conversation or open the panel.
+
+## Composer `@path` references
+
+Typing `@` in the composer opens a candidate list for the workspace root. Candidates come from the same search the Host mounts behind `ctx.fileReferences`, so the panel, the Web client, and the model's own `@` guidance rank and exclude identically. `↑`/`↓` move the highlight, `Enter` or `Tab` accepts, `Escape` closes; accepting a directory keeps the list open one level down, and a path with spaces is inserted as `@"path with spaces"`.
+
+Dropping files onto the composer turns each dropped path into an `@path` mention. The Host resolves the path through the same workspace check the send gate uses, so a drop from outside the workspace is skipped instead of becoming a token that would later be rejected. `dsh.insertFileReference` inserts one mention without a drag.
+
+## Composer `/` commands
+
+Typing `/` at the start of the composer opens a candidate list grouped into **命令 / 智能体 / 技能**. Commands come from the session's registry, agent presets from the deployment's roster, and skills from the session's user-invocable set; all three travel over the Host bridge from the registries the runtime itself serves, so a name the list offers is a name the runtime resolves. Commands and skills are session-scoped, so reading them materializes the Tab's session through the same creation path its first prompt would use. `↑`/`↓` move the highlight, `Enter` or `Tab` inserts, `Escape` closes, and the query narrows as the user types.
+
+A command or skill row inserts `/name `; an agent row inserts the preset id, because a preset is bound when the session is created and the row is prompt guidance rather than a command. Enter on a command line **runs it in the runtime** instead of sending it to the model, and the result — success text, a usage error, or a failure — appears as a local notice in the message flow, not as a message the model sees. A line no command claims stays a prompt, which is where a leading `/skill-name` resolves. An image attachment on a command line cannot ride this bridge, so the panel says so and sends the line as an ordinary message instead of silently dropping the image.
+
+The composer's 压缩上下文 button and `dsh.triggerCompact` take the same path: they run `/compact` in the runtime and fall back to the prompt path only when no command claims it.
 
 ## Panel vs Timeline
 
 | Surface | Responsibility |
 |---|---|
-| Conversation panel (`dsh.chat`) | Full user / assistant message text; live composer; waiting-interaction / generating status |
-| Timeline (`dsh.timeline`) | Compact turn/step/tool/status/subagent labels; tool Diff entry — no assistant long body |
+| Conversation panel (editor tab) | Full user / assistant message text; live composer; waiting-interaction / generating status |
+| Timeline (`dsh.openTimelineDiff`) | Compact turn/step/tool/status/subagent labels; tool Diff entry — no assistant long body |
 
 ## Close vs delete policy (AD-CU-3)
 

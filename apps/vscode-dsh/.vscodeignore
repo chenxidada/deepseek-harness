@@ -8,13 +8,24 @@ webview/package.json
 src/**
 tests/**
 test-scripts/**
+test-artifacts/**
 **/*.ts
 !**/*.d.ts
 tsconfig.json
+tsdown.config.ts
 README.md
+README.zh.md
+README.i18n.yaml
+.specdev/**
+node_modules/**
 
 # Keep production SPA assets
 !webview/dist/**
 !media/**
 !lib/**
 !package.json
+
+# Types and build metadata are not needed at runtime
+lib/types/**
+*.tsbuildinfo
+lib/*.tsbuildinfo

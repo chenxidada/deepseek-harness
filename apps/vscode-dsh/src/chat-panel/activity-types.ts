@@ -19,7 +19,12 @@ export interface ActivityItem {
   callId?: string
   status: ActivityStatus
   expanded: boolean
+  /** Collapsed-row label: the model's own call description, or the exact input it named. */
   summary?: string
+  /** Exact command / pattern / path, shown in the expanded row when it adds detail. */
+  invocation?: string
+  /** Leading lines of the rendered result, attached once `tool/result` arrives. */
+  resultPreview?: string
 }
 
 /** Tool abort codes from `@deepseek-ai/dsh-tools` (X5) — kept local to avoid a host dep. */
@@ -62,6 +67,26 @@ export function activityMessageId(
     return `activity:${sessionId}:t${turn}:${callId}`
   }
   return `activity:${sessionId}:t${turn}:ord${ordinal}`
+}
+
+/**
+ * Render the model-visible text of one `tool/result` payload.
+ * @param data - tool/result `data` record.
+ * @returns joined text blocks, `[image]` for an image result, or undefined when nothing is renderable.
+ */
+export function toolResultText(data: Record<string, unknown>): string | undefined {
+  const message = asRecord(data.message)
+  const first = Array.isArray(message?.content) ? asRecord(message.content[0]) : undefined
+  const blocks = Array.isArray(first?.content) ? first.content : []
+  const parts: string[] = []
+  for (const raw of blocks) {
+    const entry = asRecord(raw)
+    if (entry === undefined) continue
+    if (entry.type === 'text' && typeof entry.text === 'string') parts.push(entry.text)
+    else if (entry.type === 'image') parts.push('[image]')
+  }
+  const joined = parts.join('\n').trim()
+  return joined === '' ? undefined : joined
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

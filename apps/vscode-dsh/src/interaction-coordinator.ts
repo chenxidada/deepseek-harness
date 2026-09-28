@@ -335,6 +335,40 @@ export class InteractionCoordinator {
   }
 
   /**
+   * Answer one question interaction by id without a UI round trip (phase-5 panel interaction).
+   * @param id - interaction id.
+   * @param answer - user answers.
+   * @returns true when settled, false when unknown.
+   */
+  resolveQuestions(id: string, answer: AskUserQuestionAnswer): boolean {
+    const entry = this.queue.find(
+      (candidate): candidate is QuestionsEntry =>
+        candidate.id === id && candidate.kind === 'questions',
+    )
+    if (entry === undefined) return false
+    this.finishQuestions(entry, answer)
+    entry.abort.abort()
+    return true
+  }
+
+  /**
+   * Dismiss one question interaction by id with an error (phase-5 panel interaction).
+   * @param id - interaction id.
+   * @param error - dismissal reason.
+   * @returns true when settled, false when unknown.
+   */
+  dismissQuestions(id: string, error: string): boolean {
+    const entry = this.queue.find(
+      (candidate): candidate is QuestionsEntry =>
+        candidate.id === id && candidate.kind === 'questions',
+    )
+    if (entry === undefined) return false
+    this.finishQuestionsError(entry, new Error(error))
+    entry.abort.abort()
+    return true
+  }
+
+  /**
    * Handle one approval request: enqueue, present serially, return outcome (AC-16 / AC-58).
    * @param frame - validated approval/request fields.
    * @returns legal ApprovalOutcome (never silent allow on UI failure).

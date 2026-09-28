@@ -23,7 +23,10 @@ import {
   isApprovalOutcome,
   isAskUserQuestionAnswer,
   type AskUserQuestionAnswer,
+  type BridgeAgentPresetSummary,
+  type BridgeCommandSummary,
   type BridgeFrame,
+  type BridgeSkillSummary,
   type IdeBridgeHostConnection,
   type SettingsNamespaceView,
 } from '@deepseek-ai/dsh-ide-bridge'
@@ -277,6 +280,10 @@ export class IdeSessionHost {
     resolve: (value: ModelListResult) => void
     reject: (error: Error) => void
   }>()
+  private readonly pendingSessionList = new Map<string, {
+    resolve: (rows: HostSessionRow[]) => void
+    reject: (error: Error) => void
+  }>()
   private readonly pendingModelSelect = new Map<string, {
     resolve: () => void
     reject: (error: Error) => void
@@ -289,9 +296,33 @@ export class IdeSessionHost {
     resolve: (namespace: SettingsNamespaceView) => void
     reject: (error: Error) => void
   }>()
+  private readonly pendingCommandList = new Map<string, {
+    resolve: (commands: BridgeCommandSummary[]) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingCommandExecute = new Map<string, {
+    resolve: (result: CommandExecuteResult) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingAgentPresets = new Map<string, {
+    resolve: (presets: BridgeAgentPresetSummary[]) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingSkillList = new Map<string, {
+    resolve: (skills: BridgeSkillSummary[]) => void
+    reject: (error: Error) => void
+  }>()
   private resumeTimeoutMs = 15_000
   private deleteTimeoutMs = 5_000
   private modelRpcTimeoutMs = 5_000
+  private sessionListTimeoutMs = 10_000
+  /** Bound (ms) for the three catalog reads the composer's `/` menu needs. */
+  private slashCatalogTimeoutMs = 15_000
+  /**
+   * Bound (ms) for `commands/execute`. A command handler is free to do real work —
+   * a workflow start dispatches a subagent — so this is far longer than an RPC bound.
+   */
+  private commandExecuteTimeoutMs = 120_000
   /** Latest successful `model/list` payload, reused by token-status context window. */
   private modelListCache: ModelListResult | undefined
   private transportWatch: (() => void) | undefined
@@ -806,6 +837,190 @@ export class IdeSessionHost {
   }
 
   /**
+   * Enumerate every session the runtime can see via Host bridge `session/list`.
+   * Rows carry the runtime's workspace and projection-cached title, so the History
+   * list can show sessions this Extension never opened.
+   * @returns one row per session the runtime lists.
+   */
+  async listSessions(): Promise<HostSessionRow[]> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot list sessions')
+    }
+    const id = randomUUID()
+    const response = new Promise<HostSessionRow[]>((resolve, reject) => {
+      this.pendingSessionList.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingSessionList.get(id)
+      if (pending === undefined) return
+      this.pendingSessionList.delete(id)
+      pending.reject(new Error(`session/list timed out after ${this.sessionListTimeoutMs}ms`))
+    }, this.sessionListTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'session/list', id })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive session/list')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingSessionList.delete(id)
+    }
+  }
+
+  /**
+   * Enumerate the commands one session can run via Host bridge `commands/list`.
+   *
+   * The runtime materializes a session that never prompted before answering, so a
+   * freshly opened Tab sees the same catalog its first prompt would run against.
+   * @param sessionId - session whose agent-scoped command view is requested.
+   * @returns the commands the runtime advertises.
+   */
+  async listCommands(sessionId: string): Promise<BridgeCommandSummary[]> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot list commands')
+    }
+    const id = randomUUID()
+    const response = new Promise<BridgeCommandSummary[]>((resolve, reject) => {
+      this.pendingCommandList.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingCommandList.get(id)
+      if (pending === undefined) return
+      this.pendingCommandList.delete(id)
+      pending.reject(new Error(`commands/list timed out after ${this.slashCatalogTimeoutMs}ms`))
+    }, this.slashCatalogTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'commands/list', id, sessionId })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive commands/list')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingCommandList.delete(id)
+    }
+  }
+
+  /**
+   * Run one slash line against a session without sending it to the model.
+   *
+   * A line the registry does not resolve comes back `matched: false`, which leaves
+   * the caller on the prompt path — the user's text is never dropped.
+   * @param sessionId - session that receives the command.
+   * @param line - complete slash-command line, e.g. `/compact`.
+   * @returns the settled execution, or `matched: false` for an unresolved line.
+   */
+  async executeCommand(sessionId: string, line: string): Promise<CommandExecuteResult> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot execute a command')
+    }
+    const id = randomUUID()
+    const response = new Promise<CommandExecuteResult>((resolve, reject) => {
+      this.pendingCommandExecute.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingCommandExecute.get(id)
+      if (pending === undefined) return
+      this.pendingCommandExecute.delete(id)
+      pending.reject(new Error(`commands/execute timed out after ${this.commandExecuteTimeoutMs}ms`))
+    }, this.commandExecuteTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'commands/execute', id, sessionId, line })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive commands/execute')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingCommandExecute.delete(id)
+    }
+  }
+
+  /**
+   * Enumerate the agent presets this deployment can mount via Host bridge
+   * `agent-presets/list`. The roster is global: it does not depend on a session.
+   * @returns one row per preset, with the deployment's default marked.
+   */
+  async listAgentPresets(): Promise<BridgeAgentPresetSummary[]> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot list agent presets')
+    }
+    const id = randomUUID()
+    const response = new Promise<BridgeAgentPresetSummary[]>((resolve, reject) => {
+      this.pendingAgentPresets.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingAgentPresets.get(id)
+      if (pending === undefined) return
+      this.pendingAgentPresets.delete(id)
+      pending.reject(new Error(`agent-presets/list timed out after ${this.slashCatalogTimeoutMs}ms`))
+    }, this.slashCatalogTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'agent-presets/list', id })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive agent-presets/list')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingAgentPresets.delete(id)
+    }
+  }
+
+  /**
+   * Enumerate the skills one session's composition offers to a human command via
+   * Host bridge `skills/list`, which returns only user-invocable skills.
+   * @param sessionId - session whose composition scopes the catalog.
+   * @returns the skills a `/` line may name.
+   */
+  async listSkills(sessionId: string): Promise<BridgeSkillSummary[]> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot list skills')
+    }
+    const id = randomUUID()
+    const response = new Promise<BridgeSkillSummary[]>((resolve, reject) => {
+      this.pendingSkillList.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingSkillList.get(id)
+      if (pending === undefined) return
+      this.pendingSkillList.delete(id)
+      pending.reject(new Error(`skills/list timed out after ${this.slashCatalogTimeoutMs}ms`))
+    }, this.slashCatalogTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'skills/list', id, sessionId })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive skills/list')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingSkillList.delete(id)
+    }
+  }
+
+  /**
    * Select a model via Host bridge `model/select`.
    * @param provider - provider id.
    * @param model - model id.
@@ -1058,6 +1273,10 @@ export class IdeSessionHost {
       this.pendingModelList.delete(id)
       pending.reject(new Error(reason))
     }
+    for (const [id, pending] of this.pendingSessionList) {
+      this.pendingSessionList.delete(id)
+      pending.reject(new Error(reason))
+    }
     for (const [id, pending] of this.pendingModelSelect) {
       this.pendingModelSelect.delete(id)
       pending.reject(new Error(reason))
@@ -1187,6 +1406,90 @@ export class IdeSessionHost {
       this.pendingDelete.delete(frame.id)
       if (frame.ok) {
         pending.resolve(true)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'session/list/response') {
+      const pending = this.pendingSessionList.get(frame.id)
+      if (pending === undefined) return
+      this.pendingSessionList.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.sessions.map(row => ({
+          sessionId: row.sessionId,
+          createdAt: row.createdAt,
+          ...row.cwd === undefined ? {} : { cwd: row.cwd },
+          ...row.parentSessionId === undefined ? {} : { parentSessionId: row.parentSessionId },
+          ...row.title === undefined ? {} : { title: row.title },
+        })))
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'commands/list/response') {
+      const pending = this.pendingCommandList.get(frame.id)
+      if (pending === undefined) return
+      this.pendingCommandList.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.commands.map(row => ({
+          name: row.name,
+          description: row.description,
+          ...row.inputHint === undefined ? {} : { inputHint: row.inputHint },
+        })))
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'commands/execute/response') {
+      const pending = this.pendingCommandExecute.get(frame.id)
+      if (pending === undefined) return
+      this.pendingCommandExecute.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve({
+          matched: frame.matched,
+          ...frame.outcome === undefined ? {} : {
+            outcome: {
+              commandId: frame.outcome.commandId,
+              ok: frame.outcome.ok,
+              ...frame.outcome.text === undefined ? {} : { text: frame.outcome.text },
+            },
+          },
+        })
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'agent-presets/list/response') {
+      const pending = this.pendingAgentPresets.get(frame.id)
+      if (pending === undefined) return
+      this.pendingAgentPresets.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.presets.map(row => ({
+          id: row.id,
+          isDefault: row.isDefault,
+          ...row.name === undefined ? {} : { name: row.name },
+          ...row.description === undefined ? {} : { description: row.description },
+          ...row.broken === undefined ? {} : { broken: row.broken },
+        })))
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'skills/list/response') {
+      const pending = this.pendingSkillList.get(frame.id)
+      if (pending === undefined) return
+      this.pendingSkillList.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.skills.map(row => ({
+          name: row.name,
+          description: row.description,
+          ...row.whenToUse === undefined ? {} : { whenToUse: row.whenToUse },
+        })))
         return
       }
       pending.reject(new Error(frame.error))
@@ -1367,6 +1670,10 @@ export class IdeSessionHost {
       this.pendingModelList.delete(id)
       pending.reject(new Error(`${reason} during model/list`))
     }
+    for (const [id, pending] of this.pendingSessionList) {
+      this.pendingSessionList.delete(id)
+      pending.reject(new Error(`${reason} during session/list`))
+    }
     for (const [id, pending] of this.pendingModelSelect) {
       this.pendingModelSelect.delete(id)
       pending.reject(new Error(`${reason} during model/select`))
@@ -1429,6 +1736,38 @@ export type ModelListResult = {
     }>
   }>
   current: { provider: string; model: string; reasoningEffort?: string }
+}
+
+/**
+ * One session row of a successful `session/list` bridge response.
+ * Rows describe every session the runtime can see, across workspaces; the
+ * caller filters by working directory.
+ */
+export interface HostSessionRow {
+  sessionId: string
+  createdAt: number
+  cwd?: string
+  parentSessionId?: string
+  /** Projection-cached title; absent when the runtime holds no cached title row. */
+  title?: string
+}
+
+/** Outcome of one Host bridge `commands/execute` round trip. */
+export interface CommandExecuteResult {
+  /**
+   * False when the runtime resolved no command for the line. The caller keeps
+   * that text on the prompt path instead of dropping it.
+   */
+  matched: boolean
+  /** Settled outcome; present only for a matched line. */
+  outcome?: {
+    /** Pairing id of this execution's `command/run` and `command/done` records. */
+    commandId: string
+    /** Whether the handler reported success. */
+    ok: boolean
+    /** Result text to render; absent when the handler printed none. */
+    text?: string
+  }
 }
 
 function frameToPermissionResult(

@@ -27,11 +27,11 @@ export {
   canCreateEditorChatPanel,
   createEditorChatPanelController,
   defaultExtensionRootFromModuleUrl,
-  resolveWebviewDistRoot,
   type EditorChatPanelController,
   type EditorChatPanelDeps,
   type EditorChatVsCode,
 } from './editor-chat-panel.ts'
+export { resolveWebviewDistRoot } from '../webview-spa.ts'
 export {
   isMessagesAppend,
   parseWebviewToHostMessage,

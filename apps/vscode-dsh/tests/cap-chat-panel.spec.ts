@@ -8,6 +8,7 @@ import { ExtensionIndex, isHistoryEligibleSession } from '../src/extension-index
 import { activate, deactivate, getChatPanelHost, getConversationController } from '../src/extension.ts'
 import { listHistoryFromIndex } from '../src/history-view.ts'
 import { containsUnsafeHtml, renderSafeMarkdown, safeMarkdownBrowserSource } from '../src/markdown/safe-markdown.ts'
+import { renderSafeMarkdown as renderRich, containsUnsafeHtml as containsUnsafeRich } from '../src/markdown/rich-markdown.ts'
 import { MessageStore } from '../src/message-store.ts'
 import { detectIncomplete, hydrateFromAuthoritativeLog } from '../src/replay-hydrator.ts'
 import { IdeSessionHost, type SettingsNamespaceView } from '../src/session-host.ts'
@@ -1967,6 +1968,196 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
     })
   })
 
+  describe('composer @ completion and dropped files', () => {
+    const deps = (over: Partial<ChatPanelHostDeps>): ChatPanelHostDeps => ({
+      registry: new ConversationRegistry(),
+      messages: new MessageStore(),
+      isHostReady: () => true,
+      acceptSend: async () => ({ messageId: 'm', sessionId: 's', tabId: 't' }),
+      ...over,
+    })
+
+    it('CAP-CHAT-PANEL-095 composer/at-query answers with ranked candidates and aborts the superseded lookup', async () => {
+      const seen: Array<{ query: string; signal: AbortSignal }> = []
+      const panel = new ChatPanelHost(deps({
+        listAtPathCandidates: async (query, signal) => {
+          seen.push({ query, signal })
+          return [{ path: `src/${query}.ts`, kind: 'file' }]
+        },
+      }))
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({ type: 'composer/at-query', requestId: 'r1', query: 'ind' })
+      await waitFor(() => fake.receivedFromHost.some(m => m.type === 'composer/at-candidates'), 1_000)
+      expect(fake.receivedFromHost.find(m => m.type === 'composer/at-candidates')).toEqual({
+        type: 'composer/at-candidates',
+        requestId: 'r1',
+        candidates: [{ path: 'src/ind.ts', kind: 'file' }],
+      })
+
+      fake.receivedFromHost.length = 0
+      fake.emitFromWebview({ type: 'composer/at-query', requestId: 'r2', query: 'index' })
+      await waitFor(() => fake.receivedFromHost.some(m => m.type === 'composer/at-candidates'), 1_000)
+
+      // The caret moved on: the earlier lookup is cancelled rather than left racing its answer.
+      expect(seen.map(row => row.query)).toEqual(['ind', 'index'])
+      expect(seen[0]?.signal.aborted).toBe(true)
+      expect(seen[1]?.signal.aborted).toBe(false)
+    })
+
+    it('CAP-CHAT-PANEL-096 composer/drop-paths appends workspace mentions and skips paths outside it', () => {
+      const panel = new ChatPanelHost(deps({
+        getAtPathResolveOptions: () => ({ workspaceFolders: ['/ws'], exists: () => true }),
+      }))
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({
+        type: 'composer/drop-paths',
+        paths: ['/ws/src/a.ts', '/elsewhere/b.ts', '/ws/docs/my file.md'],
+        text: '看一下',
+      })
+
+      const prefill = fake.receivedFromHost.find(m => m.type === 'composer/prefill')
+      // A drop the workspace check rejects is skipped: the send gate would refuse that token.
+      expect(prefill?.type === 'composer/prefill' ? prefill.text : '').toBe('看一下 @src/a.ts @"docs/my file.md"')
+    })
+  })
+
+  describe('composer / menu and command execution', () => {
+    const CATALOG = [
+      { name: 'feature', description: '建立 .specdev 布局', group: 'command' as const },
+      { name: 'compact', description: '压缩会话上下文', group: 'command' as const },
+      { name: 'context', description: 'compact 相关设置', group: 'command' as const },
+      { name: 'bugfix', description: '缺陷修复组合', group: 'agent' as const },
+      { name: 'code-review', description: '审查改动', group: 'skill' as const },
+    ]
+
+    /** Deps carrying one live tab, so a command has a session to run against. */
+    const liveDeps = (sessionId: string, over: Partial<ChatPanelHostDeps>): ChatPanelHostDeps => {
+      const registry = new ConversationRegistry()
+      registry.create('t', sessionId)
+      return {
+        registry,
+        messages: new MessageStore(),
+        isHostReady: () => true,
+        acceptSend: async () => ({ messageId: 'm', sessionId, tabId: 't' }),
+        ...over,
+      }
+    }
+
+    it('CAP-CHAT-PANEL-097 composer/slash-query ranks the session catalog, caches it, and answers empty without one', async () => {
+      const reads: string[] = []
+      const panel = new ChatPanelHost(liveDeps('s-a', {
+        readSlashCatalog: async (sessionId) => {
+          reads.push(sessionId)
+          return CATALOG
+        },
+      }))
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({ type: 'composer/slash-query', requestId: 'r1', query: '' })
+      await waitFor(() => fake.receivedFromHost.some(m => m.type === 'composer/slash-candidates'), 1_000)
+      const first = fake.receivedFromHost.find(m => m.type === 'composer/slash-candidates')
+      // A bare slash lists every group in catalog order, so the menu can group its rows.
+      expect(first).toEqual({ type: 'composer/slash-candidates', requestId: 'r1', candidates: CATALOG })
+
+      fake.receivedFromHost.length = 0
+      fake.emitFromWebview({ type: 'composer/slash-query', requestId: 'r2', query: 'comp' })
+      await waitFor(() => fake.receivedFromHost.some(m => m.type === 'composer/slash-candidates'), 1_000)
+      const second = fake.receivedFromHost.find(m => m.type === 'composer/slash-candidates')
+      // A name prefix outranks a description match, and the catalog is read once per session.
+      expect(second?.type === 'composer/slash-candidates' ? second.candidates.map(row => row.name) : [])
+        .toEqual(['compact', 'context'])
+      expect(reads).toEqual(['s-a'])
+
+      // A session the Host cannot catalog answers with no rows instead of a stale menu.
+      const bare = new ChatPanelHost(liveDeps('s-b', {}))
+      const bareFake = new FakeWebviewPort()
+      bare.attach(bareFake)
+      bareFake.receivedFromHost.length = 0
+      bareFake.emitFromWebview({ type: 'composer/slash-query', requestId: 'r3', query: '' })
+      await waitFor(() => bareFake.receivedFromHost.some(m => m.type === 'composer/slash-candidates'), 1_000)
+      expect(bareFake.receivedFromHost.find(m => m.type === 'composer/slash-candidates')).toEqual({
+        type: 'composer/slash-candidates',
+        requestId: 'r3',
+        candidates: [],
+      })
+    })
+
+    it('CAP-CHAT-PANEL-098 a command line runs through acceptCommand, and an unresolved line keeps the prompt path', async () => {
+      const commands: Array<{ sessionId: string; line: string }> = []
+      const sent: string[] = []
+      const panel = new ChatPanelHost(liveDeps('s-a', {
+        acceptCommand: async (sessionId, line) => {
+          commands.push({ sessionId, line })
+          return line.startsWith('/feature')
+        },
+        acceptSend: async (text) => {
+          sent.push(text)
+          return { messageId: 'm', sessionId: 's-a', tabId: 't' }
+        },
+      }))
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({ type: 'composer/send', text: '/feature 支持按标签过滤' })
+      await waitFor(() => commands.length > 0, 1_000)
+      // The command carries free-form arguments, so the `@path` gate must not see them.
+      expect(commands).toEqual([{ sessionId: 's-a', line: '/feature 支持按标签过滤' }])
+      expect(sent).toEqual([])
+      expect(fake.receivedFromHost.some(m => m.type === 'composer/send-rejected')).toBe(false)
+
+      fake.emitFromWebview({ type: 'composer/send', text: '/not-a-command' })
+      await waitFor(() => sent.length > 0, 1_000)
+      // Nothing claimed the line, so it stays a prompt: that is where a `/name` skill resolves.
+      expect(sent).toEqual(['/not-a-command'])
+
+      fake.emitFromWebview({ type: 'composer/send', text: '普通消息' })
+      await waitFor(() => sent.length > 1, 1_000)
+      expect(commands.length).toBe(2)
+      expect(sent).toEqual(['/not-a-command', '普通消息'])
+    })
+
+    it('CAP-CHAT-PANEL-099 a command line carrying images banners and stays a plain message', async () => {
+      const commands: string[] = []
+      const sent: Array<{ text: string; images: number }> = []
+      const panel = new ChatPanelHost(liveDeps('s-a', {
+        acceptCommand: async (_sessionId, line) => {
+          commands.push(line)
+          return true
+        },
+        acceptSend: async (text, images) => {
+          sent.push({ text, images: images?.length ?? 0 })
+          return { messageId: 'm', sessionId: 's-a', tabId: 't' }
+        },
+      }))
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({
+        type: 'composer/send-rich',
+        text: '/compact',
+        images: [{ data: 'AAAA', mimeType: 'image/png' }],
+      })
+
+      // This bridge is text-only, so the command cannot run with attachments: the panel says
+      // so and sends the line as a message instead of dropping the image silently.
+      const banner = fake.receivedFromHost.find(m => m.type === 'ui/banner')
+      expect(banner?.type === 'ui/banner' ? banner.text : '').toContain('命令不支持图片附件')
+      expect(commands).toEqual([])
+      await waitFor(() => sent.length > 0, 1_000)
+      expect(sent).toEqual([{ text: '/compact', images: 1 }])
+    })
+  })
+
   describe('dsh.test.* hooks for the newer user-visible surfaces', () => {
     const commands = new Map<string, (...args: unknown[]) => unknown>()
     const mem = new Map<string, unknown>()
@@ -2219,6 +2410,146 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         ok: true,
         sessionId: tab.sessionId,
         length: 'LAYER-V-CAP-REASONING-OK'.length,
+      })
+    })
+  })
+
+  describe('rich-markdown.ts renderer', () => {
+    it('CAP-CHAT-PANEL-085 rich-markdown renders headings/paragraphs/bold/italic/links', () => {
+      const h1 = renderRich('# Hello')
+      expect(h1.html).toContain('<h1 class="md-h">')
+      expect(h1.mode).toBe('markdown')
+      expect(containsUnsafeRich(h1.html)).toBe(false)
+
+      const inline = renderRich('**bold** *italic*')
+      expect(inline.html).toContain('<strong>')
+      expect(inline.html).toContain('<em>')
+
+      const link = renderRich('[link](https://example.com)')
+      expect(link.html).toContain('class="md-link"')
+      expect(link.html).toContain('rel="noopener noreferrer"')
+      expect(containsUnsafeRich(link.html)).toBe(false)
+    })
+
+    it('CAP-CHAT-PANEL-086 rich-markdown renders code blocks with syntax highlighting', () => {
+      const ts = renderRich('```ts\nconst x = 1\n```')
+      expect(ts.html).toContain('data-lang="ts"')
+      expect(ts.html).toContain('code-block')
+      // highlight.js produces hljs class names or keyword spans
+      expect(ts.html).toMatch(/hljs|keyword/)
+
+      const plain = renderRich('```\nplain\n```')
+      expect(plain.html).toContain('code-block')
+      expect(plain.html).not.toContain('data-lang')
+    })
+
+    it('CAP-CHAT-PANEL-087 rich-markdown renders nested lists and task lists', () => {
+      const nested = renderRich('- a\n  - b\n  - c')
+      const ulCount = (nested.html.match(/<ul/g) || []).length
+      expect(ulCount).toBeGreaterThanOrEqual(2)
+
+      const tasks = renderRich('- [x] done\n- [ ] todo')
+      expect(tasks.html).toMatch(/task-list|checkbox|checked/)
+    })
+
+    it('CAP-CHAT-PANEL-088 rich-markdown renders KaTeX formulas', () => {
+      const inline = renderRich('$E=mc^2$')
+      expect(inline.html).toContain('katex')
+
+      const block = renderRich('$$\n\\sum_{i=1}^{n} i\n$$')
+      expect(block.html).toContain('md-math-block')
+    })
+
+    it('CAP-CHAT-PANEL-089 rich-markdown marks Mermaid code blocks', () => {
+      const mermaid = renderRich('```mermaid\ngraph LR\n  A-->B\n```')
+      expect(mermaid.html).toContain('data-mermaid="true"')
+      expect(mermaid.html).toContain('mermaid-source')
+    })
+
+    it('CAP-CHAT-PANEL-090 rich-markdown renders GFM tables', () => {
+      const table = renderRich('| A | B |\n| --- | --- |\n| 1 | 2 |')
+      expect(table.html).toContain('<table class="md-table">')
+    })
+
+    it('CAP-CHAT-PANEL-091 rich-markdown escapes HTML tags for safety', () => {
+      const script = renderRich('<script>alert(1)</script>')
+      expect(containsUnsafeRich(script.html)).toBe(false)
+
+      const img = renderRich('<img src=x onerror=alert(1)>')
+      expect(containsUnsafeRich(img.html)).toBe(false)
+    })
+  })
+
+  describe('interaction protocol frames', () => {
+    it('CAP-CHAT-PANEL-092 parseWebviewToHostMessage parses interaction/approve frames', () => {
+      expect(parseWebviewToHostMessage({
+        type: 'interaction/approve', id: 'a', outcome: 'allowed-once',
+      })).toEqual({ type: 'interaction/approve', id: 'a', outcome: 'allowed-once' })
+
+      expect(parseWebviewToHostMessage({
+        type: 'interaction/approve', id: 'a', outcome: 'rejected',
+      })).toEqual({ type: 'interaction/approve', id: 'a', outcome: 'rejected' })
+
+      // Missing id
+      expect(parseWebviewToHostMessage({
+        type: 'interaction/approve', outcome: 'allowed-once',
+      })).toBeUndefined()
+
+      // Invalid outcome
+      expect(parseWebviewToHostMessage({
+        type: 'interaction/approve', id: 'a', outcome: 'invalid',
+      })).toBeUndefined()
+    })
+
+    it('CAP-CHAT-PANEL-093 parseWebviewToHostMessage parses interaction/answer frames', () => {
+      expect(parseWebviewToHostMessage({
+        type: 'interaction/answer',
+        id: 'a',
+        answer: { answers: [{ id: 'q1', selected: ['opt1'] }] },
+      })).toEqual({
+        type: 'interaction/answer',
+        id: 'a',
+        answer: { answers: [{ id: 'q1', selected: ['opt1'] }] },
+      })
+
+      // Missing answer
+      expect(parseWebviewToHostMessage({
+        type: 'interaction/answer', id: 'a',
+      })).toBeUndefined()
+    })
+
+    it('CAP-CHAT-PANEL-094 appendReasoning is a valid messages/patch field and ChatPanelHost forwards it', async () => {
+      // Type-level: constructing the frame compiles (TS proof).
+      const frame: HostToWebviewMessage = {
+        type: 'messages/patch',
+        sessionId: 's1',
+        messageId: 'm1',
+        appendReasoning: 'thinking...',
+      }
+      expect(frame.type).toBe('messages/patch')
+
+      // Runtime: ChatPanelHost.pushPatch forwards appendReasoning through the port.
+      const registry = new ConversationRegistry()
+      const tab = registry.create('test')
+      const panel = new ChatPanelHost({
+        registry,
+        messages: new MessageStore(),
+        isHostReady: () => true,
+        acceptSend: async () => ({ messageId: 'm', sessionId: 's', tabId: 't' }),
+      })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      panel.clearOutboundLog()
+      fake.receivedFromHost.length = 0
+
+      panel.pushPatch(tab.sessionId, 'm1', { appendReasoning: 'thinking...' })
+      const patch = fake.receivedFromHost.find(m => m.type === 'messages/patch')
+      expect(patch).toBeDefined()
+      expect(patch).toMatchObject({
+        type: 'messages/patch',
+        sessionId: tab.sessionId,
+        messageId: 'm1',
+        appendReasoning: 'thinking...',
       })
     })
   })

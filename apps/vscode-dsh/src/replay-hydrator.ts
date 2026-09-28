@@ -18,8 +18,10 @@ import type { TimelineDiffHunk, TimelineItem } from './timeline-store.ts'
 import {
   activityMessageId,
   activityStatusFromToolResult,
+  toolResultText,
   type ActivityItem,
 } from './chat-panel/activity-types.ts'
+import { digestToolCall, previewToolResult } from './chat-panel/activity-digest.ts'
 
 /**
  * Surface placement of one logged message event, structurally narrowed to the
@@ -50,6 +52,14 @@ export interface FoldedMessage {
   text: string
   /** Log seq of the source event (ordering oracle). */
   seq: number
+}
+
+/** One folded activity row for replay UI hydration. */
+export interface FoldedActivity {
+  /** Log seq of the `tool/call` that opened the row, or of an orphan `tool/result`. */
+  seq: number
+  /** Complete activity item, shaped like the live projection's. */
+  activity: ActivityItem
 }
 
 /** One folded compaction marker row for replay UI hydration. */
@@ -130,22 +140,26 @@ export function hydrateFromAuthoritativeLog(
   for (const run of foldWorkflowRuns(sessionId, events)) {
     rows.push({ seq: run.seq, message: run.message })
   }
+  // AC-28: rebuild conversation-inline activity items from tool events. Each row carries the
+  // seq of the call that opened it, so a step's tool rows stay between that step's assistant
+  // bar and the next one instead of piling up below every message bar in the session.
+  for (const row of foldActivities(sessionId, events)) {
+    rows.push({
+      seq: row.seq,
+      message: {
+        id: row.activity.id,
+        sessionId,
+        role: 'notice',
+        kind: 'activity',
+        text: `${row.activity.summary ?? row.activity.toolName ?? 'tool'} · ${row.activity.status}`,
+        turn: row.activity.turn,
+        activity: row.activity,
+      },
+    })
+  }
   // Stable by seq: message bars keep their log order and each marker lands at its own start event.
   rows.sort((left, right) => left.seq - right.seq)
   const messages: ChatMessage[] = rows.map(row => row.message)
-
-  // AC-28: rebuild conversation-inline activity items from tool events.
-  for (const activity of foldActivities(sessionId, events)) {
-    messages.push({
-      id: activity.id,
-      sessionId,
-      role: 'notice',
-      kind: 'activity',
-      text: `${activity.summary ?? activity.toolName ?? 'tool'} · ${activity.status}`,
-      turn: activity.turn,
-      activity,
-    })
-  }
 
   if (incomplete) {
     messages.push({
@@ -176,25 +190,31 @@ export function hydrateFromAuthoritativeLog(
 }
 
 /**
- * Fold tool/call + tool/result (+ residual turn/end abort) into ActivityItem list (AC-28).
+ * Fold tool/call + tool/result (+ residual turn/end abort) into activity rows (AC-28).
  * Expanded always false on hydrate (presentation default).
+ * @param sessionId - SDK session identity for ActivityItem.sessionId.
+ * @param events - cold-balanced session events (full log, no paging).
+ * @returns activity rows in log order, each carrying its opening event's seq.
  */
 export function foldActivities(
   sessionId: string,
   events: readonly HydratorSessionEvent[],
-): ActivityItem[] {
+): FoldedActivity[] {
   const byCallId = new Map<string, ActivityItem>()
-  const ordered: ActivityItem[] = []
+  const ordered: FoldedActivity[] = []
   const ordinalByTurn = new Map<number, number>()
 
   const pushRunning = (
+    seq: number,
     turn: number,
     callId: string | undefined,
     toolName: string,
+    rawArguments?: unknown,
   ): ActivityItem => {
     const ordinal = ordinalByTurn.get(turn) ?? 0
     ordinalByTurn.set(turn, ordinal + 1)
     const id = activityMessageId(sessionId, turn, callId, ordinal)
+    const digest = digestToolCall(toolName, rawArguments)
     const item: ActivityItem = {
       id,
       sessionId,
@@ -204,9 +224,10 @@ export function foldActivities(
       ...callId === undefined ? {} : { callId },
       status: 'running',
       expanded: false,
-      summary: toolName,
+      summary: digest.summary,
+      ...digest.invocation === undefined ? {} : { invocation: digest.invocation },
     }
-    ordered.push(item)
+    ordered.push({ seq, activity: item })
     if (callId !== undefined) byCallId.set(callId, item)
     return item
   }
@@ -218,7 +239,7 @@ export function foldActivities(
       const callId = data.callId === undefined ? undefined : String(data.callId)
       const toolName = typeof data.name === 'string' ? data.name : 'tool'
       if (callId !== undefined && byCallId.has(callId)) continue
-      pushRunning(turn, callId, toolName)
+      pushRunning(Number(event.seq ?? 0), turn, callId, toolName, data.arguments)
       continue
     }
     if (event.type === 'tool/result') {
@@ -236,9 +257,14 @@ export function foldActivities(
           : typeof data.name === 'string'
             ? data.name
             : 'tool'
-        item = pushRunning(turn, callId, toolName)
+        item = pushRunning(Number(event.seq ?? 0), turn, callId, toolName)
       }
       item.status = status
+      const text = toolResultText(data)
+      if (text !== undefined) {
+        const preview = previewToolResult(text)
+        if (preview !== undefined) item.resultPreview = preview
+      }
       continue
     }
     if (event.type === 'turn/end') {
@@ -246,14 +272,14 @@ export function foldActivities(
       const kind = typeof reason?.kind === 'string' ? reason.kind : undefined
       if (kind !== 'aborted' && kind !== 'interrupted') continue
       const turn = asNumber(data.turn)
-      for (const item of ordered) {
-        if (item.status !== 'running') continue
-        if (turn !== undefined && item.turn !== turn) continue
-        item.status = 'aborted'
+      for (const row of ordered) {
+        if (row.activity.status !== 'running') continue
+        if (turn !== undefined && row.activity.turn !== turn) continue
+        row.activity.status = 'aborted'
       }
     }
   }
-  return ordered.map(item => ({ ...item }))
+  return ordered.map(row => ({ seq: row.seq, activity: { ...row.activity } }))
 }
 
 /**

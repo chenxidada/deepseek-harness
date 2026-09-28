@@ -5,9 +5,9 @@
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/editor-chat-panel
  */
 
-import { existsSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { buildWebviewSpaHtml, resolveWebviewDistRoot } from '../webview-spa.ts'
 import type { ChatPanelHost, WebviewMessagePort } from './chat-panel-host.ts'
 import type { ConversationRegistry } from '../conversation-registry.ts'
 
@@ -89,14 +89,6 @@ export interface EditorChatPanelDeps {
 export const EDITOR_CHAT_PANEL_VIEW_TYPE = 'dsh.editorChat'
 
 /**
- * Resolve the absolute path to `webview/dist` shipped with the extension.
- * @param extensionRoot - extension package root.
- */
-export function resolveWebviewDistRoot(extensionRoot: string): string {
-  return join(extensionRoot, 'webview', 'dist')
-}
-
-/**
  * Whether the vscode surface can create an Editor WebviewPanel.
  * @param vscode - candidate module.
  */
@@ -118,40 +110,7 @@ export function buildEditorChatSpaHtml(
   vscode: EditorChatVsCode,
   distRoot: string,
 ): string {
-  const cspSource = webview.cspSource ?? ''
-  const scriptName = existsSync(join(distRoot, 'assets', 'index.js'))
-    ? 'assets/index.js'
-    : pickBuiltAsset(distRoot, /\.js$/)
-  const cssName = existsSync(join(distRoot, 'assets', 'index.css'))
-    ? 'assets/index.css'
-    : pickBuiltAsset(distRoot, /\.css$/)
-
-  const asUri = (rel: string): string => {
-    const fileUri = vscode.Uri.file(join(distRoot, rel))
-    const webviewUri = webview.asWebviewUri?.(fileUri) ?? fileUri
-    return typeof webviewUri.toString === 'function' ? webviewUri.toString() : String(webviewUri)
-  }
-
-  const scriptSrc = scriptName ? asUri(scriptName) : ''
-  const cssHref = cssName ? asUri(cssName) : ''
-  const csp = cspSource === ''
-    ? ''
-    : `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} data:; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource}; font-src ${cspSource};">`
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  ${csp}
-  ${cssHref ? `<link rel="stylesheet" href="${cssHref}" />` : ''}
-  <title>Conversation</title>
-</head>
-<body>
-  <div id="root"></div>
-  ${scriptSrc ? `<script type="module" src="${scriptSrc}"></script>` : '<p data-testid="spa-missing">Conversation SPA assets missing. Run webview:build.</p>'}
-</body>
-</html>`
+  return buildWebviewSpaHtml({ webview, vscode, distRoot, entry: 'index', title: 'Conversation' })
 }
 
 /**
@@ -247,16 +206,4 @@ export function defaultExtensionRootFromModuleUrl(moduleUrl = import.meta.url): 
   const here = dirname(fileURLToPath(moduleUrl))
   // src/chat-panel → apps/vscode-dsh
   return join(here, '..', '..')
-}
-
-function pickBuiltAsset(distRoot: string, pattern: RegExp): string | undefined {
-  const assetsDir = join(distRoot, 'assets')
-  if (!existsSync(assetsDir)) return undefined
-  try {
-    const names = readdirSync(assetsDir)
-    const hit = names.find(name => pattern.test(name))
-    return hit === undefined ? undefined : `assets/${hit}`
-  } catch {
-    return undefined
-  }
 }

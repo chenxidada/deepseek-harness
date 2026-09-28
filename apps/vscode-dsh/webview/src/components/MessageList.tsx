@@ -1,14 +1,24 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { renderSafeMarkdown } from '@dsh/safe-markdown'
 import { decideFollowState } from '../../../src/chat-panel/render/follow-state.ts'
 import type { MessageBridge } from '../bridge/message-bridge.ts'
 import { extractAtPathTokens } from '../utils/at-path-tokens.ts'
 import {
+  clearPendingChangeListReveal,
+  clearPendingReveal,
+  clearPendingSourceReveal,
   setFollowState,
   toggleActivityExpanded,
+  type ChatUiState,
   type FollowState,
+  type PendingInteraction,
+  type TodoItem,
   type UiMessage,
 } from '../store/chat-ui-store.ts'
+import { TodoCard } from './TodoCard.tsx'
+import { InlineDiff } from './InlineDiff.tsx'
+import { ApprovalCard } from './ApprovalCard.tsx'
+import { QuestionCard } from './QuestionCard.tsx'
 
 const FOLLOW_BOTTOM_PX = 48
 
@@ -20,6 +30,14 @@ export interface MessageListProps {
   readonly?: boolean
   streaming?: boolean
   followState: FollowState
+  todoItems?: TodoItem[]
+  sessionId?: string
+  pendingReveal?: ChatUiState['pendingReveal']
+  pendingChangeListReveal?: ChatUiState['pendingChangeListReveal']
+  pendingSourceReveal?: ChatUiState['pendingSourceReveal']
+  diffContents?: ChatUiState['diffContents']
+  lastRevertResult?: ChatUiState['lastRevertResult']
+  pendingInteractions?: PendingInteraction[]
 }
 
 export function MessageList({
@@ -30,6 +48,14 @@ export function MessageList({
   readonly,
   streaming = false,
   followState,
+  todoItems,
+  sessionId,
+  pendingReveal,
+  pendingChangeListReveal,
+  pendingSourceReveal,
+  diffContents,
+  lastRevertResult,
+  pendingInteractions,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevStreaming = useRef(streaming)
@@ -84,6 +110,40 @@ export function MessageList({
     keepBottomIfFollowing()
   }, [messages, followState, streaming])
 
+  // Scroll reveal: scroll to a target message when Host requests it.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (pendingReveal) {
+      const target = pendingReveal.messageId
+        ? el.querySelector(`[data-message-id="${CSS.escape(pendingReveal.messageId)}"]`)
+        : null
+      if (target) {
+        (target as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+      clearPendingReveal()
+    }
+    if (pendingChangeListReveal) {
+      const selector = pendingChangeListReveal.messageId
+        ? `[data-message-id="${CSS.escape(pendingChangeListReveal.messageId)}"]`
+        : `[data-source-message-id="${CSS.escape(pendingChangeListReveal.sourceMessageId)}"]`
+      const target = el.querySelector(selector)
+      if (target) {
+        (target as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+      clearPendingChangeListReveal()
+    }
+    if (pendingSourceReveal) {
+      const target = el.querySelector(
+        `[data-message-id="${CSS.escape(pendingSourceReveal.sourceMessageId)}"]`,
+      )
+      if (target) {
+        (target as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+      clearPendingSourceReveal()
+    }
+  }, [pendingReveal, pendingChangeListReveal, pendingSourceReveal])
+
   if (loading) {
     return (
       <div
@@ -114,43 +174,62 @@ export function MessageList({
   }
 
   return (
-    <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+    <div className="dsh-msg-area">
       <div
         ref={scrollRef}
         data-testid="messages"
         onScroll={() => syncFollowFromScroll(false)}
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '12px 16px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-          minHeight: 0,
-        }}
+        className="dsh-msg-scroll"
       >
-        {messages.map(msg => (
+        {messages.filter(shouldRenderMessage).map(msg => (
           <MessageBubble
             key={msg.id}
             msg={msg}
             bridge={bridge}
             readonly={readonly === true}
             streamingGlobal={streaming}
+            diffContents={diffContents}
+            lastRevertResult={lastRevertResult}
           />
         ))}
+        {todoItems && todoItems.length > 0 ? (
+          <TodoCard items={todoItems} sessionId={sessionId ?? ''} />
+        ) : null}
+        {pendingInteractions && pendingInteractions.length > 0 ? (
+          pendingInteractions.map(interaction => (
+            interaction.type === 'approval' ? (
+              <ApprovalCard
+                key={interaction.id}
+                id={interaction.id}
+                toolName={interaction.toolName ?? ''}
+                reason={interaction.reason}
+                onResolve={(id, outcome) => {
+                  bridge.emitIntent({ type: 'interaction/approve', id, outcome })
+                }}
+              />
+            ) : (
+              <QuestionCard
+                key={interaction.id}
+                id={interaction.id}
+                sessionId={interaction.sessionId}
+                questions={interaction.questions ?? []}
+                onAnswer={(id, answer) => {
+                  bridge.emitIntent({ type: 'interaction/answer', id, answer })
+                }}
+                onDismiss={(id, error) => {
+                  bridge.emitIntent({ type: 'interaction/dismiss', id, error })
+                }}
+              />
+            )
+          ))
+        ) : null}
       </div>
       {followState === 'off' ? (
         <button
           type="button"
           data-testid="btn-follow-resume"
-          className="dsh-ghost-btn"
+          className="dsh-ghost-btn dsh-scroll-resume"
           onClick={resumeFollow}
-          style={{
-            position: 'absolute',
-            right: 16,
-            bottom: 12,
-            zIndex: 2,
-          }}
         >
           回到底部
         </button>
@@ -159,16 +238,34 @@ export function MessageList({
   )
 }
 
+/**
+ * Whether a message contributes visible content.
+ * An assistant step that only reasoned and then called tools logs a message bar with no
+ * text; rendering it would leave an empty bubble between its tool rows. A bar with
+ * reasoning keeps its collapsible thinking block, and an incomplete bar keeps its marker.
+ * @param msg - projected message row.
+ * @returns true when the row has something to show.
+ */
+function shouldRenderMessage(msg: UiMessage): boolean {
+  if (msg.role !== 'assistant' || (msg.kind !== undefined && msg.kind !== 'text')) return true
+  if (msg.text !== '' || msg.incomplete === true) return true
+  return msg.reasoning !== undefined && msg.reasoning !== ''
+}
+
 function MessageBubble({
   msg,
   bridge,
   readonly,
   streamingGlobal,
+  diffContents,
+  lastRevertResult,
 }: {
   msg: UiMessage
   bridge: MessageBridge
   readonly: boolean
   streamingGlobal: boolean
+  diffContents?: ChatUiState['diffContents']
+  lastRevertResult?: ChatUiState['lastRevertResult']
 }) {
   if (msg.kind === 'subagent') {
     return <SubagentCard msg={msg} bridge={bridge} />
@@ -177,7 +274,7 @@ function MessageBubble({
     return <ActivityRow msg={msg} bridge={bridge} />
   }
   if (msg.kind === 'change-list' || msg.changeList) {
-    return <ChangeListBubble msg={msg} bridge={bridge} />
+    return <ChangeListBubble msg={msg} bridge={bridge} diffContents={diffContents} lastRevertResult={lastRevertResult} />
   }
   if (msg.kind === 'compaction' || msg.compaction) {
     return <CompactionMarker msg={msg} />
@@ -222,32 +319,15 @@ function MessageBubble({
       data-incomplete={msg.incomplete === true ? 'true' : undefined}
       {...typeof msg.turn === 'number' ? { 'data-turn': String(msg.turn) } : {}}
       className={`dsh-msg ${isUser ? 'dsh-msg-user' : 'dsh-msg-assistant'}`}
-      style={{
-        alignSelf: isUser ? 'flex-end' : 'flex-start',
-        maxWidth: '88%',
-        padding: '8px 10px',
-        borderRadius: 'var(--dsh-radius-md)',
-        background: isUser ? 'var(--dsh-bubble-user)' : 'var(--dsh-bubble-assistant)',
-        border: '1px solid transparent',
-        wordBreak: 'break-word',
-      }}
     >
       {!isUser && msg.reasoning ? (
         <details
           data-testid="reasoning-block"
-          style={{
-            marginBottom: 8,
-            padding: '8px 12px',
-            background: 'var(--dsh-reasoning-bg, rgba(128,128,128,0.08))',
-            borderRadius: 'var(--dsh-radius-sm, 4px)',
-            fontSize: '0.9em',
-            color: 'var(--dsh-muted)',
-          }}
         >
-          <summary style={{ cursor: 'pointer', userSelect: 'none' }}>
+          <summary>
             思考过程{msg.streaming ? '…' : ''}
           </summary>
-          <pre style={{ whiteSpace: 'pre-wrap', margin: '8px 0 0', fontFamily: 'inherit' }}>
+          <pre>
             {msg.reasoning}
           </pre>
         </details>
@@ -257,12 +337,12 @@ function MessageBubble({
       ) : settled ? (
         <SettledMarkdown text={msg.text} bridge={bridge} />
       ) : (
-        <div style={{ whiteSpace: 'pre-wrap' }}>
+        <div className="dsh-pre-wrap">
           {msg.text || '…'}
         </div>
       )}
       {msg.incomplete === true ? (
-        <div data-testid="msg-incomplete" className="dsh-muted" style={{ marginTop: 6, fontSize: '0.85em' }}>
+        <div data-testid="msg-incomplete" className="dsh-muted">
           已停止 / 未完成
         </div>
       ) : null}
@@ -295,13 +375,16 @@ function MessageActions({
   const isAssistant = msg.role === 'assistant'
   const showCopy = isAssistant && Boolean(msg.text)
   const canMutate = !readonly && !streamingGlobal
+  // A step that only reasoned has no body to copy, retry, or branch from; its recovery
+  // retry would be the only useful action, so only an incomplete turn keeps one.
+  const bodyless = isAssistant && msg.text === '' && msg.incomplete !== true
 
   // Incomplete assistant: keep retry for cancel recovery (AC-23 / AC-34a).
   const showRetryIncomplete = canMutate && isAssistant && msg.incomplete === true
   // Settled complete turns: retry / edit-resend (legacy thin HTML parity).
-  const showRetrySettled = canMutate && isAssistant && msg.incomplete !== true
+  const showRetrySettled = canMutate && isAssistant && !bodyless && msg.incomplete !== true
   const showEdit = canMutate && isUser && msg.incomplete !== true
-  const showBranch = canMutate && typeof msg.turn === 'number' && msg.incomplete !== true
+  const showBranch = canMutate && typeof msg.turn === 'number' && !bodyless && msg.incomplete !== true
 
   if (!showCopy && !showRetryIncomplete && !showRetrySettled && !showEdit && !showBranch && !editing) {
     return null
@@ -310,25 +393,15 @@ function MessageActions({
   if (editing) {
     return (
       <div
-        className="dsh-msg-actions"
+        className="dsh-msg-actions dsh-flex-col"
         data-testid="edit-resend-form"
-        style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}
       >
         <textarea
           data-testid="edit-resend-input"
           value={draft}
           onChange={event => setDraft(event.target.value)}
           rows={3}
-          style={{
-            width: '100%',
-            font: 'inherit',
-            padding: 8,
-            borderRadius: 'var(--dsh-radius-sm)',
-            border: '1px solid var(--dsh-input-border)',
-            background: 'var(--dsh-input-bg)',
-            color: 'var(--dsh-input-fg)',
-            resize: 'vertical',
-          }}
+          className="dsh-edit-input"
         />
         <div style={{ display: 'flex', gap: 8 }}>
           <button
@@ -365,7 +438,7 @@ function MessageActions({
   }
 
   return (
-    <div className="dsh-msg-actions" style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+    <div className="dsh-msg-actions">
       {showCopy ? (
         <button
           type="button"
@@ -446,6 +519,47 @@ function SettledMarkdown({ text, bridge }: { text: string; bridge: MessageBridge
     }
   }, [html, bridge])
 
+  // Mermaid rendering: find code blocks with data-mermaid="true" and render SVG.
+  useEffect(() => {
+    const root = ref.current
+    if (!root) return
+    const mermaidBlocks = root.querySelectorAll('[data-mermaid="true"]')
+    if (mermaidBlocks.length === 0) return
+
+    let cancelled = false
+    let counter = 0
+
+    void (async () => {
+      try {
+        const mermaid = (await import('mermaid')).default
+        mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' })
+
+        for (const block of mermaidBlocks) {
+          if (cancelled) break
+          const pre = block.querySelector('pre')
+          const source = pre?.textContent ?? block.textContent ?? ''
+          if (!source.trim()) continue
+          try {
+            const id = `mermaid-${counter++}`
+            const { svg } = await mermaid.render(id, source)
+            if (!cancelled) {
+              const container = document.createElement('div')
+              container.className = 'dsh-mermaid-rendered'
+              container.innerHTML = svg
+              block.replaceWith(container)
+            }
+          } catch {
+            // Render failed — keep original code block.
+          }
+        }
+      } catch {
+        // mermaid import failed — keep original code blocks.
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, [html])
+
   return (
     <div
       ref={ref}
@@ -491,7 +605,10 @@ function ActivityRow({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge })
   const id = activity?.id ?? msg.id
   const expanded = activity?.expanded === true
   const status = activity?.status ?? 'running'
-  const summary = activity?.summary ?? activity?.toolName ?? msg.text ?? 'activity'
+  const toolName = activity?.toolName
+  const summary = activity?.summary ?? toolName ?? msg.text ?? 'activity'
+  const invocation = activity?.invocation
+  const resultPreview = activity?.resultPreview
   return (
     <article
       data-testid="activity-row"
@@ -501,20 +618,11 @@ function ActivityRow({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge })
       data-status={status}
       data-expanded={expanded ? 'true' : 'false'}
       className="dsh-activity"
-      style={{
-        alignSelf: 'stretch',
-        padding: '6px 8px',
-        borderRadius: 'var(--dsh-radius-sm)',
-        background: 'transparent',
-        border: '1px solid var(--dsh-border)',
-        opacity: 0.9,
-        fontSize: '0.9em',
-      }}
     >
       <button
         type="button"
         data-testid="activity-toggle"
-        className="dsh-link-btn"
+        className="dsh-activity-toggle"
         aria-expanded={expanded}
         onClick={() => {
           toggleActivityExpanded(id)
@@ -524,19 +632,27 @@ function ActivityRow({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge })
             expanded: !expanded,
           })
         }}
-        style={{ width: '100%', textAlign: 'left' }}
       >
-        {expanded ? '▼' : '▶'}
-        {' '}
-        {summary}
-        {' · '}
-        {status}
+        <span className="dsh-activity-caret" aria-hidden="true">{expanded ? '▼' : '▶'}</span>
+        {toolName === undefined ? null : <span className="dsh-activity-tool">{toolName}</span>}
+        <span className="dsh-activity-summary">{summary}</span>
+        <span className="dsh-activity-status">{status}</span>
       </button>
       {expanded ? (
-        <div data-testid="activity-body" style={{ marginTop: 6, color: 'var(--dsh-muted)' }}>
-          {[activity?.toolName, activity?.callId ? `callId=${activity.callId}` : '', `status=${status}`]
-            .filter(Boolean)
-            .join(' · ')}
+        <div data-testid="activity-body" className="dsh-activity-detail">
+          {invocation === undefined ? null : (
+            <div data-testid="activity-invocation" className="dsh-activity-invocation">
+              {invocation}
+            </div>
+          )}
+          {resultPreview === undefined ? null : (
+            <div data-testid="activity-result" className="dsh-activity-result">
+              {resultPreview}
+            </div>
+          )}
+          {invocation === undefined && resultPreview === undefined
+            ? <div className="dsh-text-muted">{`status=${status}`}</div>
+            : null}
         </div>
       ) : null}
     </article>
@@ -559,15 +675,8 @@ function SubagentCard({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge }
       data-message-id={msg.id}
       data-child-session-id={childSessionId ?? ''}
       data-status={status}
-      className="dsh-msg dsh-msg-subagent"
-      style={{
-        alignSelf: 'stretch',
-        padding: '8px 10px',
-        borderRadius: 'var(--dsh-radius-sm)',
-        border: '1px solid var(--dsh-border)',
-        background: 'var(--dsh-bubble-notice, var(--dsh-bg))',
-        opacity: deleted ? 0.6 : 1,
-      }}
+      className="dsh-card dsh-subagent-card"
+      data-deleted={deleted ? 'true' : undefined}
     >
       <button
         type="button"
@@ -578,96 +687,160 @@ function SubagentCard({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge }
           if (!clickable) return
           bridge.emitIntent({ type: 'nav/open-subagent', childSessionId: childSessionId as string })
         }}
-        style={{
-          display: 'block',
-          width: '100%',
-          textAlign: 'left',
-          border: 'none',
-          background: 'transparent',
-          color: 'inherit',
-          font: 'inherit',
-          padding: 0,
-          cursor: clickable ? 'pointer' : 'default',
-        }}
+        className="dsh-card-head dsh-subagent-head"
+        data-clickable={clickable ? 'true' : 'false'}
       >
-        <span style={{ marginRight: 6 }}>
+        <span className="dsh-subagent-marker" data-status={status}>
           {status === 'running' ? '●' : status === 'deleted' ? '✕' : '✓'}
         </span>
         {msg.text || fallbackLabel}
         {clickable ? (
-          <span className="dsh-muted" style={{ marginLeft: 8 }}>进入 →</span>
+          <span className="dsh-muted dsh-subagent-enter">进入 →</span>
         ) : null}
       </button>
     </article>
   )
 }
 
-function ChangeListBubble({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge }) {
+function ChangeListBubble({
+  msg,
+  bridge,
+  diffContents,
+  lastRevertResult,
+}: {
+  msg: UiMessage
+  bridge: MessageBridge
+  diffContents?: ChatUiState['diffContents']
+  lastRevertResult?: ChatUiState['lastRevertResult']
+}) {
+  const [expandedDiffs, setExpandedDiffs] = useState<Set<string>>(new Set())
   const payload = msg.changeList
+
+  const toggleDiff = (changeId: string): void => {
+    setExpandedDiffs((prev) => {
+      const next = new Set(prev)
+      if (next.has(changeId)) next.delete(changeId)
+      else next.add(changeId)
+      return next
+    })
+  }
+
+  const revertResults = lastRevertResult?.results
+  const allOk = revertResults && revertResults.length > 0 && revertResults.every(r => r.ok)
+  const someFailed = revertResults && revertResults.length > 0 && revertResults.some(r => !r.ok)
+
   return (
     <article
       data-testid="change-list"
       data-message-id={msg.id}
       data-role={msg.role}
       data-kind="change-list"
-      className="dsh-change-list"
-      style={{
-        alignSelf: 'stretch',
-        padding: 8,
-        borderRadius: 'var(--dsh-radius-sm)',
-        border: '1px solid var(--dsh-border)',
-      }}
+      data-source-message-id={payload?.sourceMessageId ?? ''}
+      className="dsh-card dsh-change-list"
     >
-      <div style={{ marginBottom: 6, fontWeight: 600 }}>{msg.text || '文件变更'}</div>
+      <div className="dsh-card-head">{msg.text || '文件变更'}</div>
       {payload?.emptyNotice ? (
-        <div data-empty="true" className="dsh-muted">本回合没有可展示的文件变更</div>
+        <div data-empty="true" className="dsh-muted dsh-card-body">本回合没有可展示的文件变更</div>
       ) : (
-        (payload?.changes ?? []).map(change => (
-          <div key={change.changeId} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              data-testid="change-list-item"
-              data-change-id={change.changeId}
-              data-path={change.path}
-              className="dsh-link-btn"
-              onClick={() => bridge.emitIntent({
-                type: 'change/open',
-                changeId: change.changeId,
-                path: change.path,
-              })}
-            >
-              {change.path}
-              {' · '}
-              {change.kind}
-              {` · +${change.additions}/-${change.deletions}`}
-            </button>
-            <button
-              type="button"
-              data-testid="change-open-native"
-              className="dsh-ghost-btn"
-              onClick={() => bridge.emitIntent({
-                type: 'change/open-native-diff',
-                changeId: change.changeId,
-              })}
-            >
-              审阅
-            </button>
-            {change.status !== 'reverted' ? (
-              <button
-                type="button"
-                data-testid="change-revert"
-                className="dsh-ghost-btn"
-                onClick={() => bridge.emitIntent({
-                  type: 'change/revert',
-                  changeId: change.changeId,
-                })}
-              >
-                撤销
-              </button>
-            ) : null}
-          </div>
-        ))
+        (payload?.changes ?? []).map((change) => {
+          const diffData = diffContents?.get(change.changeId)
+          const diffExpanded = expandedDiffs.has(change.changeId)
+          return (
+            <div key={change.changeId} className="dsh-change-row">
+              <div className="dsh-change-item">
+                <button
+                  type="button"
+                  data-testid="change-list-item"
+                  data-change-id={change.changeId}
+                  data-path={change.path}
+                  className="dsh-link-btn"
+                  onClick={() => bridge.emitIntent({
+                    type: 'change/open',
+                    changeId: change.changeId,
+                    path: change.path,
+                  })}
+                >
+                  {change.path}
+                  {' · '}
+                  {change.kind}
+                  {` · +${change.additions}/-${change.deletions}`}
+                </button>
+                <button
+                  type="button"
+                  data-testid="change-open-native"
+                  className="dsh-ghost-btn"
+                  onClick={() => bridge.emitIntent({
+                    type: 'change/open-native-diff',
+                    changeId: change.changeId,
+                  })}
+                >
+                  审阅
+                </button>
+                <button
+                  type="button"
+                  data-testid="change-view-diff"
+                  className="dsh-ghost-btn"
+                  onClick={() => {
+                    toggleDiff(change.changeId)
+                    if (!diffData) {
+                      bridge.emitIntent({ type: 'change/get-diff', changeId: change.changeId })
+                    }
+                  }}
+                >
+                  {diffExpanded ? '收起 diff' : '查看 diff'}
+                </button>
+                {change.status !== 'reverted' ? (
+                  <button
+                    type="button"
+                    data-testid="change-revert"
+                    className="dsh-ghost-btn"
+                    onClick={() => bridge.emitIntent({
+                      type: 'change/revert',
+                      changeId: change.changeId,
+                    })}
+                  >
+                    撤销
+                  </button>
+                ) : null}
+              </div>
+              {diffExpanded ? (
+                <InlineDiff
+                  changeId={change.changeId}
+                  available={diffData?.available ?? false}
+                  oldText={diffData?.oldText}
+                  newText={diffData?.newText}
+                  path={change.path}
+                  reason={diffData?.reason}
+                  onRequestDiff={id => bridge.emitIntent({ type: 'change/get-diff', changeId: id })}
+                  onOpenNativeDiff={id => bridge.emitIntent({ type: 'change/open-native-diff', changeId: id })}
+                />
+              ) : null}
+            </div>
+          )
+        })
       )}
+      {allOk ? (
+        <div
+          data-testid="revert-banner"
+          className="dsh-revert-banner"
+          data-outcome="ok"
+        >
+          {`撤销完成：${revertResults!.length} 个文件已还原`}
+        </div>
+      ) : someFailed ? (
+        <div
+          data-testid="revert-banner"
+          className="dsh-revert-banner"
+          data-outcome="failed"
+        >
+          <div>部分撤销失败</div>
+          {revertResults!.filter(r => !r.ok).map(r => (
+            <div key={r.changeId} className="dsh-revert-detail">
+              {`${r.changeId}：${r.reason ?? '未知错误'}`}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </article>
   )
 }
@@ -688,18 +861,9 @@ function CompactionMarker({ msg }: { msg: UiMessage }) {
       data-message-id={msg.id}
       data-status={status}
       data-trigger={trigger}
-      className="dsh-msg dsh-msg-compaction"
-      style={{
-        alignSelf: 'stretch',
-        padding: '4px 10px',
-        borderRadius: 'var(--dsh-radius-sm)',
-        background: 'var(--dsh-bubble-notice, rgba(128,128,128,0.06))',
-        color: 'var(--dsh-muted)',
-        fontSize: '0.85em',
-        textAlign: 'center',
-      }}
+      className="dsh-compaction"
     >
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+      <span className="dsh-compaction-label">
         <span data-testid="compaction-trigger">
           {trigger === 'manual' ? '手动压缩' : '自动压缩'}
         </span>
@@ -709,19 +873,19 @@ function CompactionMarker({ msg }: { msg: UiMessage }) {
         {shadowedTokenCount > 0 ? (
           <span data-testid="compaction-shadowed">{`释放 ${shadowedTokenCount} tokens`}</span>
         ) : null}
-      </div>
+      </span>
       {status === 'failed' ? (
         <div
           data-testid="compaction-error"
-          style={{ marginTop: 4, color: 'var(--dsh-danger, #f44)' }}
+          className="dsh-compaction-error"
         >
           {compaction?.error ?? '压缩失败'}
         </div>
       ) : null}
       {summary ? (
-        <details data-testid="compaction-summary" style={{ marginTop: 4, textAlign: 'left' }}>
-          <summary style={{ cursor: 'pointer', userSelect: 'none' }}>查看摘要</summary>
-          <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0', fontFamily: 'inherit' }}>
+        <details data-testid="compaction-summary" className="dsh-compaction-summary">
+          <summary>查看摘要</summary>
+          <pre>
             {summary}
           </pre>
         </details>
@@ -743,12 +907,6 @@ const WORKFLOW_OUTCOME_SYMBOL: Record<'pending' | 'completed' | 'failed' | 'canc
 }
 
 /** Finished members read as history: muted when completed, faded when cancelled, danger when failed. */
-function workflowMemberStyle(outcome?: 'completed' | 'failed' | 'cancelled'): CSSProperties {
-  if (outcome === 'failed') return { color: 'var(--dsh-danger, #f44)' }
-  if (outcome === 'cancelled') return { opacity: 0.55 }
-  if (outcome === 'completed') return { color: 'var(--dsh-muted)' }
-  return {}
-}
 
 /**
  * Workflow run card: run name, run status badge, member rows, and stop reason. Members are
@@ -773,17 +931,9 @@ function WorkflowCard({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge }
       data-message-id={msg.id}
       data-status={status}
       data-stop-reason={stopReason ?? ''}
-      className="dsh-msg dsh-msg-workflow"
-      style={{
-        alignSelf: 'stretch',
-        padding: '8px 10px',
-        borderRadius: 'var(--dsh-radius-sm)',
-        border: '1px solid var(--dsh-border)',
-        background: 'var(--dsh-bubble-notice, rgba(128,128,128,0.06))',
-        fontSize: '0.9em',
-      }}
+      className="dsh-card dsh-workflow-card"
     >
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="dsh-card-head">
         <span data-testid="workflow-title">{`⚙ ${workflow?.name || '工作流'}`}</span>
         <span data-testid="workflow-status" className="dsh-muted">{statusCopy}</span>
         <span data-testid="workflow-progress" className="dsh-muted">
@@ -791,11 +941,11 @@ function WorkflowCard({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge }
         </span>
       </div>
       {members.length === 0 ? (
-        <div data-testid="workflow-empty" className="dsh-muted" style={{ marginTop: 4 }}>
+        <div data-testid="workflow-empty" className="dsh-muted dsh-card-body">
           暂无成员
         </div>
       ) : (
-        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div className="dsh-card-body dsh-workflow-members">
           {members.map(member => (
             <button
               key={`${member.seq}-${member.childId}`}
@@ -803,8 +953,7 @@ function WorkflowCard({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge }
               data-testid="workflow-member"
               data-child-session-id={member.childId}
               data-outcome={member.outcome ?? 'pending'}
-              className="dsh-link-btn"
-              style={{ width: '100%', ...workflowMemberStyle(member.outcome) }}
+              className="dsh-change-item dsh-workflow-member"
               onClick={() => bridge.emitIntent({
                 type: 'nav/open-subagent',
                 childSessionId: member.childId,
@@ -819,7 +968,7 @@ function WorkflowCard({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge }
       {stopReason === 'error' ? (
         <div
           data-testid="workflow-error"
-          style={{ marginTop: 4, color: 'var(--dsh-danger, #f44)' }}
+          className="dsh-workflow-error"
         >
           {workflow?.error ?? statusCopy}
         </div>

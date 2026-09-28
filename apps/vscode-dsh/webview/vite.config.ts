@@ -11,7 +11,7 @@ export default defineConfig({
   base: './',
   resolve: {
     alias: {
-      '@dsh/safe-markdown': resolve(webviewRoot, '../src/markdown/safe-markdown.ts'),
+      '@dsh/safe-markdown': resolve(webviewRoot, '../src/markdown/rich-markdown.ts'),
     },
   },
   server: {
@@ -23,10 +23,19 @@ export default defineConfig({
     outDir: resolve(webviewRoot, 'dist'),
     emptyOutDir: true,
     sourcemap: false,
+    // Every surface loads its own document from this dist directory, and each Host
+    // document links one stylesheet. Splitting CSS per entry would hoist the shared
+    // design system into a sheet neither entry's document names.
+    cssCodeSplit: false,
     rollupOptions: {
-      input: resolve(webviewRoot, 'index.html'),
+      input: {
+        // One entry per shipped surface: the Conversation Panel SPA and the History
+        // sidebar view load their own document from the same dist directory.
+        index: resolve(webviewRoot, 'index.html'),
+        sidebar: resolve(webviewRoot, 'sidebar.html'),
+      },
       output: {
-        entryFileNames: 'assets/index.js',
+        entryFileNames: 'assets/[name].js',
         chunkFileNames: 'assets/[name].js',
         assetFileNames: 'assets/[name][extname]',
       },

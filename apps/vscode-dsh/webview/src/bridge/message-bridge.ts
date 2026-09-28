@@ -22,6 +22,25 @@ export type ChromeIntent =
     reasoningEffort?: string
   }
   | { type: 'action/compact' }
+  | {
+    /** Ask the Host to rank workspace paths for one composer `@` token (feature: at-completion). */
+    type: 'composer/at-query'
+    requestId: string
+    query: string
+  }
+  | {
+    /** Ask the Host for the `/` candidates matching one composer token (feature: slash-completion). */
+    type: 'composer/slash-query'
+    requestId: string
+    query: string
+  }
+  | {
+    /** Files dropped on the composer (feature: at-completion). */
+    type: 'composer/drop-paths'
+    paths: string[]
+    /** Composer text the drop landed on; the Host appends the mentions to it. */
+    text: string
+  }
   | { type: 'settings/open' }
   | { type: 'settings/update'; ns: string; patch: Record<string, unknown>; expectedRevision?: number }
   | { type: 'ui/tab-select'; tabId: string }
@@ -55,10 +74,21 @@ export type ChromeIntent =
   | { type: 'nav/open-subagent'; childSessionId: string }
   | { type: 'nav/back' }
   | { type: 'action/pin-subagent'; childSessionId: string }
+  | { type: 'action/new-conversation' }
+  | { type: 'action/restore-more'; all?: boolean }
+  | { type: 'action/retry-connect' }
+  | { type: 'action/open-settings' }
+  | { type: 'change/reveal-source'; changeId: string }
+  | { type: 'change/mark-reviewed'; changeIds: string[] }
+  | { type: 'change/revert-many'; changeIds: string[] }
+  | { type: 'scroll/reveal'; callId?: string }
+  | { type: 'interaction/approve'; id: string; outcome: 'allowed-once' | 'rejected' | 'cancelled' }
+  | { type: 'interaction/answer'; id: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }
+  | { type: 'interaction/dismiss'; id: string; error: string }
 
-export interface MessageBridge {
+export interface MessageBridge<Intent = ChromeIntent> {
   applyFrame(frame: unknown): void
-  emitIntent(intent: ChromeIntent): void
+  emitIntent(intent: Intent): void
   dispose(): void
 }
 
@@ -87,11 +117,14 @@ function isProbeQuery(
 
 /**
  * Create a MessageBridge bound to vscode postMessage (or a test double).
+ * @param opts - optional transport overrides and the frame sink.
  */
-export function createMessageBridge(opts?: {
+export function createMessageBridge<Intent = ChromeIntent>(opts?: {
   postToHost?: (msg: unknown) => void
   onHostMessage?: (listener: (msg: unknown) => void) => () => void
-}): MessageBridge {
+  /** Frame sink; defaults to the Conversation store. */
+  frameSink?: (frame: unknown) => void
+}): MessageBridge<Intent> {
   const api = typeof window !== 'undefined' && typeof window.acquireVsCodeApi === 'function'
     ? window.acquireVsCodeApi()
     : undefined
@@ -99,6 +132,7 @@ export function createMessageBridge(opts?: {
     ?? ((msg: unknown) => {
       api?.postMessage(msg)
     })
+  const applyToStore = opts?.frameSink ?? applyHostFrame
 
   // Answer a host-side render-state query directly from the mounted probes. The
   // query frame carries no presentation state, so it never reaches the store.
@@ -115,7 +149,7 @@ export function createMessageBridge(opts?: {
       respondRenderState()
       return
     }
-    applyHostFrame(frame)
+    applyToStore(frame)
   }
 
   let stopListen: (() => void) | undefined

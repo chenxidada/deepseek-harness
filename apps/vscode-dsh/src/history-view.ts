@@ -1,5 +1,5 @@
 /**
- * Workspace history TreeView over ExtensionIndex (AC-28/29/63/62).
+ * Workspace history list model for the sidebar view (AC-28/29/63/62).
  * Independent of Host connection for listing; open still requires hydrate.
  * @module @deepseek-ai/dsh-vscode-dsh/history-view
  */
@@ -10,120 +10,36 @@ import {
   type HistoryListRow,
 } from './extension-index.ts'
 
-/** Minimal TreeItem-like node for the history list. */
-export interface HistoryTreeItem {
+/** One history row as the sidebar renders it. */
+export interface HistorySidebarRow {
   sessionId: string
-  label: string
-  description: string
-  continueHint: string
-}
-
-/** Duck-typed TreeItem command payload. */
-interface TreeItemCommandLike {
-  command: string
   title: string
-  arguments?: unknown[]
-}
-
-/** Duck-typed TreeItem constructor surface. */
-interface TreeItemLike {
-  label: string
-  description?: string
-  contextValue?: string
-  collapsibleState?: number
-  command?: TreeItemCommandLike
-}
-
-/** Duck-typed vscode TreeView APIs used by the history list. */
-export interface HistoryViewVsCode {
-  TreeItem: new (label: string, collapsibleState?: number) => TreeItemLike
-  TreeItemCollapsibleState: { None: number }
-  window: {
-    createTreeView(
-      viewId: string,
-      options: {
-        treeDataProvider: {
-          onDidChangeTreeData?: unknown
-          getChildren(element?: unknown): HistoryTreeItem[] | Promise<HistoryTreeItem[]>
-          getTreeItem(element: HistoryTreeItem): TreeItemLike
-        }
-      },
-    ): { dispose(): void }
-  }
-  EventEmitter: new <T>() => {
-    event: unknown
-    fire(data?: T): void
-    dispose(): void
-  }
+  /** Recorded modification time in local time, minute precision. */
+  when: string
+  /** First user text when the index recorded one, '' otherwise. */
+  preview: string
+  /** Continue affordance hint; '' when the row offers no Continue. */
+  continueHint: string
+  /** Parent session title, present only for forked sessions. */
+  parentTitle?: string
 }
 
 /**
- * Build TreeItem-like rows from history index rows.
+ * Project index rows into sidebar rows.
  * @param rows - history list from {@link ExtensionIndex.listHistorySessions}.
+ * @returns one row per session, list order preserved.
  */
-export function historyTreeItems(rows: readonly HistoryListRow[]): HistoryTreeItem[] {
+export function historySidebarRows(rows: readonly HistoryListRow[]): HistorySidebarRow[] {
   return rows.map(row => ({
     sessionId: row.sessionId,
-    label: row.title,
-    description: formatHistoryDescription(row),
+    title: row.title,
+    when: formatHistoryWhen(row.mtime),
+    preview: row.firstUserPreview ?? '',
     continueHint: row.continueHint,
+    ...row.parentTitle === undefined || row.parentTitle === ''
+      ? {}
+      : { parentTitle: row.parentTitle },
   }))
-}
-
-/**
- * Create a TreeDataProvider + change emitter for the History view.
- * @param vscode - duck-typed vscode module with TreeView APIs.
- * @param getRows - returns live history rows from the index.
- * @returns handle with dispose + refresh.
- */
-export function createHistoryView(
-  vscode: HistoryViewVsCode,
-  getRows: () => readonly HistoryListRow[],
-): {
-  dispose(): void
-  refresh(): void
-} {
-  const change = new vscode.EventEmitter<void | HistoryTreeItem | undefined>()
-  const provider = {
-    onDidChangeTreeData: change.event,
-    getChildren(): HistoryTreeItem[] {
-      return historyTreeItems(getRows())
-    },
-    getTreeItem(element: HistoryTreeItem): TreeItemLike {
-      const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None)
-      item.description = element.description
-      item.contextValue = 'dshHistorySession'
-      item.command = {
-        command: 'dsh.openHistory',
-        title: 'Open History Replay',
-        arguments: [element.sessionId],
-      }
-      return item
-    },
-  }
-  const view = vscode.window.createTreeView('dsh.history', { treeDataProvider: provider })
-  return {
-    refresh() {
-      change.fire(undefined)
-    },
-    dispose() {
-      change.dispose()
-      view.dispose()
-    },
-  }
-}
-
-/**
- * Whether the injected vscode surface exposes TreeView APIs for history.
- * @param vscode - candidate module.
- */
-export function canRegisterHistoryView(vscode: unknown): vscode is HistoryViewVsCode {
-  if (typeof vscode !== 'object' || vscode === null) return false
-  const candidate = vscode as Partial<HistoryViewVsCode>
-  return typeof candidate.TreeItem === 'function'
-    && typeof candidate.EventEmitter === 'function'
-    && typeof candidate.window?.createTreeView === 'function'
-    && candidate.TreeItemCollapsibleState !== undefined
 }
 
 /**
@@ -135,12 +51,50 @@ export function listHistoryFromIndex(index: ExtensionIndex): HistoryListRow[] {
 }
 
 /**
+ * Merge runtime-listed sessions into the workspace index's history rows (AC-28).
+ * An index row wins on a shared id: it carries this Extension's tombstones, fork
+ * lineage, and continue capability, which a runtime listing cannot know.
+ * @param indexRows - rows from {@link ExtensionIndex.listHistorySessions}.
+ * @param hostRows - rows the runtime listed for this workspace.
+ * @returns one row per session, newest recorded time first.
+ */
+export function mergeHistoryRows(
+  indexRows: readonly HistoryListRow[],
+  hostRows: readonly HistoryListRow[],
+): HistoryListRow[] {
+  const known = new Set(indexRows.map(row => row.sessionId))
+  return [...indexRows, ...hostRows.filter(row => !known.has(row.sessionId))]
+    .sort((left, right) => right.mtime - left.mtime)
+}
+
+/**
+ * Project one runtime-listed session into a History row.
+ * A listing reports creation time and, at best, a cached title, so the row has no
+ * continue capability and no first-user preview until the session is opened.
+ * @param row - runtime session row belonging to this workspace.
+ */
+export function hostSessionHistoryRow(row: {
+  sessionId: string
+  createdAt: number
+  title?: string
+}): HistoryListRow {
+  return {
+    sessionId: row.sessionId,
+    title: row.title ?? `Replay ${row.sessionId.slice(0, 8)}`,
+    mtime: row.createdAt,
+    continueCapability: 'unknown',
+    continueHint: '',
+  }
+}
+
+/**
  * Re-export AD-CU-8 list hint helper for tests.
  */
 export { continueCapabilityListHint }
 
-function formatHistoryDescription(row: HistoryListRow): string {
-  const when = new Date(row.mtime).toISOString().slice(0, 19).replace('T', ' ')
-  const hint = row.continueHint
-  return hint === '' ? when : `${when} · ${hint}`
+function formatHistoryWhen(mtime: number): string {
+  const at = new Date(mtime)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`
+    + ` ${pad(at.getHours())}:${pad(at.getMinutes())}`
 }

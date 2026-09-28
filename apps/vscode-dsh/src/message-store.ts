@@ -120,6 +120,8 @@ export interface MessagePatch {
   streaming?: boolean
   /** Activity status transition (running → done|failed|aborted). */
   activityStatus?: ActivityStatus
+  /** Attach the rendered result preview once `tool/result` arrives. */
+  activityResultPreview?: string
   /** Merge into a `kind:'compaction'` bubble's marker payload. */
   compaction?: Partial<CompactionMarker>
   /**
@@ -189,6 +191,9 @@ export class MessageStore {
     if (update.activityStatus !== undefined && next.activity !== undefined) {
       next.activity = { ...next.activity, status: update.activityStatus }
       next.text = activityLabel(next.activity)
+    }
+    if (update.activityResultPreview !== undefined && next.activity !== undefined) {
+      next.activity = { ...next.activity, resultPreview: update.activityResultPreview }
     }
     if (update.compaction !== undefined && next.compaction !== undefined) {
       next.compaction = { ...next.compaction, ...update.compaction }
@@ -353,6 +358,9 @@ function copyMessage(message: ChatMessage): ChatMessage {
 }
 
 function activityLabel(activity: ActivityItem): string {
-  const name = activity.summary ?? activity.toolName ?? 'tool'
-  return `${name} · ${activity.status}`
+  const summary = activity.summary ?? activity.toolName ?? 'tool'
+  const label = activity.toolName === undefined || activity.toolName === summary
+    ? summary
+    : `${activity.toolName} · ${summary}`
+  return `${label} · ${activity.status}`
 }

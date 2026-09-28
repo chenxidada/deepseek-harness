@@ -273,9 +273,10 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         await host.shutdown()
       })
 
-      it('CAP-TIMELINE-004 activate registers timeline + review Diff commands without mid-run write confirm', async () => {
+      it('CAP-TIMELINE-004 activate registers review Diff commands without a Timeline or Conversations view', async () => {
         const commands = new Map<string, (...args: unknown[]) => unknown>()
         const treeViews: string[] = []
+        const webviewViews: string[] = []
         activate(
           { subscriptions: [], extensionPath: dirOrCwd() },
           {
@@ -284,6 +285,10 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
               async showInformationMessage() { return undefined },
               createTreeView(viewId: string) {
                 treeViews.push(viewId)
+                return { dispose() {} }
+              },
+              registerWebviewViewProvider(viewId: string) {
+                webviewViews.push(viewId)
                 return { dispose() {} }
               },
             },
@@ -324,7 +329,13 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         expect(commands.has('dsh.reviewWorkspaceDiffs')).toBe(true)
         expect(commands.has('dsh.openTimelineDiff')).toBe(true)
         expect(commands.has('dsh.confirmWriteBeforeExecute')).toBe(false)
-        expect(treeViews).toContain('dsh.timeline')
+        // History is a WebviewView, so its own row typography and row menu are ours.
+        expect(webviewViews).toContain('dsh.history')
+        expect(webviewViews).not.toContain('dsh.timeline')
+        expect(webviewViews).not.toContain('dsh.conversations')
+        expect(treeViews).not.toContain('dsh.history')
+        expect(treeViews).not.toContain('dsh.timeline')
+        expect(treeViews).not.toContain('dsh.conversations')
       })
     })
 

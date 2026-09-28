@@ -3854,6 +3854,41 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         const sent = await commands.get('dsh.test.sendPrompt')!('still live')
         expect(sent).toMatchObject({ ok: true })
       })
+
+      it('CAP-SESSION-HOST-151 hide→show keeps the live Tab instead of re-restoring it read-only', async () => {
+        mockConnectedHost()
+        activateWith(makeVscode())
+        await commands.get('dsh.test.setCredentialPresence')!(true)
+
+        await commands.get('dsh.test.fireConversationVisibility')!(true)
+        await vi.waitFor(() => {
+          expect(getConversationSnapshot().tabs.some(t => t.mode === 'live')).toBe(true)
+        })
+        const live = getConversationSnapshot().tabs[0]!
+        expect(await commands.get('dsh.test.sendPrompt')!('live turn')).toMatchObject({ ok: true })
+
+        // The Tab is durable now, so a cold restore would find it and reopen it as replay.
+        const persisted = await commands.get('dsh.test.getIndex')!() as {
+          openTabSet: Array<{ sessionId: string; mode: string }>
+        }
+        expect(
+          persisted.openTabSet.some(r => r.sessionId === live.sessionId && r.mode === 'live'),
+        ).toBe(true)
+        mockConnectedHost({
+          readSessionLog: async sessionId =>
+            sessionId === live.sessionId ? userAssistantEvents('live-user', 'live-asst') : [],
+        })
+
+        // Another editor Tab takes focus, then the conversation is shown again.
+        await commands.get('dsh.test.fireConversationVisibility')!(false)
+        await commands.get('dsh.test.fireConversationVisibility')!(true)
+        await commands.get('dsh.test.triggerAutoReady')!()
+
+        const after = getConversationSnapshot().tabs
+        expect(after).toHaveLength(1)
+        expect(after[0]?.tabId).toBe(live.tabId)
+        expect(after[0]?.mode).toBe('live')
+      })
     })
 
     describe('phase-2 newConversationOrReuseEmpty (AD-CR-6)', () => {
@@ -3960,10 +3995,11 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
 
         releaseRestore()
 
-        // New epoch must get its own apply (second restore → empty → New), not stall on in-flight.
-        await vi.waitFor(() =>{  expect(restoreCalls.length).toBeGreaterThanOrEqual(2) })
+        // New epoch must get its own apply (here: the New surface), not stall on in-flight, and
+        // must not re-run the disk restore that a hide→show would reopen as read-only replay.
+        await vi.waitFor(() =>{  expect(news.length).toBeGreaterThanOrEqual(2) })
         expect(coord.readyAppliedForVisibilityEpoch).toBe(true)
-        expect(news.length).toBeGreaterThanOrEqual(2)
+        expect(restoreCalls).toHaveLength(1)
       })
     })
   })
@@ -4762,6 +4798,44 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       expect(lines.some(line => line.kind === 'describe')).toBe(true)
       expect(lines.some(line =>
         line.kind === 'update' && line.ns === 'fake-settings' && line.expectedRevision === 1)).toBe(true)
+
+      await host.shutdown()
+    })
+
+    it('CAP-SESSION-HOST-152 session/list round-trips the rows the runtime reports', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-session-list-e2e-'))
+      dirs.push(dir)
+      const listLog = join(dir, 'session-list.ndjson')
+      const host = new IdeSessionHost()
+      await expect(host.listSessions()).rejects.toThrow('IdeSessionHost is not connected')
+
+      await host.start({
+        cwd: dir,
+        dshHome: join(dir, '.dsh'),
+        bridgeSockPath: join(dir, 'bridge.sock'),
+        dshBin: fakeSdkRuntime,
+        initializeTimeoutMs: 5_000,
+        credentials: {
+          DEEPSEEK_API_KEY: 'keyless-session-list-no-call',
+          DSH_TELEMETRY_DISABLED: '1',
+          FAKE_SESSION_LIST_CWD: dir,
+          FAKE_SESSION_LIST_LOG: listLog,
+        },
+      })
+      await waitFor(() => host.bridgeConnected(), 3_000)
+
+      expect(await host.listSessions()).toEqual([
+        { sessionId: 'fake-listed-here', createdAt: 1_700_000_000_000, cwd: dir, title: 'Fake listed session' },
+        {
+          sessionId: 'fake-listed-elsewhere',
+          createdAt: 1_700_000_000_001,
+          cwd: '/dsh-other-workspace',
+          title: 'Elsewhere',
+        },
+      ])
+      // One bridge round-trip per call: the rows are not cached between listings.
+      await host.listSessions()
+      expect((await readFile(listLog, 'utf8')).trim().split('\n')).toHaveLength(2)
 
       await host.shutdown()
     })

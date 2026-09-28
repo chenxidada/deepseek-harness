@@ -41,7 +41,12 @@ export interface UiActivity {
   expanded: boolean
   toolName?: string
   callId?: string
+  /** Collapsed-row label: the model's own call description, or the exact input it named. */
   summary?: string
+  /** Exact command / pattern / path, shown in the expanded row when it adds detail. */
+  invocation?: string
+  /** Leading lines of the rendered result, attached once `tool/result` arrives. */
+  resultPreview?: string
   ordinal?: number
   turn?: number
 }
@@ -194,6 +199,62 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'completed'
 }
 
+/** One workspace path offered as an `@` completion candidate (feature: at-completion). */
+export interface UiAtCandidate {
+  /** Workspace-relative path with POSIX separators. */
+  path: string
+  /** Directories keep completion open; files finish the mention. */
+  kind: 'file' | 'directory'
+}
+
+/** Host reply to one `composer/at-query`, kept with its request id so a stale reply is ignorable. */
+export interface AtCompletionReply {
+  /** Request id of the `composer/at-query` this reply answers. */
+  requestId: string
+  /** Ranked candidates for that query, best first. */
+  candidates: UiAtCandidate[]
+}
+
+/** Which Host-side namespace a `/` candidate comes from (feature: slash-completion). */
+export type SlashCandidateGroup = 'command' | 'agent' | 'skill'
+
+/** One `/` completion candidate offered by the Host (feature: slash-completion). */
+export interface UiSlashCandidate {
+  /** Command name without the slash, agent preset id, or skill name. */
+  name: string
+  /** One-line description shown beside the name. */
+  description: string
+  /** Namespace the candidate is listed under. */
+  group: SlashCandidateGroup
+  /** Placeholder for the arguments a command takes, when it declares any. */
+  inputHint?: string
+}
+
+/** Host reply to one `composer/slash-query`, kept with its request id so a stale reply is ignorable. */
+export interface SlashCompletionReply {
+  /** Request id of the `composer/slash-query` this reply answers. */
+  requestId: string
+  /** Ranked candidates for that query, best first. */
+  candidates: UiSlashCandidate[]
+}
+
+/** One pending in-panel interaction pushed from Host (phase-5). */
+export interface PendingInteraction {
+  type: 'approval' | 'question'
+  id: string
+  sessionId: string
+  toolName?: string
+  reason?: string
+  questions?: Array<{
+    id: string
+    question: string
+    detail?: string
+    header?: string
+    options?: Array<{ label: string; description?: string }>
+    multiSelect?: boolean
+  }>
+}
+
 export interface ChatUiState {
   mode: PanelMode
   sessionId?: string
@@ -246,6 +307,22 @@ export interface ChatUiState {
   settingsState?: SettingsState
   /** After history open, auto-fire Continue once Host chrome is ready. */
   pendingContinueSessionId?: string
+  /** Pending scroll/reveal from Host. */
+  pendingReveal: { sessionId: string; messageId?: string; kind: string; label?: string } | null
+  /** Pending change-list reveal from Host. */
+  pendingChangeListReveal: { sessionId: string; sourceMessageId: string; messageId?: string } | null
+  /** Pending source reveal from Host. */
+  pendingSourceReveal: { sessionId: string; sourceMessageId: string } | null
+  /** On-demand diff contents keyed by changeId. */
+  diffContents: Map<string, { available: boolean; oldText?: string; newText?: string; reason?: string }>
+  /** Last batch revert result from Host. */
+  lastRevertResult: { results: Array<{ changeId: string; ok: boolean; reason?: string }> } | null
+  /** Pending in-panel interactions (approval / question) pushed from Host (phase-5). */
+  pendingInteractions: PendingInteraction[]
+  /** Latest Host reply to a composer `@` query (feature: at-completion). */
+  atCompletion?: AtCompletionReply
+  /** Latest Host reply to a composer `/` query (feature: slash-completion). */
+  slashCompletion?: SlashCompletionReply
 }
 
 export type ChatUiListener = () => void
@@ -275,6 +352,12 @@ const initialState: ChatUiState = {
   todoItems: [],
   overflowOpen: false,
   settingsOpen: false,
+  pendingReveal: null,
+  pendingChangeListReveal: null,
+  pendingSourceReveal: null,
+  diffContents: new Map(),
+  lastRevertResult: null,
+  pendingInteractions: [],
 }
 
 let state: ChatUiState = { ...initialState }
@@ -328,6 +411,8 @@ function mapActivity(raw: unknown): UiActivity | undefined {
     ...typeof rec.toolName === 'string' ? { toolName: rec.toolName } : {},
     ...typeof rec.callId === 'string' ? { callId: rec.callId } : {},
     ...typeof rec.summary === 'string' ? { summary: rec.summary } : {},
+    ...typeof rec.invocation === 'string' ? { invocation: rec.invocation } : {},
+    ...typeof rec.resultPreview === 'string' ? { resultPreview: rec.resultPreview } : {},
     ...typeof rec.ordinal === 'number' ? { ordinal: rec.ordinal } : {},
     ...typeof rec.turn === 'number' ? { turn: rec.turn } : {},
   }
@@ -421,6 +506,39 @@ function mapWorkflow(raw: unknown): UiWorkflow | undefined {
   }
 }
 
+/** Drop `@` candidates outside the closed `file` / `directory` set the composer renders. */
+function mapAtCandidates(raw: unknown): UiAtCandidate[] {
+  if (!Array.isArray(raw)) return []
+  const out: UiAtCandidate[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const rec = entry as Record<string, unknown>
+    if (typeof rec.path !== 'string' || rec.path === '') continue
+    if (rec.kind !== 'file' && rec.kind !== 'directory') continue
+    out.push({ path: rec.path, kind: rec.kind })
+  }
+  return out
+}
+
+/** Drop `/` candidates outside the closed group set the composer renders. */
+function mapSlashCandidates(raw: unknown): UiSlashCandidate[] {
+  if (!Array.isArray(raw)) return []
+  const out: UiSlashCandidate[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const rec = entry as Record<string, unknown>
+    if (typeof rec.name !== 'string' || rec.name === '') continue
+    if (rec.group !== 'command' && rec.group !== 'agent' && rec.group !== 'skill') continue
+    out.push({
+      name: rec.name,
+      description: typeof rec.description === 'string' ? rec.description : '',
+      group: rec.group,
+      ...typeof rec.inputHint === 'string' ? { inputHint: rec.inputHint } : {},
+    })
+  }
+  return out
+}
+
 function mapMessage(m: unknown, index: number): UiMessage {
   const rec = (typeof m === 'object' && m !== null ? m : {}) as Record<string, unknown>
   const kind = typeof rec.kind === 'string' ? rec.kind as UiMessage['kind'] : 'text'
@@ -435,6 +553,7 @@ function mapMessage(m: unknown, index: number): UiMessage {
     kind,
     streaming: rec.streaming === true,
     incomplete: rec.incomplete === true,
+    ...typeof rec.reasoning === 'string' ? { reasoning: rec.reasoning } : {},
     ...typeof rec.turn === 'number' ? { turn: rec.turn } : {},
     ...typeof rec.sourceMessageId === 'string' ? { sourceMessageId: rec.sourceMessageId } : {},
     ...typeof rec.childSessionId === 'string' ? { childSessionId: rec.childSessionId } : {},
@@ -684,6 +803,21 @@ export function toggleActivityExpanded(activityId: string): void {
   emit()
 }
 
+export function clearPendingReveal(): void {
+  state = { ...state, pendingReveal: null }
+  emit()
+}
+
+export function clearPendingChangeListReveal(): void {
+  state = { ...state, pendingChangeListReveal: null }
+  emit()
+}
+
+export function clearPendingSourceReveal(): void {
+  state = { ...state, pendingSourceReveal: null }
+  emit()
+}
+
 export function resetChatUiState(partial?: Partial<ChatUiState>): void {
   state = {
     ...initialState,
@@ -847,10 +981,20 @@ export function applyHostFrame(raw: unknown): void {
             reasoning = (reasoning ?? '') + frame.appendReasoning
           }
           let activity = m.activity
-          if (typeof frame.activityStatus === 'string' && activity) {
+          if (activity) {
             const s = frame.activityStatus
-            if (s === 'running' || s === 'done' || s === 'failed' || s === 'aborted') {
-              activity = { ...activity, status: s }
+            const status = s === 'running' || s === 'done' || s === 'failed' || s === 'aborted'
+              ? s
+              : undefined
+            const preview = typeof frame.activityResultPreview === 'string'
+              ? frame.activityResultPreview
+              : undefined
+            if (status !== undefined || preview !== undefined) {
+              activity = {
+                ...activity,
+                ...status === undefined ? {} : { status },
+                ...preview === undefined ? {} : { resultPreview: preview },
+              }
             }
           }
           // Partial compaction patch: the merged marker is re-parsed, so a field outside
@@ -910,7 +1054,8 @@ export function applyHostFrame(raw: unknown): void {
   } else if (type === 'ui/banner') {
     state = {
       ...state,
-      banner: typeof frame.text === 'string' ? frame.text : state.banner,
+      // Empty text retracts an earlier banner: the frame carries no separate clear op.
+      banner: typeof frame.text === 'string' && frame.text !== '' ? frame.text : undefined,
       stopping: false,
     }
   } else if (type === 'ui/reject-send') {
@@ -929,6 +1074,16 @@ export function applyHostFrame(raw: unknown): void {
   } else if (type === 'composer/prefill') {
     if (typeof frame.text === 'string') {
       state = { ...state, composerText: frame.text }
+    }
+  } else if (type === 'composer/at-candidates') {
+    const requestId = typeof frame.requestId === 'string' ? frame.requestId : ''
+    if (requestId !== '') {
+      state = { ...state, atCompletion: { requestId, candidates: mapAtCandidates(frame.candidates) } }
+    }
+  } else if (type === 'composer/slash-candidates') {
+    const requestId = typeof frame.requestId === 'string' ? frame.requestId : ''
+    if (requestId !== '') {
+      state = { ...state, slashCompletion: { requestId, candidates: mapSlashCandidates(frame.candidates) } }
     }
   } else if (type === 'search/results') {
     const hits = Array.isArray(frame.hits)
@@ -993,6 +1148,91 @@ export function applyHostFrame(raw: unknown): void {
     state = {
       ...state,
       todoItems: mapTodoItems(frame.items),
+    }
+  } else if (type === 'scroll/reveal') {
+    const sessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''
+    if (!sessionId) return
+    state = {
+      ...state,
+      pendingReveal: {
+        sessionId,
+        ...typeof frame.messageId === 'string' ? { messageId: frame.messageId } : {},
+        kind: typeof frame.kind === 'string' ? frame.kind : 'none',
+        ...typeof frame.label === 'string' ? { label: frame.label } : {},
+      },
+    }
+  } else if (type === 'scroll/reveal-change-list') {
+    const sessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''
+    const sourceMessageId = typeof frame.sourceMessageId === 'string' ? frame.sourceMessageId : ''
+    if (!sessionId || !sourceMessageId) return
+    state = {
+      ...state,
+      pendingChangeListReveal: {
+        sessionId,
+        sourceMessageId,
+        ...typeof frame.messageId === 'string' ? { messageId: frame.messageId } : {},
+      },
+    }
+  } else if (type === 'scroll/reveal-source') {
+    const sessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''
+    const sourceMessageId = typeof frame.sourceMessageId === 'string' ? frame.sourceMessageId : ''
+    if (!sessionId || !sourceMessageId) return
+    state = {
+      ...state,
+      pendingSourceReveal: { sessionId, sourceMessageId },
+    }
+  } else if (type === 'change/diff-content') {
+    const changeId = typeof frame.changeId === 'string' ? frame.changeId : ''
+    if (!changeId) return
+    const next = new Map(state.diffContents)
+    next.set(changeId, {
+      available: frame.available === true,
+      ...typeof frame.oldText === 'string' ? { oldText: frame.oldText } : {},
+      ...typeof frame.newText === 'string' ? { newText: frame.newText } : {},
+      ...typeof frame.reason === 'string' ? { reason: frame.reason } : {},
+    })
+    state = { ...state, diffContents: next }
+  } else if (type === 'change/revert-result') {
+    const results = Array.isArray(frame.results)
+      ? frame.results
+        .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
+        .map(r => ({
+          changeId: String(r.changeId ?? ''),
+          ok: r.ok === true,
+          ...typeof r.reason === 'string' ? { reason: r.reason } : {},
+        }))
+        .filter(r => r.changeId !== '')
+      : []
+    state = {
+      ...state,
+      lastRevertResult: { results },
+    }
+  } else if (type === 'interaction/present') {
+    const interactionType = frame.interactionType
+    if (interactionType !== 'approval' && interactionType !== 'question') return
+    if (typeof frame.id !== 'string' || frame.id === '') return
+    if (typeof frame.sessionId !== 'string') return
+    // Deduplicate by id.
+    if (state.pendingInteractions.some(p => p.id === frame.id)) return
+    const entry: PendingInteraction = {
+      type: interactionType,
+      id: frame.id,
+      sessionId: frame.sessionId,
+      ...typeof frame.toolName === 'string' ? { toolName: frame.toolName } : {},
+      ...typeof frame.reason === 'string' ? { reason: frame.reason } : {},
+      ...Array.isArray(frame.questions) ? { questions: frame.questions as PendingInteraction['questions'] } : {},
+    }
+    state = {
+      ...state,
+      pendingInteractions: [...state.pendingInteractions, entry],
+    }
+  } else if (type === 'interaction/resolved') {
+    if (typeof frame.id !== 'string' || frame.id === '') return
+    const filtered = state.pendingInteractions.filter(p => p.id !== frame.id)
+    if (filtered.length === state.pendingInteractions.length) return
+    state = {
+      ...state,
+      pendingInteractions: filtered,
     }
   } else {
     return

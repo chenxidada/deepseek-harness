@@ -6,7 +6,7 @@ import { ConversationRegistry, titleFromFirstMessage } from '../src/conversation
 import { canRegisterConversationTabBar, conversationTreeItems, createConversationTabBar } from '../src/conversation-tab-bar.ts'
 import { EXTENSION_INDEX_STATE_KEY, ExtensionIndex, type ExtensionIndexSnapshot, type WorkspaceStateLike, continueCapabilityListHint } from '../src/extension-index.ts'
 import { activate, deactivate, getChatPanelHost, getConversationController, getConversationSnapshot } from '../src/extension.ts'
-import { listHistoryFromIndex } from '../src/history-view.ts'
+import { hostSessionHistoryRow, listHistoryFromIndex, mergeHistoryRows } from '../src/history-view.ts'
 import { InteractionCoordinator, type InteractionUi } from '../src/interaction-coordinator.ts'
 import { MessageStore } from '../src/message-store.ts'
 import { foldTimeline, hydrateFromAuthoritativeLog, recoverableDiffsFromMeta } from '../src/replay-hydrator.ts'
@@ -1411,6 +1411,266 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           diffs: [{ path: 'patch-only.txt', newText: 'x' }],
         })).toEqual([])
       })
+
+      it('CAP-CONVERSATION-073 folds tool arguments into the row label and the result into its preview', () => {
+        const events = [
+          { type: 'turn/start', seq: 0, data: { turn: 1 } },
+          {
+            type: 'tool/call',
+            seq: 1,
+            data: {
+              turn: 1,
+              step: 1,
+              callId: 'c1',
+              name: 'bash',
+              arguments: JSON.stringify({
+                command: 'cat .specdev/active-workflow',
+                description: 'Read active-workflow marker',
+              }),
+            },
+          },
+          {
+            type: 'tool/result',
+            seq: 2,
+            data: {
+              turn: 1,
+              step: 1,
+              message: {
+                source: { callId: 'c1' },
+                content: [{
+                  type: 'tool-result',
+                  toolCallId: 'c1',
+                  content: [{ type: 'text', text: '.specdev/active-workflow: empty\n---\n' }],
+                  isError: false,
+                }],
+              },
+            },
+          },
+          {
+            type: 'tool/call',
+            seq: 3,
+            data: {
+              turn: 1,
+              step: 2,
+              callId: 'c2',
+              name: 'glob',
+              arguments: '{"pattern": "**/current-status.json"}',
+            },
+          },
+          {
+            type: 'tool/call',
+            seq: 4,
+            data: {
+              turn: 1,
+              step: 3,
+              callId: 'c3',
+              name: 'read',
+              arguments: '{"file_path": "packages/core/tools/src/index.ts", "offset": 40, "limit": 5}',
+            },
+          },
+        ]
+
+        const activities = hydrateFromAuthoritativeLog('sess-activity', events).messages
+          .filter(m => m.kind === 'activity')
+          .map(m => m.activity!)
+
+        // The model's own call description wins over the raw command; the command stays for the
+        // expanded row, which is where the exact input belongs.
+        expect(activities[0]?.summary).toBe('Read active-workflow marker')
+        expect(activities[0]?.invocation).toBe('cat .specdev/active-workflow')
+        expect(activities[0]?.status).toBe('done')
+        expect(activities[0]?.resultPreview).toBe('.specdev/active-workflow: empty\n---')
+
+        // A tool whose whole input is the label keeps the row readable and omits a duplicate body.
+        expect(activities[1]?.summary).toBe('**/current-status.json')
+        expect(activities[1]?.invocation).toBeUndefined()
+        expect(activities[1]?.status).toBe('running')
+
+        // A read window names the file in the row and the exact window in the body.
+        expect(activities[2]?.summary).toBe('packages/core/tools/src/index.ts')
+        expect(activities[2]?.invocation).toBe(
+          'packages/core/tools/src/index.ts · offset=40 · limit=5',
+        )
+      })
+
+      it('CAP-CONVERSATION-074 clips a long tool result and marks the cut', () => {
+        const lines = Array.from({ length: 40 }, (_, i) => `line ${i}`)
+        const events = [
+          {
+            type: 'tool/call',
+            seq: 1,
+            data: {
+              turn: 1,
+              step: 1,
+              callId: 'c1',
+              name: 'bash',
+              arguments: '{"command": "seq 40", "description": "Count to forty"}',
+            },
+          },
+          {
+            type: 'tool/result',
+            seq: 2,
+            data: {
+              turn: 1,
+              step: 1,
+              message: {
+                source: { callId: 'c1' },
+                content: [{
+                  type: 'tool-result',
+                  toolCallId: 'c1',
+                  content: [{ type: 'text', text: lines.join('\n') }],
+                  isError: false,
+                }],
+              },
+            },
+          },
+        ]
+
+        const activity = hydrateFromAuthoritativeLog('sess-clip', events).messages
+          .find(m => m.kind === 'activity')?.activity
+
+        expect(activity?.summary).toBe('Count to forty')
+        expect(activity?.resultPreview?.split('\n').length).toBe(20)
+        expect(activity?.resultPreview?.endsWith('…')).toBe(true)
+        expect(activity?.resultPreview?.startsWith('line 0')).toBe(true)
+      })
+
+      it('CAP-CONVERSATION-080 activity rows merge into the message bars by log seq', () => {
+        const events = [
+          { type: 'turn/start', seq: 0, data: { turn: 1 } },
+          {
+            type: 'user/message',
+            seq: 1,
+            data: { id: 'u1', role: 'user', content: [{ type: 'text', text: 'go' }] },
+          },
+          {
+            type: 'assistant/message',
+            seq: 2,
+            data: {
+              turn: 1,
+              step: 1,
+              message: { id: 'a1', role: 'assistant', content: [{ type: 'reasoning', text: 'look around' }] },
+            },
+          },
+          {
+            type: 'tool/call',
+            seq: 3,
+            data: {
+              turn: 1,
+              step: 1,
+              callId: 'c1',
+              name: 'bash',
+              arguments: JSON.stringify({ command: 'ls', description: 'List workspace root' }),
+            },
+          },
+          {
+            type: 'tool/result',
+            seq: 4,
+            data: {
+              turn: 1,
+              step: 1,
+              message: {
+                source: { callId: 'c1' },
+                content: [{
+                  type: 'tool-result',
+                  toolCallId: 'c1',
+                  content: [{ type: 'text', text: 'ok' }],
+                  isError: false,
+                }],
+              },
+            },
+          },
+          {
+            type: 'assistant/message',
+            seq: 5,
+            data: {
+              turn: 1,
+              step: 2,
+              message: { id: 'a2', role: 'assistant', content: [{ type: 'reasoning', text: 'check again' }] },
+            },
+          },
+          {
+            type: 'tool/call',
+            seq: 6,
+            data: {
+              turn: 1,
+              step: 2,
+              callId: 'c2',
+              name: 'glob',
+              arguments: JSON.stringify({ pattern: '**/current-status.json' }),
+            },
+          },
+          {
+            type: 'assistant/message',
+            seq: 7,
+            data: {
+              turn: 1,
+              step: 3,
+              message: { id: 'a3', role: 'assistant', content: [{ type: 'text', text: 'the answer' }] },
+            },
+          },
+          { type: 'turn/end', seq: 8, data: { turn: 1, reason: { kind: 'completed' } } },
+        ]
+
+        const labels = hydrateFromAuthoritativeLog('sess-order', events).messages.map(message =>
+          message.activity !== undefined ? `tool:${message.activity.toolName}` : `${message.role}:${message.text}`)
+
+        // A step's tool rows sit between that step's bar and the next one; the final answer stays
+        // last instead of every tool row in the turn piling up below it.
+        expect(labels).toEqual([
+          'user:go',
+          'assistant:',
+          'tool:bash',
+          'assistant:',
+          'tool:glob',
+          'assistant:the answer',
+        ])
+      })
+
+      it('CAP-CONVERSATION-081 a step with no assistant text closes its bubble so the next step opens its own', () => {
+        const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
+        const host = {
+          status: 'connected',
+          interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
+          setConversationRegistry() {},
+          onNotification(listener: (notification: { method: string; params: Record<string, unknown> }) => void) {
+            listeners.add(listener)
+            return () => { listeners.delete(listener) }
+          },
+          onStatusChange: () => () => {},
+          prompt: async () => 'msg',
+          disposeSession: async () => {},
+        } as unknown as IdeSessionHost
+        const controller = new ConversationController(host)
+        const sessionId = controller.newConversation('steps').sessionId
+        const emit = (type: string, data: Record<string, unknown>): void => {
+          for (const listener of listeners) {
+            listener({ method: 'session.event', params: { sessionId, event: { type, data } } })
+          }
+        }
+
+        emit('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: 'think one' } })
+        emit('assistant/message', {
+          turn: 1,
+          step: 1,
+          message: { role: 'assistant', content: [{ type: 'tool-call', name: 'bash', arguments: '{}' }] },
+        })
+        emit('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'bash', arguments: '{}' })
+        emit('assistant/chunk', { turn: 1, step: 2, chunk: { type: 'reasoning-delta', text: 'think two' } })
+
+        const messages = controller.messages.get(sessionId)
+        const labels = messages.map(message => message.activity !== undefined
+          ? `tool:${message.activity.toolName}`
+          : `assistant:${message.reasoning ?? ''}`)
+        // Keeping the first step's streaming handle would patch this step's reasoning into the
+        // first bubble, above the tool row; the step boundary must open a second bubble.
+        expect(labels).toEqual(['assistant:think one', 'tool:bash', 'assistant:think two'])
+
+        const bubbles = messages.filter(message => message.activity === undefined)
+        expect(bubbles[0]?.id).not.toBe(bubbles[1]?.id)
+        expect(bubbles[0]?.streaming).toBeUndefined()
+        expect(bubbles[1]?.streaming).toBe(true)
+      })
     })
 
     describe('VP-2-history / replay reject', () => {
@@ -1537,7 +1797,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         stored = undefined
       })
 
-      it('CAP-CONVERSATION-037 listHistory / getIndex / TreeView rows read workspaceState when conversations unbound', async () => {
+      it('CAP-CONVERSATION-037 listHistory / getIndex / sidebar rows read workspaceState when conversations unbound', async () => {
         stored = {
           workspaceKey: '/tmp/dsh-phase2-ac63',
           sessions: [{
@@ -1550,7 +1810,8 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           openTabSet: [],
           ui: { restoreUiLimit: 8 },
         }
-        const historyRows: unknown[] = []
+        const sidebarPosts: Array<Record<string, unknown>> = []
+        let sidebarMessage: ((message: unknown) => void) | undefined
 
         activate({
           subscriptions: [],
@@ -1566,29 +1827,35 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             },
           },
         }, {
-          TreeItem: class {
-            label: string
-            description?: string
-            contextValue?: string
-            command?: unknown
-            constructor(label: string) { this.label = label }
-          },
-          TreeItemCollapsibleState: { None: 0 },
-          EventEmitter: class {
-            event = {}
-            fire() {}
-            dispose() {}
+          Uri: {
+            file(path: string) {
+              return { fsPath: path, toString: () => `file://${path}` }
+            },
           },
           window: {
             async showErrorMessage(msg: string) { messages.push(msg) },
             async showInformationMessage(msg: string) { messages.push(msg) },
-            registerWebviewViewProvider() { return { dispose() {} } },
-            createTreeView(viewId: string, options: {
-              treeDataProvider: { getChildren(): unknown[] }
+            registerWebviewViewProvider(viewId: string, provider: {
+              resolveWebviewView(view: unknown): void
             }) {
-              if (viewId === 'dsh.history') {
-                historyRows.push(...options.treeDataProvider.getChildren())
-              }
+              // The Conversation Panel view is no longer contributed; only History resolves here.
+              if (viewId !== 'dsh.history') return { dispose() {} }
+              provider.resolveWebviewView({
+                webview: {
+                  html: '',
+                  cspSource: 'vscode-webview:',
+                  postMessage(message: unknown) {
+                    sidebarPosts.push(message as Record<string, unknown>)
+                  },
+                  onDidReceiveMessage(listener: (message: unknown) => void) {
+                    sidebarMessage = listener
+                    return { dispose() {} }
+                  },
+                  asWebviewUri(uri: unknown) { return uri },
+                },
+                visible: true,
+                onDidChangeVisibility() { return { dispose() {} } },
+              })
               return { dispose() {} }
             },
           },
@@ -1610,8 +1877,12 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(index.sessions.map(s => s.sessionId)).toEqual(['hist-cold-1'])
         expect(index.openTabSet).toEqual([])
 
-        expect(historyRows).toEqual(expect.arrayContaining([
-          expect.objectContaining({ sessionId: 'hist-cold-1', label: 'Cold history' }),
+        // Rows reach the view only when its script asks; the unresolved view receives nothing.
+        expect(sidebarPosts).toEqual([])
+        sidebarMessage!({ type: 'sidebar/ready' })
+        const pushed = sidebarPosts.find(message => message.type === 'sidebar/rows')?.rows
+        expect(pushed).toEqual(expect.arrayContaining([
+          expect.objectContaining({ sessionId: 'hist-cold-1', title: 'Cold history' }),
         ]))
 
         await commands.get('dsh.openHistory')!('hist-cold-1')
@@ -1945,18 +2216,91 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       const commands = new Map<string, (...args: unknown[]) => unknown>()
       const executed: string[] = []
       let conversationShow: ReturnType<typeof vi.fn> | undefined
+      let historyProvider: { resolveWebviewView(view: unknown): void } | undefined
+      let historyProbe: HistoryProbe | undefined
+
+      /**
+       * Resolved History view as VS Code hands it to the provider: the Host pushes
+       * frames into `posts` and reads `visible`, like the real `WebviewView`.
+       */
+      interface HistoryProbe {
+        /** Frames the Host pushed; `sidebar/rows` carries the rows to render. */
+        posts: Array<Record<string, unknown>>
+        /** Deliver one webview → Host message. */
+        send(message: unknown): void
+        /** Set visibility and fire the event; VS Code sends no payload. */
+        setVisible(visible: boolean): void
+      }
 
       afterEach(async () => {
         await deactivate()
         commands.clear()
         executed.length = 0
         conversationShow = undefined
+        historyProvider = undefined
+        historyProbe = undefined
         vi.restoreAllMocks()
       })
 
-      function makeVscode(opts?: { resolvePanel?: boolean }) {
+      /** Resolve the History view the way VS Code does on the first reveal. */
+      function revealHistoryView(): HistoryProbe {
+        const provider = historyProvider
+        if (provider === undefined) throw new Error('History view provider was not registered')
+        const posts: Array<Record<string, unknown>> = []
+        let onMessage: ((message: unknown) => void) | undefined
+        let onVisibility: (() => void) | undefined
+        const view = {
+          webview: {
+            html: '',
+            cspSource: 'vscode-webview:',
+            postMessage(message: unknown) {
+              posts.push(message as Record<string, unknown>)
+            },
+            onDidReceiveMessage(listener: (message: unknown) => void) {
+              onMessage = listener
+              return { dispose() {} }
+            },
+            asWebviewUri(uri: unknown) { return uri },
+          },
+          visible: true,
+          onDidChangeVisibility(listener: () => void) {
+            onVisibility = listener
+            return { dispose() {} }
+          },
+        }
+        provider.resolveWebviewView(view)
+        historyProbe = {
+          posts,
+          send(message: unknown) { onMessage?.(message) },
+          setVisible(visible: boolean) {
+            view.visible = visible
+            onVisibility?.()
+          },
+        }
+        return historyProbe
+      }
+
+      function makeVscode(opts?: {
+        resolvePanel?: boolean
+        history?: boolean
+        confirmDelete?: boolean
+        showInputBox?: (options: { prompt?: string; title?: string }) => Promise<string | undefined>
+        workspaceFolder?: string
+      }) {
         const resolvePanel = opts?.resolvePanel !== false
+        const history = opts?.history === true
         return {
+          ...history
+            ? {
+              // The sidebar view builds its document from `webview/dist`, so the fake
+              // offers the URI constructor the provider resolves it with.
+              Uri: {
+                file(path: string) {
+                  return { fsPath: path, scheme: 'file', toString: () => `file://${path}` }
+                },
+              },
+            }
+            : {},
           window: {
             async showErrorMessage(message: string) {
               executed.push(`error:${message}`)
@@ -1964,6 +2308,17 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             async showInformationMessage(message: string) {
               executed.push(`info:${message}`)
             },
+            // Without this the delete confirmation falls back to the information prompt,
+            // which returns undefined and cancels — the cancel path other tests rely on.
+            ...opts?.confirmDelete === true
+              ? {
+                async showWarningMessage(message: string, ...actions: string[]) {
+                  executed.push(`warn:${message}`)
+                  return actions[0]
+                },
+              }
+              : {},
+            ...opts?.showInputBox === undefined ? {} : { showInputBox: opts.showInputBox },
             createStatusBarItem() {
               return {
                 text: '',
@@ -1975,6 +2330,11 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             registerWebviewViewProvider(viewId: string, provider: {
               resolveWebviewView(view: unknown): void
             }) {
+              if (history && viewId === 'dsh.history') {
+                // The provider runs when the user opens the container, not at activate.
+                historyProvider = provider
+                return { dispose() {} }
+              }
               expect(viewId).toBe('dsh.chat')
               if (resolvePanel) {
                 conversationShow = vi.fn()
@@ -1993,7 +2353,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             },
           },
           workspace: {
-            workspaceFolders: [{ uri: { fsPath: '/tmp/dsh-phase4' } }],
+            workspaceFolders: [{ uri: { fsPath: opts?.workspaceFolder ?? '/tmp/dsh-phase4' } }],
             getConfiguration(section: string) {
               // `dsh.nodeBin` unset: the empty value does not participate in Node resolution.
               void section
@@ -2051,6 +2411,208 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         const html = buildThinChatHtml()
         expect(html).toContain('id="newConversationBtn"')
         expect(html).toMatch(/id="newConversationBtn"[^>]*>[\s]*新建会话/)
+      })
+
+      it('CAP-CONVERSATION-075 the History view is an own-rendered WebviewView whose document carries the empty state', async () => {
+        const pkg = await import('../package.json', { with: { type: 'json' } })
+        const views = pkg.default.contributes.views.dsh
+        // A native welcome page would be a second copy of an empty state the view's own
+        // document already renders, so the view is a webview and contributes no welcome.
+        expect(views).toEqual([{ id: 'dsh.history', name: 'History', type: 'webview' }])
+        expect(pkg.default.contributes.viewsWelcome).toBeUndefined()
+        expect(pkg.default.contributes.commands.some(
+          (c: { command?: string }) => c.command === 'dsh.showPanel',
+        )).toBe(true)
+      })
+
+      it('CAP-CONVERSATION-076 the first History reveal opens the Conversation surface exactly once', () => {
+        activateWith(makeVscode({ history: true }))
+        expect(historyProvider).toBeDefined()
+        expect(conversationShow).not.toHaveBeenCalled()
+
+        const probe = revealHistoryView()
+        expect(conversationShow).toHaveBeenCalledTimes(1)
+
+        // Reopening the container is not a second product entry.
+        probe.setVisible(false)
+        probe.setVisible(true)
+        expect(conversationShow).toHaveBeenCalledTimes(1)
+      })
+
+      it('CAP-CONVERSATION-077 mergeHistoryRows keeps index rows authoritative and orders by recorded time', () => {
+        const indexRows = [{
+          sessionId: 'opened',
+          title: 'Opened here',
+          mtime: 5,
+          continueCapability: 'same-id' as const,
+          continueHint: '可继续',
+        }]
+        const merged = mergeHistoryRows(indexRows, [
+          { sessionId: 'opened', title: 'Runtime title', mtime: 9, continueCapability: 'unknown', continueHint: '' },
+          hostSessionHistoryRow({ sessionId: 'cli-1234567890', createdAt: 7, title: 'CLI session' }),
+          hostSessionHistoryRow({ sessionId: 'untitled-abcdef', createdAt: 3 }),
+        ])
+
+        expect(merged.map(row => row.sessionId))
+          .toEqual(['cli-1234567890', 'opened', 'untitled-abcdef'])
+        // A shared id keeps this Extension's title, hint, and tombstone knowledge.
+        expect(merged.find(row => row.sessionId === 'opened')).toEqual(indexRows[0])
+        // A runtime row reaches the list without a continue capability it cannot know.
+        expect(merged.find(row => row.sessionId === 'cli-1234567890')).toMatchObject({
+          title: 'CLI session',
+          mtime: 7,
+          continueCapability: 'unknown',
+          continueHint: '',
+        })
+        expect(merged.find(row => row.sessionId === 'untitled-abcdef')?.title).toBe('Replay untitled')
+      })
+
+      it('CAP-CONVERSATION-078 History merges the sessions the runtime lists for this workspace', async () => {
+        vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (
+          this: IdeSessionHost,
+        ) {
+          this.status = 'connected'
+        })
+        const listSpy = vi.spyOn(IdeSessionHost.prototype, 'listSessions').mockResolvedValue([
+          {
+            sessionId: 'cli-in-workspace',
+            createdAt: 1_700_000_000_000,
+            cwd: '/tmp/dsh-phase4',
+            title: 'CLI session',
+          },
+          {
+            sessionId: 'cli-elsewhere',
+            createdAt: 1_700_000_000_001,
+            cwd: '/tmp/other-workspace',
+            title: 'Another workspace',
+          },
+          {
+            sessionId: 'cli-child',
+            createdAt: 1_700_000_000_002,
+            cwd: '/tmp/dsh-phase4',
+            parentSessionId: 'cli-in-workspace',
+            title: 'Delegated child',
+          },
+        ])
+
+        activateWith(makeVscode({ history: true }))
+        await commands.get('dsh.test.setCredentialPresence')!(true)
+        await getChatPanelHost()!.handleWebviewMessage({ type: 'action/new-conversation' })
+        await vi.waitFor(() => {
+          expect(getConversationSnapshot().tabs.length).toBeGreaterThanOrEqual(1)
+        })
+
+        // The Activity Bar icon reveals the view; the listing arrives from the runtime.
+        const probe = revealHistoryView()
+        await vi.waitFor(() => {
+          expect(listSpy).toHaveBeenCalled()
+        })
+
+        const rows = (await commands.get('dsh.test.listHistory')!()) as Array<{
+          sessionId: string
+          title: string
+        }>
+        // A session created in another checkout never enters this workspace's list (AC-63).
+        expect(listSpy).toHaveBeenCalled()
+        expect(rows.map(row => row.sessionId)).toContain('cli-in-workspace')
+        expect(rows.map(row => row.sessionId)).not.toContain('cli-elsewhere')
+        // A parented row is a fork or a delegated child, not a conversation root.
+        expect(rows.map(row => row.sessionId)).not.toContain('cli-child')
+        expect(rows.find(row => row.sessionId === 'cli-in-workspace')?.title).toBe('CLI session')
+
+        // The refreshed list reaches the view as rows it can render.
+        await vi.waitFor(() => {
+          const pushed = probe.posts.find(message => message.type === 'sidebar/rows')?.rows
+          expect(pushed).toEqual(expect.arrayContaining([
+            expect.objectContaining({ sessionId: 'cli-in-workspace', title: 'CLI session' }),
+          ]))
+        })
+        const pushed = probe.posts.find(message => message.type === 'sidebar/rows')?.rows as
+          Array<{ sessionId: string }>
+        expect(pushed.map(row => row.sessionId)).not.toContain('cli-elsewhere')
+      })
+
+      it('CAP-CONVERSATION-083 a sidebar row sends its action to the owning Host path', async () => {
+        activateWith(makeVscode({ history: true }))
+        const probe = revealHistoryView()
+
+        probe.send({ type: 'sidebar/open', sessionId: 'sess-row-1' })
+        await vi.waitFor(() => expect(executed).toContain('exec:dsh.openHistory'))
+
+        probe.send({ type: 'sidebar/copy-id', sessionId: 'sess-row-1' })
+        await vi.waitFor(() => expect(executed).toContain('exec:dsh.copyToClipboard'))
+
+        probe.send({ type: 'sidebar/new-conversation' })
+        await vi.waitFor(() => expect(executed).toContain('exec:dsh.newConversation'))
+
+        const show = conversationShow
+        probe.send({ type: 'sidebar/open-panel' })
+        await vi.waitFor(() => expect(show).toHaveBeenCalled())
+
+        // Continue acts on the active Tab: it opens the replay and stops when that open
+        // reported nothing to continue, rather than continuing an unrelated Tab.
+        probe.send({ type: 'sidebar/continue', sessionId: 'sess-row-1' })
+        await vi.waitFor(() => {
+          expect(executed.filter(entry => entry === 'exec:dsh.openHistory')).toHaveLength(2)
+        })
+        expect(executed).not.toContain('exec:dsh.continueConversation')
+      })
+
+      it('CAP-CONVERSATION-084 a sidebar delete confirms first, and a cancelled confirm deletes nothing', async () => {
+        vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (
+          this: IdeSessionHost,
+        ) {
+          this.status = 'connected'
+        })
+
+        // No warning prompt in this host: the confirmation falls back to the information
+        // prompt, which picks nothing, so the row menu must leave the session alone.
+        activateWith(makeVscode({ history: true }))
+        await commands.get('dsh.test.setCredentialPresence')!(true)
+        await getChatPanelHost()!.handleWebviewMessage({ type: 'action/new-conversation' })
+        await vi.waitFor(() => {
+          expect(getConversationSnapshot().tabs.length).toBeGreaterThanOrEqual(1)
+        })
+        const sessionId = getConversationSnapshot().tabs[0]!.sessionId
+
+        const probe = revealHistoryView()
+        probe.send({ type: 'sidebar/delete', sessionId })
+        await vi.waitFor(() => {
+          expect(executed.some(entry => entry.startsWith('info:Permanently delete this conversation?')))
+            .toBe(true)
+        })
+        expect(executed.some(entry => entry.startsWith('info:Deleted conversation'))).toBe(false)
+        expect(getConversationSnapshot().tabs).toHaveLength(1)
+      })
+
+      it('CAP-CONVERSATION-085 a confirmed sidebar delete takes the single confirmed backend path', async () => {
+        vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (
+          this: IdeSessionHost,
+        ) {
+          this.status = 'connected'
+        })
+        // The runtime side of the delete: this fixture has no bridge, and a delete that
+        // cannot drop the live session never reaches the confirmed path it is testing.
+        const disposeSpy = vi.spyOn(IdeSessionHost.prototype, 'disposeSession').mockResolvedValue()
+        vi.spyOn(IdeSessionHost.prototype, 'deleteSession').mockResolvedValue(undefined)
+
+        activateWith(makeVscode({ history: true, confirmDelete: true }))
+        await commands.get('dsh.test.setCredentialPresence')!(true)
+        await getChatPanelHost()!.handleWebviewMessage({ type: 'action/new-conversation' })
+        await vi.waitFor(() => {
+          expect(getConversationSnapshot().tabs.length).toBeGreaterThanOrEqual(1)
+        })
+        const sessionId = getConversationSnapshot().tabs[0]!.sessionId
+
+        const probe = revealHistoryView()
+        probe.send({ type: 'sidebar/delete', sessionId })
+        await vi.waitFor(() => {
+          expect(executed.some(entry => entry.startsWith('info:Deleted conversation'))).toBe(true)
+        })
+        // The row menu asked first, and only the confirmed single backend path deleted.
+        expect(executed.some(entry => entry.startsWith('warn:Permanently delete'))).toBe(true)
+        expect(disposeSpy).toHaveBeenCalledWith(sessionId)
+        expect(getConversationSnapshot().tabs).toHaveLength(0)
       })
 
       it('CAP-CONVERSATION-052 disconnected action/new-conversation → connecting wait (not sendable live) → live', async () => {
@@ -2237,6 +2799,66 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(last.mode).not.toBe('live')
         expect(last.connectionPhase).toBe('connecting')
         expect(last.sessionId === tab.sessionId || last.mode === 'waiting-host').toBe(true)
+      })
+
+      it('CAP-CONVERSATION-079 connected retracts the connecting banner so it cannot own the status line', () => {
+        const host = new IdeSessionHost()
+        host.status = 'disconnected'
+        const controller = new ConversationController(host)
+        controller.newConversation('existing')
+        const panel = new ChatPanelHost({
+          registry: controller.registry,
+          messages: controller.messages,
+          isHostReady: () => host.status === 'connected',
+          acceptSend: async text => controller.promptActive(text),
+        })
+        panel.applyConnectionState({
+          phase: 'connecting',
+          message: '正在连接到 Host…',
+          settingsDeepLinkAvailable: false,
+          statusBarVisible: false,
+        })
+        panel.applyConnectionState({
+          phase: 'connected',
+          settingsDeepLinkAvailable: false,
+          statusBarVisible: false,
+        })
+
+        const banners = panel.getOutboundLog().filter(m => m.type === 'ui/banner')
+        const last = banners.at(-1)
+        expect(last?.type === 'ui/banner' ? last.text : undefined).toBe('')
+        // `connected` omits `connectionMessage`, so retraction is the only thing that
+        // stops the panel status line from still claiming a pending connection.
+        const states = panel.getOutboundLog().filter(m => m.type === 'panel/state')
+        const lastState = states.at(-1)
+        expect(lastState?.type === 'panel/state' ? lastState.connectionMessage : 'absent').toBeUndefined()
+      })
+
+      it('CAP-CONVERSATION-082 dsh.insertFileReference resolves the typed path and prefills its @ mention', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'dsh-atref-'))
+        mkdirSync(join(root, 'src'), { recursive: true })
+        writeFileSync(join(root, 'src', 'index.ts'), 'export {}\n')
+        vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (this: IdeSessionHost) {
+          this.status = 'connected'
+        })
+        let typed = 'src/index.ts'
+        activateWith(makeVscode({ showInputBox: async () => typed, workspaceFolder: root }))
+        await commands.get('dsh.test.setCredentialPresence')!(true)
+        await commands.get('dsh.test.requestStart')!('command-start')
+        const fake = new FakeWebviewPort()
+        getChatPanelHost()!.attach(fake)
+
+        const result = await commands.get('dsh.insertFileReference')!()
+
+        expect(result).toEqual({ ok: true, mention: '@src/index.ts' })
+        const prefill = fake.receivedFromHost.find(m => m.type === 'composer/prefill')
+        expect(prefill?.type === 'composer/prefill' ? prefill.text : '').toBe('@src/index.ts')
+
+        // A path the workspace check cannot resolve leaves the composer untouched.
+        fake.receivedFromHost.length = 0
+        typed = 'src/missing.ts'
+        expect(await commands.get('dsh.insertFileReference')!()).toEqual({ ok: false, reason: 'not-found' })
+        expect(fake.receivedFromHost.filter(m => m.type === 'composer/prefill')).toEqual([])
       })
 
       it('CAP-CONVERSATION-057 Webview action/continue uses ensureHostForSend (auto-start when offline)', async () => {
@@ -2610,14 +3232,23 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       vi.restoreAllMocks()
     })
 
-    it('CAP-CONVERSATION-067 dsh.triggerCompact prompts /compact on the active session', async () => {
+    it('CAP-CONVERSATION-067 dsh.triggerCompact runs the runtime /compact command without prompting', async () => {
       const prompt = vi.spyOn(IdeSessionHost.prototype, 'prompt').mockResolvedValue('msg-compact-1')
+      const execute = vi.spyOn(IdeSessionHost.prototype, 'executeCommand').mockResolvedValue({
+        matched: true,
+        outcome: { commandId: 'cmd-1', ok: true, text: 'Compacted 12 turns' },
+      })
       const tab = await startWithLiveTab()
 
       const result = await commands.get('dsh.triggerCompact')!()
 
       expect(result).toEqual({ ok: true })
-      expect(prompt).toHaveBeenCalledWith(tab.sessionId, [{ type: 'text', text: '/compact' }])
+      // A command runs against the registry, so the slash line never becomes a prompt.
+      expect(execute).toHaveBeenCalledWith(tab.sessionId, '/compact')
+      expect(prompt).not.toHaveBeenCalled()
+      const notices = getConversationController()!.messages.get(tab.sessionId)
+        .filter(message => message.kind === 'notice')
+      expect(notices.some(message => message.text === 'Compacted 12 turns')).toBe(true)
     })
 
     it('CAP-CONVERSATION-068 dsh.triggerCompact without an active Tab reports no-active', async () => {
@@ -2640,12 +3271,32 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       expect(infoMessages.some(text => text.includes('No active conversation'))).toBe(true)
     })
 
-    it('CAP-CONVERSATION-069 dsh.triggerCompact surfaces a failed send as an error message', async () => {
-      vi.spyOn(IdeSessionHost.prototype, 'prompt').mockRejectedValue(new Error('bridge send failed'))
-      await startWithLiveTab()
+    it('CAP-CONVERSATION-069 dsh.triggerCompact reports a failed command as a local notice', async () => {
+      const prompt = vi.spyOn(IdeSessionHost.prototype, 'prompt').mockResolvedValue('msg-compact-3')
+      vi.spyOn(IdeSessionHost.prototype, 'executeCommand').mockRejectedValue(new Error('bridge send failed'))
+      const tab = await startWithLiveTab()
 
       const result = await commands.get('dsh.triggerCompact')!()
 
+      // The command path owned the line, so the failure is reported where its result
+      // would have appeared rather than as a second prompt.
+      expect(result).toEqual({ ok: true })
+      expect(prompt).not.toHaveBeenCalled()
+      const notices = getConversationController()!.messages.get(tab.sessionId)
+        .filter(message => message.kind === 'notice')
+      expect(notices.some(message => message.text.includes('bridge send failed'))).toBe(true)
+    })
+
+    it('CAP-CONVERSATION-086 an unresolved /compact keeps the prompt path and its failure surface', async () => {
+      const prompt = vi.spyOn(IdeSessionHost.prototype, 'prompt')
+        .mockRejectedValue(new Error('bridge send failed'))
+      vi.spyOn(IdeSessionHost.prototype, 'executeCommand').mockResolvedValue({ matched: false })
+      const tab = await startWithLiveTab()
+
+      const result = await commands.get('dsh.triggerCompact')!()
+
+      // A composition without the runtime command keeps the historical prompt path.
+      expect(prompt).toHaveBeenCalledWith(tab.sessionId, [{ type: 'text', text: '/compact' }])
       expect(result).toMatchObject({ ok: false, reason: 'error' })
       expect(errorMessages.some(text => text.includes('bridge send failed'))).toBe(true)
     })

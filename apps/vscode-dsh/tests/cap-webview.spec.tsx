@@ -4,10 +4,27 @@ import { App } from '../webview/src/App.tsx'
 import { createMessageBridge } from '../webview/src/bridge/message-bridge.ts'
 import { mountDshProbes } from '../webview/src/probes.ts'
 import { applyHostFrame, getChatUiState, resetChatUiState, setStopping } from '../webview/src/store/chat-ui-store.ts'
+import { SidebarApp } from '../webview/src/sidebar/SidebarApp.tsx'
+import { applySidebarFrame, resetSidebarState } from '../webview/src/sidebar/sidebar-store.ts'
+import type { SidebarIntent } from '../webview/src/sidebar/sidebar-protocol.ts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { TodoCard } from '../webview/src/components/TodoCard.tsx'
+import { ContextRing } from '../webview/src/components/ContextRing.tsx'
+import { ApprovalCard } from '../webview/src/components/ApprovalCard.tsx'
+import { QuestionCard } from '../webview/src/components/QuestionCard.tsx'
+import { InlineDiff } from '../webview/src/components/InlineDiff.tsx'
+
+/**
+ * Design-system stylesheet: message-flow presentation is owned by these class rules, so tests assert
+ * the class/data contract on the DOM and the rule that supplies the visual detail here.
+ */
+const TOKENS_CSS = readFileSync(join(process.cwd(), 'apps/vscode-dsh/webview/src/styles/tokens.css'), 'utf8')
+
+/** History sidebar stylesheet: row typography and the row menu are its rules. */
+const SIDEBAR_CSS = readFileSync(join(process.cwd(), 'apps/vscode-dsh/webview/src/styles/sidebar.css'), 'utf8')
 
 describe('cap:webview — editor chat shell React rendering', () => {
   describe('layer-a-rtl/editor-chat-shell.spec.tsx', () => {
@@ -210,6 +227,12 @@ describe('cap:webview — editor chat shell React rendering', () => {
         cleanup()
       })
 
+      /** The last `composer/slash-query` the Webview posted, or undefined when it posted none. */
+      const slashQuery = (posted: unknown[]): { requestId: string; query: string } | undefined => {
+        const rows = posted.filter(p => (p as { type?: string }).type === 'composer/slash-query')
+        return rows[rows.length - 1] as { requestId: string; query: string } | undefined
+      }
+
       it('CAP-WEBVIEW-006 settles assistant Markdown with sanitize + visible copy ( / UI-)', async () => {
         render(<App bridge={bridge} />)
         await act(async () => {
@@ -300,6 +323,394 @@ describe('cap:webview — editor chat shell React rendering', () => {
         })
         fireEvent.click(screen.getByTestId('activity-toggle'))
         expect(posts.some(p => (p as { type?: string }).type === 'action/toggle-activity')).toBe(true)
+      })
+
+      it('CAP-WEBVIEW-062 activity row names the tool and its input, and expands to the invocation and result', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/replace',
+            sessionId: 's1',
+            messages: [
+              {
+                id: 'act1',
+                role: 'notice',
+                kind: 'activity',
+                sessionId: 's1',
+                text: 'bash · Read active-workflow marker · done',
+                activity: {
+                  id: 'act1',
+                  status: 'done',
+                  expanded: false,
+                  toolName: 'bash',
+                  summary: 'Read active-workflow marker',
+                  invocation: 'cat .specdev/active-workflow',
+                  resultPreview: '.specdev/active-workflow: empty',
+                },
+              },
+            ],
+          })
+        })
+
+        await waitFor(() => {
+          expect(screen.getByTestId('activity-row')).toBeTruthy()
+        })
+        const row = screen.getByTestId('activity-row')
+        expect(row.getAttribute('data-status')).toBe('done')
+        // The label is the model's own call description; the tool name and status stay distinct so a
+        // row is identifiable without expanding it.
+        expect(screen.getByTestId('activity-toggle').textContent).toContain('bash')
+        expect(screen.getByTestId('activity-toggle').textContent).toContain('Read active-workflow marker')
+        expect(screen.getByTestId('activity-toggle').textContent).toContain('done')
+        expect(screen.queryByTestId('activity-body')).toBeNull()
+
+        fireEvent.click(screen.getByTestId('activity-toggle'))
+        await waitFor(() => {
+          expect(screen.getByTestId('activity-body')).toBeTruthy()
+        })
+        expect(screen.getByTestId('activity-invocation').textContent).toBe('cat .specdev/active-workflow')
+        expect(screen.getByTestId('activity-result').textContent).toBe('.specdev/active-workflow: empty')
+      })
+
+      it('CAP-WEBVIEW-063 messages/patch attaches the result preview and settles the activity', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's1',
+            message: {
+              id: 'act2',
+              role: 'notice',
+              kind: 'activity',
+              sessionId: 's1',
+              text: 'glob · running',
+              activity: {
+                id: 'act2',
+                status: 'running',
+                expanded: true,
+                toolName: 'glob',
+                summary: '**/current-status.json',
+              },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('activity-body')).toBeTruthy()
+        })
+        // No result yet: the expanded body falls back to the status line instead of an empty box.
+        expect(screen.queryByTestId('activity-result')).toBeNull()
+        expect(screen.getByTestId('activity-body').textContent).toContain('status=running')
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'messages/patch',
+            sessionId: 's1',
+            messageId: 'act2',
+            activityStatus: 'done',
+            activityResultPreview: 'found 16 paths',
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('activity-row').getAttribute('data-status')).toBe('done')
+        })
+        expect(screen.getByTestId('activity-result').textContent).toBe('found 16 paths')
+      })
+
+      it('CAP-WEBVIEW-064 an empty ui/banner retracts the banner so the status line follows the phase', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1', connectionPhase: 'connecting' })
+          applyHostFrame({ type: 'ui/banner', text: '正在连接到 Host…', kind: 'connecting' })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('status').textContent).toContain('正在连接到 Host')
+        })
+
+        await act(async () => {
+          // `connected` omits `connectionMessage`, so the banner is what the status line falls
+          // back to — this is exactly how a stale connecting banner used to stick.
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1', connectionPhase: 'connected' })
+        })
+        expect(getChatUiState().banner).toBe('正在连接到 Host…')
+        expect(screen.getByTestId('status').textContent).toContain('正在连接到 Host')
+
+        await act(async () => {
+          applyHostFrame({ type: 'ui/banner', text: '', kind: 'connection-clear' })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('status').textContent).not.toContain('正在连接到 Host')
+        })
+        expect(getChatUiState().banner).toBeUndefined()
+      })
+
+      it('CAP-WEBVIEW-065 bodyless assistant bars stay unrendered; a reasoning-only bar keeps only its thinking block', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/replace',
+            sessionId: 's1',
+            messages: [
+              { id: 'empty1', role: 'assistant', kind: 'text', sessionId: 's1', text: '' },
+              { id: 'g1', role: 'assistant', kind: 'text', sessionId: 's1', text: '', reasoning: 'think', turn: 1 },
+              { id: 'a1', role: 'assistant', kind: 'text', sessionId: 's1', text: 'the answer', turn: 1 },
+            ],
+          })
+        })
+
+        // A step that only called tools logs an empty bar; drawing it would leave an empty
+        // bubble between that step's activity rows.
+        expect(document.querySelector('[data-message-id="empty1"]')).toBeNull()
+
+        const reasoningRow = document.querySelector('[data-message-id="g1"]') as HTMLElement
+        expect(reasoningRow).not.toBeNull()
+        expect(within(reasoningRow).getByTestId('reasoning-block')).toBeTruthy()
+        // Nothing to copy, retry, or branch from without a body.
+        expect(within(reasoningRow).queryByTestId('btn-copy')).toBeNull()
+        expect(within(reasoningRow).queryByTestId('btn-retry')).toBeNull()
+        expect(within(reasoningRow).queryByTestId('btn-branch')).toBeNull()
+
+        const answerRow = document.querySelector('[data-message-id="a1"]') as HTMLElement
+        expect(within(answerRow).getByTestId('btn-retry')).toBeTruthy()
+      })
+
+      it('CAP-WEBVIEW-066 typing @ asks the Host and Enter inserts the highlighted candidate', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '看一下 @src/ind' } })
+        })
+
+        const query = posts.find(p => (p as { type?: string }).type === 'composer/at-query') as
+          | { requestId: string; query: string }
+          | undefined
+        expect(query?.query).toBe('src/ind')
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'composer/at-candidates',
+            requestId: query!.requestId,
+            candidates: [
+              { path: 'src/index.ts', kind: 'file' },
+              { path: 'src/indent.md', kind: 'file' },
+            ],
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('at-completion')).toBeTruthy()
+        })
+        expect(screen.getAllByTestId('at-candidate').length).toBe(2)
+
+        // ArrowDown moves the highlight; Enter accepts it instead of sending the message.
+        fireEvent.keyDown(input, { key: 'ArrowDown' })
+        fireEvent.keyDown(input, { key: 'Enter' })
+        expect(screen.queryByTestId('at-completion')).toBeNull()
+        expect(input.value).toBe('看一下 @src/indent.md')
+        expect(input.selectionStart).toBe(input.value.length)
+        expect(posts.some(p => (p as { type?: string }).type === 'composer/send')).toBe(false)
+      })
+
+      it('CAP-WEBVIEW-072 typing / lists grouped Host candidates, and Enter inserts the slash text instead of sending', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '/' } })
+        })
+
+        const query = slashQuery(posts)
+        // The bare slash is a query too, so the menu lists everything before the user types a name.
+        expect(query?.query).toBe('')
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'composer/slash-candidates',
+            requestId: query!.requestId,
+            candidates: [
+              { name: 'feature', description: '建立 .specdev 布局', group: 'command', inputHint: '<description>' },
+              { name: 'compact', description: '压缩会话上下文', group: 'command' },
+              { name: 'bugfix', description: '缺陷修复组合', group: 'agent' },
+              { name: 'code-review', description: '审查改动', group: 'skill' },
+              // A row outside the closed group set, or without a name, is not renderable.
+              { name: 'mystery', description: '', group: 'plugin' },
+              { name: '', description: '', group: 'command' },
+            ],
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('slash-completion')).toBeTruthy()
+        })
+        const rows = screen.getAllByTestId('slash-candidate')
+        expect(rows.map(row => row.getAttribute('data-group'))).toEqual(['command', 'command', 'agent', 'skill'])
+        expect(rows[0]?.getAttribute('data-active')).toBe('true')
+        expect(screen.getByTestId('slash-completion').textContent).toContain('命令')
+        expect(screen.getByTestId('slash-completion').textContent).toContain('智能体')
+        expect(screen.getByTestId('slash-completion').textContent).toContain('技能')
+        // The hint and the summary are secondary text on the row, not the row's name.
+        expect(rows[0]?.textContent).toContain('/feature')
+        expect(rows[0]?.textContent).toContain('<description>')
+
+        // Enter picks the highlight: the name lands in the composer and nothing is sent yet.
+        fireEvent.keyDown(input, { key: 'Enter' })
+        expect(screen.queryByTestId('slash-completion')).toBeNull()
+        expect(input.value).toBe('/feature ')
+        expect(input.selectionStart).toBe(input.value.length)
+        expect(posts.some(p => (p as { type?: string }).type === 'composer/send')).toBe(false)
+      })
+
+      it('CAP-WEBVIEW-073 the query narrows as the user types, Escape closes the menu, and an agent row inserts its bare id', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '/bug' } })
+        })
+        expect(slashQuery(posts)?.query).toBe('bug')
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'composer/slash-candidates',
+            requestId: slashQuery(posts)!.requestId,
+            candidates: [{ name: 'bugfix', description: '缺陷修复组合', group: 'agent' }],
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('slash-completion')).toBeTruthy()
+        })
+
+        fireEvent.keyDown(input, { key: 'Escape' })
+        expect(screen.queryByTestId('slash-completion')).toBeNull()
+        // Escape is local chrome: the typed text stays and nothing reaches the Host.
+        expect(input.value).toBe('/bug')
+
+        // Clicking a row is the mouse path to the same insertion.
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '/bugf' } })
+        })
+        await act(async () => {
+          applyHostFrame({
+            type: 'composer/slash-candidates',
+            requestId: slashQuery(posts)!.requestId,
+            candidates: [{ name: 'bugfix', description: '缺陷修复组合', group: 'agent' }],
+          })
+        })
+        fireEvent.click(screen.getAllByTestId('slash-candidate')[0]!)
+        // A preset is bound when a session is created, so its row inserts the plain id.
+        expect(input.value).toBe('bugfix ')
+      })
+
+      it('CAP-WEBVIEW-074 a space closes the menu, and Enter then sends the whole command line', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '/fea' } })
+        })
+        await act(async () => {
+          applyHostFrame({
+            type: 'composer/slash-candidates',
+            requestId: slashQuery(posts)!.requestId,
+            candidates: [{ name: 'feature', description: '建立 .specdev 布局', group: 'command' }],
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('slash-completion')).toBeTruthy()
+        })
+
+        const queriesBefore = posts.filter(p => (p as { type?: string }).type === 'composer/slash-query').length
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '/feature 支持按标签过滤' } })
+        })
+        // Arguments belong to the command, not to the menu, so the menu closes with the token.
+        expect(screen.queryByTestId('slash-completion')).toBeNull()
+        expect(posts.filter(p => (p as { type?: string }).type === 'composer/slash-query').length).toBe(queriesBefore)
+
+        fireEvent.keyDown(input, { key: 'Enter' })
+        expect(posts).toContainEqual({ type: 'composer/send', text: '/feature 支持按标签过滤' })
+      })
+
+      it('CAP-WEBVIEW-067 dropping a file asks the Host for its mention and adopts the prefilled text', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '看看这个' } })
+        })
+
+        await act(async () => {
+          fireEvent.drop(input, {
+            dataTransfer: {
+              files: [],
+              getData: (format: string) => format === 'text/uri-list' ? 'file:///ws/src/a.ts' : '',
+            },
+          })
+        })
+
+        const drop = posts.find(p => (p as { type?: string }).type === 'composer/drop-paths') as
+          | { paths: string[]; text: string }
+          | undefined
+        // A non-image drop leaves the composer text alone and hands the path to the Host.
+        expect(drop?.paths).toEqual(['/ws/src/a.ts'])
+        expect(drop?.text).toBe('看看这个')
+
+        await act(async () => {
+          applyHostFrame({ type: 'composer/prefill', text: '看看这个 @src/a.ts' })
+        })
+        expect(input.value).toBe('看看这个 @src/a.ts')
+      })
+
+      it('CAP-WEBVIEW-068 header menus render outside the scrolling tab strips', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1', title: 'T' })
+          applyHostFrame({
+            type: 'panel/tabs',
+            activeTabId: 't1',
+            tabs: [{
+              tabId: 't1',
+              title: 'T',
+              status: 'idle',
+              unread: false,
+              approvalBadge: false,
+              mode: 'live',
+              sessionId: 's1',
+            }],
+          })
+        })
+
+        // Both strips scroll horizontally, so a menu nested inside one is clipped to the
+        // strip's height and shows only a sliver. Opening either menu closes the other.
+        const expectOutsideStrips = (testId: string): void => {
+          const menu = screen.getByTestId(testId)
+          expect(menu.closest('.dsh-tabstrip')).toBeNull()
+          expect(menu.closest('.dsh-tablist')).toBeNull()
+          expect(menu.closest('[data-testid="tab-chrome"]')).not.toBeNull()
+        }
+
+        fireEvent.click(screen.getByTestId('btn-overflow'))
+        await waitFor(() => {
+          expect(screen.getByTestId('overflow-menu')).toBeTruthy()
+        })
+        expectOutsideStrips('overflow-menu')
+
+        fireEvent.contextMenu(screen.getByTestId('tab-item'))
+        await waitFor(() => {
+          expect(screen.getByTestId('tab-context-menu')).toBeTruthy()
+        })
+        expectOutsideStrips('tab-context-menu')
       })
 
       it('CAP-WEBVIEW-008 composer four states + Stop / stopping DOM ( / R7)', async () => {
@@ -678,8 +1089,6 @@ describe('cap:webview — editor chat shell React rendering', () => {
   })
 
   describe('verifier-phase1/layer-a-rtl.spec.tsx', () => {
-    const webviewRoot = join(process.cwd(), 'apps/vscode-dsh/webview')
-
     describe('verifier Layer-A RTL (independent DOM contract)', () => {
       const posts: unknown[] = []
       let bridge: ReturnType<typeof createMessageBridge>
@@ -707,7 +1116,10 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expect(screen.getByTestId('messages-empty')).toBeTruthy()
         const composer = screen.getByTestId('composer')
         expect(composer.getAttribute('data-composer-state')).toBeTruthy()
-        expect(composer.style.position).toBe('sticky')
+        expect(composer.className).toContain('dsh-composer')
+        // Pinned below the scrolling message area rather than styled inline
+        expect(composer.parentElement).toBe(screen.getByTestId('editor-chat-root'))
+        expect(TOKENS_CSS).toMatch(/\.dsh-composer\s*\{[^}]*flex-shrink:\s*0/)
         expect(screen.queryByTestId('messages-loading')).toBeNull()
       })
 
@@ -761,14 +1173,15 @@ describe('cap:webview — editor chat shell React rendering', () => {
 
       it('CAP-WEBVIEW-021 V-A4: tabs chrome contract + unread/running badges + select posts ui/tab-select', async () => {
         render(<App bridge={bridge} />)
-        // UI-AC[vscode-dsh-usable-loop]-10 / AC[vscode-dsh-usable-loop]-50: chrome height must stay token-driven (≤40px), not a literal.
-        // The token sits on the tab row inside the header — `phase-2` made the header itself a
-        // column container, so asserting on the header's own inline height pinned a layout detail
-        // that no longer exists (the value is still applied, one level down).
+        // UI-AC[vscode-dsh-usable-loop]-10 / AC[vscode-dsh-usable-loop]-50: chrome height must stay
+        // token-driven (≤40px), not a literal. It lives on the tab row's stylesheet rule so the
+        // tab label size can change without a second source of truth.
         const chrome = screen.getByTestId('tab-chrome')
-        const tokenDrivenRow = chrome.querySelector<HTMLElement>('[style*="--dsh-chrome-height"]')
-        expect(tokenDrivenRow?.style.height).toBe('var(--dsh-chrome-height)')
-        expect(Number.parseInt(tokenDrivenRow?.style.maxHeight ?? '9999', 10)).toBeLessThanOrEqual(40)
+        expect(chrome.querySelector('.dsh-tabstrip')).toBeTruthy()
+        expect(chrome.querySelector('.dsh-tablist')).toBeTruthy()
+        const tabstripRule = TOKENS_CSS.match(/\.dsh-tabstrip\s*\{([^}]*)\}/)?.[1] ?? ''
+        expect(tabstripRule).toContain('height: var(--dsh-chrome-height)')
+        expect(tabstripRule).not.toMatch(/(?:^|[^-])height:\s*\d+px/)
         await act(async () => {
           applyHostFrame({
             type: 'panel/tabs',
@@ -881,15 +1294,14 @@ describe('cap:webview — editor chat shell React rendering', () => {
       })
 
       it('CAP-WEBVIEW-024 V-A7: tokens.css chrome ≤40px + hover/focus rules (static UI- proxy)', () => {
-        const css = readFileSync(join(webviewRoot, 'src/styles/tokens.css'), 'utf8')
-        const m = css.match(/--dsh-chrome-height:\s*(\d+)px/)
+        const m = TOKENS_CSS.match(/--dsh-chrome-height:\s*(\d+)px/)
         expect(m).toBeTruthy()
         expect(Number(m![1])).toBeLessThanOrEqual(40)
-        expect(css).toMatch(/button:focus-visible/)
-        expect(css).toMatch(/\[data-testid='tab-item'\]:focus-visible/)
-        expect(css).toMatch(/button:hover:not\(:disabled\)/)
-        expect(css).toMatch(/--vscode-foreground/)
-        expect(css).not.toMatch(/fonts\.googleapis|cdn\.|@import\s+url\(http/)
+        expect(TOKENS_CSS).toMatch(/button:focus-visible/)
+        expect(TOKENS_CSS).toMatch(/\[data-testid=["']tab-item["']\]:focus-visible/)
+        expect(TOKENS_CSS).toMatch(/:hover:not\(:disabled\)/)
+        expect(TOKENS_CSS).toMatch(/--vscode-foreground/)
+        expect(TOKENS_CSS).not.toMatch(/fonts\.googleapis|cdn\.|@import\s+url\(http/)
       })
     })
   })
@@ -1510,8 +1922,9 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expect(screen.getByTestId('compaction-shadowed').textContent).toBe('释放 4200 tokens')
         // Centered separator, not a left/right chat bubble
         expect(screen.queryByTestId('msg')).toBeNull()
-        expect(marker.style.alignSelf).toBe('stretch')
-        expect(marker.style.textAlign).toBe('center')
+        expect(marker.className).toContain('dsh-compaction')
+        expect(TOKENS_CSS).toMatch(/\.dsh-compaction\s*\{[^}]*align-self:\s*stretch/)
+        expect(TOKENS_CSS).toMatch(/\.dsh-compaction\s*\{[^}]*align-items:\s*center/)
 
         const summary = screen.getByTestId('compaction-summary')
         expect(summary.querySelector('summary')?.textContent).toBe('查看摘要')
@@ -1555,7 +1968,8 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expect(marker.getAttribute('data-trigger')).toBe('manual')
         expect(marker.textContent).toContain('手动压缩')
         expect(screen.getByTestId('compaction-error').textContent).toBe('summarizer request timed out')
-        expect(screen.getByTestId('compaction-error').style.color).toContain('--dsh-danger')
+        expect(screen.getByTestId('compaction-error').className).toContain('dsh-compaction-error')
+        expect(TOKENS_CSS).toMatch(/\.dsh-compaction-error\s*\{[^}]*color:\s*var\(--dsh-danger\)/)
         expect(screen.queryByTestId('compaction-shadowed')).toBeNull()
         expect(screen.queryByTestId('compaction-summary')).toBeNull()
       })
@@ -1605,7 +2019,8 @@ describe('cap:webview — editor chat shell React rendering', () => {
         await waitFor(() => {
           expect(screen.getByTestId('token-meter').getAttribute('data-warn')).toBe('true')
         })
-        expect(screen.getByTestId('token-meter-bar').style.background).toContain('--dsh-warning')
+        expect(screen.getByTestId('token-meter-bar').getAttribute('data-level')).toBe('warn')
+        expect(TOKENS_CSS).toMatch(/\.dsh-meter-fill\[data-level=["']warn["']\]\s*\{\s*background:\s*var\(--dsh-warn\)/)
 
         await act(async () => {
           applyHostFrame({
@@ -1798,9 +2213,10 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expect(members[2]!.textContent).toBe('⊘ 校验')
         expect(screen.queryByTestId('workflow-empty')).toBeNull()
         expect(screen.queryByTestId('workflow-error')).toBeNull()
-        // Card semantics, not a left/right chat bubble
+        // Card semantics (a full-width surface), not a left/right chat bubble
         expect(screen.queryByTestId('msg')).toBeNull()
-        expect(card.style.alignSelf).toBe('stretch')
+        expect(card.className).toContain('dsh-card')
+        expect(TOKENS_CSS).toMatch(/\.dsh-card\s*\{[^}]*border-radius:\s*var\(--dsh-radius-card\)/)
       })
 
       it('CAP-WEBVIEW-045 clicking a member emits nav/open-subagent for that child session', async () => {
@@ -1895,8 +2311,9 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expect(members.length).toBe(2)
         expect(members[1]!.getAttribute('data-child-session-id')).toBe('child-b2')
         expect(members[1]!.getAttribute('data-outcome')).toBe('failed')
-        expect(members[1]!.style.color).toContain('--dsh-danger')
-        expect(members[0]!.style.color).toContain('--dsh-muted')
+        expect(TOKENS_CSS).toMatch(/\.dsh-workflow-member\[data-outcome=["']failed["']\]\s*\{\s*color:\s*var\(--dsh-danger\)/)
+        expect(members[0]!.getAttribute('data-outcome')).toBe('completed')
+        expect(TOKENS_CSS).toMatch(/\.dsh-workflow-member\[data-outcome=["']completed["']\]\s*\{\s*color:\s*var\(--dsh-muted\)/)
       })
 
       it('CAP-WEBVIEW-047 drops a malformed workflow payload and keeps the previous card on a bad patch', async () => {
@@ -2187,6 +2604,278 @@ describe('cap:webview — editor chat shell React rendering', () => {
           applyHostFrame({ type: 'settings/state', namespaces: 'nope' })
         })
         expect(getChatUiState().settingsState?.namespaces.map(ns => ns.ns)).toEqual(['llm-deepseek'])
+      })
+    })
+  })
+
+  describe('standalone component RTL tests', () => {
+    afterEach(() => cleanup())
+
+    it('CAP-WEBVIEW-053 TodoCard renders items with three statuses', () => {
+      render(
+        <TodoCard
+          sessionId="s1"
+          items={[
+            { content: 'task1', status: 'pending' },
+            { content: 'task2', status: 'in_progress' },
+            { content: 'task3', status: 'completed' },
+          ]}
+        />,
+      )
+      expect(screen.getByText('task1')).toBeTruthy()
+      expect(screen.getByText('task2')).toBeTruthy()
+      expect(screen.getByText('task3')).toBeTruthy()
+      const summary = screen.getByTestId('todo-summary')
+      expect(summary.textContent).toContain('待办 1')
+      expect(summary.textContent).toContain('进行中 1')
+      expect(summary.textContent).toContain('已完成 1')
+    })
+
+    it('CAP-WEBVIEW-054 TodoCard empty state', () => {
+      render(<TodoCard sessionId="s1" items={[]} />)
+      const card = screen.getByTestId('todo-card')
+      expect(card.getAttribute('data-empty')).toBe('true')
+      expect(card.textContent).toContain('本会话暂无待办')
+    })
+
+    it('CAP-WEBVIEW-055 ContextRing renders percentage', () => {
+      render(
+        <ContextRing
+          usedTokens={12000}
+          contextWindow={128000}
+          thresholdRatio={0.8}
+          onCompactNow={() => {}}
+          onOpenSettings={() => {}}
+        />,
+      )
+      const ring = screen.getByTestId('context-ring')
+      expect(ring.textContent).toContain('9%')
+    })
+
+    it('CAP-WEBVIEW-056 ContextRing click opens popover menu', () => {
+      render(
+        <ContextRing
+          usedTokens={12000}
+          contextWindow={128000}
+          thresholdRatio={0.8}
+          onCompactNow={() => {}}
+          onOpenSettings={() => {}}
+        />,
+      )
+      expect(screen.queryByTestId('context-ring-popover')).toBeNull()
+      fireEvent.click(screen.getByRole('button'))
+      expect(screen.getByTestId('context-ring-popover')).toBeTruthy()
+      expect(screen.getByText('立即压缩')).toBeTruthy()
+    })
+
+    it('CAP-WEBVIEW-057 ApprovalCard renders tool name and buttons', () => {
+      render(
+        <ApprovalCard id="a1" toolName="bash" onResolve={vi.fn()} />,
+      )
+      expect(screen.getByText('bash')).toBeTruthy()
+      expect(screen.getByTestId('approval-allow')).toBeTruthy()
+      expect(screen.getByTestId('approval-reject')).toBeTruthy()
+      expect(screen.getByTestId('approval-cancel')).toBeTruthy()
+    })
+
+    it('CAP-WEBVIEW-058 ApprovalCard allow calls onResolve', () => {
+      const onResolve = vi.fn()
+      render(<ApprovalCard id="a1" toolName="bash" onResolve={onResolve} />)
+      fireEvent.click(screen.getByTestId('approval-allow'))
+      expect(onResolve).toHaveBeenCalledWith('a1', 'allowed-once')
+    })
+
+    it('CAP-WEBVIEW-059 QuestionCard renders options', () => {
+      render(
+        <QuestionCard
+          id="qc1"
+          sessionId="s1"
+          questions={[
+            { id: 'q1', question: '选择方案', options: [{ label: 'A' }, { label: 'B' }] },
+          ]}
+          onAnswer={vi.fn()}
+          onDismiss={vi.fn()}
+        />,
+      )
+      expect(screen.getByText('选择方案')).toBeTruthy()
+      expect(screen.getByText('A')).toBeTruthy()
+      expect(screen.getByText('B')).toBeTruthy()
+    })
+
+    it('CAP-WEBVIEW-060 InlineDiff available renders add/del lines', () => {
+      render(
+        <InlineDiff
+          changeId="c1"
+          available={true}
+          oldText={'line1\nline2'}
+          newText={'line1\nline3'}
+          onRequestDiff={vi.fn()}
+          onOpenNativeDiff={vi.fn()}
+        />,
+      )
+      const body = screen.getByTestId('inline-diff-body')
+      expect(body.textContent).toContain('+line3')
+      expect(body.textContent).toContain('-line2')
+    })
+
+    it('CAP-WEBVIEW-061 InlineDiff unavailable shows reason', () => {
+      render(
+        <InlineDiff
+          changeId="c2"
+          available={false}
+          oldText=""
+          newText=""
+          reason="snapshot-unavailable"
+          onRequestDiff={vi.fn()}
+          onOpenNativeDiff={vi.fn()}
+        />,
+      )
+      const el = screen.getByTestId('inline-diff')
+      expect(el.getAttribute('data-available')).toBe('false')
+      expect(el.textContent).toContain('snapshot-unavailable')
+    })
+  })
+
+  describe('sidebar/SidebarApp.tsx', () => {
+    describe('History sidebar view: own-rendered rows and row menu', () => {
+      const posts: SidebarIntent[] = []
+      let bridge: ReturnType<typeof createMessageBridge<SidebarIntent>>
+
+      beforeEach(() => {
+        cleanup()
+        posts.length = 0
+        resetSidebarState()
+        bridge = createMessageBridge<SidebarIntent>({
+          postToHost: (msg) => {
+            posts.push(msg as SidebarIntent)
+          },
+          onHostMessage: () => () => {},
+          frameSink: applySidebarFrame,
+        })
+      })
+
+      afterEach(() => {
+        bridge.dispose()
+        cleanup()
+      })
+
+      /** Deliver the Host's rows the way the sidebar Host does. */
+      const pushRows = async (rows: unknown[]): Promise<void> => {
+        await act(async () => {
+          bridge.applyFrame({ type: 'sidebar/rows', rows })
+        })
+      }
+
+      it('CAP-WEBVIEW-069 renders one row per Host row, and rows only once the Host pushed them', async () => {
+        render(<SidebarApp bridge={bridge} />)
+        expect(posts).toContainEqual({ type: 'sidebar/ready' })
+        expect(screen.getByTestId('sidebar-loading')).toBeTruthy()
+        expect(screen.queryByTestId('sidebar-row')).toBeNull()
+
+        await pushRows([
+          {
+            sessionId: 'sess-1',
+            title: 'Refactor the parser',
+            when: '2026-09-24 10:00',
+            preview: '第一句用户输入',
+            continueHint: '可继续',
+          },
+          {
+            sessionId: 'sess-2',
+            title: 'Delegated child',
+            when: '2026-09-23 09:00',
+            preview: '',
+            continueHint: '',
+            parentTitle: 'Refactor the parser',
+          },
+        ])
+
+        const rows = screen.getAllByTestId('sidebar-row')
+        expect(rows.map(row => row.getAttribute('data-session-id'))).toEqual(['sess-1', 'sess-2'])
+        expect(rows[0]!.getAttribute('data-continue')).toBe('true')
+
+        const first = within(rows[0]!)
+        expect(first.getByTestId('sidebar-row-title').textContent).toContain('Refactor the parser')
+        expect(first.getByTestId('sidebar-row-continue').textContent).toBe('可继续')
+        const meta = first.getByTestId('sidebar-row-meta').textContent ?? ''
+        expect(meta).toContain('2026-09-24 10:00')
+        expect(meta).toContain('第一句用户输入')
+
+        // A parented row names its parent and offers no Continue.
+        expect(rows[1]!.getAttribute('data-continue')).toBe('false')
+        expect(rows[1]!.textContent).toContain('分支自 Refactor the parser')
+        expect(screen.queryByTestId('sidebar-empty')).toBeNull()
+      })
+
+      it('CAP-WEBVIEW-070 the empty state starts work, and the row font is larger than the panel body text', async () => {
+        render(<SidebarApp bridge={bridge} />)
+        await pushRows([])
+        expect(screen.getByTestId('sidebar-empty')).toBeTruthy()
+
+        fireEvent.click(screen.getByTestId('btn-sidebar-empty-new'))
+        fireEvent.click(screen.getByTestId('btn-sidebar-open-panel'))
+        expect(posts).toContainEqual({ type: 'sidebar/new-conversation' })
+        expect(posts).toContainEqual({ type: 'sidebar/open-panel' })
+
+        // jsdom applies no stylesheet, so the size is asserted on the rule that supplies it.
+        // A WebviewView owns its type scale; the native tree this replaces did not.
+        const token = SIDEBAR_CSS.match(/--dsh-sidebar-row-title:\s*([\d.]+)px/)
+        const bodyToken = TOKENS_CSS.match(/--dsh-text-base:\s*([\d.]+)px/)
+        expect(token).toBeTruthy()
+        expect(bodyToken).toBeTruthy()
+        expect(Number(token![1])).toBeGreaterThan(Number(bodyToken![1]))
+        expect(SIDEBAR_CSS).toMatch(
+          /\.dsh-sidebar-row-title\s*\{[^}]*font-size:\s*var\(--dsh-sidebar-row-title\)/,
+        )
+        // The rows scroll; the menu is placed against the view, so it must not be a child
+        // of the scrolling list whose overflow would clip it.
+        expect(SIDEBAR_CSS).toMatch(/\.dsh-sidebar-menu\s*\{[^}]*position:\s*fixed/)
+      })
+
+      it('CAP-WEBVIEW-071 a row menu opens on right-click and on the menu key, and each item sends its intent', async () => {
+        render(<SidebarApp bridge={bridge} />)
+        await pushRows([{
+          sessionId: 'sess-1',
+          title: 'Refactor the parser',
+          when: '2026-09-24 10:00',
+          preview: '',
+          continueHint: '',
+        }])
+        const row = screen.getByTestId('sidebar-row')
+        expect(screen.queryByTestId('sidebar-menu')).toBeNull()
+
+        fireEvent.contextMenu(row, { clientX: 30, clientY: 40 })
+        const menu = screen.getByTestId('sidebar-menu')
+        expect(menu.textContent).toContain('打开回放')
+        expect(menu.textContent).toContain('继续本会话')
+        expect(menu.textContent).toContain('复制会话 ID')
+        expect(menu.textContent).toContain('删除会话')
+        // The Host said this session cannot be continued, so that item cannot be picked.
+        expect(screen.getByTestId('menu-continue-session').hasAttribute('disabled')).toBe(true)
+        expect(menu.closest('[data-testid="sidebar-list"]')).toBeNull()
+
+        fireEvent.click(screen.getByTestId('menu-open-replay'))
+        expect(posts).toContainEqual({ type: 'sidebar/open', sessionId: 'sess-1' })
+        await waitFor(() => {
+          expect(screen.queryByTestId('sidebar-menu')).toBeNull()
+        })
+
+        fireEvent.keyDown(row, { key: 'F10', shiftKey: true })
+        expect(screen.getByTestId('sidebar-menu')).toBeTruthy()
+        fireEvent.click(screen.getByTestId('menu-copy-session-id'))
+        expect(posts).toContainEqual({ type: 'sidebar/copy-id', sessionId: 'sess-1' })
+
+        fireEvent.contextMenu(row)
+        fireEvent.click(screen.getByTestId('menu-delete-session'))
+        expect(posts).toContainEqual({ type: 'sidebar/delete', sessionId: 'sess-1' })
+
+        // Escape is the keyboard way out of an open menu.
+        fireEvent.contextMenu(row)
+        expect(screen.getByTestId('sidebar-menu')).toBeTruthy()
+        fireEvent.keyDown(document, { key: 'Escape' })
+        await waitFor(() => {
+          expect(screen.queryByTestId('sidebar-menu')).toBeNull()
+        })
       })
     })
   })

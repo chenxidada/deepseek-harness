@@ -25,6 +25,9 @@
  * - `FAKE_PERMISSION_LOG`: append permission RPC lines.
  * - `FAKE_SETTINGS_LOG`: append settings RPC lines; `settings/describe` answers
  *   one `fake-settings` namespace whose revision moves on each `settings/update`.
+ * - `FAKE_SESSION_LIST_CWD`: `session/list` reports this directory as the listed
+ *   session's workspace, so a caller's workspace filter has something to match.
+ * - `FAKE_SESSION_LIST_LOG`: append session RPC lines.
  * - `FAKE_EMIT_TURN_EVENTS`: after each prompt, stream session.status + session.event
  *   (turn / step / assistant / optional write tool) for timeline tests (Phase 4).
  * - `FAKE_EMIT_WRITE_DIFF`: with turn events, include write tool/call + tool/result
@@ -140,6 +143,28 @@ function fakeSettingsNamespaces() {
   }]
 }
 
+/**
+ * Deterministic `session/list` answer: one session in the workspace the knob names,
+ * so a caller's workspace filter has a match, and one in a different workspace.
+ */
+function fakeSessionList() {
+  const here = process.env.FAKE_SESSION_LIST_CWD ?? process.cwd()
+  return [
+    {
+      sessionId: 'fake-listed-here',
+      createdAt: 1_700_000_000_000,
+      cwd: here,
+      title: 'Fake listed session',
+    },
+    {
+      sessionId: 'fake-listed-elsewhere',
+      createdAt: 1_700_000_000_001,
+      cwd: '/dsh-other-workspace',
+      title: 'Elsewhere',
+    },
+  ]
+}
+
 function sendBridge(frame) {
   if (bridgeSocket === undefined || bridgeSocket.destroyed) return false
   bridgeSocket.write(`${JSON.stringify(frame)}\n`)
@@ -244,6 +269,16 @@ function connectBridge() {
           ok: true,
           presets: ['workspace-write', 'danger-full-access'],
           current: 'workspace-write',
+        })
+        continue
+      }
+      if (frame?.kind === 'session/list' && typeof frame.id === 'string') {
+        logLine('FAKE_SESSION_LIST_LOG', { id: frame.id })
+        sendBridge({
+          kind: 'session/list/response',
+          id: frame.id,
+          ok: true,
+          sessions: fakeSessionList(),
         })
         continue
       }

@@ -1,4 +1,5 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import type { MessageBridge } from '../bridge/message-bridge.ts'
 import type { BreadcrumbState, SearchHit, TabChromeItem } from '../store/chat-ui-store.ts'
 import {
@@ -33,6 +34,21 @@ interface TabContextMenuState {
   tabId: string
   sessionId: string
   title: string
+  /** Left offset of the right-clicked Tab inside the header, in pixels. */
+  left: number
+}
+
+/** Frame shared by the header's two popover menus; each supplies its own anchor edge. */
+const menuStyle: CSSProperties = {
+  position: 'absolute',
+  top: 'var(--dsh-chrome-height)',
+  zIndex: 30,
+  minWidth: 160,
+  background: 'var(--dsh-bg)',
+  border: '1px solid var(--dsh-border)',
+  borderRadius: 'var(--dsh-radius-sm)',
+  boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+  padding: 4,
 }
 
 export function TabChrome({
@@ -53,6 +69,10 @@ export function TabChrome({
   breadcrumb,
 }: TabChromeProps) {
   const [tabContextMenu, setTabContextMenu] = useState<TabContextMenuState | null>(null)
+  const headerRef = useRef<HTMLElement | null>(null)
+  const overflowButtonRef = useRef<HTMLButtonElement | null>(null)
+  /** Right offset of the overflow menu inside the header, in pixels. */
+  const [overflowRight, setOverflowRight] = useState(0)
 
   useEffect(() => {
     if (tabContextMenu === null) return
@@ -69,48 +89,15 @@ export function TabChrome({
   }, [tabContextMenu])
 
   return (
-    <header
-      data-testid="tab-chrome"
-      className="dsh-tab-chrome"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        borderBottom: '1px solid var(--dsh-border)',
-        flexShrink: 0,
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 4,
-          height: 'var(--dsh-chrome-height)',
-          maxHeight: 40,
-          minHeight: 32,
-          padding: '0 8px',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'stretch',
-            gap: 2,
-            overflowX: 'auto',
-            flex: 1,
-            minWidth: 0,
-          }}
-          role="tablist"
-        >
+    <header data-testid="tab-chrome" className="dsh-tab-chrome" ref={headerRef}>
+      <div className="dsh-tabstrip">
+        <div className="dsh-tablist" role="tablist">
           {tabs.map((tab) => {
             const active = tab.tabId === activeTabId
             const deleteSessionId = tab.sessionId
               ?? (active && activeSessionId ? activeSessionId : undefined)
-            const menuOpen = tabContextMenu?.tabId === tab.tabId
             return (
-              <div
-                key={tab.tabId}
-                style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}
-              >
+              <div key={tab.tabId} className="dsh-tab-wrap">
                 <button
                   type="button"
                   role="tab"
@@ -130,38 +117,29 @@ export function TabChrome({
                       setTabContextMenu(null)
                       return
                     }
+                    const header = headerRef.current
+                    const tabRect = event.currentTarget.getBoundingClientRect()
                     setTabContextMenu({
                       tabId: tab.tabId,
                       sessionId: deleteSessionId,
                       title: tab.title,
+                      // The menu renders under the header, outside both scrolling
+                      // strips, so it needs the Tab's offset in that context.
+                      left: header === null
+                        ? tabRect.left
+                        : tabRect.left - header.getBoundingClientRect().left,
                     })
                   }}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    maxWidth: 160,
-                    padding: '2px 8px',
-                    border: 'none',
-                    borderBottom: active ? '2px solid var(--dsh-focus)' : '2px solid transparent',
-                    background: active ? 'var(--dsh-tab-active-bg)' : 'var(--dsh-tab-inactive-bg)',
-                    color: active ? 'var(--dsh-tab-active-fg)' : 'var(--dsh-tab-inactive-fg)',
-                    cursor: 'pointer',
-                    font: 'inherit',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}
                 >
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.title}</span>
+                  <span>{tab.title}</span>
                   {tab.status === 'running' ? (
-                    <span data-testid="tab-running-badge" aria-label="running" style={{ fontSize: 10 }}>●</span>
+                    <span data-testid="tab-running-badge" aria-label="running">●</span>
                   ) : null}
                   {tab.unread ? (
-                    <span data-testid="tab-unread-badge" aria-label="unread" style={{ fontSize: 10 }}>•</span>
+                    <span data-testid="tab-unread-badge" aria-label="unread">•</span>
                   ) : null}
                   {tab.approvalBadge ? (
-                    <span data-testid="tab-approval-badge" aria-label="approval" style={{ fontSize: 10 }}>!</span>
+                    <span data-testid="tab-approval-badge" aria-label="approval">!</span>
                   ) : null}
                   <span
                     role="button"
@@ -179,190 +157,102 @@ export function TabChrome({
                         bridge.emitIntent({ type: 'ui/tab-close', tabId: tab.tabId })
                       }
                     }}
-                    style={{ marginLeft: 2, opacity: 0.7 }}
+                    className="dsh-tab-close"
                   >
                     ×
                   </span>
                 </button>
-                {menuOpen && tabContextMenu ? (
-                  <div
-                    data-testid="tab-context-menu"
-                    role="menu"
-                    onMouseDown={event => event.stopPropagation()}
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      top: '100%',
-                      zIndex: 30,
-                      minWidth: 160,
-                      background: 'var(--dsh-bg)',
-                      border: '1px solid var(--dsh-border)',
-                      borderRadius: 'var(--dsh-radius-sm)',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-                      padding: 4,
-                    }}
-                  >
-                    <button
-                      type="button"
-                      role="menuitem"
-                      data-testid="menu-tab-delete-session"
-                      className="dsh-menu-item"
-                      onClick={() => {
-                        openDeleteConfirm({
-                          sessionId: tabContextMenu.sessionId,
-                          title: tabContextMenu.title,
-                          source: 'tab-context',
-                        })
-                        setTabContextMenu(null)
-                      }}
-                    >
-                      删除会话
-                    </button>
-                  </div>
-                ) : null}
               </div>
             )
           })}
         </div>
-        <button
-          type="button"
-          data-testid="btn-new-tab"
-          title="新建会话"
-          onClick={() => bridge.emitIntent({ type: 'ui/tab-new' })}
-          style={chromeBtnStyle}
-        >
-          +
-        </button>
-        <button
-          type="button"
-          data-testid="btn-history"
-          title="历史"
-          aria-pressed={historyOpen}
-          onClick={() => bridge.emitIntent({
-            type: historyOpen ? 'ui/history-close' : 'ui/history-open',
-          })}
-          style={chromeBtnStyle}
-        >
-          历史
-        </button>
-        <button
-          type="button"
-          data-testid="btn-search"
-          title="搜索"
-          aria-pressed={searchOpen}
-          onClick={() => {
-            const next = !searchOpen
-            setSearchOpen(next)
-            if (!next) return
-          }}
-          style={chromeBtnStyle}
-        >
-          搜索
-        </button>
-        <button
-          type="button"
-          data-testid="btn-settings"
-          title="设置"
-          aria-pressed={settingsOpen}
-          onClick={() => {
-            bridge.emitIntent({ type: 'settings/open' })
-            setSettingsOpen(true)
-          }}
-          style={chromeBtnStyle}
-        >
-          设置
-        </button>
-        <div style={{ position: 'relative' }}>
+        <div className="dsh-chrome-actions">
+          <button
+            type="button"
+            data-testid="btn-new-tab"
+            title="新建会话"
+            className="dsh-chrome-btn"
+            onClick={() => bridge.emitIntent({ type: 'ui/tab-new' })}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            data-testid="btn-history"
+            title="历史"
+            aria-pressed={historyOpen}
+            className="dsh-chrome-btn"
+            onClick={() => bridge.emitIntent({
+              type: historyOpen ? 'ui/history-close' : 'ui/history-open',
+            })}
+          >
+            历史
+          </button>
+          <button
+            type="button"
+            data-testid="btn-search"
+            title="搜索"
+            aria-pressed={searchOpen}
+            className="dsh-chrome-btn"
+            onClick={() => {
+              const next = !searchOpen
+              setSearchOpen(next)
+              if (!next) return
+            }}
+          >
+            搜索
+          </button>
+          <button
+            type="button"
+            data-testid="btn-settings"
+            title="设置"
+            aria-pressed={settingsOpen}
+            className="dsh-chrome-btn"
+            onClick={() => {
+              bridge.emitIntent({ type: 'settings/open' })
+              setSettingsOpen(true)
+            }}
+          >
+            设置
+          </button>
           <button
             type="button"
             data-testid="btn-overflow"
             title="更多"
             aria-expanded={overflowOpen}
+            className="dsh-chrome-btn"
+            ref={overflowButtonRef}
             onClick={() => {
               setTabContextMenu(null)
+              const button = overflowButtonRef.current
+              const header = headerRef.current
+              // The menu renders under the header, outside both scrolling strips, so it
+              // needs the button's right offset in that context.
+              if (button !== null && header !== null) {
+                setOverflowRight(Math.round(
+                  header.getBoundingClientRect().right - button.getBoundingClientRect().right,
+                ))
+              }
               setOverflowOpen(!overflowOpen)
             }}
-            style={chromeBtnStyle}
           >
             ⋯
           </button>
-          {overflowOpen ? (
-            <div
-              data-testid="overflow-menu"
-              role="menu"
-              style={{
-                position: 'absolute',
-                right: 0,
-                top: '100%',
-                zIndex: 20,
-                minWidth: 160,
-                background: 'var(--dsh-bg)',
-                border: '1px solid var(--dsh-border)',
-                borderRadius: 'var(--dsh-radius-sm)',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-                padding: 4,
-              }}
-            >
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="menu-delete-session"
-                className="dsh-menu-item"
-                disabled={!activeSessionId}
-                onClick={() => {
-                  if (!activeSessionId) return
-                  openDeleteConfirm({
-                    sessionId: activeSessionId,
-                    title: activeTitle,
-                    source: 'chrome',
-                  })
-                }}
-              >
-                删除会话
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="menu-open-timeline"
-                className="dsh-menu-item"
-                onClick={() => {
-                  setOverflowOpen(false)
-                  bridge.emitIntent({ type: 'ui/open-timeline' })
-                }}
-              >
-                打开 Timeline
-              </button>
-            </div>
-          ) : null}
         </div>
       </div>
       {forkParentTitle ? (
-        <div
-          data-testid="fork-parent-banner"
-          className="dsh-muted"
-          style={{ padding: '4px 12px', fontSize: '0.85em', borderTop: '1px solid var(--dsh-border)' }}
-        >
+        <div data-testid="fork-parent-banner" className="dsh-muted dsh-tag">
           {`分支自 ${forkParentTitle}`}
         </div>
       ) : null}
       {contextSessionId !== undefined || breadcrumb !== undefined ? (
-        <div
-          data-testid="subagent-breadcrumb"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '4px 12px',
-            fontSize: '0.85em',
-            borderTop: '1px solid var(--dsh-border)',
-          }}
-        >
+        <div data-testid="subagent-breadcrumb" className="dsh-breadcrumb">
           <button
             type="button"
             data-testid="btn-nav-back"
             disabled={breadcrumb?.parentDeleted === true}
             onClick={() => bridge.emitIntent({ type: 'nav/back' })}
-            style={chromeBtnStyle}
+            className="dsh-chrome-btn"
           >
             ← 返回
           </button>
@@ -387,7 +277,7 @@ export function TabChrome({
                 type: 'action/pin-subagent',
                 childSessionId: contextSessionId,
               })}
-              style={chromeBtnStyle}
+              className="dsh-chrome-btn"
             >
               钉住
             </button>
@@ -456,21 +346,10 @@ export function TabChrome({
                       })
                       setSearchOpen(false)
                     }}
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      textAlign: 'left',
-                      border: 'none',
-                      borderTop: '1px solid var(--dsh-border)',
-                      background: 'transparent',
-                      color: 'inherit',
-                      padding: '8px 4px',
-                      cursor: 'pointer',
-                      font: 'inherit',
-                    }}
+                    className="dsh-search-row"
                   >
-                    <div style={{ fontWeight: 600 }}>{hit.title}</div>
-                    <div className="dsh-muted" style={{ fontSize: '0.85em' }}>
+                    <div className="dsh-search-title">{hit.title}</div>
+                    <div className="dsh-muted dsh-search-preview">
                       {hit.firstUserPreview || hit.matchedPath || hit.sessionId.slice(0, 8)}
                       {hit.matchTiers.length > 0 ? ` · tier ${hit.matchTiers.join('+')}` : ''}
                     </div>
@@ -481,16 +360,71 @@ export function TabChrome({
           )}
         </div>
       ) : null}
+      {/* Both menus anchor to the header, not to the tab strip: the strip and the tab
+          list scroll horizontally, and a scroll container clips its absolutely
+          positioned descendants, which reduced each menu to a sliver. */}
+      {tabContextMenu !== null ? (
+        <div
+          data-testid="tab-context-menu"
+          role="menu"
+          onMouseDown={event => event.stopPropagation()}
+          style={{ ...menuStyle, left: tabContextMenu.left }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="menu-tab-delete-session"
+            className="dsh-menu-item"
+            onClick={() => {
+              openDeleteConfirm({
+                sessionId: tabContextMenu.sessionId,
+                title: tabContextMenu.title,
+                source: 'tab-context',
+              })
+              setTabContextMenu(null)
+            }}
+          >
+            删除会话
+          </button>
+        </div>
+      ) : null}
+      {overflowOpen ? (
+        <div
+          data-testid="overflow-menu"
+          role="menu"
+          style={{ ...menuStyle, right: overflowRight }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="menu-delete-session"
+            className="dsh-menu-item"
+            disabled={!activeSessionId}
+            onClick={() => {
+              if (!activeSessionId) return
+              openDeleteConfirm({
+                sessionId: activeSessionId,
+                title: activeTitle,
+                source: 'chrome',
+              })
+            }}
+          >
+            删除会话
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="menu-open-timeline"
+            className="dsh-menu-item"
+            onClick={() => {
+              setOverflowOpen(false)
+              bridge.emitIntent({ type: 'ui/open-timeline' })
+            }}
+          >
+            打开 Timeline
+          </button>
+        </div>
+      ) : null}
     </header>
   )
-}
-
-const chromeBtnStyle: CSSProperties = {
-  border: 'none',
-  background: 'transparent',
-  color: 'var(--dsh-muted)',
-  cursor: 'pointer',
-  padding: '4px 6px',
-  font: 'inherit',
-  flexShrink: 0,
 }

@@ -207,7 +207,9 @@
             "CAP-SESSION-HOST-147",
             "CAP-SESSION-HOST-148",
             "CAP-SESSION-HOST-149",
-            "CAP-SESSION-HOST-150"
+            "CAP-SESSION-HOST-150",
+            "CAP-SESSION-HOST-151",
+            "CAP-SESSION-HOST-152"
           ]
         }
       ],
@@ -305,7 +307,21 @@
             "CAP-CONVERSATION-069",
             "CAP-CONVERSATION-070",
             "CAP-CONVERSATION-071",
-            "CAP-CONVERSATION-072"
+            "CAP-CONVERSATION-072",
+            "CAP-CONVERSATION-073",
+            "CAP-CONVERSATION-074",
+            "CAP-CONVERSATION-075",
+            "CAP-CONVERSATION-076",
+            "CAP-CONVERSATION-077",
+            "CAP-CONVERSATION-078",
+            "CAP-CONVERSATION-079",
+            "CAP-CONVERSATION-080",
+            "CAP-CONVERSATION-081",
+            "CAP-CONVERSATION-082",
+            "CAP-CONVERSATION-083",
+            "CAP-CONVERSATION-084",
+            "CAP-CONVERSATION-085",
+            "CAP-CONVERSATION-086"
           ]
         }
       ],
@@ -627,7 +643,22 @@
             "CAP-CHAT-PANEL-081",
             "CAP-CHAT-PANEL-082",
             "CAP-CHAT-PANEL-083",
-            "CAP-CHAT-PANEL-084"
+            "CAP-CHAT-PANEL-084",
+            "CAP-CHAT-PANEL-085",
+            "CAP-CHAT-PANEL-086",
+            "CAP-CHAT-PANEL-087",
+            "CAP-CHAT-PANEL-088",
+            "CAP-CHAT-PANEL-089",
+            "CAP-CHAT-PANEL-090",
+            "CAP-CHAT-PANEL-091",
+            "CAP-CHAT-PANEL-092",
+            "CAP-CHAT-PANEL-093",
+            "CAP-CHAT-PANEL-094",
+            "CAP-CHAT-PANEL-095",
+            "CAP-CHAT-PANEL-096",
+            "CAP-CHAT-PANEL-097",
+            "CAP-CHAT-PANEL-098",
+            "CAP-CHAT-PANEL-099"
           ]
         }
       ],
@@ -698,7 +729,20 @@
             "CAP-WEBVIEW-049",
             "CAP-WEBVIEW-050",
             "CAP-WEBVIEW-051",
-            "CAP-WEBVIEW-052"
+            "CAP-WEBVIEW-052",
+            "CAP-WEBVIEW-062",
+            "CAP-WEBVIEW-063",
+            "CAP-WEBVIEW-064",
+            "CAP-WEBVIEW-065",
+            "CAP-WEBVIEW-066",
+            "CAP-WEBVIEW-067",
+            "CAP-WEBVIEW-068",
+            "CAP-WEBVIEW-069",
+            "CAP-WEBVIEW-070",
+            "CAP-WEBVIEW-071",
+            "CAP-WEBVIEW-072",
+            "CAP-WEBVIEW-073",
+            "CAP-WEBVIEW-074"
           ]
         }
       ],

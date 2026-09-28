@@ -9,22 +9,22 @@ import { ConversationRegistry } from './conversation-registry.ts'
 import { MessageStore, type ChatMessage } from './message-store.ts'
 import type { ForkBoundary, ForkIntent, ForkRequest } from './fork/fork-orchestrator.ts'
 import {
-  canRegisterConversationTabBar,
   conversationTreeItems,
-  createConversationTabBar,
   type ConversationTreeItem,
 } from './conversation-tab-bar.ts'
 import {
-  canRegisterTimelineView,
-  createTimelineView,
   timelineTreeItems,
   type TimelineTreeItem,
 } from './timeline-view.ts'
 import {
-  canRegisterHistoryView,
-  createHistoryView,
+  hostSessionHistoryRow,
   listHistoryFromIndex,
+  mergeHistoryRows,
 } from './history-view.ts'
+import {
+  canRegisterSidebarView,
+  createSidebarView,
+} from './sidebar-view.ts'
 import {
   DEFAULT_POST_HOC_DIFF_ONLY,
   openChangeSnapshotDiff,
@@ -32,7 +32,14 @@ import {
   reviewWorkspaceDiffs,
   type DiffVsCodeLike,
 } from './diff-entry.ts'
-import { HostStartError, IdeSessionHost, type ModelListResult, type SettingsNamespaceView } from './session-host.ts'
+import {
+  HostStartError,
+  IdeSessionHost,
+  type CommandExecuteResult,
+  type HostSessionRow,
+  type ModelListResult,
+  type SettingsNamespaceView,
+} from './session-host.ts'
 import {
   HOST_DIAGNOSTICS_CHANNEL_NAME,
   HostDiagnosticRecorder,
@@ -58,6 +65,7 @@ import type { ConversationRegistrySnapshot, ConversationTab } from './conversati
 import type { TimelineDiffHunk, TimelineItem } from './timeline-store.ts'
 import {
   ExtensionIndex,
+  type HistoryListRow,
   type WorkspaceStateLike,
 } from './extension-index.ts'
 import { EMPTY_LIVE_TITLE } from './conversation-titles.ts'
@@ -71,6 +79,7 @@ import {
   type EditorChatPanelController,
   type WebviewViewLike,
 } from './chat-panel/index.ts'
+import type { SlashCandidate } from './chat-panel/protocol.ts'
 import {
   AutoStartOrchestrator,
   type StartHostPort,
@@ -87,17 +96,25 @@ import {
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import {
   askAboutSelection,
   extractAtPathTokens,
+  formatOfficialAtPath,
   planReferenceOpen,
   resolveAtPathInWorkspace,
   SelectionMetaStore,
   type TextEditorLike,
 } from './code-context/index.ts'
+import {
+  DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES,
+  DEFAULT_FILE_SEARCH_MAX_ENTRIES,
+  DEFAULT_FILE_SEARCH_MAX_RESULTS,
+  WorkspaceFileSearch,
+} from '@deepseek-ai/dsh-file-reference-local/search'
+import type { FileReferenceCandidate } from '@deepseek-ai/dsh-file-reference/types'
 import {
   gateKey,
   type RevertGate,
@@ -347,6 +364,22 @@ let connectionUi: ConnectionUiController | undefined
 let autoReady: AutoReadyCoordinator | undefined
 let conversationView: WebviewViewLike | undefined
 let conversationVisible = false
+/** Exactly one Conversation Panel reveal per window, triggered by the first History reveal. */
+let sidebarOpenedPanel = false
+/**
+ * History rows the runtime listed for this workspace, refreshed on Host start and on
+ * each History reveal. They are never written to the index: a listing row has no
+ * continue capability and carries the runtime's title, not this Extension's.
+ */
+let hostHistoryRows: HistoryListRow[] = []
+/**
+ * Fuzzy workspace path index behind composer `@` completion, rebuilt when the workspace
+ * root changes. The Host session owns the same index for its own `ctx.fileReferences`
+ * service; the panel asks this one so a candidate appears without a Host round-trip.
+ */
+let atPathSearch: WorkspaceFileSearch | undefined
+/** Workspace root the cached {@link atPathSearch} was built for. */
+let atPathSearchRoot = ''
 /** Cached vscode workspace accessor for AutoReady workspace-index predicate. */
 let vscodeWorkspaceFolders: (() => readonly { uri: { fsPath: string } }[] | undefined) | undefined
 /** Active duck-typed vscode for revert write surface (AD-CCD-10). */
@@ -403,12 +436,15 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   vscodeApi = vscode
   workspaceState = context.workspaceState
   workspaceKey = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''
+  loadDotEnv(workspaceKey)
   changeStorageRoot = resolveChangeStorageRoot(context, workspaceKey)
   credentialPresenceOverride = undefined
   userStopping = false
   hostCreateCount = 0
   conversationView = undefined
   conversationVisible = false
+  sidebarOpenedPanel = false
+  hostHistoryRows = []
   editorChatPanel?.dispose()
   editorChatPanel = undefined
   vscodeWorkspaceFolders = () => vscode.workspace.workspaceFolders
@@ -420,20 +456,55 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     },
   })
 
-  if (canRegisterConversationTabBar(vscode)) {
-    const tabBar = createConversationTabBar(vscode, getConversationSnapshot)
-    tabBarRefresh = () => tabBar.refresh()
-    context.subscriptions.push(tabBar)
-  }
-  if (canRegisterTimelineView(vscode)) {
-    const timeline = createTimelineView(vscode, getActiveTimelineItems)
-    timelineRefresh = () => timeline.refresh()
-    context.subscriptions.push(timeline)
-  }
-  if (canRegisterHistoryView(vscode)) {
-    const history = createHistoryView(vscode, () => listHistoryFromIndex(resolveWorkspaceIndex()))
-    historyRefresh = () => history.refresh()
-    context.subscriptions.push(history)
+  // ConversationTabBar and TimelineView registration removed from VS Code views.
+  // Source files (conversation-tab-bar.ts, timeline-view.ts) are retained for future use.
+  if (canRegisterSidebarView(vscode)) {
+    const sidebar = createSidebarView({
+      vscode,
+      extensionRoot: context.extensionPath,
+      getRows: () => currentHistoryRows(),
+      onOpen: async (sessionId) => {
+        const title = currentHistoryRows().find(row => row.sessionId === sessionId)?.title
+        await vscode.commands.executeCommand?.('dsh.openHistory', sessionId, title)
+      },
+      onDelete: async (sessionId) => {
+        await runDeleteHistoryRow(vscode, sessionId)
+      },
+      onContinue: async (sessionId) => {
+        const title = currentHistoryRows().find(row => row.sessionId === sessionId)?.title
+        const opened = await vscode.commands.executeCommand?.(
+          'dsh.openHistory',
+          sessionId,
+          title,
+        ) as { outcome?: string } | undefined
+        // Continue acts on the active Tab, so it only runs once the replay is the one on screen.
+        if (opened?.outcome !== 'opened' && opened?.outcome !== 'activated') return
+        await vscode.commands.executeCommand?.('dsh.continueConversation')
+      },
+      onCopyId: async (sessionId) => {
+        await vscode.commands.executeCommand?.('dsh.copyToClipboard', sessionId)
+      },
+      onNewConversation: async () => {
+        await vscode.commands.executeCommand?.('dsh.newConversation')
+      },
+      onOpenPanel: async () => {
+        await revealConversationPanel(vscode)
+      },
+      hooks: {
+        onVisibilityChanged(visible) {
+          // The Activity Bar icon reveals this view and nothing else, so the first
+          // reveal is the product entry point: open the Conversation Panel once.
+          if (!visible) return
+          if (!sidebarOpenedPanel) {
+            sidebarOpenedPanel = true
+            void revealConversationPanel(vscode)
+          }
+          void refreshHostHistory()
+        },
+      },
+    })
+    historyRefresh = () => sidebar.refresh()
+    context.subscriptions.push(sidebar)
   }
   if (typeof vscode.window.createTreeView === 'function') {
     const todoView = createTodoTreeView(vscode)
@@ -487,6 +558,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     connectionUi?.projectOrchestrator(snap)
     autoReady?.onHostReadyChanged(snap.state === 'started')
     recordOrchestratorFailure(snap)
+    if (snap.state === 'started') void refreshHostHistory()
   })
 
   if (canCreateEditorChatPanel(vscode) && typeof vscode.Uri?.file === 'function') {
@@ -525,6 +597,9 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   }
 
   if (canRegisterChatPanel(vscode)) {
+    // The `dsh.chat` view is no longer contributed (the sidebar keeps History only), so this provider
+    // resolves nothing in VS Code; `conversationView` stays the surface for hosts without
+    // createWebviewPanel and for the L2 harness.
     context.subscriptions.push(registerChatPanelProvider(vscode, panelHost, {
       onViewResolved(view) {
         conversationView = view
@@ -726,51 +801,58 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     await runDeleteActive(vscode, typeof tabIdArg === 'string' ? tabIdArg : undefined)
   })
 
-  const openHistory = vscode.commands.registerCommand('dsh.openHistory', async (sessionIdArg?: unknown) => {
-    let sessionId = typeof sessionIdArg === 'string' ? sessionIdArg : undefined
-    if (sessionId === undefined || sessionId === '') {
-      const rows = listHistoryFromIndex(resolveWorkspaceIndex())
-      if (rows.length === 0) {
-        await vscode.window.showInformationMessage('No history sessions in this workspace.')
-        return
+  const openHistory = vscode.commands.registerCommand(
+    'dsh.openHistory',
+    async (sessionIdArg?: unknown, titleArg?: unknown) => {
+      let sessionId = typeof sessionIdArg === 'string' ? sessionIdArg : undefined
+      let title = typeof titleArg === 'string' && titleArg !== '' ? titleArg : undefined
+      if (sessionId === undefined || sessionId === '') {
+        const rows = currentHistoryRows()
+        if (rows.length === 0) {
+          await vscode.window.showInformationMessage('No history sessions in this workspace.')
+          return
+        }
+        const pick = await vscode.window.showQuickPick?.(
+          rows.map(row => ({
+            label: row.title,
+            description: row.continueHint || row.sessionId.slice(0, 8),
+            tabId: row.sessionId,
+          })),
+          { title: 'Open History Replay', placeHolder: 'Select a session' },
+        )
+        const chosen = Array.isArray(pick) ? pick[0] : pick
+        if (chosen === undefined) return
+        sessionId = chosen.tabId
+        title = rows.find(row => row.sessionId === sessionId)?.title
       }
-      const pick = await vscode.window.showQuickPick?.(
-        rows.map(row => ({
-          label: row.title,
-          description: row.continueHint || row.sessionId.slice(0, 8),
-          tabId: row.sessionId,
-        })),
-        { title: 'Open History Replay', placeHolder: 'Select a session' },
-      )
-      const chosen = Array.isArray(pick) ? pick[0] : pick
-      if (chosen === undefined) return
-      sessionId = chosen.tabId
-    }
-    const controller = requireConversations()
-    if (controller === undefined) {
-      await vscode.window.showErrorMessage(
-        'DeepSeek Harness Host is not connected. Connect Host before opening a history replay.',
-      )
-      return { outcome: 'host-not-ready' as const, sessionId }
-    }
-    const result = await controller.openFromHistory(sessionId)
-    historyRefresh?.()
-    tabBarRefresh?.()
-    panelHost?.pushFullState()
-    if (result.outcome === 'opened' || result.outcome === 'activated') {
-      // AC-1c: History TreeView / command open must create+focus Editor Chat Panel.
-      await revealConversationPanel(vscode, false, { sessionId })
-    } else if (result.outcome === 'host-not-ready') {
-      await vscode.window.showInformationMessage(
-        'Waiting for Host before replaying this session from the authoritative log.',
-      )
-    } else if (result.outcome === 'error') {
-      await vscode.window.showErrorMessage(`Failed to open history replay: ${result.error}`)
-    } else if (result.outcome === 'missing') {
-      await vscode.window.showErrorMessage('History session not found or deleted.')
-    }
-    return result
-  })
+      const controller = requireConversations()
+      if (controller === undefined) {
+        await vscode.window.showErrorMessage(
+          'DeepSeek Harness Host is not connected. Connect Host before opening a history replay.',
+        )
+        return { outcome: 'host-not-ready' as const, sessionId }
+      }
+      const result = await controller.openFromHistory(sessionId, {
+        ...title === undefined ? {} : { title },
+      })
+      historyRefresh?.()
+      tabBarRefresh?.()
+      panelHost?.pushFullState()
+      if (result.outcome === 'opened' || result.outcome === 'activated') {
+        // AC-1c: History sidebar / command open must create+focus Editor Chat Panel.
+        await revealConversationPanel(vscode, false, { sessionId })
+      } else if (result.outcome === 'host-not-ready') {
+        await vscode.window.showInformationMessage(
+          'Waiting for Host before replaying this session from the authoritative log.',
+        )
+      } else if (result.outcome === 'error') {
+        await vscode.window.showErrorMessage(`Failed to open history replay: ${result.error}`)
+      } else if (result.outcome === 'missing') {
+        await vscode.window.showErrorMessage('History session not found or deleted.')
+      }
+      return result
+    },
+  )
 
   /**
    * Query/browse: tier 1 title/preview + tier 2 path→session search.
@@ -889,6 +971,12 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
   const askAboutSelectionCmd = vscode.commands.registerCommand(
     'dsh.askAboutSelection',
     async () => runAskAboutSelection(vscode),
+  )
+
+  // Palette entry for an `@` file mention; independent of any Webview drop payload.
+  const insertFileReferenceCmd = vscode.commands.registerCommand(
+    'dsh.insertFileReference',
+    async () => runInsertFileReference(vscode),
   )
 
   const selectPermission = vscode.commands.registerCommand('dsh.selectPermissionPreset', async () => {
@@ -1073,10 +1161,15 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
    */
   const triggerCompact = vscode.commands.registerCommand('dsh.triggerCompact', async () => {
     const controller = requireConversations()
-    if (controller === undefined || controller.registry.getActive() === undefined) {
+    const active = controller?.registry.getActive()
+    if (controller === undefined || active === undefined) {
       await vscode.window.showInformationMessage('No active conversation to compact.')
       return { ok: false as const, reason: 'no-active' as const }
     }
+    // The runtime's own `/compact` command owns the work, so the slash line must not
+    // reach the model. A composition without that command keeps the prompt path —
+    // the line is then plain text like any other unresolved slash gesture.
+    if (await runCommand(active.sessionId, '/compact')) return { ok: true as const }
     try {
       await controller.promptActive('/compact')
       return { ok: true as const }
@@ -1202,7 +1295,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
           )
         },
       ),
-      vscode.commands.registerCommand('dsh.test.listHistory', () => listHistoryFromIndex(resolveWorkspaceIndex())),
+      vscode.commands.registerCommand('dsh.test.listHistory', () => currentHistoryRows()),
       vscode.commands.registerCommand('dsh.test.injectAssistant', (opts?: unknown) => {
         const controller = conversations
         if (controller === undefined) return { ok: false as const, reason: 'no-host' }
@@ -2027,6 +2120,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     restoreMore,
     promptActive,
     askAboutSelectionCmd,
+    insertFileReferenceCmd,
     selectPermission,
     reviewDiffs,
     openDiff,
@@ -2054,6 +2148,9 @@ export async function deactivate(): Promise<void> {
   unbindConversations()
   connectionUi?.dispose()
   connectionUi = undefined
+  atPathSearch?.dispose()
+  atPathSearch = undefined
+  atPathSearchRoot = ''
   orchestrator = undefined
   autoReady = undefined
   conversationView = undefined
@@ -2227,6 +2324,72 @@ function pushActiveTheme(vscode: VsCodeLike): void {
   panelHost?.pushThemeKind(label)
 }
 
+/**
+ * Interaction UI that pushes to the Webview panel when visible, falling back to native QuickPick.
+ * @param nativeUi - VS Code QuickPick / InputBox presenter.
+ * @returns panel-first presenter.
+ */
+function createPanelFirstInteractionUi(
+  nativeUi: import('./interaction-coordinator.ts').InteractionUi,
+): import('./interaction-coordinator.ts').InteractionUi {
+  return {
+    async presentApproval(request, signal) {
+      const panel = panelHost
+      if (panel !== undefined && conversationVisible) {
+        panel.pushInteraction({
+          type: 'interaction/present',
+          interactionType: 'approval',
+          id: request.id,
+          sessionId: request.sessionId,
+          toolName: request.toolName,
+          ...request.reason === undefined ? {} : { reason: request.reason },
+        })
+        // Wait for the coordinator to settle this entry (via deps.resolveApproval).
+        // The abort signal fires when the coordinator settles or fail-closes.
+        return new Promise<import('@deepseek-ai/dsh-ide-bridge').ApprovalOutcome>((resolve) => {
+          const onAbort = (): void => {
+            panel.resolveInteraction(request.id)
+            resolve('unavailable')
+          }
+          if (signal?.aborted) { onAbort(); return }
+          signal?.addEventListener('abort', onAbort, { once: true })
+        })
+      }
+      return nativeUi.presentApproval(request, signal)
+    },
+    async presentQuestions(request, signal) {
+      const panel = panelHost
+      if (panel !== undefined && conversationVisible) {
+        panel.pushInteraction({
+          type: 'interaction/present',
+          interactionType: 'question',
+          id: request.id,
+          sessionId: request.sessionId,
+          questions: request.questions.map(q => ({
+            id: q.id,
+            question: q.question,
+            ...q.detail === undefined ? {} : { detail: q.detail },
+            ...q.header === undefined ? {} : { header: q.header },
+            ...q.options === undefined ? {} : { options: q.options },
+            ...q.multiSelect === undefined ? {} : { multiSelect: q.multiSelect },
+          })),
+        })
+        return new Promise<import('@deepseek-ai/dsh-ide-bridge').AskUserQuestionAnswer>(
+          (_resolve, reject) => {
+            const onAbort = (): void => {
+              panel.resolveInteraction(request.id)
+              reject(new Error('interaction cancelled'))
+            }
+            if (signal?.aborted) { onAbort(); return }
+            signal?.addEventListener('abort', onAbort, { once: true })
+          },
+        )
+      }
+      return nativeUi.presentQuestions(request, signal)
+    },
+  }
+}
+
 function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
   const emptyRegistry = new ConversationRegistry()
   const emptyMessages = new MessageStore()
@@ -2243,6 +2406,8 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       if (controller === undefined) throw new Error('no-host')
       return controller.promptActive(text, images)
     },
+    acceptCommand: async (sessionId, line) => await runCommand(sessionId, line),
+    readSlashCatalog: async sessionId => await readSlashCatalog(sessionId),
     requestDelete: async () => {
       await runDeleteActive(vscode)
     },
@@ -2477,6 +2642,7 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       preferredFolder: preferredWorkspaceFolder(vscode),
       exists: existsSync,
     }),
+    listAtPathCandidates,
     requestOpenReference: async (path) => {
       await openReferencePath(vscode, path)
     },
@@ -2491,8 +2657,7 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       await runCloseTab(vscode, controller, tabId)
     },
     listHistoryRows: () => {
-      const index = resolveWorkspaceIndex()
-      return index.listHistorySessions().map(row => ({
+      return currentHistoryRows().map(row => ({
         sessionId: row.sessionId,
         title: row.title,
         updatedAt: new Date(row.mtime).toISOString(),
@@ -2526,6 +2691,13 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestOpenSearch: async () => {
       await vscode.commands.executeCommand?.('dsh.searchSessions')
     },
+    requestSelectModel: async (provider, model, reasoningEffort) => {
+      const liveHost = host
+      if (liveHost === undefined || liveHost.status !== 'connected') {
+        throw new Error('Host is not connected')
+      }
+      await liveHost.selectModel(provider, model, reasoningEffort)
+    },
     requestModelList: async () => readModelList(host),
     requestSettingsDescribe: async () => readSettingsNamespaces(host),
     requestSettingsUpdate: async (ns, patch, expectedRevision) => {
@@ -2546,6 +2718,15 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
         sessionId: active.sessionId,
         ...controller.revealTarget(active.sessionId, callId),
       }
+    },
+    resolveApproval: (id, outcome) => {
+      host?.interactions.resolveApproval(id, outcome)
+    },
+    resolveQuestion: (id, answer) => {
+      host?.interactions.resolveQuestions(id, answer)
+    },
+    dismissQuestion: (id, error) => {
+      host?.interactions.dismissQuestions(id, error)
     },
   }
   Object.defineProperty(deps, 'interactions', {
@@ -2898,6 +3079,168 @@ function resolveWorkspaceIndex(): ExtensionIndex {
   return new ExtensionIndex(workspaceKey, workspaceState)
 }
 
+/**
+ * History rows for this workspace: the local index plus the sessions the runtime
+ * listed (AC-28/29). The index rows win on a shared session id.
+ */
+function currentHistoryRows(): HistoryListRow[] {
+  return mergeHistoryRows(listHistoryFromIndex(resolveWorkspaceIndex()), hostHistoryRows)
+}
+
+/**
+ * Ranked workspace paths for one composer `@` query. Ranking, exclusions, and the
+ * directory-scoped listing come from the same search the Host mounts behind
+ * `ctx.fileReferences`, so the panel and the Web client offer identical candidates.
+ * @param query - path text following `@` or `@"`.
+ * @param signal - aborted when a newer query supersedes this one.
+ */
+async function listAtPathCandidates(
+  query: string,
+  signal: AbortSignal,
+): Promise<readonly FileReferenceCandidate[]> {
+  const root = workspaceKey
+  if (root === '') return []
+  if (atPathSearch === undefined || atPathSearchRoot !== root) {
+    atPathSearch?.dispose()
+    atPathSearch = new WorkspaceFileSearch(root, {
+      maxResults: DEFAULT_FILE_SEARCH_MAX_RESULTS,
+      maxEntries: DEFAULT_FILE_SEARCH_MAX_ENTRIES,
+      excludedDirectories: DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES,
+    })
+    atPathSearchRoot = root
+  }
+  return atPathSearch.list(query, signal)
+}
+
+/**
+ * Re-read the runtime's session list and rebuild {@link hostHistoryRows}.
+ * Best effort and silent on failure: without a runtime, or when the listing fails,
+ * the rows already on screen stay.
+ */
+async function refreshHostHistory(): Promise<void> {
+  const current = host
+  if (current === undefined || current.status !== 'connected') return
+  let rows: readonly HostSessionRow[]
+  try {
+    rows = await current.listSessions()
+  } catch {
+    // A failed listing leaves the last known rows in place; the index rows still render.
+    return
+  }
+  hostHistoryRows = rows
+    // History lists conversations the user can open. A row with a parent is a fork or a
+    // delegated child, which the runtime cannot tell apart; the index already carries the
+    // ones this Extension created, so a parented row here is never a conversation root.
+    .filter(row => row.parentSessionId === undefined && isSessionInWorkspace(row.cwd))
+    .map(row => hostSessionHistoryRow(row))
+  historyRefresh?.()
+}
+
+/**
+ * Run one composer slash line as a runtime command (feature: slash-commands).
+ *
+ * The runtime's registry decides whether the line is a command at all: an
+ * unresolved line returns `false`, which keeps it on the prompt path — that is
+ * where the runtime reads a leading `/name` as a skill invocation. A command that
+ * runs is answered with a local notice, so its text never enters the
+ * model-visible transcript.
+ * @param sessionId - session that receives the command.
+ * @param line - complete slash line from the composer.
+ * @returns whether the line was consumed as a command.
+ */
+async function runCommand(sessionId: string, line: string): Promise<boolean> {
+  const current = host
+  const controller = requireConversations()
+  if (current?.status !== 'connected' || controller === undefined) return false
+  let result: CommandExecuteResult
+  try {
+    result = await current.executeCommand(sessionId, line)
+  } catch (error) {
+    const message = redactSecrets(error instanceof Error ? error.message : String(error))
+    controller.appendCommandNotice(sessionId, `命令执行失败：${message}`)
+    return true
+  }
+  if (!result.matched) return false
+  controller.appendCommandNotice(sessionId, commandNoticeText(result.outcome))
+  return true
+}
+
+/**
+ * Read the three `/` catalogs for one session and order them for the menu.
+ *
+ * Commands, agent presets, and skills come from three runtime services, so one
+ * absent or failing read leaves the others usable. A skill sharing a command's
+ * name is dropped: the registry resolves the command first, so listing both would
+ * advertise a line that can never load that skill.
+ * @param sessionId - session whose composition scopes the catalogs.
+ * @returns menu rows, commands first.
+ */
+async function readSlashCatalog(sessionId: string): Promise<SlashCandidate[]> {
+  const current = host
+  if (current?.status !== 'connected') return []
+  const [commands, presets, skills] = await Promise.all([
+    current.listCommands(sessionId).catch(() => []),
+    current.listAgentPresets().catch(() => []),
+    current.listSkills(sessionId).catch(() => []),
+  ])
+  const commandNames = new Set(commands.map(row => row.name))
+  return [
+    ...commands.map(row => ({
+      name: row.name,
+      description: row.description,
+      group: 'command' as const,
+      ...row.inputHint === undefined ? {} : { inputHint: row.inputHint },
+    })),
+    // A preset names a composition rather than a line: a session binds its preset
+    // when it is created, so the menu offers the bare id as prompt guidance.
+    ...presets
+      .filter(row => row.broken === undefined)
+      .map(row => ({
+        name: row.id,
+        description: row.description ?? (row.isDefault ? '默认 Agent 组合' : 'Agent 组合'),
+        group: 'agent' as const,
+      })),
+    ...skills
+      .filter(row => !commandNames.has(row.name))
+      .map(row => ({
+        name: row.name,
+        description: row.description,
+        group: 'skill' as const,
+      })),
+  ]
+}
+
+/**
+ * Render one command outcome as notice text.
+ * @param outcome - settled outcome; absent when the runtime reported none.
+ * @returns the handler's own text, or a short fallback when it printed none.
+ */
+function commandNoticeText(outcome: CommandExecuteResult['outcome']): string {
+  const text = outcome?.text?.trim()
+  if (text !== undefined && text !== '') return text
+  return outcome?.ok === false ? '命令执行失败' : '命令已执行'
+}
+
+/**
+ * Whether a runtime-listed session belongs to this window's workspace, judged by the
+ * working directory its log recorded at creation (AC-63).
+ * @param cwd - recorded working directory, absent when the log carries none.
+ */
+function isSessionInWorkspace(cwd: string | undefined): boolean {
+  if (cwd === undefined || workspaceKey === '') return false
+  return canonicalPath(cwd) === canonicalPath(workspaceKey)
+}
+
+/** Resolve symlinks and `..` so two spellings of one directory compare equal. */
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    // A path that cannot be resolved (deleted directory, permission) compares as written.
+    return path
+  }
+}
+
 function requireConversations(): ConversationController | undefined {
   if (host === undefined || host.status !== 'connected' || conversations === undefined) {
     return undefined
@@ -3104,6 +3447,37 @@ async function runDeleteConfirmed(vscode: VsCodeLike, sessionId: string): Promis
   }
 }
 
+/**
+ * Sidebar row delete (AD-CU-3): the row menu is the request, so this path asks for
+ * confirmation before taking the confirmed backend path shared with the panel.
+ * @param vscode - duck-typed vscode module.
+ * @param sessionId - session the row menu targeted.
+ */
+async function runDeleteHistoryRow(vscode: VsCodeLike, sessionId: string): Promise<void> {
+  const controller = requireConversations()
+  if (controller === undefined) {
+    await vscode.window.showErrorMessage('Host 连接后可删除')
+    return
+  }
+  const pending = await controller.deleteSession(sessionId)
+  if (pending.outcome === 'host-not-ready') {
+    await vscode.window.showErrorMessage('Host 连接后可删除')
+    return
+  }
+  if (pending.outcome === 'missing') {
+    await vscode.window.showInformationMessage('No conversation to delete.')
+    return
+  }
+  if (pending.outcome === 'needs-confirm') {
+    const choice = await confirmDeleteConversation(
+      vscode.window as InteractionWindow,
+      pending.running,
+    )
+    if (choice === 'cancel') return
+  }
+  await runDeleteConfirmed(vscode, sessionId)
+}
+
 function tabTitle(tab: ConversationTab): string {
   return tab.title ?? `Conversation ${shortId(tab.sessionId)}`
 }
@@ -3202,17 +3576,7 @@ async function runAskAboutSelection(vscode: VsCodeLike): Promise<unknown> {
         return relative === undefined ? fsPath : relative(fsPath, false)
       } }),
     selectionMeta: selectionMetaStore,
-    ensureLiveTab: () => {
-      const active = controller.registry.getActive()
-      if (active !== undefined && active.mode === 'live') {
-        return { tabId: active.tabId, sessionId: active.sessionId, mode: 'live' as const }
-      }
-      // Replay or no Tab: never prefill a replay Tab (AC-1) — mint a new live Tab.
-      // AD-CR-6: do not steal inactive empty Tabs; newConversation is correct here.
-      const live = controller.newConversation(EMPTY_LIVE_TITLE)
-      panelHost?.pushFullState()
-      return { tabId: live.tabId, sessionId: live.sessionId, mode: 'live' as const }
-    },
+    ensureLiveTab: () => ensureLiveTabForPrefill(controller),
     prefillComposer: (text) => {
       panelHost?.prefillComposer(text)
     },
@@ -3222,6 +3586,62 @@ async function runAskAboutSelection(vscode: VsCodeLike): Promise<unknown> {
     },
   })
   return result
+}
+
+/**
+ * The live Tab a composer prefill may target; a replay Tab never accepts one.
+ * @param controller - conversation controller owning the Tabs.
+ * @returns the live Tab's identity.
+ */
+function ensureLiveTabForPrefill(
+  controller: ConversationController,
+): { tabId: string; sessionId: string; mode: 'live' } {
+  const active = controller.registry.getActive()
+  if (active !== undefined && active.mode === 'live') {
+    return { tabId: active.tabId, sessionId: active.sessionId, mode: 'live' }
+  }
+  // Replay or no Tab: never prefill a replay Tab (AC-1) — mint a new live Tab.
+  // AD-CR-6: do not steal inactive empty Tabs; newConversation is correct here.
+  const live = controller.newConversation(EMPTY_LIVE_TITLE)
+  panelHost?.pushFullState()
+  return { tabId: live.tabId, sessionId: live.sessionId, mode: 'live' }
+}
+
+/**
+ * Insert one `@` file mention into the composer from a typed workspace-relative path.
+ * Discovery lives in the composer's own `@` popup; this entry exists for hosts where a
+ * dragged file reaches the Webview without a usable URI, so the mention has a second route.
+ * @param vscode - duck-typed vscode surface.
+ * @returns `{ok:true, mention}` on insert, otherwise the reason nothing was inserted.
+ */
+async function runInsertFileReference(vscode: VsCodeLike): Promise<unknown> {
+  await ensureHostForSend(vscode)
+  await revealConversationPanel(vscode)
+  const controller = conversations
+  if (controller === undefined || panelHost === undefined) {
+    await vscode.window.showErrorMessage('请先连接 DeepSeek Harness Host。')
+    return { ok: false as const, reason: 'no-host' as const }
+  }
+  if (vscode.window.showInputBox === undefined) return { ok: false as const, reason: 'no-input' as const }
+  const typed = await vscode.window.showInputBox({
+    prompt: '输入工作区相对路径，例如 packages/core/tools/src/index.ts',
+    title: '在对话中引用工作区文件',
+  })
+  if (typed === undefined) return { ok: false as const, reason: 'cancelled' as const }
+  const resolved = resolveAtPathInWorkspace(typed.trim(), {
+    workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath),
+    preferredFolder: preferredWorkspaceFolder(vscode),
+    exists: existsSync,
+  })
+  if (!resolved.ok) {
+    await vscode.window.showInformationMessage(`无法在工作区中解析该路径（${resolved.reason}）。`)
+    return { ok: false as const, reason: resolved.reason }
+  }
+  const mention = formatOfficialAtPath(resolved.path)
+  if (mention === undefined) return { ok: false as const, reason: 'unrepresentable' as const }
+  ensureLiveTabForPrefill(controller)
+  panelHost.prefillComposer(mention)
+  return { ok: true as const, mention }
 }
 
 /**
@@ -3252,6 +3672,51 @@ function resolveStartCwd(vscode: VsCodeLike): string {
 /**
  * Scan env for credential-like keys (never log values).
  */
+/**
+ * Load a `.env` file from the workspace root into `process.env`.
+ * Only sets variables not already present so explicit env wins.
+ */
+function loadDotEnv(workspaceRoot: string): void {
+  if (!workspaceRoot) return
+  try {
+    const envPath = join(workspaceRoot, '.env')
+    if (!existsSync(envPath)) return
+    const content = readFileSync(envPath, 'utf-8')
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith('#')) continue
+      const eq = trimmed.indexOf('=')
+      if (eq < 1) continue
+      const key = trimmed.slice(0, eq).trim()
+      const value = trimmed.slice(eq + 1).trim()
+      if (process.env[key] === undefined) {
+        process.env[key] = value
+      }
+    }
+  } catch {
+    /* non-fatal — credentials can still come from env */
+  }
+}
+
+/**
+ * Locate the dsh CLI entry point so that `HarnessClient` does not call
+ * `import.meta.resolve('@deepseek-ai/dsh/package.json')` which fails
+ * when the extension is installed as a standalone VSIX outside the monorepo.
+ * Walks up from `cwd` looking for `apps/cli/lib/bin.js` (built) or
+ * `apps/cli/src/bin.ts` (source) in a monorepo checkout.
+ */
+function resolveDshBin(cwd: string): string | undefined {
+  let dir = cwd
+  for (let i = 0; i < 10; i++) {
+    const built = join(dir, 'apps/cli/lib/bin.js')
+    if (existsSync(built)) return built
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return undefined
+}
+
 function detectCredentialsFromEnv(): boolean {
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && value !== '' && /KEY|PASSWORD|SECRET|TOKEN/i.test(key)) {
@@ -3330,7 +3795,8 @@ function createStartHostPort(
       const next = new IdeSessionHost(diagnostics)
       hostCreateCount += 1
       if (vscode.window.showQuickPick !== undefined) {
-        next.setInteractionUi(createVscodeInteractionUi(vscode.window as InteractionWindow))
+        const nativeUi = createVscodeInteractionUi(vscode.window as InteractionWindow)
+        next.setInteractionUi(createPanelFirstInteractionUi(nativeUi))
       }
       stopErrorWatch = next.onError((message) => {
         // Secondary diagnostic — ConnectionUi remains the primary carrier (AC-2 / AD-CR-4).
@@ -3352,10 +3818,12 @@ function createStartHostPort(
       try {
         const credentials = collectCredentialsEnv()
         const nodeBinSetting = readNodeBinSetting(vscode)
+        const dshBin = resolveDshBin(cwd)
         await next.start({
           cwd,
           ...nodeBinSetting === undefined ? {} : { nodeBinSetting },
           ...Object.keys(credentials).length === 0 ? {} : { credentials },
+          ...dshBin === undefined ? {} : { dshBin },
         })
         bindConversations(new ConversationController(
           next,

@@ -1,0 +1,209 @@
+/**
+ * History sidebar view (feature: sidebar-history).
+ * Loaded by the sidebar entry only. A WebviewView owns its type scale, so the row
+ * font is one step above the Conversation Panel's body text: the row title is the
+ * primary reading surface here, and the native tree this view replaces rendered it
+ * at the workspace font size.
+ */
+
+:root {
+  --dsh-sidebar-row-title: 15px;
+  --dsh-sidebar-row-meta: 12.5px;
+  --dsh-sidebar-menu-item: 14px;
+}
+
+.dsh-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--dsh-panel-bg);
+}
+
+.dsh-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--dsh-space-2);
+  padding: var(--dsh-space-3) var(--dsh-space-3) var(--dsh-space-2);
+  border-bottom: 1px solid var(--dsh-border-soft);
+  flex-shrink: 0;
+}
+
+.dsh-sidebar-heading {
+  font-size: var(--dsh-text-md);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.dsh-sidebar-action,
+.dsh-sidebar-primary {
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: var(--dsh-radius-sm);
+  padding: 5px 10px;
+  font-size: var(--dsh-text-sm);
+  transition: background var(--dsh-transition), border-color var(--dsh-transition),
+    color var(--dsh-transition);
+}
+
+.dsh-sidebar-action {
+  border: 1px solid var(--dsh-border);
+  background: var(--dsh-btn-secondary-bg);
+  color: var(--dsh-fg);
+}
+
+.dsh-sidebar-action:hover {
+  background: var(--dsh-btn-secondary-hover);
+  border-color: color-mix(in srgb, var(--dsh-fg) 28%, var(--dsh-border));
+}
+
+.dsh-sidebar-primary {
+  border: 1px solid transparent;
+  background: var(--dsh-btn-bg);
+  color: var(--dsh-btn-fg);
+  font-weight: 500;
+}
+
+.dsh-sidebar-primary:hover {
+  background: var(--dsh-button-hover);
+}
+
+.dsh-sidebar-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--dsh-space-1) var(--dsh-space-2) var(--dsh-space-3);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.dsh-sidebar-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: var(--dsh-radius-sm);
+  background: transparent;
+  color: var(--dsh-fg);
+  font-family: inherit;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: background var(--dsh-transition), border-color var(--dsh-transition);
+}
+
+.dsh-sidebar-row:hover {
+  background: var(--dsh-list-hover);
+}
+
+.dsh-sidebar-row:focus-visible {
+  outline: none;
+  border-color: var(--dsh-focus);
+  box-shadow: var(--dsh-glow-accent);
+}
+
+.dsh-sidebar-row-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--dsh-sidebar-row-title);
+  font-weight: 500;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-sidebar-badge {
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--dsh-accent) 32%, transparent);
+  border-radius: var(--dsh-radius-pill);
+  background: color-mix(in srgb, var(--dsh-accent) 12%, transparent);
+  color: var(--dsh-accent);
+  font-size: var(--dsh-text-xs);
+  font-weight: 500;
+  padding: 0 6px;
+}
+
+.dsh-sidebar-row-meta {
+  font-size: var(--dsh-sidebar-row-meta);
+  line-height: 1.45;
+  color: var(--dsh-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-sidebar-hint {
+  font-size: var(--dsh-text-sm);
+  color: var(--dsh-muted);
+  padding: var(--dsh-space-3);
+}
+
+.dsh-sidebar-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dsh-space-3);
+}
+
+.dsh-sidebar-empty .dsh-sidebar-hint {
+  padding-bottom: 0;
+}
+
+.dsh-sidebar-empty-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dsh-space-2);
+  padding: 0 var(--dsh-space-3);
+}
+
+/* Row menu. Fixed placement keeps it clear of the scrolling row list, whose
+   overflow would otherwise decide what the menu can show. */
+.dsh-sidebar-menu {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 176px;
+  padding: 4px;
+  border: 1px solid var(--dsh-border);
+  border-radius: var(--dsh-radius-md);
+  background: var(--dsh-bg);
+  box-shadow: var(--dsh-shadow-md);
+}
+
+.dsh-sidebar-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-radius: var(--dsh-radius-sm);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--dsh-sidebar-menu-item);
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background var(--dsh-transition), color var(--dsh-transition);
+}
+
+.dsh-sidebar-menu-item:hover:not(:disabled),
+.dsh-sidebar-menu-item:focus-visible {
+  background: var(--dsh-list-hover);
+}
+
+.dsh-sidebar-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.dsh-sidebar-menu-item.is-danger {
+  color: var(--dsh-danger);
+}
+
+.dsh-sidebar-menu-item.is-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsh-danger) 14%, transparent);
+}

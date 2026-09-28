@@ -20,8 +20,10 @@ import { MessageStore, type ChatMessage, type MessagePatch } from './message-sto
 import {
   activityMessageId,
   activityStatusFromToolResult,
+  toolResultText,
   type ActivityItem,
 } from './chat-panel/activity-types.ts'
+import { digestToolCall, previewToolResult } from './chat-panel/activity-digest.ts'
 import {
   ExtensionIndex,
   type OpenTabMode,
@@ -411,11 +413,13 @@ export class ConversationController {
    * Open a workspace history session as a replay Tab (AC-30/64/65).
    * Reuses an existing open Tab by sessionId; otherwise mints a new tabId.
    * @param sessionId - session to open from the extension index / authority log.
-   * @param options - optional preloaded events (tests) bypassing bridge read.
+   * @param options - optional preloaded events (tests) bypassing bridge read, and the
+   *   display title the caller already knows — a runtime-listed session has no index row,
+   *   so the index would otherwise record a generated `Replay …` title.
    */
   async openFromHistory(
     sessionId: string,
-    options: { events?: readonly HydratorSessionEvent[] } = {},
+    options: { events?: readonly HydratorSessionEvent[]; title?: string } = {},
   ): Promise<OpenHistoryResult> {
     if (this.index.isDeleted(sessionId)) {
       return { outcome: 'missing', sessionId }
@@ -433,7 +437,10 @@ export class ConversationController {
     }
 
     const indexRow = this.index.read().sessions.find(row => row.sessionId === sessionId && row.deleted !== true)
-    const title = indexRow?.title ?? indexRow?.firstUserPreview ?? `Replay ${sessionId.slice(0, 8)}`
+    const title = options.title
+      ?? indexRow?.title
+      ?? indexRow?.firstUserPreview
+      ?? `Replay ${sessionId.slice(0, 8)}`
 
     let events: readonly HydratorSessionEvent[]
     if (options.events !== undefined) {
@@ -604,7 +611,7 @@ export class ConversationController {
         return { outcome: 'empty' }
       }
 
-      // Unload any leftover live Tabs before reopening as replay (cold restore).
+      // Unload any leftover Tabs before reopening as replay (cold restore).
       for (const tab of [...this.registry.list()]) {
         this.registry.close(tab.tabId)
       }
@@ -2446,6 +2453,23 @@ export class ConversationController {
   }
 
   /**
+   * Close the open assistant bubble of `sessionId` without new text.
+   * A step whose `assistant/message` carries no text block (reasoning and tool calls
+   * only) still ends its bubble, so the next step starts its own.
+   * @param sessionId - session owning the streaming assistant bubble.
+   */
+  private closeStreamingAssistant(sessionId: string): void {
+    const streaming = this.streamingAssistant.get(sessionId)
+    if (streaming === undefined) return
+    this.streamingAssistant.delete(sessionId)
+    const patch = { streaming: false, incomplete: false }
+    this.messages.patch(sessionId, streaming.messageId, patch)
+    if (this.isProjectedSession(this.registry.getActive(), sessionId)) {
+      this.panelHost?.pushPatch(sessionId, streaming.messageId, patch)
+    }
+  }
+
+  /**
    * Project a live `assistant/chunk` text-delta onto a stable assistant bubble (AC-10).
    * Projects reasoning-delta onto the same bubble's reasoning field.
    */
@@ -2607,6 +2631,31 @@ export class ConversationController {
     const tab = this.registry.getBySessionId(sessionId)
     if (tab !== undefined) this.registry.setStatus(tab.tabId, 'idle')
     this.panelHost?.pushStatus()
+  }
+
+  /**
+   * Append one command result as a local notice.
+   *
+   * A command's result is not model-visible input: the runtime logs
+   * `command/run` / `command/done`, and this bubble is what the user reads. It is
+   * projected through the same append path as every other local notice, so a
+   * session that is not on screen keeps the row for when it is.
+   * @param sessionId - session whose panel shows the notice.
+   * @param text - result or failure text from the command path.
+   */
+  appendCommandNotice(sessionId: string, text: string): void {
+    const notice: ChatMessage = {
+      id: randomUUID(),
+      sessionId,
+      role: 'notice',
+      kind: 'notice',
+      text,
+    }
+    this.messages.append(sessionId, notice)
+    const active = this.registry.getActive()
+    if (this.isProjectedSession(active, sessionId)) {
+      this.panelHost?.pushAppend(notice)
+    }
   }
 
   /**
@@ -2840,6 +2889,7 @@ export class ConversationController {
       .filter(m => m.kind === 'activity' && (m.turn === turnNumber || m.activity?.turn === turnNumber))
       .length
     const id = activityMessageId(sessionId, turnNumber, callId, ordinal)
+    const digest = digestToolCall(toolName, data.arguments)
     const activity: ActivityItem = {
       id,
       sessionId,
@@ -2849,14 +2899,15 @@ export class ConversationController {
       ...callId === undefined ? {} : { callId },
       status: 'running',
       expanded: false,
-      summary: toolName,
+      summary: digest.summary,
+      ...digest.invocation === undefined ? {} : { invocation: digest.invocation },
     }
     const message: ChatMessage = {
       id,
       sessionId,
       role: 'notice',
       kind: 'activity',
-      text: `${toolName} · running`,
+      text: `${digest.summary} · running`,
       turn: turnNumber,
       activity,
     }
@@ -2888,6 +2939,8 @@ export class ConversationController {
           ? messageRec.callId
           : undefined
     const status = activityStatusFromToolResult(data)
+    const resultText = toolResultText(data)
+    const resultPreview = resultText === undefined ? undefined : previewToolResult(resultText)
     const list = this.messages.get(sessionId)
     const target = callId === undefined
       ? [...list].reverse().find(m =>
@@ -2919,6 +2972,7 @@ export class ConversationController {
         status,
         expanded: false,
         summary: toolName,
+        ...resultPreview === undefined ? {} : { resultPreview },
       }
       const message: ChatMessage = {
         id,
@@ -2936,11 +2990,15 @@ export class ConversationController {
       }
       return
     }
-    const patched = this.messages.patch(sessionId, target.id, { activityStatus: status })
+    const patch: MessagePatch = {
+      activityStatus: status,
+      ...resultPreview === undefined ? {} : { activityResultPreview: resultPreview },
+    }
+    const patched = this.messages.patch(sessionId, target.id, patch)
     if (patched === undefined) return
     const active = this.registry.getActive()
     if (this.isProjectedSession(active, sessionId)) {
-      this.panelHost?.pushPatch(sessionId, target.id, { activityStatus: status })
+      this.panelHost?.pushPatch(sessionId, target.id, patch)
     }
   }
 
@@ -3179,8 +3237,13 @@ export class ConversationController {
     }
     const message = data.message as Record<string, unknown> | undefined
     const text = firstAssistantText(message)
-    // AC-6: never invent assistant body when the event has no text.
-    if (text === undefined) return
+    // AC-6: never invent assistant body when the event has no text. The step still ends
+    // here, so close its bubble: a surviving handle would anchor every later step's
+    // reasoning and text to this step's position, above that step's tool rows.
+    if (text === undefined) {
+      this.closeStreamingAssistant(sessionId)
+      return
+    }
     this.projectAssistantMessage(sessionId, text, turn)
     const pending = this.pendingSettleTurn.get(sessionId)
     if (pending !== undefined && turn === pending) {

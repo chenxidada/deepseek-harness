@@ -39,7 +39,9 @@ export type AutoReadyDeps = {
 
 /**
  * Visibility + hostReady latch that owns restore / New → live.
- * Hide bumps `visibilityEpoch` and clears `readyAppliedForVisibilityEpoch`.
+ * Hide bumps `visibilityEpoch` and clears `readyAppliedForVisibilityEpoch`; the
+ * disk restore itself runs once per Extension Host, so a later Hide→Show reuses
+ * the Tabs already hydrated here.
  */
 export class AutoReadyCoordinator {
   conversationViewVisible = false
@@ -48,6 +50,8 @@ export class AutoReadyCoordinator {
   visibilityEpoch = 0
 
   private applyInFlight: Promise<AutoReadyApplyResult> | undefined
+  /** True once this Extension Host ran its disk restore (or its New fallback). */
+  private restoredFromDisk = false
 
   /**
    * @param deps - controller / workspace predicates from Extension.
@@ -89,7 +93,7 @@ export class AutoReadyCoordinator {
    * Apply restore/New when `visible && hostReady`; else no-op.
    * If a caller awaits an in-flight apply and hide→show cleared
    * `readyAppliedForVisibilityEpoch` meanwhile, re-enter so the new
-   * visibility epoch still gets a full apply (AD-CR-3).
+   * visibility epoch still gets its own apply (AD-CR-3).
    * @param options - optional restore overrides (tests).
    * @returns apply result.
    */
@@ -123,10 +127,14 @@ export class AutoReadyCoordinator {
       return { applied: false, reason: 'no-controller' }
     }
 
-    if (this.readyAppliedForVisibilityEpoch) {
+    if (this.readyAppliedForVisibilityEpoch || this.restoredFromDisk) {
+      // Hide→show keeps the Tabs this Extension Host already hydrated, so a visible flip (editor tab
+      // switch) never re-runs the cold restore, which reopens every Tab as read-only replay.
+      this.readyAppliedForVisibilityEpoch = true
       return this.ensureReadySurface(controller)
     }
     this.readyAppliedForVisibilityEpoch = true
+    this.restoredFromDisk = true
 
     if (!this.deps.hasWorkspaceIndex()) {
       controller.newConversationOrReuseEmpty(EMPTY_LIVE_TITLE)

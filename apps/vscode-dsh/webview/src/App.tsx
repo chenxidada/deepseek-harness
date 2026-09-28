@@ -67,12 +67,6 @@ export function App({ bridge }: AppProps) {
       data-testid="editor-chat-root"
       data-follow-state={ui.followState}
       data-mode={ui.mode}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
-        minHeight: 0,
-      }}
     >
       <TabChrome
         tabs={ui.tabs}
@@ -99,15 +93,7 @@ export function App({ bridge }: AppProps) {
         historySearchHits={ui.historySearchHits}
         bridge={bridge}
       />
-      <div
-        style={{
-          position: 'relative',
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
+      <div className="dsh-msg-area">
         <MessageList
           messages={ui.messages}
           loading={ui.messagesLoading}
@@ -116,6 +102,14 @@ export function App({ bridge }: AppProps) {
           readonly={ui.mode === 'replay' || ui.mode === 'empty' || ui.mode === 'readonly-live'}
           streaming={ui.streaming}
           followState={ui.followState}
+          todoItems={ui.todoItems}
+          sessionId={ui.sessionId}
+          pendingReveal={ui.pendingReveal}
+          pendingChangeListReveal={ui.pendingChangeListReveal}
+          pendingSourceReveal={ui.pendingSourceReveal}
+          diffContents={ui.diffContents}
+          lastRevertResult={ui.lastRevertResult}
+          pendingInteractions={ui.pendingInteractions}
         />
         <SettingsPanel
           open={ui.settingsOpen}
@@ -128,19 +122,10 @@ export function App({ bridge }: AppProps) {
       <div
         data-testid="status"
         role="status"
-        style={{
-          padding: '4px 12px',
-          fontSize: '0.85em',
-          color: 'var(--dsh-status-fg)',
-          borderTop: ui.statusText || ui.tokenStatus ? '1px solid var(--dsh-border)' : undefined,
-          minHeight: ui.statusText || ui.tokenStatus ? undefined : 0,
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-        }}
+        className="dsh-statusline"
+        data-empty={ui.statusText || ui.tokenStatus ? undefined : 'true'}
       >
-        <span style={{ flex: 1, minWidth: 0 }}>{ui.statusText}</span>
+        <span className="dsh-status-text">{ui.statusText}</span>
         <TokenMeter status={ui.tokenStatus} />
       </div>
       <Composer
@@ -152,6 +137,9 @@ export function App({ bridge }: AppProps) {
         stopping={ui.stopping}
         continueChrome={ui.continueChrome}
         mode={ui.mode}
+        tokenStatus={ui.tokenStatus}
+        atCompletion={ui.atCompletion}
+        slashCompletion={ui.slashCompletion}
       />
       {ui.deleteConfirm ? (
         <DeleteConfirmModal confirm={ui.deleteConfirm} bridge={bridge} />
@@ -186,29 +174,21 @@ function TokenMeter({ status }: { status?: TokenStatus }) {
     <div
       data-testid="token-meter"
       data-warn={warn ? 'true' : 'false'}
+      className="dsh-token-meter"
       title={detail}
-      style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}
     >
       <div
         aria-hidden="true"
-        style={{
-          width: 64,
-          height: 4,
-          borderRadius: 'var(--dsh-radius-sm)',
-          background: 'var(--dsh-border)',
-          overflow: 'hidden',
-        }}
+        className="dsh-meter"
       >
         <div
           data-testid="token-meter-bar"
-          style={{
-            width: `${percent}%`,
-            height: '100%',
-            background: warn ? 'var(--dsh-warning, #e8a33d)' : 'var(--dsh-accent, #4a9)',
-          }}
+          className="dsh-meter-fill"
+          data-level={warn ? 'warn' : 'ok'}
+          style={{ width: `${percent}%` }}
         />
       </div>
-      <span data-testid="token-meter-text" style={{ whiteSpace: 'nowrap' }}>
+      <span data-testid="token-meter-text" className="dsh-token-text">
         {`${formatTokenCount(status.totalTokens)} / ${formatTokenCount(status.contextWindow)} · ${percent}%`}
       </span>
     </div>

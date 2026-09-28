@@ -64,26 +64,8 @@ export function HistoryPanel({
     : localFiltered
 
   return (
-    <aside
-      data-testid="history-panel"
-      style={{
-        borderBottom: '1px solid var(--dsh-border)',
-        maxHeight: 280,
-        overflowY: 'auto',
-        background: 'var(--dsh-bg)',
-        flexShrink: 0,
-      }}
-    >
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        gap: 8,
-        padding: '8px 10px',
-        color: 'var(--dsh-muted)',
-        fontSize: '0.9em',
-      }}
-      >
+    <aside data-testid="history-panel" className="dsh-panel">
+      <div className="dsh-panel-head" style={{ justifyContent: 'space-between' }}>
         <span>历史会话</span>
         <button
           type="button"
@@ -94,174 +76,169 @@ export function HistoryPanel({
           关闭
         </button>
       </div>
-      <div style={{ padding: '0 10px 8px' }}>
-        <input
-          data-testid="history-search"
-          type="search"
-          placeholder="搜索标题 / 预览（档1+2）"
-          value={query}
-          onChange={(event) => {
-            const next = event.target.value
-            setHistoryQuery(next)
-            const trimmed = next.trim()
-            if (trimmed === '') return
-            setSearchOrigin('history')
-            setSearchLoading(true)
-            const looksPath = trimmed.includes('/') || trimmed.startsWith('@')
-            bridge.emitIntent({
-              type: 'action/search-sessions',
-              ...looksPath
-                ? { path: trimmed.replace(/^@/, '') }
-                : { text: trimmed },
-            })
-          }}
-          style={{
-            width: '100%',
-            font: 'inherit',
-            padding: '6px 8px',
-            borderRadius: 'var(--dsh-radius-sm)',
-            border: '1px solid var(--dsh-input-border)',
-            background: 'var(--dsh-input-bg)',
-            color: 'var(--dsh-input-fg)',
-          }}
-        />
-      </div>
-      {loading ? (
-        <div data-testid="history-loading" style={{ padding: 12, color: 'var(--dsh-muted)' }}>
-          加载中…
+      <div className="dsh-panel-body">
+        <div style={{ padding: '0 10px 8px' }}>
+          <input
+            data-testid="history-search"
+            type="search"
+            placeholder="搜索标题 / 预览（档1+2）"
+            value={query}
+            onChange={(event) => {
+              const next = event.target.value
+              setHistoryQuery(next)
+              const trimmed = next.trim()
+              if (trimmed === '') return
+              setSearchOrigin('history')
+              setSearchLoading(true)
+              const looksPath = trimmed.includes('/') || trimmed.startsWith('@')
+              bridge.emitIntent({
+                type: 'action/search-sessions',
+                ...looksPath
+                  ? { path: trimmed.replace(/^@/, '') }
+                  : { text: trimmed },
+              })
+            }}
+            style={{
+              width: '100%',
+              font: 'inherit',
+              padding: '6px 8px',
+              borderRadius: 'var(--dsh-radius-sm)',
+              border: '1px solid var(--dsh-input-border)',
+              background: 'var(--dsh-input-bg)',
+              color: 'var(--dsh-input-fg)',
+            }}
+          />
         </div>
-      ) : displayRows.length === 0 ? (
-        <div
-          data-testid="history-empty"
-          style={{
-            padding: 12,
-            color: 'var(--dsh-muted)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-            alignItems: 'flex-start',
-          }}
-        >
-          <span>{q ? '无匹配会话' : '暂无历史会话'}</span>
-          {!q ? (
-            <button
-              type="button"
-              data-testid="btn-history-empty-new"
-              className="dsh-ghost-btn"
-              onClick={() => bridge.emitIntent({ type: 'ui/tab-new' })}
-            >
-              新建会话
-            </button>
-          ) : null}
-        </div>
-      ) : (
-        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-          {displayRows.map(row => (
-            <li key={row.sessionId}>
-              <div
-                data-testid="history-row"
-                data-session-id={row.sessionId}
-                role="button"
-                tabIndex={0}
-                onClick={() => bridge.emitIntent({
-                  type: 'ui/history-select',
-                  sessionId: row.sessionId,
-                })}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    bridge.emitIntent({
-                      type: 'ui/history-select',
-                      sessionId: row.sessionId,
-                    })
-                  }
-                }}
-                style={{
-                  display: 'flex',
-                  gap: 8,
-                  alignItems: 'flex-start',
-                  borderTop: '1px solid var(--dsh-border)',
-                  padding: '8px 10px',
-                  cursor: 'pointer',
-                }}
+        {loading ? (
+          <div data-testid="history-loading" style={{ padding: 12, color: 'var(--dsh-muted)' }}>
+            加载中…
+          </div>
+        ) : displayRows.length === 0 ? (
+          <div
+            data-testid="history-empty"
+            style={{
+              padding: 12,
+              color: 'var(--dsh-muted)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              alignItems: 'flex-start',
+            }}
+          >
+            <span>{q ? '无匹配会话' : '暂无历史会话'}</span>
+            {!q ? (
+              <button
+                type="button"
+                data-testid="btn-history-empty-new"
+                className="dsh-ghost-btn"
+                onClick={() => bridge.emitIntent({ type: 'ui/tab-new' })}
               >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600 }}>{row.title}</div>
-                  <div style={{ fontSize: '0.85em', color: 'var(--dsh-muted)' }}>
-                    {row.updatedAt}
-                    {row.previewOrPath ? ` · ${row.previewOrPath}` : ''}
-                  </div>
-                  {row.parentTitle ? (
-                    <div
-                      data-testid="history-parent"
-                      style={{ fontSize: '0.85em', color: 'var(--dsh-muted)', marginTop: 2 }}
-                    >
-                      {`分支自 ${row.parentTitle}`}
-                    </div>
-                  ) : null}
-                </div>
+                新建会话
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <ul className="dsh-list" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {displayRows.map(row => (
+              <li key={row.sessionId}>
                 <div
-                  className="dsh-history-row-actions"
-                  onClick={event => event.stopPropagation()}
-                  onKeyDown={event => event.stopPropagation()}
+                  data-testid="history-row"
+                  data-session-id={row.sessionId}
+                  role="button"
+                  tabIndex={0}
+                  className="dsh-list-row"
+                  onClick={() => bridge.emitIntent({
+                    type: 'ui/history-select',
+                    sessionId: row.sessionId,
+                  })}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      bridge.emitIntent({
+                        type: 'ui/history-select',
+                        sessionId: row.sessionId,
+                      })
+                    }
+                  }}
                 >
-                  <button
-                    type="button"
-                    data-testid="btn-history-more"
-                    className="dsh-history-more"
-                    aria-label="更多操作"
-                    aria-expanded={menuSessionId === row.sessionId}
-                    onClick={() => setMenuSessionId(
-                      menuSessionId === row.sessionId ? undefined : row.sessionId,
-                    )}
-                  >
-                    ⋮
-                  </button>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600 }}>{row.title}</div>
+                    <div style={{ fontSize: '0.85em', color: 'var(--dsh-muted)' }}>
+                      {row.updatedAt}
+                      {row.previewOrPath ? ` · ${row.previewOrPath}` : ''}
+                    </div>
+                    {row.parentTitle ? (
+                      <div
+                        data-testid="history-parent"
+                        style={{ fontSize: '0.85em', color: 'var(--dsh-muted)', marginTop: 2 }}
+                      >
+                        {`分支自 ${row.parentTitle}`}
+                      </div>
+                    ) : null}
+                  </div>
                   <div
-                    className={`dsh-history-menu${menuSessionId === row.sessionId ? ' is-open' : ''}`}
-                    data-testid="history-row-menu"
-                    hidden={menuSessionId !== row.sessionId}
+                    className="dsh-history-row-actions"
+                    onClick={event => event.stopPropagation()}
+                    onKeyDown={event => event.stopPropagation()}
                   >
-                    {row.continueHint ? (
+                    <button
+                      type="button"
+                      data-testid="btn-history-more"
+                      className="dsh-history-more"
+                      aria-label="更多操作"
+                      aria-expanded={menuSessionId === row.sessionId}
+                      onClick={() => setMenuSessionId(
+                        menuSessionId === row.sessionId ? undefined : row.sessionId,
+                      )}
+                    >
+                      ⋮
+                    </button>
+                    <div
+                      className={`dsh-history-menu${menuSessionId === row.sessionId ? ' is-open' : ''}`}
+                      data-testid="history-row-menu"
+                      hidden={menuSessionId !== row.sessionId}
+                    >
+                      {row.continueHint ? (
+                        <button
+                          type="button"
+                          data-testid="btn-continue"
+                          title={row.continueHint}
+                          className="dsh-menu-item"
+                          onClick={() => {
+                            setMenuSessionId(undefined)
+                            setPendingContinue(row.sessionId)
+                            bridge.emitIntent({
+                              type: 'ui/history-select',
+                              sessionId: row.sessionId,
+                            })
+                          }}
+                        >
+                          Continue
+                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        data-testid="btn-continue"
-                        title={row.continueHint}
+                        data-testid="btn-history-delete"
                         className="dsh-menu-item"
                         onClick={() => {
                           setMenuSessionId(undefined)
-                          setPendingContinue(row.sessionId)
-                          bridge.emitIntent({
-                            type: 'ui/history-select',
+                          openDeleteConfirm({
                             sessionId: row.sessionId,
+                            title: row.title,
+                            source: 'history',
                           })
                         }}
                       >
-                        Continue
+                        删除
                       </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      data-testid="btn-history-delete"
-                      className="dsh-menu-item"
-                      onClick={() => {
-                        setMenuSessionId(undefined)
-                        openDeleteConfirm({
-                          sessionId: row.sessionId,
-                          title: row.title,
-                          source: 'history',
-                        })
-                      }}
-                    >
-                      删除
-                    </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </aside>
   )
 }

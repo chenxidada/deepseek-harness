@@ -11,9 +11,15 @@ import type { ExtensionIndex } from '../extension-index.ts'
 import type { InteractionCoordinator } from '../interaction-coordinator.ts'
 import type { ConnectionUiState } from '../connection-ui.ts'
 import type { SettingsNamespaceView } from '../session-host.ts'
-import { validateComposerAtPaths, type ResolveAtPathOptions } from '../code-context/at-path.ts'
+import {
+  formatOfficialAtPath,
+  resolveAtPathInWorkspace,
+  validateComposerAtPaths,
+  type ResolveAtPathOptions,
+} from '../code-context/at-path.ts'
 import {
   parseWebviewToHostMessage,
+  type AtPathCandidate,
   type ConnectionPhase,
   type HostToWebviewMessage,
   type PanelBreadcrumb,
@@ -21,6 +27,7 @@ import {
   type PanelStatus,
   type PromptImage,
   type RejectSendReason,
+  type SlashCandidate,
   type WebviewToHostMessage,
 } from './protocol.ts'
 
@@ -33,7 +40,58 @@ export interface WebviewMessagePort {
 /** Result of a Host-gated send attempt. */
 export type SendGateResult =
   | { ok: true; messageId: string; sessionId: string; tabId: string }
+  /**
+   * The line was consumed as a command: it never became a prompt, and its result
+   * is projected as a local notice instead of a message.
+   */
+  | { ok: true; command: true; sessionId: string; tabId: string }
   | { ok: false; reason: RejectSendReason }
+
+/** Most `/` menu rows one answer carries; a query narrows this set, never widens it. */
+export const SLASH_MENU_LIMIT = 30
+
+/**
+ * The runtime's own slash grammar: a lowercase command name followed by the end of
+ * the line or whitespace. Mirrors `ParseCommand` in `@deepseek-ai/dsh-commands`, so
+ * a line this Host treats as a command is exactly one the registry can resolve.
+ */
+const COMMAND_LINE = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u
+
+/**
+ * Whether one composer line is a command candidate. A candidate still has to be
+ * resolved by the runtime: an unresolved line stays on the prompt path.
+ * @param text - trimmed composer text.
+ */
+export function isCommandLine(text: string): boolean {
+  return COMMAND_LINE.test(text)
+}
+
+/**
+ * Rank and cap the `/` menu rows for one query.
+ * @param candidates - the session's settled catalog, already group-ordered.
+ * @param query - text the user typed after the slash.
+ * @returns rows whose name matches first, then rows matched by description.
+ */
+export function filterSlashCandidates(
+  candidates: readonly SlashCandidate[],
+  query: string,
+): SlashCandidate[] {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return candidates.slice(0, SLASH_MENU_LIMIT)
+  const ranked: Array<{ candidate: SlashCandidate; score: number }> = []
+  for (const candidate of candidates) {
+    const name = candidate.name.toLowerCase()
+    const score = name.startsWith(needle)
+      ? 3
+      : name.includes(needle)
+        ? 2
+        : candidate.description.toLowerCase().includes(needle) ? 1 : 0
+    if (score > 0) ranked.push({ candidate, score })
+  }
+  // Array.prototype.sort is stable, so equal scores keep the catalog's own order.
+  ranked.sort((left, right) => right.score - left.score)
+  return ranked.slice(0, SLASH_MENU_LIMIT).map(entry => entry.candidate)
+}
 
 /** One todo entry pushed via todo/state (feature: todo-panel). */
 export type TodoStateItem = Extract<HostToWebviewMessage, { type: 'todo/state' }>['items'][number]
@@ -85,6 +143,24 @@ export interface ChatPanelHostDeps {
    * @param text - trimmed user text.
    */
   acceptSend: (text: string, images?: PromptImage[]) => Promise<{ messageId: string; sessionId: string; tabId: string }>
+  /**
+   * Run one slash line as a command when the runtime's registry resolves it.
+   *
+   * The Extension owns the registry lookup, the execution, and the projected
+   * result, because they need the runtime Host rather than the panel. `false`
+   * leaves the line on the prompt path, which is where the runtime's own
+   * `agent/pre-step` boundary reads a leading `/name` as a skill invocation.
+   * @param sessionId - session that would receive the command.
+   * @param line - complete composer line, e.g. `/feature add a tag filter`.
+   * @returns whether the line was consumed as a command.
+   */
+  acceptCommand?: (sessionId: string, line: string) => Promise<boolean>
+  /**
+   * Read the `/` menu catalogs for one session: commands, agent presets, skills.
+   * The Extension assembles them from the runtime and orders them by group.
+   * @param sessionId - session whose composition scopes the catalogs.
+   */
+  readSlashCatalog?: (sessionId: string) => Promise<SlashCandidate[]>
   /** Optional delete action requested from the panel (may still native-confirm). */
   requestDelete?: () => Promise<void>
   /**
@@ -187,6 +263,24 @@ export interface ChatPanelHostDeps {
    * When omitted, the Host falls back to the active Tab root projection.
    */
   resolvePanelProjection?: () => PanelProjection | undefined
+  /**
+   * Resolve an in-panel approval (phase-5 panel interaction).
+   * @param id - interaction correlation id.
+   * @param outcome - user decision.
+   */
+  resolveApproval?: (id: string, outcome: 'allowed-once' | 'rejected' | 'cancelled') => void
+  /**
+   * Resolve an in-panel question (phase-5 panel interaction).
+   * @param id - interaction correlation id.
+   * @param answer - user answers.
+   */
+  resolveQuestion?: (id: string, answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> }) => void
+  /**
+   * Dismiss an in-panel question with an error (phase-5 panel interaction).
+   * @param id - interaction correlation id.
+   * @param error - dismissal reason.
+   */
+  dismissQuestion?: (id: string, error: string) => void
   /**
    * Enter a subagent child session in-panel (phase-4).
    * @param childSessionId - child session id.
@@ -325,6 +419,12 @@ export interface ChatPanelHostDeps {
     continueHint?: string
   }>
   /**
+   * Ranked workspace paths for one composer `@` query (feature: at-completion).
+   * @param query - path text following `@` or `@"`.
+   * @param signal - aborted when a newer query supersedes this one.
+   */
+  listAtPathCandidates?: (query: string, signal: AbortSignal) => Promise<readonly AtPathCandidate[]>
+  /**
    * Open a history session (dedupe + replay; no auto-Start) — AC-52.
    * @param sessionId - history session id.
    */
@@ -353,6 +453,13 @@ export class ChatPanelHost {
   /** Last render-state answer from the webview (DEBT-7). */
   private lastRenderState: { testIds: string[]; renderState: Record<string, boolean> } | undefined
   private renderStateResolvers: Array<(state: { testIds: string[]; renderState: Record<string, boolean> }) => void> = []
+  /** Cancels the in-flight `@` candidate lookup when a newer query arrives. */
+  private atQueryAbort: AbortController | undefined
+  /**
+   * Settled `/` menu catalog for one session. The composition that decides the
+   * catalog is the session's, so a different active session refetches.
+   */
+  private slashCatalog: { sessionId: string; candidates: SlashCandidate[] } | undefined
 
   /**
    * @param deps - registry / store / send gate callbacks.
@@ -373,7 +480,10 @@ export class ChatPanelHost {
       || state.phase === 'disconnected-retrying') {
       this.pushBanner(state.message ?? 'Host connection issue', state.phase)
     } else if (state.phase === 'connected' || state.phase === 'idle') {
-      // Re-push full state so connecting banner does not stick.
+      // Retract the connecting/progress banner: this channel never clears itself,
+      // and the full state below omits `connectionMessage`, so a stale banner
+      // would keep owning the panel status line after the connection is live.
+      this.pushBanner('', 'connection-clear')
       this.pushFullState()
       return
     }
@@ -603,6 +713,75 @@ export class ChatPanelHost {
   }
 
   /**
+   * Answer one composer `@` query with ranked workspace candidates.
+   * A newer query aborts the one before it: the Webview keys answers by `requestId`, so an
+   * abandoned list must not keep walking directories behind the caret.
+   * @param requestId - correlation id echoed back to the Webview.
+   * @param query - path text following `@` or `@"`.
+   */
+  private async answerAtQuery(requestId: string, query: string): Promise<void> {
+    const list = this.deps.listAtPathCandidates
+    if (list === undefined) return
+    this.atQueryAbort?.abort()
+    const controller = new AbortController()
+    this.atQueryAbort = controller
+    // A failed or superseded lookup is advisory: the composer keeps the typed text and the
+    // next keystroke asks again, so an empty list is the whole answer owed here.
+    const candidates = await list(query, controller.signal).catch(() => [])
+    if (controller.signal.aborted) return
+    this.post({ type: 'composer/at-candidates', requestId, candidates: [...candidates] })
+  }
+
+  /**
+   * Answer one composer `/` query from the session's catalog.
+   *
+   * The catalog is read once per session and filtered per keystroke here, so typing
+   * costs no runtime round trip. A read that fails answers empty: the slash line is
+   * still text, and its prompt path stays available either way.
+   * @param requestId - correlation id echoed back to the Webview.
+   * @param query - text following the slash.
+   */
+  private async answerSlashQuery(requestId: string, query: string): Promise<void> {
+    const read = this.deps.readSlashCatalog
+    const sessionId = this.deps.registry.getActive()?.sessionId
+    if (read === undefined || sessionId === undefined) {
+      this.post({ type: 'composer/slash-candidates', requestId, candidates: [] })
+      return
+    }
+    try {
+      if (this.slashCatalog?.sessionId !== sessionId) {
+        this.slashCatalog = { sessionId, candidates: await read(sessionId) }
+      }
+      const candidates = filterSlashCandidates(this.slashCatalog.candidates, query)
+      this.post({ type: 'composer/slash-candidates', requestId, candidates })
+    } catch {
+      this.post({ type: 'composer/slash-candidates', requestId, candidates: [] })
+    }
+  }
+
+  /**
+   * Append `@` mentions for dropped filesystem paths and push the result back to the composer.
+   * Paths resolve through the same workspace check as a typed `@` token, so a drop from
+   * outside the workspace is ignored instead of becoming a mention the send gate rejects.
+   * @param text - composer text the drop landed on.
+   * @param paths - absolute filesystem paths from the drop payload.
+   */
+  private appendDroppedMentions(text: string, paths: readonly string[]): void {
+    const options = this.deps.getAtPathResolveOptions?.()
+    if (options === undefined) return
+    const mentions: string[] = []
+    for (const path of paths) {
+      const resolved = resolveAtPathInWorkspace(path, options)
+      if (!resolved.ok) continue
+      const mention = formatOfficialAtPath(resolved.path)
+      if (mention !== undefined) mentions.push(mention)
+    }
+    if (mentions.length === 0) return
+    const base = text.trimEnd()
+    this.prefillComposer(base === '' ? mentions.join(' ') : `${base} ${mentions.join(' ')}`)
+  }
+
+  /**
    * Push token usage status to the Webview.
    * @param status - token/status payload fields.
    */
@@ -661,6 +840,7 @@ export class ChatPanelHost {
       incomplete?: boolean
       streaming?: boolean
       activityStatus?: 'running' | 'done' | 'failed' | 'aborted'
+      activityResultPreview?: string
       compaction?: Partial<CompactionMarker>
       workflow?: Partial<WorkflowMarker>
     },
@@ -678,6 +858,9 @@ export class ChatPanelHost {
       ...update.streaming !== undefined ? { streaming: update.streaming } : {},
       ...update.activityStatus !== undefined
         ? { activityStatus: update.activityStatus }
+        : {},
+      ...update.activityResultPreview !== undefined
+        ? { activityResultPreview: update.activityResultPreview }
         : {},
       ...update.compaction !== undefined ? { compaction: update.compaction } : {},
       ...update.workflow !== undefined ? { workflow: update.workflow } : {},
@@ -710,6 +893,22 @@ export class ChatPanelHost {
       sessionId,
       sourceMessageId,
     })
+  }
+
+  /**
+   * Push an interaction (approval or question) to the Webview for in-panel presentation (phase-5).
+   * @param interaction - typed interaction/present frame.
+   */
+  pushInteraction(interaction: Extract<HostToWebviewMessage, { type: 'interaction/present' }>): void {
+    this.post(interaction)
+  }
+
+  /**
+   * Resolve (remove) a previously presented interaction in the Webview (phase-5).
+   * @param id - interaction correlation id.
+   */
+  resolveInteraction(id: string): void {
+    this.post({ type: 'interaction/resolved', id })
   }
 
   /**
@@ -800,6 +999,19 @@ export class ChatPanelHost {
     if (active.status === 'disconnected') {
       return this.reject('disconnected')
     }
+    // A command runs against the registry instead of the model, so it is decided
+    // before the `@path` gate: a command's own arguments are free-form text.
+    if (this.deps.acceptCommand !== undefined && isCommandLine(trimmed)) {
+      let consumed = false
+      try {
+        consumed = await this.deps.acceptCommand(active.sessionId, trimmed)
+      } catch {
+        return this.reject('disconnected')
+      }
+      if (consumed) return { ok: true, command: true, sessionId: active.sessionId, tabId: active.tabId }
+      // Not a command: the line keeps its prompt path, where the runtime's pre-step
+      // boundary reads a leading `/name` as a skill invocation.
+    }
     const atPathOptions = this.deps.getAtPathResolveOptions?.() ?? { workspaceFolders: [] }
     const atPath = validateComposerAtPaths(trimmed, atPathOptions)
     if (!atPath.ok) {
@@ -828,6 +1040,18 @@ export class ChatPanelHost {
       this.lastRenderState = { testIds: message.testIds, renderState: message.renderState }
       const resolvers = this.renderStateResolvers.splice(0)
       for (const resolve of resolvers) resolve(this.lastRenderState)
+      return
+    }
+    if (message.type === 'composer/at-query') {
+      void this.answerAtQuery(message.requestId, message.query)
+      return
+    }
+    if (message.type === 'composer/slash-query') {
+      void this.answerSlashQuery(message.requestId, message.query)
+      return
+    }
+    if (message.type === 'composer/drop-paths') {
+      this.appendDroppedMentions(message.text, message.paths)
       return
     }
     if (message.type === 'ready') {
@@ -1029,6 +1253,12 @@ export class ChatPanelHost {
     }
     if (message.type === 'composer/send-rich') {
       const images = message.images?.map(img => ({ data: img.data, mimeType: img.mimeType }))
+      // A command is text-only on this bridge, so a slash line carrying attachments
+      // cannot run as one. Saying so keeps the send honest: dropping the images
+      // silently would look like the command had consumed them.
+      if ((images?.length ?? 0) > 0 && isCommandLine(message.text.trim())) {
+        this.pushBanner('命令不支持图片附件，已按普通消息发送', 'slash-command')
+      }
       try {
         await this.deps.acceptSend(message.text, images)
       } catch {
@@ -1092,6 +1322,18 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/open-reference') {
       await this.deps.requestOpenReference?.(message.path)
+      return
+    }
+    if (message.type === 'interaction/approve') {
+      this.deps.resolveApproval?.(message.id, message.outcome)
+      return
+    }
+    if (message.type === 'interaction/answer') {
+      this.deps.resolveQuestion?.(message.id, message.answer)
+      return
+    }
+    if (message.type === 'interaction/dismiss') {
+      this.deps.dismissQuestion?.(message.id, message.error)
       return
     }
     if (message.type === 'scroll/reveal') {

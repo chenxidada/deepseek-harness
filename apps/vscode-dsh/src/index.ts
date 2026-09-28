@@ -85,10 +85,19 @@ export {
   type HydratorSessionEvent,
 } from './replay-hydrator.ts'
 export {
-  historyTreeItems,
+  historySidebarRows,
   listHistoryFromIndex,
-  type HistoryTreeItem,
+  type HistorySidebarRow,
 } from './history-view.ts'
+export {
+  canRegisterSidebarView,
+  createSidebarView,
+  parseSidebarIntent,
+  SIDEBAR_VIEW_ID,
+  type SidebarIntent,
+  type SidebarViewDeps,
+  type SidebarViewHooks,
+} from './sidebar-view.ts'
 export {
   ChatPanelHost,
   FakeWebviewPort,

@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-vscode-dsh",
+  "name": "dsh-vscode-dsh",
   "displayName": "DeepSeek Harness IDE",
   "publisher": "deepseek-ai",
   "description": "VS Code Extension host for the dsh ide profile: SDK stdio client plus Host bridge server",
@@ -11,7 +11,7 @@
     "directory": "apps/vscode-dsh"
   },
   "type": "module",
-  "main": "lib/extension.js",
+  "main": "lib/extension.cjs",
   "types": "lib/types/extension.d.ts",
   "exports": {
     ".": {
@@ -21,16 +21,10 @@
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
-  "files": [
-    "lib/*.js",
-    "lib/types/**/*.d.ts",
-    "media/**/*",
-    "webview/dist/**/*"
-  ],
   "scripts": {
     "webview:build": "vite build --config webview/vite.config.ts",
     "build:webview": "pnpm run webview:build",
-    "build:host": "tsc -b && tsdown",
+    "build:host": "tsc -b && tsdown && cp src/extension-shim.cjs lib/extension.cjs",
     "vscode:prepublish": "pnpm run build:host && pnpm run webview:build",
     "prepublishOnly": "pnpm run build:host && pnpm run webview:build"
   },
@@ -48,11 +42,9 @@
     "onCommand:dsh.reviewWorkspaceDiffs",
     "onCommand:dsh.openTimelineDiff",
     "onCommand:dsh.askAboutSelection",
+    "onCommand:dsh.insertFileReference",
     "onCommand:dsh.openSettingsPage",
-    "onView:dsh.conversations",
-    "onView:dsh.history",
-    "onView:dsh.timeline",
-    "onView:dsh.chat"
+    "onView:dsh.history"
   ],
   "contributes": {
     "configuration": {
@@ -99,6 +91,10 @@
       {
         "command": "dsh.askAboutSelection",
         "title": "DeepSeek Harness: Ask About Selection"
+      },
+      {
+        "command": "dsh.insertFileReference",
+        "title": "DeepSeek Harness: Reference a Workspace File in the Composer"
       },
       {
         "command": "dsh.selectPermissionPreset",
@@ -164,23 +160,6 @@
           "group": "dsh@1",
           "when": "editorHasSelection"
         }
-      ],
-      "view/item/context": [
-        {
-          "command": "dsh.deleteConversation",
-          "when": "view == dsh.conversations && viewItem =~ /dshConversation/",
-          "group": "inline"
-        },
-        {
-          "command": "dsh.closeConversation",
-          "when": "view == dsh.conversations && viewItem =~ /dshConversation/",
-          "group": "inline"
-        },
-        {
-          "command": "dsh.deleteHistory",
-          "when": "view == dsh.history && viewItem == dshHistorySession",
-          "group": "inline"
-        }
       ]
     },
     "viewsContainers": {
@@ -195,21 +174,9 @@
     "views": {
       "dsh": [
         {
-          "id": "dsh.chat",
-          "name": "Conversation",
-          "type": "webview"
-        },
-        {
-          "id": "dsh.conversations",
-          "name": "Conversations"
-        },
-        {
           "id": "dsh.history",
-          "name": "History"
-        },
-        {
-          "id": "dsh.timeline",
-          "name": "Timeline"
+          "name": "History",
+          "type": "webview"
         }
       ]
     },
@@ -229,17 +196,23 @@
     ]
   },
   "license": "MIT",
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@deepseek-ai/dsh-file-reference": "workspace:^",
+    "@deepseek-ai/dsh-file-reference-local": "workspace:^",
     "@deepseek-ai/dsh-ide-bridge": "workspace:^",
     "@deepseek-ai/dsh-sdk-client": "workspace:^",
-    "@deepseek-ai/dsh-subprocess": "workspace:^"
-  },
-  "devDependencies": {
+    "@deepseek-ai/dsh-subprocess": "workspace:^",
+    "@types/katex": "^0.16.8",
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^22.0.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "highlight.js": "^11.12.0",
+    "katex": "^0.16.47",
+    "markdown-it": "^15.0.2",
+    "markdown-it-task-lists": "^2.1.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tsdown": "^0.22.2",

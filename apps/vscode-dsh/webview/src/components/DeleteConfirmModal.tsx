@@ -18,39 +18,21 @@ export function DeleteConfirmModal({ confirm, bridge }: DeleteConfirmModalProps)
       role="dialog"
       aria-modal="true"
       aria-labelledby="delete-confirm-title"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 50,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'rgba(0,0,0,0.45)',
-        padding: 16,
-      }}
+      className="dsh-modal-backdrop"
     >
       <div
-        style={{
-          width: 'min(420px, 100%)',
-          background: 'var(--dsh-bg)',
-          color: 'var(--dsh-fg)',
-          border: '1px solid var(--dsh-border)',
-          borderRadius: 'var(--dsh-radius-md)',
-          padding: 16,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-        }}
+        className="dsh-modal"
+        style={{ display: 'flex', flexDirection: 'column' }}
       >
-        <h2 id="delete-confirm-title" style={{ margin: 0, fontSize: '1.05em' }}>
+        <h2 id="delete-confirm-title" className="dsh-modal-head" style={{ margin: 0 }}>
           删除会话
         </h2>
-        <p data-testid="delete-confirm-copy" style={{ margin: 0, lineHeight: 1.45 }}>
+        <p data-testid="delete-confirm-copy" className="dsh-modal-body" style={{ margin: 0 }}>
           将永久删除
           {confirm.title ? `「${confirm.title}」` : '该会话'}
           ，此操作不可恢复。
         </p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <div className="dsh-modal-actions">
           <button
             type="button"
             data-testid="btn-delete-cancel"

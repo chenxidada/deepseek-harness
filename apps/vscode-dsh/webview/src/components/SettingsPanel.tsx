@@ -32,28 +32,8 @@ export function SettingsPanel({
   if (!open) return null
 
   return (
-    <section
-      data-testid="settings-panel"
-      aria-label="设置"
-      style={{
-        position: 'absolute',
-        inset: 0,
-        zIndex: 20,
-        background: 'var(--dsh-bg)',
-        display: 'flex',
-        flexDirection: 'column',
-        overflowY: 'auto',
-      }}
-    >
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 8,
-        padding: '8px 10px',
-        borderBottom: '1px solid var(--dsh-border)',
-      }}
-      >
+    <section data-testid="settings-panel" aria-label="设置" className="dsh-panel">
+      <div className="dsh-panel-head" style={{ justifyContent: 'space-between' }}>
         <span>设置</span>
         <button
           type="button"
@@ -64,7 +44,10 @@ export function SettingsPanel({
           关闭
         </button>
       </div>
-      <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div
+        className="dsh-panel-body"
+        style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
+      >
         <ModelSection modelState={modelState} bridge={bridge} />
         <CompactionSection
           namespace={settingsState?.namespaces.find(ns => ns.ns === COMPACTION_NS)}
@@ -135,7 +118,7 @@ function ModelSection({ modelState, bridge }: { modelState?: ModelState; bridge:
           data-testid="settings-provider"
           value={providerId}
           onChange={event => selectProvider(event.target.value)}
-          style={selectStyle}
+          style={{ maxWidth: '100%' }}
         >
           {modelState.providers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
@@ -147,7 +130,7 @@ function ModelSection({ modelState, bridge }: { modelState?: ModelState; bridge:
           value={modelId}
           disabled={models.length === 0}
           onChange={event => selectModel(event.target.value)}
-          style={selectStyle}
+          style={{ maxWidth: '100%' }}
         >
           {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
         </select>
@@ -159,7 +142,7 @@ function ModelSection({ modelState, bridge }: { modelState?: ModelState; bridge:
           value={effortId}
           disabled={efforts.length === 0}
           onChange={event => setEffortId(event.target.value)}
-          style={selectStyle}
+          style={{ maxWidth: '100%' }}
         >
           {efforts.length === 0
             ? <option value="">该模型不支持</option>
@@ -478,15 +461,6 @@ const fieldRowStyle: CSSProperties = {
   gap: 6,
   flexWrap: 'wrap',
   fontSize: '0.92em',
-}
-
-const selectStyle: CSSProperties = {
-  font: 'inherit',
-  borderRadius: 'var(--dsh-radius-sm)',
-  border: '1px solid var(--dsh-input-border)',
-  background: 'var(--dsh-input-bg)',
-  color: 'var(--dsh-input-fg)',
-  maxWidth: '100%',
 }
 
 const numberInputStyle: CSSProperties = {
