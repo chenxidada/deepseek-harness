@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/subsystems/ide-bridge.md
-ide-bridge.md: 7c582af991e9b2260eb313103d27d39c981c06c8
-ide-bridge.zh.md: b6df07112bfc50a8c08952fea50ba07221751d92
+ide-bridge.md: edaafb1b7e041ba1e5ad7561ad4426337ae6fe5b
+ide-bridge.zh.md: 574869e460f77fd3a994582ffb6433e3b0b83622

@@ -110,8 +110,88 @@ function isListedSelection(value: unknown): value is ListedSelection {
   return value.reasoningEffort === undefined || isNonEmptyString(value.reasoningEffort)
 }
 
+/** One session row of a `session/list/response`. */
+type ListedSession = Extract<BridgeFrame, { kind: 'session/list/response'; ok: true }>['sessions'][number]
+
+/** Whether `value` is one optional session id field of a listed session row. */
+function isOptionalSessionId(value: unknown): boolean {
+  return value === undefined || isNonEmptyString(value)
+}
+
+/** Whether `value` is one session row of a `session/list/response`. */
+function isListedSession(value: unknown): value is ListedSession {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.sessionId) || !Number.isSafeInteger(value.createdAt)) return false
+  return isOptionalSessionId(value.cwd)
+    && isOptionalSessionId(value.parentSessionId)
+    && isOptionalSessionId(value.title)
+}
+
+/** Whether `value` is the session array of a `session/list/response`. */
+function isListedSessionArray(value: unknown): value is ListedSession[] {
+  return Array.isArray(value) && value.every(isListedSession)
+}
+
+/** One command row of a `commands/list/response`. */
+type ListedCommand = Extract<BridgeFrame, { kind: 'commands/list/response'; ok: true }>['commands'][number]
+
+/** Whether `value` is one command row of a `commands/list/response`. */
+function isListedCommand(value: unknown): value is ListedCommand {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.name) || typeof value.description !== 'string') return false
+  return value.inputHint === undefined || typeof value.inputHint === 'string'
+}
+
+/** Whether `value` is the command array of a `commands/list/response`. */
+function isListedCommandArray(value: unknown): value is ListedCommand[] {
+  return Array.isArray(value) && value.every(isListedCommand)
+}
+
+/** One outcome of a `commands/execute/response`. */
+type CommandOutcome = Extract<BridgeFrame, { kind: 'commands/execute/response'; ok: true }>['outcome']
+
+/** Whether `value` is the settled execution of a `commands/execute/response`. */
+function isCommandOutcome(value: unknown): value is NonNullable<CommandOutcome> {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.commandId) || typeof value.ok !== 'boolean') return false
+  return value.text === undefined || typeof value.text === 'string'
+}
+
+/** One preset row of an `agent-presets/list/response`. */
+type ListedPreset = Extract<BridgeFrame, { kind: 'agent-presets/list/response'; ok: true }>['presets'][number]
+
+/** Whether `value` is one preset row of an `agent-presets/list/response`. */
+function isListedPreset(value: unknown): value is ListedPreset {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.id) || typeof value.isDefault !== 'boolean') return false
+  for (const field of [value.name, value.description, value.broken]) {
+    if (field !== undefined && typeof field !== 'string') return false
+  }
+  return true
+}
+
+/** Whether `value` is the preset array of an `agent-presets/list/response`. */
+function isListedPresetArray(value: unknown): value is ListedPreset[] {
+  return Array.isArray(value) && value.every(isListedPreset)
+}
+
+/** One skill row of a `skills/list/response`. */
+type ListedSkill = Extract<BridgeFrame, { kind: 'skills/list/response'; ok: true }>['skills'][number]
+
+/** Whether `value` is one skill row of a `skills/list/response`. */
+function isListedSkill(value: unknown): value is ListedSkill {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.name) || typeof value.description !== 'string') return false
+  return value.whenToUse === undefined || typeof value.whenToUse === 'string'
+}
+
+/** Whether `value` is the skill array of a `skills/list/response`. */
+function isListedSkillArray(value: unknown): value is ListedSkill[] {
+  return Array.isArray(value) && value.every(isListedSkill)
+}
+
 /** Kinds whose whole payload is the round-trip id. */
-type IdOnlyKind = 'model/list' | 'settings/describe'
+type IdOnlyKind = 'model/list' | 'settings/describe' | 'session/list' | 'agent-presets/list'
 
 /**
  * Validate frames whose payload is only the round-trip id.
@@ -138,6 +218,8 @@ type SessionScopedKind =
   | 'session/continue-capability'
   | 'session/delete'
   | 'permission/list'
+  | 'commands/list'
+  | 'skills/list'
 
 /**
  * Validate the `id` + `sessionId` pair shared by the session-scoped request frames.
@@ -318,6 +400,16 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
     }
     case 'session/delete': return sessionScopedFrame('session/delete', record)
     case 'session/delete/response': return okResponseFrame('session/delete/response', record)
+    case 'session/list': return idOnlyFrame('session/list', record)
+    case 'session/list/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isListedSessionArray(record.sessions)) return undefined
+        return { kind, id: record.id, ok: true, sessions: record.sessions }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
     case 'model/list': return idOnlyFrame('model/list', record)
     case 'model/list/response': {
       if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
@@ -410,6 +502,59 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       if (record.ok) {
         if (!isSettingsNamespaceView(record.namespace)) return undefined
         return { kind, id: record.id, ok: true, namespace: record.namespace }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'commands/list': return sessionScopedFrame('commands/list', record)
+    case 'commands/list/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isListedCommandArray(record.commands)) return undefined
+        return { kind, id: record.id, ok: true, commands: record.commands }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'commands/execute': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
+      if (typeof record.line !== 'string' || record.line === '') return undefined
+      return { kind, id: record.id, sessionId: record.sessionId, line: record.line }
+    }
+    case 'commands/execute/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (typeof record.matched !== 'boolean') return undefined
+        if (record.outcome !== undefined && !isCommandOutcome(record.outcome)) return undefined
+        // A matched line always reports its execution; an unmatched one carries none.
+        if (record.matched !== (record.outcome !== undefined)) return undefined
+        return {
+          kind,
+          id: record.id,
+          ok: true,
+          matched: record.matched,
+          ...record.outcome === undefined ? {} : { outcome: record.outcome },
+        }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'agent-presets/list': return idOnlyFrame('agent-presets/list', record)
+    case 'agent-presets/list/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isListedPresetArray(record.presets)) return undefined
+        return { kind, id: record.id, ok: true, presets: record.presets }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'skills/list': return sessionScopedFrame('skills/list', record)
+    case 'skills/list/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isListedSkillArray(record.skills)) return undefined
+        return { kind, id: record.id, ok: true, skills: record.skills }
       }
       if (typeof record.error !== 'string') return undefined
       return { kind, id: record.id, ok: false, error: record.error }

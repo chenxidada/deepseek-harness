@@ -273,6 +273,16 @@ export class HarnessSdkJsonRpcServer {
   }
 
   /**
+   * Materialize one server-owned session without touching stdout protocol methods
+   * (Host commands issued from a Tab that never prompted).
+   * Creates the same record `session/prompt` creates; no-op when already live.
+   * @param sessionId - SDK session identity to materialize.
+   */
+  async ensureSession(sessionId: string): Promise<void> {
+    await this.getOrCreateSession(sessionId)
+  }
+
+  /**
    * Fork a live parent into a prompt-ready child (AD-CUX-5 / session/fork).
    * Uses `SessionStore.fork` seed cut semantics via `agents.create` with the
    * same seed/lineage so the child is registered in the SDK session Map.

@@ -419,6 +419,42 @@ describe('dsh-sdk-jsonrpc-server plugin apply', () => {
   })
 })
 
+describe('dsh-sdk-jsonrpc-server session ensure', () => {
+  /** Mount the plugin over a mock completion endpoint and initialize the SDK route. */
+  async function mountIdleTab(): Promise<{ harness: ApplyHarness; storageDir: string }> {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-apply-ensure-'))
+    const llmServer = await mockCompletionServer()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
+    const harness = await mountPlugin(storageDir)
+    harness.send({
+      jsonrpc: '2.0',
+      id: 'init',
+      method: 'initialize',
+      params: { cwd: storageDir, provider: 'deepseek-official', model: 'ensure-model' },
+    })
+    await harness.waitForFrame(frame => frame.id === 'init', 'initialize response')
+    return { harness, storageDir }
+  }
+
+  it('materializes a session for a command surface and reuses the live one', async () => {
+    const { harness, storageDir } = await mountIdleTab()
+    try {
+      await harness.ctx.sdkSessionEnsure.ensureSession('idle-tab')
+      const agent = harness.ctx.agents.get(SessionId('idle-tab'))
+      expect(agent).toBeDefined()
+
+      // The Tab keeps one session: a second ensure reaches the live agent instead
+      // of creating a second one, so a catalog read cannot fork the composition.
+      await harness.ctx.sdkSessionEnsure.ensureSession('idle-tab')
+      expect(harness.ctx.agents.get(SessionId('idle-tab'))).toBe(agent)
+    } finally {
+      await harness.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('dsh-sdk-jsonrpc-server session delete', () => {
   /** Storage entries belonging to session `main`, matched by path segment. */
   async function mainSessionEntries(storageDir: string): Promise<string[]> {

@@ -35,6 +35,10 @@ import {
   type SessionPersistenceDeleteCapability,
   type SdkSessionDelete,
 } from './session-delete.ts'
+import {
+  SDK_SESSION_ENSURE_SERVICE,
+  type SdkSessionEnsure,
+} from './session-ensure.ts'
 
 export * from './server.ts'
 export {
@@ -59,6 +63,10 @@ export {
   type SessionPersistenceDeleteCapability,
   type SdkSessionDelete,
 } from './session-delete.ts'
+export {
+  SDK_SESSION_ENSURE_SERVICE,
+  type SdkSessionEnsure,
+} from './session-ensure.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -67,6 +75,7 @@ declare module '@deepseek-ai/cordis' {
     sdkSessionCancel: SdkSessionCancel
     sdkSessionFork: SdkSessionFork
     sdkSessionDelete: SdkSessionDelete
+    sdkSessionEnsure: SdkSessionEnsure
   }
 }
 
@@ -142,6 +151,10 @@ export function apply(ctx: Context, config: JsonRpcConfig): void {
     },
   }
   ctx.provide(SDK_SESSION_DELETE_SERVICE, sessionDelete)
+  const sessionEnsure: SdkSessionEnsure = {
+    ensureSession: sessionId => server.ensureSession(sessionId),
+  }
+  ctx.provide(SDK_SESSION_ENSURE_SERVICE, sessionEnsure)
 
   // Share one exit task so racing shutdown requests cannot dispose the root or
   // exit the process more than once.

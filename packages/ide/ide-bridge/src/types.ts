@@ -49,10 +49,53 @@ export const PERMISSION_PRESETS_SERVICE = 'permissionPresets'
 export const SESSIONS_SERVICE = 'sessions'
 
 /**
+ * Cordis service key for the session corpus listing (`ctx.sessionQuery`).
+ * Used by Host `session/list` to enumerate sessions without resuming an Agent.
+ */
+export const SESSION_QUERY_SERVICE = 'sessionQuery'
+
+/**
+ * Cordis service key for the listing projection cache (`ctx.sessionProjectionCache`).
+ * Used by Host `session/list` for titles, so listing never replays a log per row.
+ */
+export const SESSION_PROJECTION_CACHE_SERVICE = 'sessionProjectionCache'
+
+/**
  * Cordis service key for durable session persistence (`ctx.sessionPersistence`).
  * Used by Host `session/read-log` cold reads (T-0a / AD-CU-2).
  */
 export const SESSION_PERSISTENCE_SERVICE = 'sessionPersistence'
+
+/**
+ * Cordis service key for server-owned per-session materialization.
+ * Published by `@deepseek-ai/dsh-sdk-jsonrpc-server` as `sdkSessionEnsure`, and
+ * called before a command runs against a Tab that never prompted.
+ */
+export const SDK_SESSION_ENSURE_SERVICE = 'sdkSessionEnsure'
+
+/**
+ * Cordis service key for the live-agent registry (`ctx.agents`).
+ * The command and skill frames address one agent through its session id.
+ */
+export const AGENTS_SERVICE = 'agents'
+
+/**
+ * Cordis service key for the human-command registry (`ctx.commands`).
+ * Backs Host `commands/list` and `commands/execute`.
+ */
+export const COMMANDS_SERVICE = 'commands'
+
+/**
+ * Cordis service key for the agent-preset roster (`ctx.agentPresets`).
+ * Backs Host `agent-presets/list`.
+ */
+export const AGENT_PRESETS_SERVICE = 'agentPresets'
+
+/**
+ * Cordis service key for the skill registry (`ctx.skills`).
+ * Backs Host `skills/list`.
+ */
+export const SKILLS_SERVICE = 'skills'
 
 /** Duck-typed persistence open/read surface for cold log reads. */
 export interface SessionPersistenceReadCapability {
@@ -68,6 +111,60 @@ export interface SessionPersistenceReadCapability {
     read(from: number): Promise<readonly unknown[]>
     close(): Promise<void>
   }>
+}
+
+/** Stored session header fields a `session/list` row reports. */
+export interface BridgeSessionHeader {
+  /** Session identity. */
+  readonly id: string
+  /** Log creation time in epoch milliseconds; part of the projection-cache identity. */
+  readonly createdAt: number
+  /** Recorded working directory, absent when the session was created without one. */
+  readonly cwd?: string
+  /** Whether the log is a fork seed; a seeded log has no listing-readable cache row. */
+  readonly isSeeded: boolean
+  /** Parent session identity for a fork or a delegated child. */
+  readonly parentSession?: string
+}
+
+/** One session row of a `session/list/response`. */
+export interface BridgeSessionSummary {
+  /** Session identity. */
+  sessionId: string
+  /** Log creation time in epoch milliseconds. */
+  createdAt: number
+  /** Recorded working directory, absent when the session was created without one. */
+  cwd?: string
+  /** Parent session identity for a fork or a delegated child. */
+  parentSessionId?: string
+  /** Projection-cached title; absent when this lifecycle has no cached title row. */
+  title?: string
+}
+
+/** Duck-typed session corpus enumeration for `session/list`. */
+export interface SessionQueryListCapability {
+  /**
+   * Read every logical session without resuming an Agent.
+   * @param signal - optional cancellation for persistence reads.
+   * @returns one record per session, in no promised order.
+   */
+  listSessions(signal?: AbortSignal): Promise<readonly { header: BridgeSessionHeader }[]>
+}
+
+/** Duck-typed listing read of the projection cache for `session/list` titles. */
+export interface SessionProjectionCacheListCapability {
+  /**
+   * View stored projection values without reading any log.
+   * @param header - the listed session's header, which witnesses the record's identity.
+   * @param inheritedEventCount - exact inherited prefix length; `0` for an unseeded log.
+   * @param keys - projection keys the caller needs.
+   * @returns the served values, or `undefined` when no usable row matches this lifecycle.
+   */
+  cachedSnapshot(
+    header: BridgeSessionHeader,
+    inheritedEventCount: number,
+    keys?: readonly string[],
+  ): { values: Record<string, unknown> } | undefined
 }
 
 /** Live connection state exposed to the runtime and tests. */
@@ -206,6 +303,180 @@ export interface IdeBridgeSessions {
   get(id: string): IdeBridgeSessionHandle | undefined
 }
 
+/** Duck-typed live-agent registry (`ctx.agents`) behind the command and skill frames. */
+export interface IdeBridgeAgents {
+  /**
+   * Look up a live agent by session id.
+   * @param id - session identity from the Host Tab binding.
+   * @returns the live agent, or `undefined` when that session is not materialized.
+   */
+  get(id: string): IdeBridgeLiveAgent | undefined
+}
+
+/**
+ * Minimal live-agent surface the command and skill frames read. An agent is both
+ * the command-scope key and the viewing scope a skill listing merges layers for.
+ */
+export interface IdeBridgeLiveAgent {
+  /** The agent's session, read for the cwd that scopes a skill listing. */
+  readonly session: { readonly header: { readonly cwd?: string } }
+}
+
+/** Duck-typed human-command registry (`ctx.commands`). */
+export interface IdeBridgeCommands {
+  /**
+   * List the effective command descriptors for one agent.
+   * @param agent - the live agent whose scoped layer shadows globals.
+   * @returns name-sorted descriptors after scoped shadowing.
+   */
+  list(agent: object): readonly IdeBridgeCommandDescriptor[]
+  /**
+   * Parse and execute one complete slash line without sending it to the model.
+   * @param agent - the receiving live agent.
+   * @param line - complete slash-command line.
+   * @param images - composer images; this bridge is a text surface and always
+   *   passes none, so a command that declares `input.images` still runs, without
+   *   attachments.
+   * @param signal - caller lifetime.
+   * @returns the settled execution, or `undefined` when the line resolves no command.
+   */
+  execute(
+    agent: object,
+    line: string,
+    images: readonly unknown[],
+    signal: AbortSignal,
+  ): Promise<IdeBridgeCommandExecution | undefined>
+}
+
+/** One command row the registry advertises. */
+export interface IdeBridgeCommandDescriptor {
+  /** Lowercase command name without the leading slash. */
+  readonly name: string
+  /** Human-readable summary from the command's own registration. */
+  readonly description: string
+  /** Optional free-form input contract the command declared. */
+  readonly input?: {
+    /** Placeholder shown before the user supplies free-form input. */
+    readonly hint: string
+    /** Whether composer images may accompany an invocation. */
+    readonly images?: boolean
+  }
+}
+
+/** One settled command execution the registry returns. */
+export interface IdeBridgeCommandExecution {
+  /** Pairing id carried by this execution's `command/run` and `command/done` records. */
+  readonly commandId: string
+  /** The handler's normalized outcome. */
+  readonly result: {
+    /** Whether the handler reported success. */
+    readonly kind: 'success' | 'error'
+    /** Result text the dispatching surface renders; absent when the handler printed none. */
+    readonly text?: string
+  }
+}
+
+/** Duck-typed agent-preset roster (`ctx.agentPresets`). */
+export interface IdeBridgeAgentPresets {
+  /** Id of this deployment's default preset. */
+  readonly defaultId: string
+  /**
+   * Every preset the configured roots currently supply.
+   * @returns the presets, first-root-wins per id.
+   */
+  list(): Promise<readonly IdeBridgeAgentPresetListing[]>
+}
+
+/** One preset row a roster read returns; the bridge projects it onto the wire. */
+export interface IdeBridgeAgentPresetListing {
+  /** Preset id, e.g. `specdev-orchestrator`. */
+  readonly id: string
+  /** Display name when the composition declares one. */
+  readonly name?: string | undefined
+  /** One-line purpose when the composition declares one. */
+  readonly description?: string | undefined
+  /** Why the preset cannot be mounted; absent for a usable preset. */
+  readonly broken?: string | undefined
+}
+
+/** Duck-typed skill registry read surface (`ctx.skills`). */
+export interface IdeBridgeSkills {
+  /**
+   * List the skills visible to one viewing scope.
+   * @param options - workspace selector and the viewing scope (the live agent).
+   * @returns every skill of the merged layers, before invocation filtering.
+   */
+  list(options: {
+    readonly cwd?: string | undefined
+    readonly scope?: object | undefined
+  }): Promise<readonly IdeBridgeSkillListing[]>
+}
+
+/** One skill row a listing returns; the bridge projects it onto the wire. */
+export interface IdeBridgeSkillListing {
+  /** Kebab-case identifier used to address the skill. */
+  readonly name: string
+  /** Short routing description. */
+  readonly description: string
+  /** Optional extra routing guidance. */
+  readonly whenToUse?: string | undefined
+  /** Invocation controls; the bridge keeps only user-invocable skills. */
+  readonly invocation: { readonly userInvocable: boolean }
+}
+
+/** Server-owned per-session materialization (`sdkSessionEnsure`). */
+export interface SdkSessionEnsureCapability {
+  /**
+   * Ensure one session has a live agent; no-op when it is already live.
+   * @param sessionId - SDK session identity from the Host Tab binding.
+   */
+  ensureSession(sessionId: string): Promise<void>
+}
+
+/** One command row of a `commands/list/response`. */
+export interface BridgeCommandSummary {
+  /** Lowercase command name without the leading slash. */
+  readonly name: string
+  /** Human-readable summary shown beside the name. */
+  readonly description: string
+  /** Free-form input placeholder; absent when the command declares no input. */
+  readonly inputHint?: string
+}
+
+/** One settled command outcome of a `commands/execute/response`. */
+export interface BridgeCommandOutcome {
+  /** Pairing id correlating this execution with its logged run/done records. */
+  readonly commandId: string
+  /** Whether the handler reported success. */
+  readonly ok: boolean
+  /** Result text to render; absent when the handler printed none. */
+  readonly text?: string
+}
+
+/** One agent-preset row of an `agent-presets/list/response`. */
+export interface BridgeAgentPresetSummary {
+  /** Preset id, e.g. `specdev-orchestrator`. */
+  readonly id: string
+  /** Display name when the composition declares one. */
+  readonly name?: string
+  /** One-line purpose when the composition declares one. */
+  readonly description?: string
+  /** Whether this is the deployment's default preset. */
+  readonly isDefault: boolean
+  /** Why the preset cannot be mounted; absent for a usable preset. */
+  readonly broken?: string
+}
+
+/** One skill row of a `skills/list/response`. */
+export interface BridgeSkillSummary {
+  /** Kebab-case identifier used to address the skill. */
+  readonly name: string
+  /** Short routing description shown beside the name. */
+  readonly description: string
+  /** Optional extra routing guidance. */
+  readonly whenToUse?: string
+}
+
 /**
  * NDJSON frames exchanged on the Host bridge (not SDK stdout).
  * Approval / user-questions round-trips and permission-preset RPC share this
@@ -279,6 +550,9 @@ export type BridgeFrame =
   | { kind: 'session/delete'; id: string; sessionId: string }
   | { kind: 'session/delete/response'; id: string; ok: true }
   | { kind: 'session/delete/response'; id: string; ok: false; error: string }
+  | { kind: 'session/list'; id: string }
+  | { kind: 'session/list/response'; id: string; ok: true; sessions: BridgeSessionSummary[] }
+  | { kind: 'session/list/response'; id: string; ok: false; error: string }
   | { kind: 'model/list'; id: string }
   | {
     kind: 'model/list/response'
@@ -337,6 +611,31 @@ export type BridgeFrame =
     namespace: SettingsNamespaceView
   }
   | { kind: 'settings/update/response'; id: string; ok: false; error: string }
+  | { kind: 'commands/list'; id: string; sessionId: string }
+  | { kind: 'commands/list/response'; id: string; ok: true; commands: BridgeCommandSummary[] }
+  | { kind: 'commands/list/response'; id: string; ok: false; error: string }
+  | { kind: 'commands/execute'; id: string; sessionId: string; line: string }
+  | {
+    kind: 'commands/execute/response'
+    id: string
+    ok: true
+    /** Whether the line resolved a registered command; false leaves it to the prompt path. */
+    matched: boolean
+    /** The settled execution; absent when `matched` is false. */
+    outcome?: BridgeCommandOutcome
+  }
+  | { kind: 'commands/execute/response'; id: string; ok: false; error: string }
+  | { kind: 'agent-presets/list'; id: string }
+  | {
+    kind: 'agent-presets/list/response'
+    id: string
+    ok: true
+    presets: BridgeAgentPresetSummary[]
+  }
+  | { kind: 'agent-presets/list/response'; id: string; ok: false; error: string }
+  | { kind: 'skills/list'; id: string; sessionId: string }
+  | { kind: 'skills/list/response'; id: string; ok: true; skills: BridgeSkillSummary[] }
+  | { kind: 'skills/list/response'; id: string; ok: false; error: string }
   | { kind: 'error'; id?: string; message: string }
 
 /** Closed approval outcomes accepted on the wire. */

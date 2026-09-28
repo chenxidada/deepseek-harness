@@ -1388,6 +1388,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'sdkSessionEnsure',
+    summary: 'Server-owned per-session materialization used by the ide Host bridge command path.',
+    description: 'Server-owned per-session materialization used by the ide Host bridge command path. Creates the same record `session/prompt` would create for the id, so a command issued from an untouched Tab runs against the session its first prompt would use.',
+    methods: [
+      {
+        signature: 'ensureSession(sessionId: string): Promise<void>',
+        description: 'Ensure one session has a live agent; no-op when it is already live. Uses `getOrCreateSession` — the `session/prompt` path — and never a second creation route, so the session\'s composition matches a prompted session.',
+        parameters: [{ name: 'sessionId', description: 'SDK session identity from the Host Tab binding.' }],
+      },
+    ],
+  },
+  {
     key: 'sdkSessionFork',
     summary: 'Server-owned per-session fork used by the ide Host bridge retry/edit/branch path.',
     description: 'Server-owned per-session fork used by the ide Host bridge retry/edit/branch path. Creates a prompt-ready child via `sessions.fork` seed semantics + `agents.create`.',

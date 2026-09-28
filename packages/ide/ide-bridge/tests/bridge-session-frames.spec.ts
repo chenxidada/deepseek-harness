@@ -27,6 +27,8 @@ import {
   SDK_SESSION_FORK_SERVICE,
   SDK_SESSION_RESUME_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
+  SESSION_PROJECTION_CACHE_SERVICE,
+  SESSION_QUERY_SERVICE,
   validateBridgeFrame,
   type BridgeFrame,
   type IdeBridgeConnectionState,
@@ -202,6 +204,46 @@ describe('ide-bridge delete / model / settings frame validation (AC-31)', () => 
     expect(validateBridgeFrame({ kind: 'session/delete/response', id: 'del-1', ok: false })).toBeUndefined()
     expect(validateBridgeFrame({ kind: 'session/delete/response', id: '', ok: true })).toBeUndefined()
     expect(validateBridgeFrame({ kind: 'session/delete/response', id: 'del-1', ok: 'yes' })).toBeUndefined()
+  })
+
+  it('accepts session/list and drops an id-less frame', () => {
+    expect(validateBridgeFrame({ kind: 'session/list', id: 'sl-1' }))
+      .toEqual({ kind: 'session/list', id: 'sl-1' })
+    expect(validateBridgeFrame({ kind: 'session/list', id: '' })).toBeUndefined()
+  })
+
+  it('accepts session/list/response only as complete session rows', () => {
+    const sessions = [
+      { sessionId: 'sess-a', createdAt: 1_700_000_000_000, cwd: '/w', title: 'A' },
+      { sessionId: 'sess-b', createdAt: 1_700_000_000_001, parentSessionId: 'sess-a' },
+    ]
+    expect(validateBridgeFrame({ kind: 'session/list/response', id: 'sl-1', ok: true, sessions }))
+      .toEqual({ kind: 'session/list/response', id: 'sl-1', ok: true, sessions })
+    expect(validateBridgeFrame({ kind: 'session/list/response', id: 'sl-1', ok: false, error: 'no corpus' }))
+      .toEqual({ kind: 'session/list/response', id: 'sl-1', ok: false, error: 'no corpus' })
+    expect(validateBridgeFrame({ kind: 'session/list/response', id: 'sl-1', ok: true, sessions: 'sess-a' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/list/response', id: 'sl-1', ok: true, sessions: [] }))
+      .toEqual({ kind: 'session/list/response', id: 'sl-1', ok: true, sessions: [] })
+    // A row without identity or creation time cannot be listed, and optional fields stay typed.
+    expect(validateBridgeFrame({
+      kind: 'session/list/response',
+      id: 'sl-1',
+      ok: true,
+      sessions: [{ sessionId: '', createdAt: 1 }],
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'session/list/response',
+      id: 'sl-1',
+      ok: true,
+      sessions: [{ sessionId: 'sess-a', createdAt: 'now' }],
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'session/list/response',
+      id: 'sl-1',
+      ok: true,
+      sessions: [{ sessionId: 'sess-a', createdAt: 1, title: 7 }],
+    })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/list/response', id: 'sl-1', ok: false })).toBeUndefined()
   })
 
   it('accepts model/list and drops an id-less frame', () => {
@@ -651,6 +693,115 @@ describe('ide-bridge session/delete frames', () => {
           ok: false,
           error: 'sdkSessionDelete service is not available',
         })
+    })
+  })
+})
+
+describe('ide-bridge session/list frames', () => {
+  it('lists every session, taking each title from the projection cache', async () => {
+    const viewed: Array<{ id: string; inherited: number; keys: readonly string[] }> = []
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_QUERY_SERVICE, {
+        listSessions: async () => [
+          { header: { id: 'sess-cached', createdAt: 1_700_000_000_000, cwd: '/w', isSeeded: false } },
+          {
+            header: {
+              id: 'sess-seeded',
+              createdAt: 1_700_000_000_001,
+              cwd: '/w',
+              isSeeded: true,
+              parentSession: 'sess-cached',
+            },
+          },
+          { header: { id: 'sess-cwdless', createdAt: 1_700_000_000_002, isSeeded: false } },
+        ],
+      })
+      ctx.provide(SESSION_PROJECTION_CACHE_SERVICE, {
+        cachedSnapshot: (
+          header: { id: string },
+          inheritedEventCount: number,
+          keys?: readonly string[],
+        ) => {
+          viewed.push({ id: header.id, inherited: inheritedEventCount, keys: keys ?? [] })
+          return header.id === 'sess-cached' ? { values: { title: 'Cached title' } } : undefined
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/list', id: 'sl-1' })).toEqual({
+        kind: 'session/list/response',
+        id: 'sl-1',
+        ok: true,
+        sessions: [
+          { sessionId: 'sess-cached', createdAt: 1_700_000_000_000, cwd: '/w', title: 'Cached title' },
+          { sessionId: 'sess-seeded', createdAt: 1_700_000_000_001, cwd: '/w', parentSessionId: 'sess-cached' },
+          { sessionId: 'sess-cwdless', createdAt: 1_700_000_000_002 },
+        ],
+      })
+      // A seeded log's inherited prefix is unreadable from listing metadata, so only an
+      // unseeded row is witnessed against the cache — at the zero cut the Host API uses.
+      expect(viewed.map(entry => [entry.id, entry.inherited])).toEqual([
+        ['sess-cached', 0],
+        ['sess-cwdless', 0],
+      ])
+      expect(viewed[0]?.keys).toEqual(['title'])
+    })
+  })
+
+  it('answers without titles when the runtime mounts no projection cache', async () => {
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_QUERY_SERVICE, {
+        listSessions: async () => [
+          { header: { id: 'sess-plain', createdAt: 1_700_000_000_003, isSeeded: false } },
+        ],
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/list', id: 'sl-nocache' })).toEqual({
+        kind: 'session/list/response',
+        id: 'sl-nocache',
+        ok: true,
+        sessions: [{ sessionId: 'sess-plain', createdAt: 1_700_000_000_003 }],
+      })
+    })
+  })
+
+  it('reports a missing sessionQuery service and a failing listing', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/list', id: 'sl-missing' })).toEqual({
+        kind: 'session/list/response',
+        id: 'sl-missing',
+        ok: false,
+        error: 'sessionQuery service is not available',
+      })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_QUERY_SERVICE, {
+        listSessions: async () => {
+          throw new Error('session corpus is unavailable')
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/list', id: 'sl-error' })).toEqual({
+        kind: 'session/list/response',
+        id: 'sl-error',
+        ok: false,
+        error: 'session corpus is unavailable',
+      })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_QUERY_SERVICE, {
+        listSessions: async () => {
+          throw 'persistence is read-only'
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/list', id: 'sl-text' })).toEqual({
+        kind: 'session/list/response',
+        id: 'sl-text',
+        ok: false,
+        error: 'persistence is read-only',
+      })
     })
   })
 })

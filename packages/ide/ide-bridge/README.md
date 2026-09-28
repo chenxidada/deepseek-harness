@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-ide-bridge` is the Host-side answerer plugin for `dsh --profile ide`. It connects to the Extension-owned Unix domain socket (or Windows named pipe) named by `DSH_IDE_BRIDGE_SOCK`, publishes connection state, and registers terminal listeners for `approval/request` and `user-questions/request`. Legal Host outcomes map back into the waterfall; disconnect, timeout, and illegal payloads fail closed without calling `next()`. The same connection carries the Extension's session, model, settings, and permission requests, and the runtime answers each of them with a result or its failure text; permission presets keep `dsh-permission-presets` as their only authority. SDK stdout stays exclusive to JSON-RPC; bridge traffic never writes there.
+`dsh-ide-bridge` is the Host-side answerer plugin for `dsh --profile ide`. It connects to the Extension-owned Unix domain socket (or Windows named pipe) named by `DSH_IDE_BRIDGE_SOCK`, publishes connection state, and registers terminal listeners for `approval/request` and `user-questions/request`. Legal Host outcomes map back into the waterfall; disconnect, timeout, and illegal payloads fail closed without calling `next()`. The same connection carries the Extension's session, model, settings, permission, and composer-catalog requests, and the runtime answers each of them with a result or its failure text; permission presets keep `dsh-permission-presets` as their only authority. SDK stdout stays exclusive to JSON-RPC; bridge traffic never writes there.
 
 ## Table of Contents
 
@@ -46,6 +46,19 @@ The Extension drives session deletion, model selection, and settings through the
 | `settings/update` | Merge a patch into one namespace's user layer and answer with that namespace re-read | The write error (a revision conflict included), or `settings namespace "<ns>" is not registered` |
 
 Settings answers stay redacted: every read requests `redactSecrets: true`, and the runtime projects each descriptor onto the wire fields `ns`, `value`, `base`, `user`, `revision`, and `secretFields` — the dotted paths whose values were removed. The serialized schema and the descriptor's other properties never leave the runtime.
+
+### Composer catalogs and command execution
+
+The Extension's `/` menu reads four catalogs and runs the line a command claims. `agent-presets/list` is a deployment-wide roster; the other three are addressed by `sessionId`, and the runtime answers each `/response` frame with the rows below or the failure text.
+
+| Request (Host → runtime) | Purpose | Failure the Host sees |
+|---|---|---|
+| `commands/list` | List the session's registered commands as name, description, and `input.hint` | `commands service is not available`, or the listing error |
+| `commands/execute` | Run one line through the command registry and answer with the matched command's outcome | `commands service is not available`, or the execution error |
+| `agent-presets/list` | List the preset roster with each id, display name, description, default flag, and mount failure | `agentPresets service is not available`, or the listing error |
+| `skills/list` | List the session's user-invocable skills | `skills service is not available`, or the listing error |
+
+`commands/execute` needs a live Agent, so the handler materializes one through `ctx.sdkSessionEnsure` — the same `session/prompt` creation path, never a second route — before resolving the registry. A line no command claims answers `matched: false` with no outcome: the Extension keeps it on the prompt path, where the runtime's `agent/pre-step` boundary reads a leading `/name` as a skill invocation, so a command name and a skill name stay the same gesture. This bridge is a text surface, so `commands/execute` always passes no images; whether a command accepts them is the composer's question, answered on the Host API's wire protocol instead.
 
 <a id="replaceability-contract-ad-8"></a>
 ## Replaceability contract (AD-8)

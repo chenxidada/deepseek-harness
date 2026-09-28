@@ -712,6 +712,24 @@ disposeSession(sessionId: string): Promise<void>
 
 Source: [`packages/sdk/server/src/session-dispose.ts`](../../packages/sdk/server/src/session-dispose.ts)
 
+<a id="ctxsdksessionensure--sdksessionensure"></a>
+
+### `ctx.sdkSessionEnsure` — `SdkSessionEnsure`
+
+Server-owned per-session materialization used by the ide Host bridge command path. Creates the same record `session/prompt` would create for the id, so a command issued from an untouched Tab runs against the session its first prompt would use.
+
+```ts cordis-catalog
+/**
+ * Ensure one session has a live agent; no-op when it is already live.
+ * Uses `getOrCreateSession` — the `session/prompt` path — and never a second
+ * creation route, so the session's composition matches a prompted session.
+ * @param sessionId - SDK session identity from the Host Tab binding.
+ */
+ensureSession(sessionId: string): Promise<void>
+```
+
+Source: [`packages/sdk/server/src/session-ensure.ts`](../../packages/sdk/server/src/session-ensure.ts)
+
 <a id="ctxsdksessionfork--sdksessionfork"></a>
 
 ### `ctx.sdkSessionFork` — `SdkSessionFork`

@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-ide-bridge` 是 `dsh --profile ide` 的 Host 侧应答插件。它连接到由扩展持有、由 `DSH_IDE_BRIDGE_SOCK` 命名的 Unix domain socket（或 Windows named pipe），发布连接状态，并注册 `approval/request` 与 `user-questions/request` 的终端监听器。合法 Host 结局回传到瀑布；断连、超时与非法载荷 fail-closed，且不调用 `next()`。同一连接还承载扩展的 session、model、settings 与 permission 请求，运行时逐条以结果或失败文本应答；permission 档位仍只由 `dsh-permission-presets` 应用。SDK stdout 仍专属于 JSON-RPC；bridge 流量绝不写入 stdout。
+`dsh-ide-bridge` 是 `dsh --profile ide` 的 Host 侧应答插件。它连接到由扩展持有、由 `DSH_IDE_BRIDGE_SOCK` 命名的 Unix domain socket（或 Windows named pipe），发布连接状态，并注册 `approval/request` 与 `user-questions/request` 的终端监听器。合法 Host 结局回传到瀑布；断连、超时与非法载荷 fail-closed，且不调用 `next()`。同一连接还承载扩展的 session、model、settings、permission 与 composer 目录请求，运行时逐条以结果或失败文本应答；permission 档位仍只由 `dsh-permission-presets` 应用。SDK stdout 仍专属于 JSON-RPC；bridge 流量绝不写入 stdout。
 
 ## 目录
 
@@ -46,6 +46,19 @@ kind: "package-reference"
 | `settings/update` | 将一个补丁合并进某命名空间的用户层，并回以该命名空间的重读结果 | 写入错误（含 revision 冲突），或 `settings namespace "<ns>" is not registered` |
 
 settings 应答始终脱敏：每次读取都请求 `redactSecrets: true`，运行时把每个描述符逐字段投影为 `ns`、`value`、`base`、`user`、`revision` 与 `secretFields`——被移除值所在的点分路径。序列化 schema 与描述符的其它属性绝不离开运行时。
+
+### Composer 目录与命令执行
+
+扩展的 `/` 菜单读取四份目录，并执行命令认领的那一行。`agent-presets/list` 是部署级名册；其余三条按 `sessionId` 寻址，运行时对每条请求回以配对的 `/response` 帧，承载下表各行的结果或失败文本。
+
+| 请求（Host → runtime） | 用途 | Host 看到的失败 |
+|---|---|---|
+| `commands/list` | 列出该会话注册的命令，含名称、描述与 `input.hint` | `commands service is not available`，或列举错误 |
+| `commands/execute` | 经命令注册表执行一行，并回以命中命令的结局 | `commands service is not available`，或执行错误 |
+| `agent-presets/list` | 列出 preset 名册，含各 id、显示名、描述、默认标记与挂载失败 | `agentPresets service is not available`，或列举错误 |
+| `skills/list` | 列出该会话中用户可调用的 skill | `skills service is not available`，或列举错误 |
+
+`commands/execute` 需要 live Agent，因此处理器先经 `ctx.sdkSessionEnsure` 装配一个——走的正是 `session/prompt` 的创建路径，绝不另开第二条路径——再解析注册表。没有命令认领的行以 `matched: false` 应答且不带结局：扩展把它留在 prompt 路径上，运行时的 `agent/pre-step` 边界会把行首的 `/name` 读作 skill 调用，因此命令名与 skill 名是同一个手势。本桥是纯文本面，`commands/execute` 始终不携带图片；命令是否接受图片是 composer 的问题，由 Host API 的 wire protocol 回答。
 
 <a id="replaceability-contract-ad-8"></a>
 ## 可替换性契约（AD-8）

@@ -93,6 +93,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   sdkSessionCancel: 'session.md',
   sdkSessionDelete: 'session.md',
   sdkSessionDispose: 'session.md',
+  sdkSessionEnsure: 'session.md',
   sdkSessionFork: 'session.md',
   sdkSessionResume: 'session.md',
   sessionPersistence: 'persistence.md',

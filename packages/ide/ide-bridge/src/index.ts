@@ -14,6 +14,9 @@ import type { AskUserQuestionAnswer, AskUserQuestionRequestEvent } from '@deepse
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import { IdeBridgeClient } from './client.ts'
 import {
+  AGENT_PRESETS_SERVICE,
+  AGENTS_SERVICE,
+  COMMANDS_SERVICE,
   IDE_BRIDGE_SERVICE,
   IDE_BRIDGE_SOCK_ENV,
   PERMISSION_PRESETS_SERVICE,
@@ -22,23 +25,42 @@ import {
   SDK_SESSION_CANCEL_SERVICE,
   SDK_SESSION_FORK_SERVICE,
   SDK_SESSION_DELETE_SERVICE,
+  SDK_SESSION_ENSURE_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
+  SESSION_PROJECTION_CACHE_SERVICE,
+  SESSION_QUERY_SERVICE,
+  SKILLS_SERVICE,
+  type BridgeCommandSummary,
   type BridgeFrame,
+  type BridgeSessionHeader,
+  type BridgeSessionSummary,
+  type IdeBridgeAgentPresets,
+  type IdeBridgeAgents,
+  type IdeBridgeCommandDescriptor,
+  type IdeBridgeCommands,
   type IdeBridgeConnectionState,
+  type IdeBridgeLiveAgent,
   type IdeBridgePermissionPresets,
   type IdeBridgeSessions,
+  type IdeBridgeSkills,
   type SdkSessionDisposeCapability,
+  type SdkSessionEnsureCapability,
   type SdkSessionResumeCapability,
   type SdkSessionCancelCapability,
   type SdkSessionForkCapability,
   type SdkSessionDeleteCapability,
   type SessionPersistenceReadCapability,
+  type SessionProjectionCacheListCapability,
+  type SessionQueryListCapability,
   type SettingsNamespaceView,
 } from './types.ts'
 import { isApprovalOutcome, isAskUserQuestionAnswer } from './validate.ts'
 
 export {
+  AGENT_PRESETS_SERVICE,
+  AGENTS_SERVICE,
+  COMMANDS_SERVICE,
   IDE_BRIDGE_SERVICE,
   IDE_BRIDGE_SOCK_ENV,
   PERMISSION_PRESETS_SERVICE,
@@ -47,19 +69,36 @@ export {
   SDK_SESSION_CANCEL_SERVICE,
   SDK_SESSION_FORK_SERVICE,
   SDK_SESSION_DELETE_SERVICE,
+  SDK_SESSION_ENSURE_SERVICE,
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
+  SESSION_PROJECTION_CACHE_SERVICE,
+  SESSION_QUERY_SERVICE,
+  SKILLS_SERVICE,
   APPROVAL_OUTCOMES,
+  type BridgeCommandOutcome,
+  type BridgeCommandSummary,
+  type BridgeAgentPresetSummary,
   type BridgeFrame,
+  type BridgeSessionHeader,
+  type BridgeSessionSummary,
+  type BridgeSkillSummary,
+  type IdeBridgeAgentPresets,
+  type IdeBridgeCommands,
   type IdeBridgeConnectionState,
+  type IdeBridgeLiveAgent,
   type IdeBridgePermissionPresets,
   type IdeBridgeSessions,
+  type IdeBridgeSkills,
   type SdkSessionDisposeCapability,
+  type SdkSessionEnsureCapability,
   type SdkSessionResumeCapability,
   type SdkSessionCancelCapability,
   type SdkSessionForkCapability,
   type SdkSessionDeleteCapability,
   type SessionPersistenceReadCapability,
+  type SessionProjectionCacheListCapability,
+  type SessionQueryListCapability,
   type SettingsNamespaceView,
   type ApprovalOutcome,
   type AskUserQuestionAnswer,
@@ -456,6 +495,10 @@ async function handleHostFrame(
     await handleDelete(ctx, client, frame)
     return
   }
+  if (frame.kind === 'session/list') {
+    await handleSessionList(ctx, client, frame)
+    return
+  }
   if (frame.kind === 'permission/select') {
     handlePermissionSelect(ctx, client, frame)
     return
@@ -478,6 +521,23 @@ async function handleHostFrame(
   }
   if (frame.kind === 'settings/update') {
     await handleSettingsUpdate(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'commands/list') {
+    await handleCommandsList(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'commands/execute') {
+    await handleCommandsExecute(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'agent-presets/list') {
+    await handleAgentPresetsList(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'skills/list') {
+    await handleSkillsList(ctx, client, frame)
+    return
   }
 }
 
@@ -506,6 +566,70 @@ async function handleDispose(
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     })
+  }
+}
+
+/**
+ * List every session the runtime can see, for the IDE History view (AC-28/29).
+ * Titles come from the projection cache only — the same zero-I/O listing read the
+ * Host API's session list uses — so cost scales with session count, not log size.
+ */
+async function handleSessionList(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'session/list' }>,
+): Promise<void> {
+  const query = ctx.get(SESSION_QUERY_SERVICE) as SessionQueryListCapability | undefined
+  if (query === undefined) {
+    client.send({
+      kind: 'session/list/response',
+      id: frame.id,
+      ok: false,
+      error: `${SESSION_QUERY_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const cache = ctx.get(SESSION_PROJECTION_CACHE_SERVICE) as SessionProjectionCacheListCapability | undefined
+    const records = await query.listSessions()
+    client.send({
+      kind: 'session/list/response',
+      id: frame.id,
+      ok: true,
+      sessions: records.map(record => bridgeSessionSummary(record.header, cache)),
+    })
+  } catch (error) {
+    client.send({
+      kind: 'session/list/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Project one listed header into its `session/list` row.
+ * @param header - stored header from the session corpus.
+ * @param cache - projection cache, absent when the runtime mounts no cache.
+ * @returns the row, carrying a title only when a cached row witnesses this lineage.
+ */
+function bridgeSessionSummary(
+  header: BridgeSessionHeader,
+  cache: SessionProjectionCacheListCapability | undefined,
+): BridgeSessionSummary {
+  // A seeded log's inherited prefix is not readable from listing metadata, so its
+  // cache record cannot be witnessed; only the unseeded lineage has a listing title.
+  const cached = cache === undefined || header.isSeeded
+    ? undefined
+    : cache.cachedSnapshot(header, 0, ['title'])
+  const title = cached?.values.title
+  return {
+    sessionId: header.id,
+    createdAt: header.createdAt,
+    ...header.cwd === undefined ? {} : { cwd: header.cwd },
+    ...header.parentSession === undefined ? {} : { parentSessionId: header.parentSession },
+    ...typeof title !== 'string' ? {} : { title },
   }
 }
 
@@ -1045,5 +1169,239 @@ async function handleSettingsUpdate(
     })
   } catch (error) {
     client.send({ kind: 'settings/update/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/**
+ * List the commands one session can run. The registry keys scoped definitions by
+ * the agent, so the session is materialized first — the same record its first
+ * prompt would create — because a Tab can ask for the catalog before it prompts.
+ */
+async function handleCommandsList(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'commands/list' }>,
+): Promise<void> {
+  const commands = ctx.get(COMMANDS_SERVICE) as IdeBridgeCommands | undefined
+  if (commands === undefined) {
+    client.send({
+      kind: 'commands/list/response',
+      id: frame.id,
+      ok: false,
+      error: `${COMMANDS_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const agent = await liveAgentFor(ctx, frame.sessionId)
+    if (agent === undefined) {
+      client.send({
+        kind: 'commands/list/response',
+        id: frame.id,
+        ok: false,
+        error: `session "${frame.sessionId}" has no live agent`,
+      })
+      return
+    }
+    client.send({
+      kind: 'commands/list/response',
+      id: frame.id,
+      ok: true,
+      commands: commands.list(agent).map(toCommandSummary),
+    })
+  } catch (error) {
+    client.send({
+      kind: 'commands/list/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Run one slash line against a session's agent, without sending it to the model.
+ * A line that resolves no command reports `matched: false` so the Host keeps it on
+ * the prompt path instead of dropping the user's text.
+ */
+async function handleCommandsExecute(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'commands/execute' }>,
+): Promise<void> {
+  const commands = ctx.get(COMMANDS_SERVICE) as IdeBridgeCommands | undefined
+  if (commands === undefined) {
+    client.send({
+      kind: 'commands/execute/response',
+      id: frame.id,
+      ok: false,
+      error: `${COMMANDS_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const agent = await liveAgentFor(ctx, frame.sessionId)
+    if (agent === undefined) {
+      client.send({
+        kind: 'commands/execute/response',
+        id: frame.id,
+        ok: false,
+        error: `session "${frame.sessionId}" has no live agent`,
+      })
+      return
+    }
+    // A frame round trip carries no cancellation channel: a disconnect leaves the
+    // started command running, which is what a direct UI command does too.
+    const execution = await commands.execute(agent, frame.line, [], new AbortController().signal)
+    if (execution === undefined) {
+      client.send({ kind: 'commands/execute/response', id: frame.id, ok: true, matched: false })
+      return
+    }
+    client.send({
+      kind: 'commands/execute/response',
+      id: frame.id,
+      ok: true,
+      matched: true,
+      outcome: {
+        commandId: execution.commandId,
+        ok: execution.result.kind === 'success',
+        ...execution.result.text === undefined ? {} : { text: execution.result.text },
+      },
+    })
+  } catch (error) {
+    client.send({
+      kind: 'commands/execute/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/** List the agent presets this deployment can mount, with its default marked. */
+async function handleAgentPresetsList(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'agent-presets/list' }>,
+): Promise<void> {
+  const presets = ctx.get(AGENT_PRESETS_SERVICE) as IdeBridgeAgentPresets | undefined
+  if (presets === undefined) {
+    client.send({
+      kind: 'agent-presets/list/response',
+      id: frame.id,
+      ok: false,
+      error: `${AGENT_PRESETS_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const defaultId = presets.defaultId
+    const rows = await presets.list()
+    client.send({
+      kind: 'agent-presets/list/response',
+      id: frame.id,
+      ok: true,
+      presets: rows.map(row => ({
+        id: row.id,
+        isDefault: row.id === defaultId,
+        ...row.name === undefined ? {} : { name: row.name },
+        ...row.description === undefined ? {} : { description: row.description },
+        ...row.broken === undefined ? {} : { broken: row.broken },
+      })),
+    })
+  } catch (error) {
+    client.send({
+      kind: 'agent-presets/list/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/** List the skills one session's composition offers to a human command. */
+async function handleSkillsList(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'skills/list' }>,
+): Promise<void> {
+  const skills = ctx.get(SKILLS_SERVICE) as IdeBridgeSkills | undefined
+  if (skills === undefined) {
+    client.send({
+      kind: 'skills/list/response',
+      id: frame.id,
+      ok: false,
+      error: `${SKILLS_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const agent = await liveAgentFor(ctx, frame.sessionId)
+    if (agent === undefined) {
+      client.send({
+        kind: 'skills/list/response',
+        id: frame.id,
+        ok: false,
+        error: `session "${frame.sessionId}" has no live agent`,
+      })
+      return
+    }
+    const cwd = agent.session.header.cwd
+    const listed = await skills.list({
+      ...cwd === undefined ? {} : { cwd },
+      scope: agent,
+    })
+    client.send({
+      kind: 'skills/list/response',
+      id: frame.id,
+      ok: true,
+      skills: listed
+        // A command surface is a human surface: model-only skills stay out of it.
+        .filter(skill => skill.invocation.userInvocable)
+        .map(skill => ({
+          name: skill.name,
+          description: skill.description,
+          ...skill.whenToUse === undefined ? {} : { whenToUse: skill.whenToUse },
+        })),
+    })
+  } catch (error) {
+    client.send({
+      kind: 'skills/list/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Resolve the live agent behind one session id, materializing the session when it
+ * has never prompted. Command listing and execution both address an agent, and the
+ * SDK server owns the only creation route for one.
+ * @param ctx - bridge context.
+ * @param sessionId - session identity from the Host Tab binding.
+ * @returns the live agent, or `undefined` when neither a registry nor an ensure
+ *   capability can produce one.
+ */
+async function liveAgentFor(ctx: Context, sessionId: string): Promise<IdeBridgeLiveAgent | undefined> {
+  const agents = ctx.get(AGENTS_SERVICE) as IdeBridgeAgents | undefined
+  const live = agents?.get(sessionId)
+  if (live !== undefined) return live
+  const ensure = ctx.get(SDK_SESSION_ENSURE_SERVICE) as SdkSessionEnsureCapability | undefined
+  if (ensure === undefined) return undefined
+  await ensure.ensureSession(sessionId)
+  return agents?.get(sessionId)
+}
+
+/**
+ * Project one registry descriptor onto the wire row.
+ * @param descriptor - registry-held command descriptor.
+ * @returns the row, flattening the optional input contract into its hint.
+ */
+function toCommandSummary(descriptor: IdeBridgeCommandDescriptor): BridgeCommandSummary {
+  return {
+    name: descriptor.name,
+    description: descriptor.description,
+    ...descriptor.input === undefined ? {} : { inputHint: descriptor.input.hint },
   }
 }
