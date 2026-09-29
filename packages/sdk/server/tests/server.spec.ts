@@ -502,12 +502,13 @@ describe('HarnessSdkJsonRpcServer', () => {
   it('inherits the parent agentPreset when forking a live parent', async () => {
     const composedPreset = vi.fn(() => 'specdev-orchestrator')
     const composeFrom = vi.fn()
+    const childCtx = { on: vi.fn(() => () => undefined) } as unknown as Context
     const create = vi.fn(async (options: {
       sessionId: string
       meta?: { agentPreset?: string; parentSession?: string; cwd?: string; isSeeded?: boolean }
       setup?: (agentCtx: Context) => void
     }) => {
-      if (options.setup !== undefined) options.setup({} as Context)
+      if (options.setup !== undefined) options.setup(childCtx)
       return {
         agent: { id: options.sessionId, session: { id: options.sessionId, header: {} } } as unknown as Agent,
         dispose: async () => undefined,
@@ -533,7 +534,7 @@ describe('HarnessSdkJsonRpcServer', () => {
 
     expect(childId).toBeTypeOf('string')
     expect(composedPreset).toHaveBeenCalledWith(parentCtx)
-    expect(composeFrom).toHaveBeenCalledWith({}, parentCtx)
+    expect(composeFrom).toHaveBeenCalledWith(childCtx, parentCtx)
     expect(create).toHaveBeenCalledOnce()
     expect(create.mock.calls[0]?.[0]).toMatchObject({
       meta: {
@@ -1246,7 +1247,9 @@ describe('HarnessSdkJsonRpcServer', () => {
     const ctx = {
       on: vi.fn(() => () => undefined),
       agents: { create, get: () => undefined },
-      get: () => ({ listProviders: () => [{ id: 'mock', name: 'Mock' }], resolveCallConfig }),
+      get: (name: string) => (name === 'llm'
+        ? { listProviders: () => [{ id: 'mock', name: 'Mock' }], resolveCallConfig }
+        : undefined),
     } as unknown as Context
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
       initialize(params: { cwd: string; provider: string; model: string; reasoningEffort?: string; maxTokens?: number }): Promise<unknown>
@@ -1288,7 +1291,7 @@ describe('HarnessSdkJsonRpcServer', () => {
         session: { id: options.sessionId, header: { cwd: '/tmp' } },
       } as unknown as Agent
       if (options.setup !== undefined) {
-        await options.setup({} as Context)
+        await options.setup({ on: vi.fn(() => () => undefined) } as unknown as Context)
       }
       return {
         agent,
@@ -1361,5 +1364,121 @@ describe('HarnessSdkJsonRpcServer', () => {
 
     await expect(server.shutdown()).rejects.toBe(listenerFailure)
     expect(on).toHaveBeenCalledTimes(4)
+  })
+
+  it('adopts the configured default model for sessions created now', async () => {
+    const installed: string[] = []
+    const agentCtx = {
+      on: vi.fn((event: string) => {
+        installed.push(event)
+        return () => undefined
+      }),
+    } as unknown as Context
+    const create = vi.fn(async (options: { setup?: (agentCtx: Context) => void }) => {
+      options.setup?.(agentCtx)
+      return { agent: {} as Agent, dispose: () => Promise.resolve() }
+    })
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, get: () => undefined },
+      get: (name: string) => {
+        if (name === 'agentDefaultModel') {
+          return { currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'max' }) }
+        }
+        if (name === 'llm') {
+          return {
+            listProviders: () => [{ id: 'deepseek-official', name: 'DeepSeek' }],
+            resolveCallConfig: vi.fn(async (config: Record<string, unknown>) => config),
+          }
+        }
+        return undefined
+      },
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
+      initialize(params: { cwd: string; provider: string; model: string }): Promise<unknown>
+      getOrCreateSession(sessionId: string): Promise<unknown>
+      shutdown(): Promise<Record<string, never>>
+    }
+
+    await server.initialize({ cwd: process.cwd(), provider: 'deepseek-official', model: 'deepseek-v4-flash' })
+    await server.getOrCreateSession('configured')
+
+    // The configured selection outranks the handshake route for later sessions.
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'max' },
+    }))
+    // Prompt assembly and request routing both read the installed selection.
+    expect(installed).toEqual(['system-prompt/assemble', 'agent/request'])
+    await server.shutdown()
+  })
+
+  it('selectModel validates the route, adopts it, and hands it to live sessions', async () => {
+    type Listener = (...args: unknown[]) => unknown
+    const listeners = new Map<string, Listener>()
+    const agentCtx = {
+      on: vi.fn((event: string, callback: Listener) => {
+        listeners.set(event, callback)
+        return () => undefined
+      }),
+    } as unknown as Context
+    const create = vi.fn(async (options: { setup?: (agentCtx: Context) => void }) => {
+      options.setup?.(agentCtx)
+      return { agent: {} as Agent, dispose: () => Promise.resolve() }
+    })
+    const resolveCallConfig = vi.fn(async (config: Record<string, unknown>) => config)
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, get: () => undefined },
+      get: (name: string) => (name === 'llm'
+        ? { listProviders: () => [{ id: 'deepseek-official', name: 'DeepSeek' }], resolveCallConfig }
+        : undefined),
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
+      initialize(params: { cwd: string; provider: string; model: string }): Promise<unknown>
+      getOrCreateSession(sessionId: string): Promise<unknown>
+      selectModel(selection: { provider: string; model: string; reasoningEffort?: string }): Promise<{ applied: number }>
+      shutdown(): Promise<Record<string, never>>
+    }
+
+    await server.initialize({ cwd: process.cwd(), provider: 'deepseek-official', model: 'deepseek-v4-flash' })
+    await server.getOrCreateSession('live')
+
+    const applied = await server.selectModel({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-pro',
+      reasoningEffort: 'low',
+    })
+
+    expect(applied).toEqual({ applied: 1 })
+    expect(resolveCallConfig).toHaveBeenCalledWith({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-pro',
+      reasoningEffort: ReasoningEffortId('low'),
+    })
+    const assembled = await listeners.get('system-prompt/assemble')!({}, {}, async () => ({ variables: {} })) as {
+      variables: Record<string, string>
+    }
+    expect(assembled.variables).toEqual({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+    const routed = await listeners.get('agent/request')!({}, async () => ({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      reasoningEffort: ReasoningEffortId('high'),
+      maxTokens: 5,
+    }))
+    expect(routed).toEqual({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-pro',
+      reasoningEffort: ReasoningEffortId('low'),
+      maxTokens: 5,
+    })
+
+    resolveCallConfig.mockRejectedValueOnce(new Error('no adapter registered for provider "ghost"'))
+    await expect(server.selectModel({ provider: 'ghost', model: 'ghost-model' }))
+      .rejects.toThrow('no adapter registered for provider "ghost"')
+    await server.getOrCreateSession('after-rejection')
+    expect(create.mock.calls.at(-1)?.[0]).toMatchObject({
+      agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'low' },
+    })
+    await server.shutdown()
   })
 })

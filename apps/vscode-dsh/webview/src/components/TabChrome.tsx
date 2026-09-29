@@ -28,6 +28,10 @@ export interface TabChromeProps {
   forkParentTitle?: string
   contextSessionId?: string
   breadcrumb?: BreadcrumbState
+  /** Host decision for the「新建会话」entry; absent means the Webview keeps it enabled. */
+  newConversation?: { visibility: 'hidden' | 'disabled' | 'enabled' }
+  /** Restorable Tabs the「查看更多」entry can bring back; 0 hides the entry. */
+  deferredRestoreCount: number
 }
 
 interface TabContextMenuState {
@@ -67,6 +71,8 @@ export function TabChrome({
   forkParentTitle,
   contextSessionId,
   breadcrumb,
+  newConversation,
+  deferredRestoreCount,
 }: TabChromeProps) {
   const [tabContextMenu, setTabContextMenu] = useState<TabContextMenuState | null>(null)
   const headerRef = useRef<HTMLElement | null>(null)
@@ -132,6 +138,18 @@ export function TabChrome({
                   }}
                 >
                   <span>{tab.title}</span>
+                  {tab.parentHint === undefined ? null : (
+                    <span
+                      data-testid="tab-parent-hint"
+                      className="dsh-muted dsh-tab-hint"
+                      title={tab.parentHint}
+                    >
+                      {tab.parentHint}
+                    </span>
+                  )}
+                  {tab.mode === 'replay' ? (
+                    <span data-testid="tab-replay-badge" aria-label="replay">回放</span>
+                  ) : null}
                   {tab.status === 'running' ? (
                     <span data-testid="tab-running-badge" aria-label="running">●</span>
                   ) : null}
@@ -167,15 +185,18 @@ export function TabChrome({
           })}
         </div>
         <div className="dsh-chrome-actions">
-          <button
-            type="button"
-            data-testid="btn-new-tab"
-            title="新建会话"
-            className="dsh-chrome-btn"
-            onClick={() => bridge.emitIntent({ type: 'ui/tab-new' })}
-          >
-            +
-          </button>
+          {newConversation?.visibility === 'hidden' ? null : (
+            <button
+              type="button"
+              data-testid="btn-new-tab"
+              title="新建会话"
+              className="dsh-chrome-btn"
+              disabled={newConversation?.visibility === 'disabled'}
+              onClick={() => bridge.emitIntent({ type: 'ui/tab-new' })}
+            >
+              +
+            </button>
+          )}
           <button
             type="button"
             data-testid="btn-history"
@@ -350,7 +371,7 @@ export function TabChrome({
                   >
                     <div className="dsh-search-title">{hit.title}</div>
                     <div className="dsh-muted dsh-search-preview">
-                      {hit.firstUserPreview || hit.matchedPath || hit.sessionId.slice(0, 8)}
+                      {hit.snippet || hit.firstUserPreview || hit.matchedPath || hit.sessionId.slice(0, 8)}
                       {hit.matchTiers.length > 0 ? ` · tier ${hit.matchTiers.join('+')}` : ''}
                     </div>
                   </button>
@@ -370,6 +391,18 @@ export function TabChrome({
           onMouseDown={event => event.stopPropagation()}
           style={{ ...menuStyle, left: tabContextMenu.left }}
         >
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="menu-tab-rename-session"
+            className="dsh-menu-item"
+            onClick={() => {
+              bridge.emitIntent({ type: 'ui/rename-request', sessionId: tabContextMenu.sessionId })
+              setTabContextMenu(null)
+            }}
+          >
+            重命名
+          </button>
           <button
             type="button"
             role="menuitem"
@@ -397,6 +430,20 @@ export function TabChrome({
           <button
             type="button"
             role="menuitem"
+            data-testid="menu-rename-session"
+            className="dsh-menu-item"
+            disabled={!activeSessionId}
+            onClick={() => {
+              if (!activeSessionId) return
+              bridge.emitIntent({ type: 'ui/rename-request', sessionId: activeSessionId })
+              setOverflowOpen(false)
+            }}
+          >
+            重命名
+          </button>
+          <button
+            type="button"
+            role="menuitem"
             data-testid="menu-delete-session"
             className="dsh-menu-item"
             disabled={!activeSessionId}
@@ -411,18 +458,34 @@ export function TabChrome({
           >
             删除会话
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            data-testid="menu-open-timeline"
-            className="dsh-menu-item"
-            onClick={() => {
-              setOverflowOpen(false)
-              bridge.emitIntent({ type: 'ui/open-timeline' })
-            }}
-          >
-            打开 Timeline
-          </button>
+          {deferredRestoreCount > 0 ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="menu-restore-more"
+                className="dsh-menu-item"
+                onClick={() => {
+                  bridge.emitIntent({ type: 'action/restore-more' })
+                  setOverflowOpen(false)
+                }}
+              >
+                {`查看更多（剩余 ${deferredRestoreCount}）`}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="menu-restore-all"
+                className="dsh-menu-item"
+                onClick={() => {
+                  bridge.emitIntent({ type: 'action/restore-more', all: true })
+                  setOverflowOpen(false)
+                }}
+              >
+                恢复全部
+              </button>
+            </>
+          ) : null}
         </div>
       ) : null}
     </header>

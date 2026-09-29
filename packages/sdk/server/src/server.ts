@@ -9,7 +9,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
+import { installModelSelection, type Agent, type AgentHandle, type ModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { admitEncodedImages, type EncodedImageAttachment, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, ReasoningEffortId, type ContentBlock, type LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { carrierKeyOf, type Scoped } from '@deepseek-ai/dsh-scope'
@@ -36,9 +37,12 @@ import type {
   SubagentFinishedNotification,
   SubagentStartedNotification,
 } from '@deepseek-ai/dsh-sdk-protocol'
+import type { SdkModelSelectInput } from './session-model-select.ts'
 
 interface SessionRecord {
   handle: AgentHandle
+  /** Selection this session's prompt assembly and request routing read. */
+  selection: ModelSelectionRef
 }
 
 function encodedImage(block: SessionPromptParams['contentBlocks'][number]): block is SdkEncodedImageBlock {
@@ -410,6 +414,8 @@ export class HarnessSdkJsonRpcServer {
       readonly defaultId: string
       mount(agentCtx: Context, id?: string): Promise<unknown>
     } | undefined
+    const route = this.route()
+    const selection: ModelSelectionRef = { current: { ...route }, assembled: undefined }
     const handle = await this.ctx.agents.create({
       sessionId: brandString<SessionId>(sessionId),
       meta: {
@@ -417,18 +423,15 @@ export class HarnessSdkJsonRpcServer {
         ...presets === undefined ? {} : { agentPreset: presets.defaultId },
       },
       agentOptions: {
-        provider: this.provider,
-        model: this.model,
-        ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
+        provider: route.provider,
+        model: route.model,
+        ...route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort },
         ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
       },
-      ...presets === undefined
-        ? {}
-        : {
-          setup: async (agentCtx: Context) => {
-            await presets.mount(agentCtx)
-          },
-        },
+      setup: async (agentCtx: Context) => {
+        installModelSelection(agentCtx, selection)
+        await presets?.mount(agentCtx)
+      },
     })
 
     const specdev = this.ctx.get('specdev') as {
@@ -439,7 +442,7 @@ export class HarnessSdkJsonRpcServer {
       attachOrchestratorMetadata(handle.agent, active?.slug ?? `sdk-${sessionId}`)
     }
 
-    const rec: SessionRecord = { handle }
+    const rec: SessionRecord = { handle, selection }
     this.sessions.set(sessionId, rec)
     return rec
   }
@@ -449,16 +452,21 @@ export class HarnessSdkJsonRpcServer {
    * @param sessionId - persisted session identity.
    */
   private async resumePersistedSession(sessionId: string): Promise<SessionRecord> {
+    const route = this.route()
+    const selection: ModelSelectionRef = { current: { ...route }, assembled: undefined }
     const handle = await this.ctx.agents.resume({
       resumeSessionId: brandString<SessionId>(sessionId),
       agentOptions: {
-        provider: this.provider,
-        model: this.model,
-        ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
+        provider: route.provider,
+        model: route.model,
+        ...route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort },
         ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
       },
+      setup: (agentCtx: Context) => {
+        installModelSelection(agentCtx, selection)
+      },
     })
-    const rec: SessionRecord = { handle }
+    const rec: SessionRecord = { handle, selection }
     this.sessions.set(sessionId, rec)
     return rec
   }
@@ -481,6 +489,8 @@ export class HarnessSdkJsonRpcServer {
       composedPreset(agentCtx: Context): string | undefined
     } | undefined
     const parentPreset = presets?.composedPreset(parentAgent.ctx)
+    const route = this.route()
+    const selection: ModelSelectionRef = { current: { ...route }, assembled: undefined }
     const handle = await this.ctx.agents.create({
       sessionId: brandString<SessionId>(childSessionId),
       seed,
@@ -492,22 +502,64 @@ export class HarnessSdkJsonRpcServer {
         ...parentPreset === undefined ? {} : { agentPreset: parentPreset },
       },
       agentOptions: {
-        provider: this.provider,
-        model: this.model,
-        ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
+        provider: route.provider,
+        model: route.model,
+        ...route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort },
         ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
       },
-      ...presets === undefined
-        ? {}
-        : {
-          setup: (childCtx: Context) => {
-            presets.composeFrom(childCtx, parentAgent.ctx)
-          },
-        },
+      setup: (childCtx: Context) => {
+        installModelSelection(childCtx, selection)
+        presets?.composeFrom(childCtx, parentAgent.ctx)
+      },
     })
-    const rec: SessionRecord = { handle }
+    const rec: SessionRecord = { handle, selection }
     this.sessions.set(childSessionId, rec)
     return rec
+  }
+
+  /**
+   * Route a session created now adopts: the configured default when a
+   * default-model service is mounted, otherwise the initialized route.
+   * @returns the provider, model, and optional reasoning effort.
+   */
+  private route(): ModelSelection {
+    const configured = this.ctx.get('agentDefaultModel')?.currentSelection()
+    if (configured !== undefined) return configured
+    return {
+      provider: this.provider,
+      model: this.model,
+      ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
+    }
+  }
+
+  /**
+   * Validate one Host-selected route, adopt it for later sessions, and hand it to
+   * every live session's next prompt assembly. A running turn keeps the route it
+   * assembled with.
+   * @param selection - requested provider, model, and optional reasoning effort.
+   * @returns the number of live sessions that adopted the selection.
+   */
+  async selectModel(selection: SdkModelSelectInput): Promise<{ applied: number }> {
+    if (this.shuttingDown) throw new Error('SDK server is shutting down')
+    const llm = this.ctx.get('llm') as LlmRuntime | undefined
+    if (llm === undefined) throw new Error('llm service is not available')
+    const resolved = await llm.resolveCallConfig({
+      provider: selection.provider,
+      model: selection.model,
+      ...selection.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) },
+    })
+    const route: ModelSelection = {
+      provider: resolved.provider,
+      model: resolved.model,
+      ...resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort },
+    }
+    this.provider = route.provider
+    this.model = route.model
+    this.reasoningEffort = route.reasoningEffort
+    for (const rec of this.sessions.values()) rec.selection.current = { ...route }
+    return { applied: this.sessions.size }
   }
 
   private hasAdapterFor(provider: string): boolean {

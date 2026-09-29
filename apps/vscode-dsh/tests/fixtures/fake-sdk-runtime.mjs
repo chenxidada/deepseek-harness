@@ -2,8 +2,9 @@
  * Minimal JSON-RPC SDK runtime stand-in for IdeSessionHost unit/integration tests.
  * Answers `initialize` / `session/prompt` / `shutdown` on stdio; ignores argv.
  * When `DSH_IDE_BRIDGE_SOCK` is set, connects as an ide-bridge runtime and answers
- * Host `session/dispose` / `session/delete` / permission frames; optionally emits
- * approval/questions.
+ * Host `session/dispose` / `session/delete` / `session/rename` / `session/stat` /
+ * `projection/read` / `session/search` / `attachment/read` / `subagent/*` /
+ * permission and approval-policy frames; optionally emits approval/questions.
  *
  * Env knobs:
  * - `FAKE_FAIL_INIT_WITH_API_KEY`: answer initialize with a JSON-RPC error whose
@@ -23,6 +24,45 @@
  * - `FAKE_EMIT_QUESTIONS_SESSION`: after bridge hello, emit one user-questions/request.
  * - `FAKE_EXIT_AFTER_MS`: exit the process after N ms (AC-30 child-death probe).
  * - `FAKE_PERMISSION_LOG`: append permission RPC lines.
+ * - `FAKE_RENAME_LOG`: append `session/rename` lines; the stand-in normalizes the
+ *   title, commits a `session/title` event, and rejects a title without visible text.
+ * - `FAKE_STAT_LOG`: append `session/stat` lines; the stand-in reports `found` for the
+ *   ids it was prompted with and `found: false` for every other id.
+ * - `FAKE_APPROVAL_POLICY_LOG`: append `approval/policy` read and `approval/policy/set`
+ *   write lines; the stand-in starts at `ask` and reports the switched policy back.
+ * - `FAKE_PROJECTION_LOG`: append `projection/read` lines; the stand-in answers the
+ *   registered units filtered to the requested keys.
+ * - `FAKE_SEARCH_LOG`: append `session/search` lines.
+ * - `FAKE_SEARCH_BODY`: the indexed sentence a query must appear in to match;
+ *   matching answers one hit whose snippet is that sentence.
+ * - `FAKE_SEARCH_SESSION`: session id the matched hit reports.
+ * - `FAKE_SEARCH_ERROR`: answer `session/search` with this failure text instead
+ *   of hits, standing in for a disabled/absent search backend.
+ * - `FAKE_ATTACHMENT_LOG`: append `attachment/read` lines.
+ * - `FAKE_ATTACHMENT_DATA`: base64 payload `attachment/read` answers
+ *   (`ZmFrZQ==` = `fake` when unset).
+ * - `FAKE_ATTACHMENT_MEDIA_TYPE`: media type the answer reports; the requested
+ *   reference's own type when unset.
+ * - `FAKE_ATTACHMENT_ERROR`: answer `attachment/read` with this failure text,
+ *   standing in for an object the store no longer holds.
+ * - `FAKE_SUBAGENT_LIST_LOG`: append `subagent/list` lines.
+ * - `FAKE_SUBAGENT_CHILD` / `FAKE_SUBAGENT_LABEL` / `FAKE_SUBAGENT_MODE` /
+ *   `FAKE_SUBAGENT_ACTIVITY`: the one child row `subagent/list` reports.
+ * - `FAKE_SUBAGENT_SESSION_LIVE=0`: report that the addressed session has no live Agent.
+ * - `FAKE_SUBAGENT_LIST_ERROR`: answer `subagent/list` with this failure text.
+ * - `FAKE_SUBAGENT_PROMPT_LOG`: append `subagent/prompt` lines; the stand-in
+ *   answers the message id `FAKE_SUBAGENT_MESSAGE_ID`.
+ * - `FAKE_SUBAGENT_PROMPT_ERROR`: answer `subagent/prompt` with this failure text.
+ * - `FAKE_SUBAGENT_INTERRUPT_LOG`: append `subagent/interrupt` lines.
+ * - `FAKE_SUBAGENT_INTERRUPT_ERROR`: answer `subagent/interrupt` with this failure text.
+ * - `FAKE_SPECDEV_SNAPSHOT_LOG`: append `specdev/snapshot` lines.
+ * - `FAKE_SPECDEV_SLUG` / `FAKE_SPECDEV_STAGE` / `FAKE_SPECDEV_PHASE` /
+ *   `FAKE_SPECDEV_PENDING_GATE` (empty for none): the workflow the snapshot reports.
+ * - `FAKE_SPECDEV_NONE=1`: report no active workflow.
+ * - `FAKE_SPECDEV_SNAPSHOT_ERROR`: answer `specdev/snapshot` with this failure text.
+ * - `FAKE_SPECDEV_GATE_LOG`: append `specdev/confirm-gate` lines; the stand-in answers
+ *   the post-change status (HG-2 passed, `FAKE_SPECDEV_STAGE_AFTER` as the stage).
+ * - `FAKE_SPECDEV_GATE_ERROR`: answer `specdev/confirm-gate` with this failure text.
  * - `FAKE_SETTINGS_LOG`: append settings RPC lines; `settings/describe` answers
  *   one `fake-settings` namespace whose revision moves on each `settings/update`.
  * - `FAKE_SESSION_LIST_CWD`: `session/list` reports this directory as the listed
@@ -126,6 +166,8 @@ function emitTurnEvents(sessionId) {
 }
 
 const sessions = new Set()
+/** Effective approval policy this stand-in reports and switches; `ask` is the composed default. */
+let fakeApprovalPolicy = 'ask'
 let bridgeSocket
 let bridgeBuffer = ''
 
@@ -163,6 +205,64 @@ function fakeSessionList() {
       title: 'Elsewhere',
     },
   ]
+}
+
+/**
+ * Client-visible projection views, filtered to the requested keys. The context
+ * capacity differs from every Host-side fallback, so a caller showing it proves
+ * the runtime's value won.
+ */
+function fakeProjectionValues(keys) {
+  const all = {
+    contextPressure: { pressureTokens: 1_200, projectedTokens: 1_500, contextWindow: 200_000 },
+    sessionStats: { turns: 1, steps: 1 },
+    turnOutline: { turns: [] },
+  }
+  if (keys === undefined) return all
+  return Object.fromEntries(Object.entries(all).filter(([key]) => keys.includes(key)))
+}
+
+/**
+ * Stand-in rows for `subagent/list`: one child whose classified facts come from
+ * the env knobs, placed at depth 1 when the caller asked for the whole tree.
+ * @param scope - the listing scope the Host asked for.
+ */
+function fakeSubagentEntries(scope) {
+  const child = {
+    kind: 'child',
+    sessionId: process.env.FAKE_SUBAGENT_CHILD ?? 'fake-subagent-child',
+    mode: process.env.FAKE_SUBAGENT_MODE ?? 'continuable',
+    label: process.env.FAKE_SUBAGENT_LABEL ?? 'Fake subagent',
+    activity: process.env.FAKE_SUBAGENT_ACTIVITY === 'running' ? 'running' : 'inactive',
+    hasChildren: false,
+  }
+  if (scope !== 'descendants') return [child]
+  return [{ ...child, parentSessionId: process.env.FAKE_SUBAGENT_CHILD_PARENT ?? 'fake-parent', depth: 1 }]
+}
+
+/**
+ * Stand-in SpecDev status for `specdev/snapshot`: a workflow waiting at HG-2
+ * with one phase in progress, named by the env knobs.
+ */
+function fakeSpecdevSnapshot() {
+  const stage = process.env.FAKE_SPECDEV_STAGE ?? 'implementation'
+  const pendingGate = process.env.FAKE_SPECDEV_PENDING_GATE ?? 'hg2'
+  return {
+    schemaVersion: 2,
+    slug: process.env.FAKE_SPECDEV_SLUG ?? 'fake-workflow',
+    stage,
+    phase: process.env.FAKE_SPECDEV_PHASE ?? 'phase-1',
+    gates: { hg1: 'passed', hg2: 'pending', hg3: 'pending' },
+    steps: {
+      'phase-1': { implementer: 'completed', reviewer: 'in_progress', verifier: 'pending' },
+    },
+    pendingGate: pendingGate === '' ? null : pendingGate,
+    loopCount: 1,
+    nextAction: 'confirm HG-2',
+    techDebtSummary: { blocking: 0, total: 2 },
+    initiatingCommand: 'feature',
+    pipelineMode: 'feature',
+  }
 }
 
 function sendBridge(frame) {
@@ -247,6 +347,28 @@ function connectBridge() {
         })
         continue
       }
+      if (frame?.kind === 'session/rename' && typeof frame.id === 'string') {
+        // Stand-in for `sessionTitle.rename`: the runtime normalizes the text and
+        // commits a `session/title` event, which the Host projects as chrome.
+        const title = String(frame.title ?? '').trim()
+        if (title === '') {
+          sendBridge({
+            kind: 'session/rename/response',
+            id: frame.id,
+            ok: false,
+            error: 'session title must contain visible characters',
+          })
+          continue
+        }
+        logLine('FAKE_RENAME_LOG', { sessionId: frame.sessionId, title })
+        event(frame.sessionId, 'session/title', {
+          title,
+          messageSeqs: [],
+          source: { kind: 'user' },
+        })
+        sendBridge({ kind: 'session/rename/response', id: frame.id, ok: true, title })
+        continue
+      }
       if (frame?.kind === 'permission/select' && typeof frame.id === 'string') {
         logLine('FAKE_PERMISSION_LOG', {
           kind: 'select',
@@ -267,7 +389,10 @@ function connectBridge() {
           kind: 'permission/list/response',
           id: frame.id,
           ok: true,
-          presets: ['workspace-write', 'danger-full-access'],
+          options: [
+            { value: 'workspace-write', name: 'Workspace write', description: '写入工作区，越界操作先询问' },
+            { value: 'danger-full-access', name: 'Full access', description: '不询问，允许全部操作' },
+          ],
           current: 'workspace-write',
         })
         continue
@@ -279,6 +404,193 @@ function connectBridge() {
           id: frame.id,
           ok: true,
           sessions: fakeSessionList(),
+        })
+        continue
+      }
+      if (frame?.kind === 'approval/policy' && typeof frame.id === 'string') {
+        logLine('FAKE_APPROVAL_POLICY_LOG', { kind: 'read', sessionId: frame.sessionId })
+        sendBridge({
+          kind: 'approval/policy/response',
+          id: frame.id,
+          ok: true,
+          policy: fakeApprovalPolicy,
+        })
+        continue
+      }
+      if (frame?.kind === 'approval/policy/set' && typeof frame.id === 'string') {
+        // Stand-in for `approval.setPolicy`: the switch holds until the process ends,
+        // and the next read reports it back.
+        fakeApprovalPolicy = frame.policy
+        logLine('FAKE_APPROVAL_POLICY_LOG', { kind: 'set', sessionId: frame.sessionId, policy: frame.policy })
+        sendBridge({
+          kind: 'approval/policy/set/response',
+          id: frame.id,
+          ok: true,
+          policy: fakeApprovalPolicy,
+        })
+        continue
+      }
+      if (frame?.kind === 'projection/read' && typeof frame.id === 'string') {
+        // Stand-in for `sessionProjections.snapshot`: the client-visible units the
+        // ide profile registers, filtered to the requested keys.
+        const keys = Array.isArray(frame.keys) ? frame.keys : undefined
+        logLine('FAKE_PROJECTION_LOG', { sessionId: frame.sessionId, keys: keys ?? null })
+        sendBridge({
+          kind: 'projection/read/response',
+          id: frame.id,
+          ok: true,
+          asOfSeq: 7,
+          values: fakeProjectionValues(keys),
+        })
+        continue
+      }
+      if (frame?.kind === 'session/search' && typeof frame.id === 'string') {
+        // Stand-in for the runtime's full-text index: the body knob names one
+        // sentence, so a caller's query matches a snippet no local index holds.
+        logLine('FAKE_SEARCH_LOG', { query: frame.query, limit: frame.limit ?? null })
+        const refusal = process.env.FAKE_SEARCH_ERROR
+        if (refusal !== undefined) {
+          sendBridge({ kind: 'session/search/response', id: frame.id, ok: false, error: refusal })
+          continue
+        }
+        const body = process.env.FAKE_SEARCH_BODY ?? 'indexed body text'
+        const hits = frame.query !== '' && body.includes(frame.query)
+          ? [{
+            sessionId: process.env.FAKE_SEARCH_SESSION ?? 'fake-search-hit',
+            createdAt: 1_700_000_000_002,
+            cwd: process.env.FAKE_SESSION_LIST_CWD ?? process.cwd(),
+            title: 'Fake search hit',
+            seq: 3,
+            snippet: `…${body}…`,
+          }]
+          : []
+        sendBridge({ kind: 'session/search/response', id: frame.id, ok: true, hits })
+        continue
+      }
+      if (frame?.kind === 'attachment/read' && typeof frame.id === 'string') {
+        // Stand-in for the attachment store read: the payload knob is the base64
+        // the store would have returned, so a test needs no stored object.
+        logLine('FAKE_ATTACHMENT_LOG', {
+          attachmentId: frame.ref?.attachmentId ?? null,
+          mediaType: frame.ref?.mediaType ?? null,
+        })
+        const refusal = process.env.FAKE_ATTACHMENT_ERROR
+        if (refusal !== undefined) {
+          sendBridge({ kind: 'attachment/read/response', id: frame.id, ok: false, error: refusal })
+          continue
+        }
+        sendBridge({
+          kind: 'attachment/read/response',
+          id: frame.id,
+          ok: true,
+          mediaType: process.env.FAKE_ATTACHMENT_MEDIA_TYPE ?? frame.ref?.mediaType ?? 'image/png',
+          data: process.env.FAKE_ATTACHMENT_DATA ?? 'ZmFrZQ==',
+        })
+        continue
+      }
+      if (frame?.kind === 'subagent/list' && typeof frame.id === 'string') {
+        // Stand-in for the projection-backed listing: the knobs name the row, so
+        // a test can present a child this process never ran.
+        logLine('FAKE_SUBAGENT_LIST_LOG', { sessionId: frame.sessionId, scope: frame.scope })
+        const refusal = process.env.FAKE_SUBAGENT_LIST_ERROR
+        if (refusal !== undefined) {
+          sendBridge({ kind: 'subagent/list/response', id: frame.id, ok: false, error: refusal })
+          continue
+        }
+        sendBridge({
+          kind: 'subagent/list/response',
+          id: frame.id,
+          ok: true,
+          sessionLive: process.env.FAKE_SUBAGENT_SESSION_LIVE !== '0',
+          entries: fakeSubagentEntries(frame.scope),
+        })
+        continue
+      }
+      if (frame?.kind === 'subagent/prompt' && typeof frame.id === 'string') {
+        logLine('FAKE_SUBAGENT_PROMPT_LOG', {
+          parentSessionId: frame.parentSessionId,
+          childSessionId: frame.childSessionId,
+          text: frame.text,
+        })
+        const refusal = process.env.FAKE_SUBAGENT_PROMPT_ERROR
+        if (refusal !== undefined) {
+          sendBridge({ kind: 'subagent/prompt/response', id: frame.id, ok: false, error: refusal })
+          continue
+        }
+        sendBridge({
+          kind: 'subagent/prompt/response',
+          id: frame.id,
+          ok: true,
+          messageId: process.env.FAKE_SUBAGENT_MESSAGE_ID ?? 'fake-subagent-message',
+        })
+        continue
+      }
+      if (frame?.kind === 'subagent/interrupt' && typeof frame.id === 'string') {
+        logLine('FAKE_SUBAGENT_INTERRUPT_LOG', {
+          parentSessionId: frame.parentSessionId,
+          childSessionId: frame.childSessionId,
+        })
+        const refusal = process.env.FAKE_SUBAGENT_INTERRUPT_ERROR
+        if (refusal !== undefined) {
+          sendBridge({ kind: 'subagent/interrupt/response', id: frame.id, ok: false, error: refusal })
+          continue
+        }
+        sendBridge({ kind: 'subagent/interrupt/response', id: frame.id, ok: true })
+        continue
+      }
+      if (frame?.kind === 'specdev/snapshot' && typeof frame.id === 'string') {
+        // Stand-in for the workspace `.specdev` read: the knobs name the workflow,
+        // so a test can present one this process never created.
+        logLine('FAKE_SPECDEV_SNAPSHOT_LOG', { sessionId: frame.sessionId })
+        const refusal = process.env.FAKE_SPECDEV_SNAPSHOT_ERROR
+        if (refusal !== undefined) {
+          sendBridge({ kind: 'specdev/snapshot/response', id: frame.id, ok: false, error: refusal })
+          continue
+        }
+        sendBridge({
+          kind: 'specdev/snapshot/response',
+          id: frame.id,
+          ok: true,
+          snapshot: process.env.FAKE_SPECDEV_NONE === '1' ? null : fakeSpecdevSnapshot(),
+        })
+        continue
+      }
+      if (frame?.kind === 'specdev/confirm-gate' && typeof frame.id === 'string') {
+        logLine('FAKE_SPECDEV_GATE_LOG', {
+          sessionId: frame.sessionId,
+          gate: frame.gate,
+          decision: frame.decision,
+          note: frame.note,
+        })
+        const refusal = process.env.FAKE_SPECDEV_GATE_ERROR
+        if (refusal !== undefined) {
+          sendBridge({ kind: 'specdev/confirm-gate/response', id: frame.id, ok: false, error: refusal })
+          continue
+        }
+        sendBridge({
+          kind: 'specdev/confirm-gate/response',
+          id: frame.id,
+          ok: true,
+          snapshot: {
+            ...fakeSpecdevSnapshot(),
+            gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' },
+            pendingGate: null,
+            stage: process.env.FAKE_SPECDEV_STAGE_AFTER ?? 'implementation',
+          },
+        })
+        continue
+      }
+      if (frame?.kind === 'session/stat' && typeof frame.id === 'string') {
+        // Stand-in for `sessionPersistence.stat`: the ids this process was prompted with
+        // are the ones it still holds; everything else was never stored here.
+        const found = sessions.has(frame.sessionId)
+        logLine('FAKE_STAT_LOG', { sessionId: frame.sessionId, found })
+        sendBridge({
+          kind: 'session/stat/response',
+          id: frame.id,
+          ok: true,
+          found,
+          ...found ? { eventCount: 2, sizeBytes: 512 } : {},
         })
         continue
       }

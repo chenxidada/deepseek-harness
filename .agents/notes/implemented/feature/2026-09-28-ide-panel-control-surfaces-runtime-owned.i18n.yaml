@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-28-ide-panel-control-surfaces-runtime-owned.md
+2026-09-28-ide-panel-control-surfaces-runtime-owned.md: d9e7bd229a5067691a931ad555919b53a1f55914
+2026-09-28-ide-panel-control-surfaces-runtime-owned.zh.md: d65c6754ebd78fc074f48c2c33b2e44d9a59ee6c

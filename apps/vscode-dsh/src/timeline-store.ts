@@ -7,7 +7,7 @@
 import type { HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
 
 /** Timeline row kinds projected for the VS Code Timeline view. */
-export type TimelineItemKind = 'turn' | 'step' | 'tool' | 'assistant' | 'status' | 'subagent'
+export type TimelineItemKind = 'turn' | 'step' | 'tool' | 'assistant' | 'status' | 'subagent' | 'approval'
 
 /** One projected timeline row. */
 export interface TimelineItem {
@@ -297,6 +297,29 @@ export class TimelineStore {
         kind: 'assistant',
         label: text === undefined || text === '' ? 'assistant' : truncate(text, 40),
         description: 'assistant turn',
+        depth,
+      })
+      return
+    }
+    if (type === 'approval/asked') {
+      const toolName = asString(data.toolName) ?? 'tool'
+      const reason = asString(data.reason)
+      const callId = asString(data.callId)
+      this.push(sessionId, {
+        kind: 'approval',
+        label: `approval ${toolName}`,
+        description: reason === undefined ? 'asked' : `asked · ${reason}`,
+        depth,
+        toolName,
+        ...callId === undefined ? {} : { callId },
+      })
+      return
+    }
+    if (type === 'approval/decided') {
+      this.push(sessionId, {
+        kind: 'approval',
+        label: `approval ${asString(data.outcome) ?? 'unavailable'}`,
+        description: 'decided',
         depth,
       })
       return

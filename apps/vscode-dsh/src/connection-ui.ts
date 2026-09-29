@@ -137,7 +137,10 @@ export class ConnectionUiController {
         phase = 'idle'
       }
     }
-    const settingsDeepLinkAvailable = snap.errorKind === 'missing-credentials'
+    // Both failures name something the settings page carries: the credentials the
+    // window must provide, or the `dsh.cliPath` value that replaces a runtime the
+    // automatic sources did not find.
+    const settingsDeepLinkAvailable = snap.errorKind === 'missing-credentials' || snap.errorKind === 'dsh-entry'
     const message = phase === 'connecting'
       ? '正在连接到 Host…'
       : phase === 'connected'

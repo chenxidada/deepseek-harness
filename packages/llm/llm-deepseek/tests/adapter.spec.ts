@@ -1052,7 +1052,7 @@ describe('DeepSeekAdapter against a mock server', () => {
     expect(server.fileRequests.filter(request => request.method === 'POST')).toHaveLength(2)
   })
 
-  it.each(['deepseek-v4-flash', 'unlisted-pass-through'])(
+  it.each(['deepseek-v4-pro', 'unlisted-pass-through'])(
     'rejects image input for text-only model %s before credentials, attachments, or fetch',
     async (model) => {
       const server = await mockServer([])
@@ -1702,7 +1702,7 @@ describe('plugin registration and config', () => {
         id: 'deepseek-v4-flash',
         name: 'DeepSeek-V4-Flash',
         description: 'Fast, efficient, and economical; suited to focused, routine, or parallel tasks.',
-        inputModalities: ['text'],
+        inputModalities: ['text', 'image'],
       },
       {
         provider: 'deepseek-official',
@@ -1829,7 +1829,7 @@ describe('plugin registration and config', () => {
         id: 'deepseek-v4-flash',
         name: 'DeepSeek-V4-Flash',
         description: 'Fast, efficient, and economical; suited to focused, routine, or parallel tasks.',
-        inputModalities: ['text'],
+        inputModalities: ['text', 'image'],
       },
       {
         provider: 'deepseek-official',

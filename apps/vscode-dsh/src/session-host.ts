@@ -24,15 +24,22 @@ import {
   isAskUserQuestionAnswer,
   type AskUserQuestionAnswer,
   type BridgeAgentPresetSummary,
+  type BridgeApprovalPolicy,
+  type BridgeAttachmentRef,
   type BridgeCommandSummary,
   type BridgeFrame,
+  type BridgePermissionPreset,
+  type BridgeSessionSearchHit,
   type BridgeSkillSummary,
+  type BridgeSpecdevSnapshot,
+  type BridgeSubagentEntry,
   type IdeBridgeHostConnection,
   type SettingsNamespaceView,
 } from '@deepseek-ai/dsh-ide-bridge'
 import type { StartErrorKind } from './auto-start-orchestrator.ts'
 import { buildIdeChildEnv } from './env.ts'
 import { assertNodeExecutable, NodeEnvironmentError, type NodeEnvironmentFailure } from './node-env-guard.ts'
+import { DshEntryError, resolveDshEntry, type DshEntryFailure } from './dsh-entry-guard.ts'
 import {
   startErrorKindForFailure,
   type HostDiagnosticInput,
@@ -59,6 +66,8 @@ export type IdeSessionHostStatus =
  * setting (`invalid-setting`) is raised. `node-environment` means the
  * spawn was refused by the Node pre-flight, so the failure belongs to the
  * developer's Node installation rather than to dsh (AC-7, AC-9);
+ * `dsh-entry` means no source provided a dsh CLI entry point, so the failure
+ * belongs to the window's environment rather than to dsh either;
  * `invalid-setting` means a Node selection setting held a value of the wrong
  * type, so the failure belongs to that setting's value rather than to dsh;
  * `bridge-listen` means the ide-bridge socket refused to listen (AC-16),
@@ -72,13 +81,16 @@ export type HostStartErrorKind = StartErrorKind
 
 /**
  * Failed start with a machine-readable class. A `node-environment` failure
- * carries the pre-flight `diagnostic` that produced it.
+ * carries the pre-flight `diagnostic` that produced it, and a `dsh-entry`
+ * failure carries the entry-resolution diagnostic instead.
  */
 export class HostStartError extends Error {
   /** Which start stage failed. */
   readonly kind: HostStartErrorKind
-  /** Pre-flight diagnostic; present exactly when `kind` is `node-environment`. */
+  /** Node pre-flight diagnostic; present exactly when `kind` is `node-environment`. */
   readonly diagnostic: NodeEnvironmentFailure | undefined
+  /** dsh entry resolution diagnostic; present exactly when `kind` is `dsh-entry`. */
+  readonly entryDiagnostic: DshEntryFailure | undefined
 
   /**
    * @param kind - which start stage failed.
@@ -88,12 +100,13 @@ export class HostStartError extends Error {
   constructor(
     kind: HostStartErrorKind,
     message: string,
-    options: { cause?: unknown; diagnostic?: NodeEnvironmentFailure } = {},
+    options: { cause?: unknown; diagnostic?: NodeEnvironmentFailure; entryDiagnostic?: DshEntryFailure } = {},
   ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause })
     this.name = 'HostStartError'
     this.kind = kind
     this.diagnostic = options.diagnostic
+    this.entryDiagnostic = options.entryDiagnostic
   }
 }
 
@@ -153,6 +166,12 @@ function describeStartFailure(error: unknown, context: StartFailureContext): Hos
       ...failure.version === undefined ? {} : { nodeVersion: failure.version },
     }
   }
+  if (error instanceof DshEntryError) {
+    return { kind: 'dsh-entry', hint: error.failure.remedy, detail }
+  }
+  if (error instanceof DshEntryError) {
+    return { kind: 'dsh-entry', hint: error.failure.remedy, detail }
+  }
   if (error instanceof TransportClosedError) {
     const details = error.details
     return {
@@ -196,8 +215,10 @@ export interface IdeSessionHostStartOptions {
   bridgeSockPath?: string
   /** Extra credential env merged after scrub (never logged). */
   credentials?: NodeJS.ProcessEnv
-  /** Optional override of the dsh CLI module path for tests. */
+  /** Explicit dsh CLI entry point; wins over every configured and automatic source. */
   dshBin?: string
+  /** `dsh.cliPath` setting value used when no explicit entry point is supplied. */
+  cliPathSetting?: string
   /** Bound (ms) for initialize (default client value). */
   initializeTimeoutMs?: number
   /** Bound (ms) for bridge dispose round-trips (default 5000). */
@@ -247,6 +268,27 @@ export class IdeSessionHost {
   private forkTimeoutMs = 5_000
   private permissionTimeoutMs = 5_000
   private readLogTimeoutMs = 15_000
+  private statTimeoutMs = 5_000
+  private projectionTimeoutMs = 5_000
+  /** Bound for a content search. Longer than the other round trips because the
+   * runtime opens and reconciles its derived index on the first search.
+   */
+  private searchTimeoutMs = 15_000
+  /**
+   * Bound for one stored-image read. Longer than an ordinary round trip because
+   * the answer carries the image bytes, which can be megabytes.
+   */
+  private attachmentTimeoutMs = 30_000
+  /**
+   * Bound for a subagent listing. Longer than an ordinary round trip because a
+   * child the runtime no longer holds live is identified by observing its log.
+   */
+  private subagentListTimeoutMs = 30_000
+  /** Bound for one subagent continuation prompt and one interrupt acknowledgement. */
+  private subagentTimeoutMs = 10_000
+  /** Bound for one SpecDev status read and one gate confirmation. */
+  private specdevTimeoutMs = 10_000
+  private approvalPolicyTimeoutMs = 5_000
   private settingsTimeoutMs = 5_000
   private readonly pendingDispose = new Map<string, {
     resolve: () => void
@@ -274,6 +316,54 @@ export class IdeSessionHost {
   }>()
   private readonly pendingDelete = new Map<string, {
     resolve: (ok: boolean) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingRename = new Map<string, {
+    resolve: (title: string) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingStat = new Map<string, {
+    resolve: (value: SessionStatResult) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingProjection = new Map<string, {
+    resolve: (value: SessionProjectionSnapshot) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingSearch = new Map<string, {
+    resolve: (value: BridgeSessionSearchHit[]) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingAttachment = new Map<string, {
+    resolve: (value: StoredAttachmentBytes) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingSubagentList = new Map<string, {
+    resolve: (value: SubagentListResult) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingSubagentPrompt = new Map<string, {
+    resolve: (messageId: string) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingSubagentInterrupt = new Map<string, {
+    resolve: () => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingSpecdevSnapshot = new Map<string, {
+    resolve: (value: BridgeSpecdevSnapshot | null) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingSpecdevGate = new Map<string, {
+    resolve: (value: BridgeSpecdevSnapshot | null) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingApprovalPolicy = new Map<string, {
+    resolve: (value: BridgeApprovalPolicy) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingApprovalPolicySet = new Map<string, {
+    resolve: (value: BridgeApprovalPolicy) => void
     reject: (error: Error) => void
   }>()
   private readonly pendingModelList = new Map<string, {
@@ -314,6 +404,7 @@ export class IdeSessionHost {
   }>()
   private resumeTimeoutMs = 15_000
   private deleteTimeoutMs = 5_000
+  private renameTimeoutMs = 5_000
   private modelRpcTimeoutMs = 5_000
   private sessionListTimeoutMs = 10_000
   /** Bound (ms) for the three catalog reads the composer's `/` menu needs. */
@@ -427,8 +518,9 @@ export class IdeSessionHost {
   }
 
   /**
-   * Pre-flight the resolved Node executable, then listen on the bridge, spawn
-   * `dsh --profile ide`, and complete initialize (AC-4, AC-7). Every failure on
+   * Pre-flight the resolved Node executable, resolve the dsh CLI entry point,
+   * then listen on the bridge, spawn `dsh --profile ide`, and complete
+   * initialize (AC-4, AC-7). Every failure on
    * those boundaries is classified and recorded before it is thrown, so a start
    * that fails leaves an inspectable record rather than only a message (AC-14
    * – AC-18).
@@ -480,6 +572,15 @@ export class IdeSessionHost {
       this.nodeExecutable = nodeExecutable
       stage = 'preflight'
       await assertNodeExecutable(nodeExecutable)
+      // The runtime entry point is resolved next, still before any socket: a window
+      // that has a Node but no dsh reports the missing runtime with its diagnostic
+      // instead of a module resolution error from the spawn.
+      const entry = resolveDshEntry({
+        cwd: options.cwd,
+        ...options.dshBin === undefined ? {} : { explicitPath: options.dshBin },
+        ...options.cliPathSetting === undefined ? {} : { cliPathSetting: options.cliPathSetting },
+      })
+      if (!entry.ok) throw new DshEntryError(entry.failure)
       stage = 'bridge-listen'
       await bridge.listen(bridgePath)
       const env = buildIdeChildEnv({
@@ -493,7 +594,7 @@ export class IdeSessionHost {
         env,
         nodeExecutable,
         ...options.dshHome === undefined ? {} : { dshHome: options.dshHome },
-        ...options.dshBin === undefined ? {} : { dshBin: options.dshBin },
+        dshBin: entry.entry.path,
         initializeTimeoutMs,
       })
       this.client = client
@@ -524,6 +625,12 @@ export class IdeSessionHost {
         throw new HostStartError('node-environment', this.errorMessage, {
           cause: error,
           diagnostic: error.failure,
+        })
+      }
+      if (error instanceof DshEntryError) {
+        throw new HostStartError('dsh-entry', this.errorMessage, {
+          cause: error,
+          entryDiagnostic: error.failure,
         })
       }
       throw new HostStartError(startErrorKindForFailure(failure.kind), this.errorMessage, { cause: error })
@@ -763,6 +870,461 @@ export class IdeSessionHost {
   }
 
   /**
+   * Accept an explicit user title for one session via Host bridge `session/rename`.
+   * @param sessionId - Tab-bound SDK session identity.
+   * @param title - title text the user typed; the runtime normalizes it.
+   * @returns the normalized title the runtime wrote to the session log.
+   */
+  async renameSession(sessionId: string, title: string): Promise<string> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot rename session')
+    }
+    const id = randomUUID()
+    const response = new Promise<string>((resolve, reject) => {
+      this.pendingRename.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingRename.get(id)
+      if (pending === undefined) return
+      this.pendingRename.delete(id)
+      pending.reject(new Error(`session/rename timed out after ${this.renameTimeoutMs}ms`))
+    }, this.renameTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'session/rename', id, sessionId, title })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive session/rename')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingRename.delete(id)
+    }
+  }
+
+  /**
+   * Observe one session's durable state via Host bridge `session/stat`.
+   * @param sessionId - Tab-bound SDK session identity.
+   * @returns whether the runtime still stores the session, plus its reported size when known.
+   */
+  async statSession(sessionId: string): Promise<SessionStatResult> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot stat session')
+    }
+    const id = randomUUID()
+    const response = new Promise<SessionStatResult>((resolve, reject) => {
+      this.pendingStat.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingStat.get(id)
+      if (pending === undefined) return
+      this.pendingStat.delete(id)
+      pending.reject(new Error(`session/stat timed out after ${this.statTimeoutMs}ms`))
+    }, this.statTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'session/stat', id, sessionId })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive session/stat')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingStat.delete(id)
+    }
+  }
+
+  /**
+   * Read one consistent cut of a live session's registered projection units via
+   * Host bridge `projection/read`.
+   * @param sessionId - Tab-bound SDK session identity.
+   * @param keys - unit keys to view; every client-visible unit when omitted.
+   * @returns the values and the log position they reflect.
+   */
+  async readProjection(sessionId: string, keys?: string[]): Promise<SessionProjectionSnapshot> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot read projection')
+    }
+    const id = randomUUID()
+    const response = new Promise<SessionProjectionSnapshot>((resolve, reject) => {
+      this.pendingProjection.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingProjection.get(id)
+      if (pending === undefined) return
+      this.pendingProjection.delete(id)
+      pending.reject(new Error(`projection/read timed out after ${this.projectionTimeoutMs}ms`))
+    }, this.projectionTimeoutMs)
+    try {
+      const sent = bridge.broadcast({
+        kind: 'projection/read',
+        id,
+        sessionId,
+        ...keys === undefined ? {} : { keys },
+      })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive projection/read')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingProjection.delete(id)
+    }
+  }
+
+  /**
+   * Search the session corpus for content matches via Host bridge `session/search`.
+   * @param query - full-text query text, matched against indexed event content.
+   * @param limit - maximum sessions in one page.
+   * @returns hits ranked by their strongest matching event, each with its snippet.
+   */
+  async searchSessions(query: string, limit?: number): Promise<BridgeSessionSearchHit[]> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot search sessions')
+    }
+    const id = randomUUID()
+    const response = new Promise<BridgeSessionSearchHit[]>((resolve, reject) => {
+      this.pendingSearch.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingSearch.get(id)
+      if (pending === undefined) return
+      this.pendingSearch.delete(id)
+      pending.reject(new Error(`session/search timed out after ${this.searchTimeoutMs}ms`))
+    }, this.searchTimeoutMs)
+    try {
+      const sent = bridge.broadcast({
+        kind: 'session/search',
+        id,
+        query,
+        ...limit === undefined ? {} : { limit },
+      })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive session/search')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingSearch.delete(id)
+    }
+  }
+
+  /**
+   * Read one stored image's bytes via Host bridge `attachment/read`. A session
+   * log records only the durable reference, so this is how a panel that folded
+   * a session from its log renders the images that session sent.
+   * @param ref - durable reference the session log recorded.
+   * @returns the media type admission verified plus the canonical base64 payload.
+   */
+  async readAttachment(ref: BridgeAttachmentRef): Promise<StoredAttachmentBytes> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot read an attachment')
+    }
+    const id = randomUUID()
+    const response = new Promise<StoredAttachmentBytes>((resolve, reject) => {
+      this.pendingAttachment.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingAttachment.get(id)
+      if (pending === undefined) return
+      this.pendingAttachment.delete(id)
+      pending.reject(new Error(`attachment/read timed out after ${this.attachmentTimeoutMs}ms`))
+    }, this.attachmentTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'attachment/read', id, ref })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive attachment/read')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingAttachment.delete(id)
+    }
+  }
+
+  /**
+   * List one session's durable subagent children or its whole subtree via Host
+   * bridge `subagent/list`.
+   * @param sessionId - parent (`children`) or root (`descendants`) session.
+   * @param scope - whether to read direct children or the whole subtree.
+   * @returns the rows plus whether the runtime held a live Agent for that session.
+   */
+  async listSubagents(sessionId: string, scope: 'children' | 'descendants'): Promise<SubagentListResult> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot list subagents')
+    }
+    const id = randomUUID()
+    const response = new Promise<SubagentListResult>((resolve, reject) => {
+      this.pendingSubagentList.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingSubagentList.get(id)
+      if (pending === undefined) return
+      this.pendingSubagentList.delete(id)
+      pending.reject(new Error(`subagent/list timed out after ${this.subagentListTimeoutMs}ms`))
+    }, this.subagentListTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'subagent/list', id, sessionId, scope })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive subagent/list')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingSubagentList.delete(id)
+    }
+  }
+
+  /**
+   * Deliver one message to a continuable subagent child via Host bridge
+   * `subagent/prompt`. Only the child's live direct parent can deliver it, so a
+   * refusal names the address rather than a missing route.
+   * @param parentSessionId - durable parent whose live Agent delivers the message.
+   * @param childSessionId - durable continuable child receiving it.
+   * @param text - message text.
+   * @returns identity of the message the child's inbox accepted.
+   */
+  async promptSubagent(parentSessionId: string, childSessionId: string, text: string): Promise<string> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot prompt a subagent')
+    }
+    const id = randomUUID()
+    const response = new Promise<string>((resolve, reject) => {
+      this.pendingSubagentPrompt.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingSubagentPrompt.get(id)
+      if (pending === undefined) return
+      this.pendingSubagentPrompt.delete(id)
+      pending.reject(new Error(`subagent/prompt timed out after ${this.subagentTimeoutMs}ms`))
+    }, this.subagentTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'subagent/prompt', id, parentSessionId, childSessionId, text })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive subagent/prompt')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingSubagentPrompt.delete(id)
+    }
+  }
+
+  /**
+   * Abort one subagent child's active turn via Host bridge `subagent/interrupt`.
+   * The runtime admits an absent or already-finished target as a no-op.
+   * @param parentSessionId - durable parent whose authority the request claims.
+   * @param childSessionId - durable child whose active turn is aborted.
+   */
+  async interruptSubagent(parentSessionId: string, childSessionId: string): Promise<void> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot interrupt a subagent')
+    }
+    const id = randomUUID()
+    const response = new Promise<void>((resolve, reject) => {
+      this.pendingSubagentInterrupt.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingSubagentInterrupt.get(id)
+      if (pending === undefined) return
+      this.pendingSubagentInterrupt.delete(id)
+      pending.reject(new Error(`subagent/interrupt timed out after ${this.subagentTimeoutMs}ms`))
+    }, this.subagentTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'subagent/interrupt', id, parentSessionId, childSessionId })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive subagent/interrupt')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingSubagentInterrupt.delete(id)
+    }
+  }
+
+  /**
+   * Read one session's workspace SpecDev status via Host bridge `specdev/snapshot`.
+   * @param sessionId - Tab-bound SDK session identity.
+   * @returns the active workflow status, or null when the workspace has none.
+   */
+  async readSpecdevSnapshot(sessionId: string): Promise<BridgeSpecdevSnapshot | null> {
+    return await this.specdevRoundTrip(
+      { kind: 'specdev/snapshot', sessionId },
+      this.pendingSpecdevSnapshot,
+      'specdev/snapshot',
+      'cannot read the SpecDev status',
+    )
+  }
+
+  /**
+   * Apply one Human Gate decision via Host bridge `specdev/confirm-gate`. The
+   * runtime owns gate ordering and the durable write, so a refusal names the
+   * runtime's own reason.
+   * @param sessionId - Tab-bound SDK session identity owning the log.
+   * @param request - gate, decision, and optional note.
+   * @returns the post-change status, or null when the runtime returned none.
+   */
+  async confirmSpecdevGate(
+    sessionId: string,
+    request: { gate: string; decision: string; note?: string },
+  ): Promise<BridgeSpecdevSnapshot | null> {
+    return await this.specdevRoundTrip(
+      { kind: 'specdev/confirm-gate', sessionId, ...request },
+      this.pendingSpecdevGate,
+      'specdev/confirm-gate',
+      'cannot confirm the SpecDev gate',
+    )
+  }
+
+  /**
+   * Broadcast one SpecDev frame and await its response, which both frames spell
+   * as a nullable snapshot.
+   * @param frame - request payload without the round-trip id.
+   * @param pending - map holding this frame kind's waiters.
+   * @param kind - wire frame kind, used in the failure texts.
+   * @param action - verb phrase naming what could not run, used in the hello failure.
+   * @returns the answered snapshot, or null when the runtime reported none.
+   */
+  private async specdevRoundTrip(
+    frame:
+      | { kind: 'specdev/snapshot'; sessionId: string }
+      | { kind: 'specdev/confirm-gate'; sessionId: string; gate: string; decision: string; note?: string },
+    pending: Map<string, { resolve: (value: BridgeSpecdevSnapshot | null) => void; reject: (error: Error) => void }>,
+    kind: 'specdev/snapshot' | 'specdev/confirm-gate',
+    action: string,
+  ): Promise<BridgeSpecdevSnapshot | null> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error(`ide-bridge runtime is not connected; ${action}`)
+    }
+    const id = randomUUID()
+    const response = new Promise<BridgeSpecdevSnapshot | null>((resolve, reject) => {
+      pending.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const waiting = pending.get(id)
+      if (waiting === undefined) return
+      pending.delete(id)
+      waiting.reject(new Error(`${kind} timed out after ${this.specdevTimeoutMs}ms`))
+    }, this.specdevTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ ...frame, id })
+      if (sent === 0) {
+        throw new Error(`no ide-bridge runtime connection to receive ${kind}`)
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      pending.delete(id)
+    }
+  }
+
+  /**
+   * Read one session's effective approval policy via Host bridge `approval/policy`.
+   * @param sessionId - Tab-bound SDK session identity.
+   * @returns the policy every ask for this session resolves under right now.
+   */
+  async readApprovalPolicy(sessionId: string): Promise<BridgeApprovalPolicy> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot read approval policy')
+    }
+    const id = randomUUID()
+    const response = new Promise<BridgeApprovalPolicy>((resolve, reject) => {
+      this.pendingApprovalPolicy.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingApprovalPolicy.get(id)
+      if (pending === undefined) return
+      this.pendingApprovalPolicy.delete(id)
+      pending.reject(new Error(`approval/policy timed out after ${this.approvalPolicyTimeoutMs}ms`))
+    }, this.approvalPolicyTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'approval/policy', id, sessionId })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive approval/policy')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingApprovalPolicy.delete(id)
+    }
+  }
+
+  /**
+   * Switch one session's approval policy via Host bridge `approval/policy/set`.
+   * The runtime logs the change and states it to the model on its next step.
+   * @param sessionId - Tab-bound SDK session identity.
+   * @param policy - policy to apply for this session.
+   * @returns the policy the runtime accepted.
+   */
+  async setApprovalPolicy(sessionId: string, policy: BridgeApprovalPolicy): Promise<BridgeApprovalPolicy> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot set approval policy')
+    }
+    const id = randomUUID()
+    const response = new Promise<BridgeApprovalPolicy>((resolve, reject) => {
+      this.pendingApprovalPolicySet.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingApprovalPolicySet.get(id)
+      if (pending === undefined) return
+      this.pendingApprovalPolicySet.delete(id)
+      pending.reject(new Error(`approval/policy/set timed out after ${this.approvalPolicyTimeoutMs}ms`))
+    }, this.approvalPolicyTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'approval/policy/set', id, sessionId, policy })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive approval/policy/set')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingApprovalPolicySet.delete(id)
+    }
+  }
+
+  /**
    * Apply a permission-presets name for a session via Host bridge (AC-21 / AC-22).
    * @param sessionId - Tab-bound SDK session identity.
    * @param preset - preset table key owned by dsh-permission-presets.
@@ -782,14 +1344,14 @@ export class IdeSessionHost {
    * List permission-presets for a session via Host bridge (AC-21 / AC-22).
    * @param sessionId - Tab-bound SDK session identity.
    */
-  async listPermissionPresets(sessionId: string): Promise<{ presets: string[]; current: string }> {
+  async listPermissionPresets(sessionId: string): Promise<PermissionPresetList> {
     const result = await this.permissionRpc({
       kind: 'permission/list',
       sessionId,
     })
     if (!result.ok) throw new Error(result.error)
-    if (!('presets' in result)) throw new Error('unexpected permission/select response for list')
-    return { presets: result.presets, current: result.current }
+    if (!('options' in result)) throw new Error('unexpected permission/select response for list')
+    return { options: result.options, current: result.current }
   }
 
   /**
@@ -1269,12 +1831,60 @@ export class IdeSessionHost {
       this.pendingDelete.delete(id)
       pending.reject(new Error(reason))
     }
+    for (const [id, pending] of this.pendingRename) {
+      this.pendingRename.delete(id)
+      pending.reject(new Error(reason))
+    }
     for (const [id, pending] of this.pendingModelList) {
       this.pendingModelList.delete(id)
       pending.reject(new Error(reason))
     }
     for (const [id, pending] of this.pendingSessionList) {
       this.pendingSessionList.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingStat) {
+      this.pendingStat.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingProjection) {
+      this.pendingProjection.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingSearch) {
+      this.pendingSearch.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingAttachment) {
+      this.pendingAttachment.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingSubagentList) {
+      this.pendingSubagentList.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingSubagentPrompt) {
+      this.pendingSubagentPrompt.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingSubagentInterrupt) {
+      this.pendingSubagentInterrupt.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingSpecdevSnapshot) {
+      this.pendingSpecdevSnapshot.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingSpecdevGate) {
+      this.pendingSpecdevGate.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingApprovalPolicy) {
+      this.pendingApprovalPolicy.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingApprovalPolicySet) {
+      this.pendingApprovalPolicySet.delete(id)
       pending.reject(new Error(reason))
     }
     for (const [id, pending] of this.pendingModelSelect) {
@@ -1411,6 +2021,17 @@ export class IdeSessionHost {
       pending.reject(new Error(frame.error))
       return
     }
+    if (frame.kind === 'session/rename/response') {
+      const pending = this.pendingRename.get(frame.id)
+      if (pending === undefined) return
+      this.pendingRename.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.title)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
     if (frame.kind === 'session/list/response') {
       const pending = this.pendingSessionList.get(frame.id)
       if (pending === undefined) return
@@ -1423,6 +2044,131 @@ export class IdeSessionHost {
           ...row.parentSessionId === undefined ? {} : { parentSessionId: row.parentSessionId },
           ...row.title === undefined ? {} : { title: row.title },
         })))
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'session/stat/response') {
+      const pending = this.pendingStat.get(frame.id)
+      if (pending === undefined) return
+      this.pendingStat.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve({
+          found: frame.found,
+          ...frame.eventCount === undefined ? {} : { eventCount: frame.eventCount },
+          ...frame.sizeBytes === undefined ? {} : { sizeBytes: frame.sizeBytes },
+        })
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'projection/read/response') {
+      const pending = this.pendingProjection.get(frame.id)
+      if (pending === undefined) return
+      this.pendingProjection.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve({ asOfSeq: frame.asOfSeq, values: frame.values })
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'session/search/response') {
+      const pending = this.pendingSearch.get(frame.id)
+      if (pending === undefined) return
+      this.pendingSearch.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.hits)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'attachment/read/response') {
+      const pending = this.pendingAttachment.get(frame.id)
+      if (pending === undefined) return
+      this.pendingAttachment.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve({ mediaType: frame.mediaType, data: frame.data })
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'subagent/list/response') {
+      const pending = this.pendingSubagentList.get(frame.id)
+      if (pending === undefined) return
+      this.pendingSubagentList.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve({ sessionLive: frame.sessionLive, entries: frame.entries })
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'subagent/prompt/response') {
+      const pending = this.pendingSubagentPrompt.get(frame.id)
+      if (pending === undefined) return
+      this.pendingSubagentPrompt.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.messageId)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'subagent/interrupt/response') {
+      const pending = this.pendingSubagentInterrupt.get(frame.id)
+      if (pending === undefined) return
+      this.pendingSubagentInterrupt.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve()
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'specdev/snapshot/response') {
+      const pending = this.pendingSpecdevSnapshot.get(frame.id)
+      if (pending === undefined) return
+      this.pendingSpecdevSnapshot.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.snapshot)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'specdev/confirm-gate/response') {
+      const pending = this.pendingSpecdevGate.get(frame.id)
+      if (pending === undefined) return
+      this.pendingSpecdevGate.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.snapshot)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'approval/policy/response') {
+      const pending = this.pendingApprovalPolicy.get(frame.id)
+      if (pending === undefined) return
+      this.pendingApprovalPolicy.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.policy)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'approval/policy/set/response') {
+      const pending = this.pendingApprovalPolicySet.get(frame.id)
+      if (pending === undefined) return
+      this.pendingApprovalPolicySet.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.policy)
         return
       }
       pending.reject(new Error(frame.error))
@@ -1666,6 +2412,10 @@ export class IdeSessionHost {
       this.pendingDelete.delete(id)
       pending.reject(new Error(`${reason} during session/delete`))
     }
+    for (const [id, pending] of this.pendingRename) {
+      this.pendingRename.delete(id)
+      pending.reject(new Error(`${reason} during session/rename`))
+    }
     for (const [id, pending] of this.pendingModelList) {
       this.pendingModelList.delete(id)
       pending.reject(new Error(`${reason} during model/list`))
@@ -1673,6 +2423,50 @@ export class IdeSessionHost {
     for (const [id, pending] of this.pendingSessionList) {
       this.pendingSessionList.delete(id)
       pending.reject(new Error(`${reason} during session/list`))
+    }
+    for (const [id, pending] of this.pendingStat) {
+      this.pendingStat.delete(id)
+      pending.reject(new Error(`${reason} during session/stat`))
+    }
+    for (const [id, pending] of this.pendingProjection) {
+      this.pendingProjection.delete(id)
+      pending.reject(new Error(`${reason} during projection/read`))
+    }
+    for (const [id, pending] of this.pendingSearch) {
+      this.pendingSearch.delete(id)
+      pending.reject(new Error(`${reason} during session/search`))
+    }
+    for (const [id, pending] of this.pendingAttachment) {
+      this.pendingAttachment.delete(id)
+      pending.reject(new Error(`${reason} during attachment/read`))
+    }
+    for (const [id, pending] of this.pendingSubagentList) {
+      this.pendingSubagentList.delete(id)
+      pending.reject(new Error(`${reason} during subagent/list`))
+    }
+    for (const [id, pending] of this.pendingSubagentPrompt) {
+      this.pendingSubagentPrompt.delete(id)
+      pending.reject(new Error(`${reason} during subagent/prompt`))
+    }
+    for (const [id, pending] of this.pendingSubagentInterrupt) {
+      this.pendingSubagentInterrupt.delete(id)
+      pending.reject(new Error(`${reason} during subagent/interrupt`))
+    }
+    for (const [id, pending] of this.pendingSpecdevSnapshot) {
+      this.pendingSpecdevSnapshot.delete(id)
+      pending.reject(new Error(`${reason} during specdev/snapshot`))
+    }
+    for (const [id, pending] of this.pendingSpecdevGate) {
+      this.pendingSpecdevGate.delete(id)
+      pending.reject(new Error(`${reason} during specdev/confirm-gate`))
+    }
+    for (const [id, pending] of this.pendingApprovalPolicy) {
+      this.pendingApprovalPolicy.delete(id)
+      pending.reject(new Error(`${reason} during approval/policy`))
+    }
+    for (const [id, pending] of this.pendingApprovalPolicySet) {
+      this.pendingApprovalPolicySet.delete(id)
+      pending.reject(new Error(`${reason} during approval/policy/set`))
     }
     for (const [id, pending] of this.pendingModelSelect) {
       this.pendingModelSelect.delete(id)
@@ -1716,7 +2510,7 @@ export class IdeSessionHost {
 
 type PermissionRpcResult =
   | { ok: true; preset: string }
-  | { ok: true; presets: string[]; current: string }
+  | { ok: true; options: BridgePermissionPreset[]; current: string }
   | { ok: false; error: string }
 
 /** Successful model/list bridge response payload. */
@@ -1752,6 +2546,48 @@ export interface HostSessionRow {
   title?: string
 }
 
+/** Switchable permission presets plus the effective one, from a `permission/list` round trip. */
+export interface PermissionPresetList {
+  /** Options in table order, each carrying its label and description; `custom` joins while effective. */
+  options: BridgePermissionPreset[]
+  /** The effective preset value for the session. */
+  current: string
+}
+
+/** Durable state of one session, from a `session/stat` round trip. */
+export interface SessionStatResult {
+  /** Whether the runtime still stores a log for the asked session. */
+  found: boolean
+  /** Recorded event count; present only when the backend reports one. */
+  eventCount?: number
+  /** Stored byte size; present only when the backend reports one. */
+  sizeBytes?: number
+}
+
+/** One projection cut of a live session, from a `projection/read` round trip. */
+export interface SessionProjectionSnapshot {
+  /** Log position every returned value reflects. */
+  asOfSeq: number
+  /** Client-visible unit views, keyed by unit key. */
+  values: Record<string, unknown>
+}
+
+/** One stored image's bytes, from an `attachment/read` round trip. */
+export interface StoredAttachmentBytes {
+  /** Media type admission verified for these bytes. */
+  mediaType: string
+  /** Canonical base64 of the stored image. */
+  data: string
+}
+
+/** Durable subagent rows plus the addressed session's live state, from a `subagent/list` round trip. */
+export interface SubagentListResult {
+  /** Whether the runtime held a live Agent for the addressed session. */
+  sessionLive: boolean
+  /** Classified child rows and per-candidate diagnostics. */
+  entries: BridgeSubagentEntry[]
+}
+
 /** Outcome of one Host bridge `commands/execute` round trip. */
 export interface CommandExecuteResult {
   /**
@@ -1777,7 +2613,7 @@ function frameToPermissionResult(
     if (frame.ok) return { ok: true, preset: frame.preset }
     return { ok: false, error: frame.error }
   }
-  if (frame.ok) return { ok: true, presets: frame.presets, current: frame.current }
+  if (frame.ok) return { ok: true, options: frame.options, current: frame.current }
   return { ok: false, error: frame.error }
 }
 

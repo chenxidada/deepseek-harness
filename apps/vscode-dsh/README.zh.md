@@ -141,11 +141,14 @@ bash apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh --check-shadow-preset
 | `dsh.closeConversation` | 关闭（卸载）active 页签 —— **不** dispose 会话 |
 | `dsh.deleteConversation` | 显式删除：确认 → `session/dispose` + 清索引。离线时 → **「Host 连接后可删除」**（不假删、不自动启动） |
 | `dsh.deleteHistory` | 删除历史列表中的会话（`session/dispose` + 清索引）。离线时 → **「Host 连接后可删除」**（不假删、不自动启动） |
+| `dsh.deleteSessionFromDisk` | 把 active 页签的会话从磁盘删除：走已确认删除路径，但本身不弹确认（脚本 / 命令面板入口）。离线时 → **「Host 连接后可删除」** |
 | `dsh.continueConversation` | 继续本会话（需要时自动启动 Host） |
 | `dsh.restoreMoreTabs` | 注入被推迟的恢复页签（「查看更多 / 全部恢复」） |
 | `dsh.promptActiveConversation` | 向 active 页签的 `sessionId` 发提示词（测试 / 脚本用；需要时自动启动） |
 | `dsh.insertFileReference` | 输入工作区相对路径，把它的 `@path` mention 插入输入框（需要时自动启动） |
 | `dsh.selectPermissionPreset` | 为 active 页签选择一个 permission-presets 档位 |
+| `dsh.selectModel` | 模型选择的键盘入口（ctrl+shift+alt+m）：显示对话面板，并推送它模型下拉所需 settings 状态 |
+| `dsh.triggerCompact` | 对 active 页签执行 `/compact` —— 与输入框「压缩上下文」按钮同一条路径。没有 active 页签 → 仅提示，不调用运行时 |
 | `dsh.reviewWorkspaceDiffs` | 为 active 页签上的 write/edit 路径打开事后 Diff |
 | `dsh.openTimelineDiff` | 从 Timeline 的 write 行打开 Diff（AC-25） |
 | `dsh.showPanel` | 显示 Conversation 视图 / 连接错误详情（**不**强制 Start） |
@@ -157,8 +160,8 @@ bash apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh --check-shadow-preset
 | 类别 | 命令 | 自动启动？ |
 |---|---|:---:|
 | **Start** | `dsh.startSession` | ✅ (`command-start`) |
-| **发送 / 新建** | `dsh.newConversation`、`dsh.promptActiveConversation`、`dsh.continueConversation`；Webview `action/new-conversation` / `action/continue` | ✅ (`command-send`) |
-| **查询 / 浏览** | `dsh.openHistory`、`dsh.searchSessions`、`dsh.switchConversation`、History/Conversations 刷新 | ❌ |
+| **发送 / 新建** | `dsh.newConversation`、`dsh.promptActiveConversation`、`dsh.continueConversation`；Webview `ui/tab-new` / `action/continue` | ✅ (`command-send`) |
+| **查询 / 浏览** | `dsh.openHistory`、`dsh.searchSessions`、`dsh.listSubagents`、`dsh.specdevStatus`、`dsh.switchConversation`、History/Conversations 刷新 | ❌ |
 | **删除** | `dsh.deleteConversation`、`dsh.deleteHistory` | ❌ —— 离线时显示「Host 连接后可删除」；绝不假删权威数据 |
 | **面板 / 设置** | `dsh.showPanel`、`dsh.openExtensionSettings` | ❌（仅显示详情 / 设置） |
 | **状态栏** | `dsh.statusBarAction` | ✅ (`status-bar`) |
@@ -213,8 +216,11 @@ AutoReady 仅在 **Conversation 可见 ∧ Host ready** 时运行：
 | 视图 id | 内容 |
 |---|---|
 | `dsh.history` | 会话历史列表 —— 本扩展自绘的 WebviewView：会话行（打开 / 行菜单）、新建会话、空态 |
+| `dsh.todo` | 当前对话 Tab 的待办列表 —— 每条已写入的待办一行 `TreeView` 行，行描述为 进行中 / 已完成 |
 
-对话界面是编辑器面板（`dsh.editorChat`）；Activity Bar 只贡献 History。Activity Bar 图标只负责显示这个视图，因此首次显示它时同时打开对话面板 —— 每个窗口一次，且只在用户打开该容器时发生。
+对话界面是编辑器面板（`dsh.editorChat`）；Activity Bar 容器 `dsh` 贡献 History 与 Todo。History 首次显示时同时打开对话面板 —— 每个窗口一次，且只在用户打开该容器时发生。
+
+Todo 视图渲染活动 Tab 的 `todoItemsForSession`：没有活动会话时为空，模型写入后显示该列表；控制器在待办写入与 Tab 切换时刷新它。
 
 History 是 **WebviewView** 而非 `TreeView`：行的字号与行菜单归本扩展所有，而原生树的字体由 VS Code 决定。每行显示记录时间与首句用户输入，运行时能恢复该会话时另加「可继续」。右键点击某行（或在行上按 `Shift+F10`）打开行菜单 —— **打开回放 / 继续本会话 / 复制会话 ID / 删除会话**。运行时无法恢复的会话，**继续本会话** 为禁用；该操作先打开回放再继续，因为继续作用于当前活动 Tab。**删除会话** 先请求确认，然后走与面板相同的已确认删除路径。没有可用会话时，该视图渲染自己的空态，其按钮用于新建会话或打开面板。
 
@@ -259,7 +265,7 @@ History 是 **WebviewView** 而非 `TreeView`：行的字号与行菜单归本�
 ## 会话 chrome ——「新建会话」(AD-CR-8)
 
 - 顶栏的 **「新建会话」** 是**产品主入口**（始终带标签；窄侧栏可以换行，或使用溢出「⋯」，其中「新建会话」是第一个菜单项）。
-- 点击 → Webview `action/new-conversation` → 与 `dsh.newConversation` 相同的 Host 路径：离线时**先 Start**（`ensureHostForSend` / `command-send`），等待横幅「正在连接到 Host…」（输入区**不可**发送 `live`），然后 `newConversationOrReuseEmpty` + reveal Conversation。
+- 点击 → Webview `ui/tab-new` → 与 `dsh.newConversation` 相同的 Host 路径：离线时**先 Start**（`ensureHostForSend` / `command-send`），等待横幅「正在连接到 Host…」（输入区**不可**发送 `live`），然后 `newConversationOrReuseEmpty` + reveal Conversation。
 - 键盘 `contributes.keybindings` 把 **`ctrl+shift+alt+n`** / mac **`cmd+shift+alt+n`** 绑定到 `dsh.newConversation`（与 chrome 按钮相同的 ensureHost / 先 Start 路径）。用户可在 VS Code 键盘快捷方式中覆盖或禁用该组合键。快捷键是 **Must 次要**入口，且**不得**取代或削弱顶栏的「新建会话」按钮（AC-34）。
 - Webview 的 `action/continue` 在离线时同样会自动启动 Host（与 `dsh.continueConversation` 同属发送类路径）。
 
@@ -274,6 +280,46 @@ History 是 **WebviewView** 而非 `TreeView`：行的字号与行菜单归本�
 - 仅当 `meta.diffs` 携带可恢复的快照（`path` + `newText` + `oldText: string|null`）时 Diff 可用。仅有 patch（缺 `oldText`）→ Diff 不可用并给出说明。
 - Diff 的两侧都作为来自日志的虚拟 `dsh-diff` 文档打开 —— **绝不**把当前工作区文件当作 before/after。
 - 未完成 / 被中断的轮次会在消息上标记（`incomplete`），并提示「已停止/未完成」（AC-77）。
+
+## 子代理控制（AD-CU-11）
+
+- `dsh.listSubagents` 通过 bridge 的 `subagent/list` 展示某会话的名册 —— 默认 `children`，传 `'descendants'` 得到整棵子树并带 `parentId` / `depth`。每行携带 `mode`（`one-shot` / `continuable`）与从实时 Agent 注册表重采样的 `activity`；无法读取的子会话显示为「无法识别 <id8>」。
+- `continuable` 子代理仅在其父页签存活且该子代理未运行时可接收消息：输入区显示「发送给子代理 <label>」并经 bridge 的 `subagent/prompt` 投递。one-shot 子代理、运行中的子代理、回放父页签、bridge 不可达时输入区保持只读。
+- 运行中的子代理卡片提供「中断」→ bridge 的 `subagent/interrupt`，以父会话为权威；one-shot 与 continuable 子代理都可中断。
+- runtime 的拒绝文案（父会话不在运行、子代理不可续接、服务不可用）原样显示在横幅上。
+
+## SpecDev 状态（AD-CU-12）
+
+- 工作区的 Spec 驱动工作流（`.specdev`）是持久状态而非日志状态，因此面板从运行时读取：只要 bridge 的 `specdev/snapshot` 回出一个工作流就有状态卡；工作区没有工作流时不渲染卡片。
+- 卡片显示 slug、stage/phase、HG-1/2/3 标记、技术债计数与待决门禁。切换页签与每个 `specdev/*` 事件都会重新读取，因此在别处推进过的工作流不会再占据卡片。
+- `dsh.specdevStatus` 以行形式展示同一状态（门禁、各阶段的实现/评审/验证、必须修复轮次、下一步），有待决门禁时首行是「确认门禁 <gate>…」。
+- 决定在 QuickPick 中选择（通过 / 驳回 / 推迟，后两者可附一句说明）并经 bridge 的 `specdev/confirm-gate` 应用；卡片上的「确认门禁…」按钮走同一条路径。门禁次序、工件前置条件与持久写入都属于运行时，因此拒绝（`SPECDEV_GATE_NOT_PENDING: …`）原样显示，而已接受的决定会替换卡片上的状态。
+
+## 对话中的图片
+
+- composer 通过粘贴、拖放或文件选择附加图片，并按字节声明媒体类型，而不是平台给的 `File.type`，因为运行时会拒绝与自身探测结果相矛盾的声明。
+- 模型目录中不含 `image` 的路由会把附件以占位文本发给模型，composer 会在发送前于发送按钮上方明示这一点。
+- 已发送的图片用 composer 自己的字节回显在用户气泡里。从日志折出的会话只带附件引用，因此它的每张图片都经 bridge 的 `attachment/read` 读回并补写到气泡上；存储已不再持有的图片只让该气泡不带它，而不会让整次重放失败。
+- 被拒绝的发送会在 `send-failed` 横幅之后把文本与附件交回 composer，用户读到的就是运行时自己的消息。
+
+## 运行时的解析
+
+扩展不自带运行时：自身的 bundle 只带扩展代码，会话子进程运行的是环境提供的 `dsh`。每个窗口解析两类输入，激活时与每次启动时各解析一遍。
+
+- **Node.js** —— `DSH_NODE_BIN`，其次 `dsh.nodeBin` 设置，再次 Extension Host 自带的 Node.js；校验 `^22.19.0 || >=24.0.0` 与 harness 所需的 API。
+- **dsh CLI 入口** —— 启动选项 `dshBin`，其次 `DSH_BIN`，其次 `dsh.cliPath` 设置，其次工作区自己的 `@deepseek-ai/dsh` 依赖，其次工作区上方的 dsh 检出，其次 `PATH` 上的 `dsh`，最后是本扩展自身的安装。
+
+显式配置的路径（`DSH_BIN`、`dsh.cliPath`）若不存在，会让解析直接失败而不落到自动来源，诊断里同时点名这两个杠杆。
+
+激活时向 **DeepSeek Harness** 输出通道写一行：入口、提供它的来源、其包声明的版本，并与本扩展自身的版本并列，版本不一致不阻塞。没有任何来源提供运行时的窗口会在加载时报出来并列出它找过的每个来源；这类窗口里的启动在任何 bridge socket 打开之前就以 `dsh-entry` 失败。
+
+```
+dsh runtime check failed — source: none
+Probed: DSH_BIN environment variable (unset); dsh.cliPath setting (unset); the workspace @deepseek-ai/dsh dependency (no @deepseek-ai/dsh in a node_modules at /work/app or above); the dsh executable on PATH (no dsh executable on PATH)
+Actual: no source provided a dsh CLI entry point
+Expected: a dsh CLI entry point: the "dsh" bin file of @deepseek-ai/dsh (lib/bin.js)
+Fix: install @deepseek-ai/dsh in the workspace so its "dsh" bin is found automatically, or set DSH_BIN or the dsh.cliPath setting to one
+```
 
 ## 双通道
 

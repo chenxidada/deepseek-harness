@@ -5,12 +5,13 @@
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/chat-panel-host
  */
 
-import type { ChatMessage, CompactionMarker, MessageStore, WorkflowMarker } from '../message-store.ts'
+import type { ChatMessage, CompactionMarker, MessageImage, MessageStore, WorkflowMarker } from '../message-store.ts'
 import type { ConversationRegistry } from '../conversation-registry.ts'
 import type { ExtensionIndex } from '../extension-index.ts'
 import type { InteractionCoordinator } from '../interaction-coordinator.ts'
 import type { ConnectionUiState } from '../connection-ui.ts'
 import type { SettingsNamespaceView } from '../session-host.ts'
+import type { BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
 import {
   formatOfficialAtPath,
   resolveAtPathInWorkspace,
@@ -120,10 +121,26 @@ export interface PanelProjection {
   contextSessionId?: string
   /** Parent→child lineage chrome, when a child context is open. */
   breadcrumb?: PanelBreadcrumb
+  /**
+   * Subagent address the composer may write to for this projection. Present
+   * only when the projected child is continuable, not running, and its parent
+   * Tab is live; a send then travels to the child instead of this Tab.
+   */
+  subagentPrompt?: SubagentPromptAddress
   /** Messages already scoped to the projected session. */
   messages: readonly ChatMessage[]
   /** Run status for the projected session (drives status/set resolution). */
   tabStatus: 'idle' | 'running' | 'error' | 'disconnected'
+}
+
+/** Durable subagent address a composer send may target. */
+export interface SubagentPromptAddress {
+  /** Durable parent whose live Agent delivers the message. */
+  parentSessionId: string
+  /** Durable continuable child receiving it. */
+  childSessionId: string
+  /** Durable child label, present when the runtime recorded one. */
+  label?: string
 }
 
 /** Dependencies the panel Host needs from the Extension / controller. */
@@ -156,20 +173,44 @@ export interface ChatPanelHostDeps {
    */
   acceptCommand?: (sessionId: string, line: string) => Promise<boolean>
   /**
+   * Deliver one composer line to a subagent child. The runtime accepts it only
+   * through the child's live direct parent, so a refusal carries that address.
+   * @param target - parent/child address the projection resolved.
+   * @param text - trimmed user text.
+   * @returns identity of the message the child's inbox accepted.
+   */
+  acceptSubagentPrompt?: (target: SubagentPromptAddress, text: string) => Promise<string>
+  /**
+   * Abort one subagent child's active turn from its card.
+   * @param parentSessionId - durable parent whose authority the request claims.
+   * @param childSessionId - durable child whose active turn is aborted.
+   */
+  requestInterruptSubagent?: (parentSessionId: string, childSessionId: string) => Promise<void>
+  /**
+   * Decide one pending SpecDev Human Gate from its status card. The Extension
+   * owns the decision presenter and the runtime write, which is the only
+   * accepted path for a gate decision.
+   * @param sessionId - session owning the workflow log.
+   * @param gate - gate the card reported as pending.
+   */
+  requestSpecdevGate?: (sessionId: string, gate: string) => Promise<void>
+  /**
    * Read the `/` menu catalogs for one session: commands, agent presets, skills.
    * The Extension assembles them from the runtime and orders them by group.
    * @param sessionId - session whose composition scopes the catalogs.
    */
   readSlashCatalog?: (sessionId: string) => Promise<SlashCandidate[]>
-  /** Optional delete action requested from the panel (may still native-confirm). */
-  requestDelete?: () => Promise<void>
   /**
    * Webview-modal-confirmed delete (AD-ECP-6 / AC-60).
    * Must call deleteSession/deleteConversation with `{ confirmed: true }` — no second confirm.
    */
   requestDeleteConfirmed?: (sessionId: string) => Promise<void>
-  /** Open Timeline view from overflow (AD-ECP-7). */
-  requestOpenTimeline?: () => Promise<void>
+  /**
+   * Optional rename action: collect a title from the user and write it through the
+   * runtime, which owns the title in the session log.
+   * @param sessionId - session the Webview asked to rename.
+   */
+  requestRename?: (sessionId: string) => Promise<void>
   /** Optional Continue action (AD-CU-8). */
   requestContinue?: () => Promise<void>
   /** Optional Stop / cancel active turn (AD-CUX-3 / I-真). */
@@ -230,8 +271,9 @@ export interface ChatPanelHostDeps {
    */
   requestBranch?: (turn: number) => Promise<void>
   /**
-   * Tier 1/2 session search (AD-CUX-9). Returns metadata hits only.
-   * @param query - optional text (tier 1) and/or path (tier 2).
+   * Session search over the metadata tiers and, when the runtime's index is
+   * enabled, its content matches (AD-CUX-9).
+   * @param query - optional text (tier 1 / tier 3) and/or path (tier 2).
    */
   requestSearchSessions?: (query: {
     text?: string
@@ -240,10 +282,12 @@ export interface ChatPanelHostDeps {
     sessionId: string
     title: string
     mtime: number
-    matchTiers: Array<1 | 2>
+    matchTiers: Array<1 | 2 | 3>
     matchField?: 'title' | 'firstUserPreview'
     firstUserPreview?: string
     matchedPath?: string
+    /** Runtime excerpt around the content match (tier 3). */
+    snippet?: string
   }>>
   /**
    * Open a search hit via history/replay — must not auto-Start (AC-52).
@@ -258,6 +302,12 @@ export interface ChatPanelHostDeps {
    * Optional「派生自 …」parent title for fork chrome (AC-63).
    */
   resolveForkParentTitle?: () => string | undefined
+  /**
+   * Optional lineage label for one Tab's chrome: the session it was derived from
+   * (fork parent or subagent parent). Absent → tabs carry no lineage hint.
+   * @param sessionId - session the Tab is bound to.
+   */
+  resolveTabParentHint?: (sessionId: string) => string | undefined
   /**
    * Host-decision panel projection (phase-4 subagent context).
    * When omitted, the Host falls back to the active Tab root projection.
@@ -429,10 +479,6 @@ export interface ChatPanelHostDeps {
    * @param sessionId - history session id.
    */
   requestOpenHistorySession?: (sessionId: string) => Promise<void>
-  /**
-   * Optional search entry from chrome (P1: open command / banner; full search UI → P2).
-   */
-  requestOpenSearch?: () => Promise<void>
 }
 
 /**
@@ -485,6 +531,9 @@ export class ChatPanelHost {
       // would keep owning the panel status line after the connection is live.
       this.pushBanner('', 'connection-clear')
       this.pushFullState()
+      // A mount-time catalog read loses the handshake race; the live transition
+      // is the retry that fills the model dropdown.
+      void this.refreshModelState()
       return
     }
     this.pushFullState()
@@ -597,6 +646,7 @@ export class ChatPanelHost {
           ? {}
           : { contextSessionId: projection.contextSessionId },
         ...projection.breadcrumb === undefined ? {} : { breadcrumb: projection.breadcrumb },
+        ...projection.subagentPrompt === undefined ? {} : { subagentPrompt: projection.subagentPrompt },
         ...continueChrome === undefined ? {} : { continue: continueChrome },
         ...newConversationChrome,
         deferredRestoreCount: this.deps.resolveDeferredRestoreCount?.() ?? 0,
@@ -657,15 +707,21 @@ export class ChatPanelHost {
     this.post({
       type: 'panel/tabs',
       activeTabId: snap.activeTabId,
-      tabs: snap.tabs.map(tab => ({
-        tabId: tab.tabId,
-        sessionId: tab.sessionId,
-        title: tab.title?.trim() || tab.sessionId.slice(0, 8),
-        status: tab.status,
-        unread: tab.unread,
-        approvalBadge: tab.approvalBadge,
-        mode: tab.mode,
-      })),
+      tabs: snap.tabs.map((tab) => {
+        // Lineage chrome: a Tab bound to a forked or subagent session says what it
+        // was derived from, so the strip distinguishes siblings without opening them.
+        const lineage = this.deps.resolveTabParentHint?.(tab.sessionId)
+        return {
+          tabId: tab.tabId,
+          sessionId: tab.sessionId,
+          title: tab.title?.trim() || tab.sessionId.slice(0, 8),
+          status: tab.status,
+          unread: tab.unread,
+          approvalBadge: tab.approvalBadge,
+          mode: tab.mode,
+          ...lineage === undefined ? {} : { parentHint: `派生自 ${lineage}` },
+        }
+      }),
 
     })
   }
@@ -799,11 +855,37 @@ export class ChatPanelHost {
   }
 
   /**
+   * Push the route a session's last request used.
+   * @param route - session and the provider/model recorded by `request/context`.
+   */
+  pushSessionRoute(route: { sessionId: string; provider: string; model: string }): void {
+    this.post({ type: 'session/route', ...route })
+  }
+
+  /**
+   * Push one session's SpecDev status (or its absence) to the Webview.
+   * @param sessionId - session whose workspace workflow this status describes.
+   * @param snapshot - status the runtime served, or null when no workflow is active.
+   */
+  pushSpecdevStatus(sessionId: string, snapshot: BridgeSpecdevSnapshot | null): void {
+    this.post({ type: 'specdev/status', sessionId, snapshot })
+  }
+
+  /**
    * Push the model catalog and current selection to the Webview.
    * @param state - providers + current selection from `model/list`.
    */
   pushModelState(state: ModelStatePayload): void {
     this.post({ type: 'model/state', ...state })
+  }
+
+  /**
+   * Re-read the model catalog and push it. A failed read keeps the last pushed
+   * state, so the dropdown never regresses to its empty form.
+   */
+  private async refreshModelState(): Promise<void> {
+    const list = await this.deps.requestModelList?.()
+    if (list !== undefined) this.pushModelState(list)
   }
 
   /**
@@ -837,6 +919,7 @@ export class ChatPanelHost {
       text?: string
       appendText?: string
       appendReasoning?: string
+      images?: MessageImage[]
       incomplete?: boolean
       streaming?: boolean
       activityStatus?: 'running' | 'done' | 'failed' | 'aborted'
@@ -854,6 +937,7 @@ export class ChatPanelHost {
       ...update.text !== undefined ? { text: update.text } : {},
       ...update.appendText !== undefined ? { appendText: update.appendText } : {},
       ...update.appendReasoning !== undefined ? { appendReasoning: update.appendReasoning } : {},
+      ...update.images !== undefined ? { images: update.images } : {},
       ...update.incomplete !== undefined ? { incomplete: update.incomplete } : {},
       ...update.streaming !== undefined ? { streaming: update.streaming } : {},
       ...update.activityStatus !== undefined
@@ -980,6 +1064,19 @@ export class ChatPanelHost {
     }
     const projection = this.deps.resolvePanelProjection?.()
     if (projection !== undefined) {
+      // A continuable child is the one writable address inside a read-only
+      // projection: the runtime delivers through the parent's live Agent, so
+      // the child's own Tab mode does not gate this line.
+      const target = projection.subagentPrompt
+      if (target !== undefined && this.deps.acceptSubagentPrompt !== undefined) {
+        try {
+          const messageId = await this.deps.acceptSubagentPrompt(target, trimmed)
+          return { ok: true, sessionId: target.childSessionId, tabId: projection.tabId, messageId }
+        } catch (error) {
+          this.pushBanner(error instanceof Error ? error.message : String(error), 'subagent-prompt')
+          return this.reject('unknown')
+        }
+      }
       if (projection.mode === 'replay') return this.reject('replay')
       // A running child session is read-only live: streaming is mirror-only (AC-71).
       if (projection.mode === 'readonly-live') return this.reject('readonly-live')
@@ -1057,10 +1154,7 @@ export class ChatPanelHost {
     if (message.type === 'ready') {
       this.pushFullState()
       // The catalog needs a bridge round-trip, so the mount path answers it after full state.
-      void (async () => {
-        const list = await this.deps.requestModelList?.()
-        if (list !== undefined) this.pushModelState(list)
-      })()
+      void this.refreshModelState()
       // Same for the settings page, so it opens onto data instead of an empty form.
       void (async () => {
         const namespaces = await this.deps.requestSettingsDescribe?.()
@@ -1108,10 +1202,6 @@ export class ChatPanelHost {
       this.pushFullState()
       return
     }
-    if (message.type === 'ui/search-open') {
-      await this.deps.requestOpenSearch?.()
-      return
-    }
     if (message.type === 'ui/delete-request') {
       await this.deps.requestDeleteConfirmed?.(message.sessionId)
       this.historyOpen = true
@@ -1119,12 +1209,8 @@ export class ChatPanelHost {
       this.pushFullState()
       return
     }
-    if (message.type === 'ui/open-timeline') {
-      await this.deps.requestOpenTimeline?.()
-      return
-    }
-    if (message.type === 'action/delete') {
-      await this.deps.requestDelete?.()
+    if (message.type === 'ui/rename-request') {
+      await this.deps.requestRename?.(message.sessionId)
       return
     }
     if (message.type === 'action/continue') {
@@ -1139,10 +1225,6 @@ export class ChatPanelHost {
       // Presentation-owned: Webview already toggled DOM + probes; Host acknowledges without reorder.
       return
     }
-    if (message.type === 'action/new-conversation') {
-      await this.deps.requestNewConversation?.()
-      return
-    }
     if (message.type === 'nav/open-subagent') {
       await this.deps.requestOpenSubagent?.(message.childSessionId)
       return
@@ -1153,6 +1235,24 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/pin-subagent') {
       await this.deps.requestPinSubagent?.(message.childSessionId)
+      return
+    }
+    if (message.type === 'action/interrupt-subagent') {
+      try {
+        await this.deps.requestInterruptSubagent?.(message.parentSessionId, message.childSessionId)
+      } catch (error) {
+        // A refused interrupt names the address: the runtime authorizes it against the live parent.
+        this.pushBanner(error instanceof Error ? error.message : String(error), 'subagent-interrupt')
+      }
+      return
+    }
+    if (message.type === 'action/specdev-gate') {
+      try {
+        await this.deps.requestSpecdevGate?.(message.sessionId, message.gate)
+      } catch (error) {
+        // A refused decision carries the runtime's own gate-order or artifact reason.
+        this.pushBanner(error instanceof Error ? error.message : String(error), 'specdev-gate')
+      }
       return
     }
     if (message.type === 'action/restore-more') {
@@ -1209,10 +1309,25 @@ export class ChatPanelHost {
       return
     }
     if (message.type === 'action/select-model') {
-      await this.deps.requestSelectModel?.(message.provider, message.model, message.reasoningEffort)
+      if (this.deps.requestSelectModel === undefined) {
+        this.pushBanner('模型切换失败：Host 未就绪', 'settings')
+        return
+      }
+      try {
+        await this.deps.requestSelectModel(message.provider, message.model, message.reasoningEffort)
+      } catch (error) {
+        // The runtime refuses an unknown route; the page must not keep showing a
+        // selection the running sessions never adopted.
+        this.pushBanner(`模型切换失败：${error instanceof Error ? error.message : String(error)}`, 'settings')
+        return
+      }
+      await this.refreshModelState()
       return
     }
     if (message.type === 'settings/open') {
+      // The page renders the model dropdown from model/state, so opening settings is
+      // also the user's retry after a catalog read lost the handshake race.
+      await this.refreshModelState()
       const namespaces = await this.deps.requestSettingsDescribe?.()
       if (namespaces === undefined) {
         // An unanswered read must not clear the page with an empty list.
@@ -1261,8 +1376,14 @@ export class ChatPanelHost {
       }
       try {
         await this.deps.acceptSend(message.text, images)
-      } catch {
-        // fail-closed: send gate already validated; surface-level errors stay in the prompt path.
+      } catch (error) {
+        // The send gate admitted this payload, so a rejection belongs to the runtime
+        // (attachment admission, transport). Saying so returns the draft to the
+        // composer instead of making the message disappear.
+        this.pushBanner(
+          `发送失败：${error instanceof Error ? error.message : String(error)}`,
+          'send-failed',
+        )
       }
       return
     }

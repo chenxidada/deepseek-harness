@@ -27,6 +27,7 @@ export type StartOrchestratorState =
 const START_ERROR_KINDS = [
   'invalid-setting',
   'missing-credentials',
+  'dsh-entry',
   'node-environment',
   'bridge-listen',
   'spawn',
@@ -39,6 +40,7 @@ const START_ERROR_KINDS = [
  * the `HostStartErrorKind` vocabulary a start throws with — `IdeSessionHost.start`
  * or the `StartHostPort` wrapping it — so a typed start failure reaches this
  * snapshot instead of being flattened into the generic member (AD-4):
+ * `dsh-entry` when no source provided a dsh CLI entry point,
  * `node-environment` when the Node pre-flight refused the spawn,
  * `invalid-setting` when a Node selection setting held a value of the wrong
  * type, `bridge-listen` when the ide-bridge socket refused to listen, `spawn`

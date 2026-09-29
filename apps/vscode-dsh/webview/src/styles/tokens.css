@@ -1463,6 +1463,26 @@ select:focus {
 }
 
 /* ===== Status line ===== */
+.dsh-specdev-card {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 16px;
+  border-top: 1px solid var(--dsh-border);
+  background: var(--dsh-surface);
+  font-size: var(--dsh-text-sm);
+  color: var(--dsh-status-fg);
+}
+
+.dsh-specdev-slug {
+  font-weight: 600;
+}
+
+.dsh-specdev-pending {
+  color: var(--vscode-charts-yellow, var(--dsh-status-fg));
+}
+
 .dsh-statusline {
   flex-shrink: 0;
   display: flex;

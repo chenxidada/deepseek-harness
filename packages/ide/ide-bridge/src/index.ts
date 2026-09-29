@@ -16,6 +16,8 @@ import { IdeBridgeClient } from './client.ts'
 import {
   AGENT_PRESETS_SERVICE,
   AGENTS_SERVICE,
+  APPROVAL_SERVICE,
+  ATTACHMENT_SERVICE,
   COMMANDS_SERVICE,
   IDE_BRIDGE_SERVICE,
   IDE_BRIDGE_SOCK_ENV,
@@ -29,12 +31,19 @@ import {
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   SESSION_PROJECTION_CACHE_SERVICE,
+  SESSION_PROJECTION_REGISTRY_SERVICE,
   SESSION_QUERY_SERVICE,
+  SESSION_TITLE_SERVICE,
   SKILLS_SERVICE,
+  SPECDEV_SERVICE,
+  SUBAGENT_SERVICE,
+  type ApprovalPolicyCapability,
+  type AttachmentReadCapability,
   type BridgeCommandSummary,
   type BridgeFrame,
   type BridgeSessionHeader,
   type BridgeSessionSummary,
+  type BridgeSubagentEntry,
   type IdeBridgeAgentPresets,
   type IdeBridgeAgents,
   type IdeBridgeCommandDescriptor,
@@ -43,6 +52,7 @@ import {
   type IdeBridgeLiveAgent,
   type IdeBridgePermissionPresets,
   type IdeBridgeSessions,
+  type IdeBridgeSessionTitles,
   type IdeBridgeSkills,
   type SdkSessionDisposeCapability,
   type SdkSessionEnsureCapability,
@@ -51,15 +61,27 @@ import {
   type SdkSessionForkCapability,
   type SdkSessionDeleteCapability,
   type SessionPersistenceReadCapability,
+  type SessionPersistenceStatCapability,
   type SessionProjectionCacheListCapability,
+  type SessionProjectionRegistryCapability,
   type SessionQueryListCapability,
+  type SessionQuerySearchCapability,
   type SettingsNamespaceView,
+  type SpecdevSessionHandle,
+  type SpecdevSessionsCapability,
+  type SpecdevStatusCapability,
+  type SubagentInterruptCapability,
+  type SubagentListCapability,
+  type SubagentListRow,
+  type SubagentPromptCapability,
 } from './types.ts'
 import { isApprovalOutcome, isAskUserQuestionAnswer } from './validate.ts'
 
 export {
   AGENT_PRESETS_SERVICE,
   AGENTS_SERVICE,
+  APPROVAL_SERVICE,
+  ATTACHMENT_SERVICE,
   COMMANDS_SERVICE,
   IDE_BRIDGE_SERVICE,
   IDE_BRIDGE_SOCK_ENV,
@@ -73,22 +95,36 @@ export {
   SESSIONS_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   SESSION_PROJECTION_CACHE_SERVICE,
+  SESSION_PROJECTION_REGISTRY_SERVICE,
   SESSION_QUERY_SERVICE,
+  SESSION_TITLE_SERVICE,
   SKILLS_SERVICE,
+  SPECDEV_SERVICE,
+  SUBAGENT_SERVICE,
   APPROVAL_OUTCOMES,
+  APPROVAL_POLICIES,
+  type ApprovalPolicyCapability,
+  type AttachmentReadCapability,
+  type BridgeApprovalPolicy,
+  type BridgeAttachmentRef,
   type BridgeCommandOutcome,
   type BridgeCommandSummary,
   type BridgeAgentPresetSummary,
   type BridgeFrame,
+  type BridgePermissionPreset,
   type BridgeSessionHeader,
+  type BridgeSessionSearchHit,
   type BridgeSessionSummary,
   type BridgeSkillSummary,
+  type BridgeSpecdevSnapshot,
+  type BridgeSubagentEntry,
   type IdeBridgeAgentPresets,
   type IdeBridgeCommands,
   type IdeBridgeConnectionState,
   type IdeBridgeLiveAgent,
   type IdeBridgePermissionPresets,
   type IdeBridgeSessions,
+  type IdeBridgeSessionTitles,
   type IdeBridgeSkills,
   type SdkSessionDisposeCapability,
   type SdkSessionEnsureCapability,
@@ -97,9 +133,15 @@ export {
   type SdkSessionForkCapability,
   type SdkSessionDeleteCapability,
   type SessionPersistenceReadCapability,
+  type SessionPersistenceStatCapability,
   type SessionProjectionCacheListCapability,
+  type SessionProjectionRegistryCapability,
   type SessionQueryListCapability,
+  type SessionQuerySearchCapability,
   type SettingsNamespaceView,
+  type SubagentInterruptCapability,
+  type SubagentListCapability,
+  type SubagentPromptCapability,
   type ApprovalOutcome,
   type AskUserQuestionAnswer,
   type AskUserQuestionItem,
@@ -483,12 +525,12 @@ async function handleHostFrame(
     await handleCancel(ctx, client, frame)
     return
   }
-  if (frame.kind === 'session/fork') {
-    await handleFork(ctx, client, frame)
+  if (frame.kind === 'session/rename') {
+    handleRename(ctx, client, frame)
     return
   }
-  if (frame.kind === 'session/continue-capability') {
-    await handleContinueCapability(ctx, client, frame)
+  if (frame.kind === 'session/fork') {
+    await handleFork(ctx, client, frame)
     return
   }
   if (frame.kind === 'session/delete') {
@@ -499,12 +541,56 @@ async function handleHostFrame(
     await handleSessionList(ctx, client, frame)
     return
   }
+  if (frame.kind === 'session/stat') {
+    await handleStat(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'projection/read') {
+    handleProjectionRead(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'session/search') {
+    await handleSessionSearch(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'attachment/read') {
+    await handleAttachmentRead(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'subagent/list') {
+    await handleSubagentList(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'subagent/prompt') {
+    await handleSubagentPrompt(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'subagent/interrupt') {
+    handleSubagentInterrupt(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'specdev/snapshot') {
+    handleSpecdevSnapshot(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'specdev/confirm-gate') {
+    await handleSpecdevConfirmGate(ctx, client, frame)
+    return
+  }
   if (frame.kind === 'permission/select') {
     handlePermissionSelect(ctx, client, frame)
     return
   }
   if (frame.kind === 'permission/list') {
     handlePermissionList(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'approval/policy') {
+    handleApprovalPolicy(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'approval/policy/set') {
+    await handleApprovalPolicySet(ctx, client, frame)
     return
   }
   if (frame.kind === 'model/list') {
@@ -606,6 +692,451 @@ async function handleSessionList(
       error: error instanceof Error ? error.message : String(error),
     })
   }
+}
+
+/**
+ * Report whether the runtime still stores one session, without reading its log.
+ * Backs the Host's staleness check for rows whose durable data another window deleted.
+ */
+async function handleStat(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'session/stat' }>,
+): Promise<void> {
+  const persistence = ctx.get(SESSION_PERSISTENCE_SERVICE) as SessionPersistenceStatCapability | undefined
+  if (persistence === undefined) {
+    client.send({
+      kind: 'session/stat/response',
+      id: frame.id,
+      ok: false,
+      error: `${SESSION_PERSISTENCE_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const snapshot = await persistence.stat(frame.sessionId)
+    client.send({
+      kind: 'session/stat/response',
+      id: frame.id,
+      ok: true,
+      found: snapshot !== undefined,
+      ...snapshot?.eventCount === undefined ? {} : { eventCount: snapshot.eventCount },
+      ...snapshot?.sizeBytes === undefined ? {} : { sizeBytes: snapshot.sizeBytes },
+    })
+  } catch (error) {
+    client.send({
+      kind: 'session/stat/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Read one consistent cut of the live session's registered client-visible units.
+ * The runtime owns every value's schema, so the IDE views what the log already
+ * produced instead of folding its own approximation.
+ */
+function handleProjectionRead(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'projection/read' }>,
+): void {
+  const registry = ctx.get(SESSION_PROJECTION_REGISTRY_SERVICE) as SessionProjectionRegistryCapability | undefined
+  const sessions = ctx.get(SESSIONS_SERVICE) as IdeBridgeSessions | undefined
+  if (registry === undefined || sessions === undefined) {
+    client.send({
+      kind: 'projection/read/response',
+      id: frame.id,
+      ok: false,
+      error: `${SESSION_PROJECTION_REGISTRY_SERVICE} or ${SESSIONS_SERVICE} service is not available`,
+    })
+    return
+  }
+  const session = sessions.get(frame.sessionId)
+  if (session === undefined) {
+    client.send({
+      kind: 'projection/read/response',
+      id: frame.id,
+      ok: false,
+      error: `unknown session "${frame.sessionId}"`,
+    })
+    return
+  }
+  try {
+    const snapshot = registry.snapshot(session, frame.keys)
+    client.send({
+      kind: 'projection/read/response',
+      id: frame.id,
+      ok: true,
+      asOfSeq: snapshot.asOfSeq,
+      values: snapshot.values,
+    })
+  } catch (error) {
+    client.send({
+      kind: 'projection/read/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Search the session corpus for content matches through the runtime's own
+ * full-text index (AC-28/29). Hits carry the runtime's excerpt, so the IDE
+ * shows what the index matched instead of reading log bodies itself.
+ */
+async function handleSessionSearch(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'session/search' }>,
+): Promise<void> {
+  const query = ctx.get(SESSION_QUERY_SERVICE) as SessionQuerySearchCapability | undefined
+  if (query === undefined) {
+    client.send({
+      kind: 'session/search/response',
+      id: frame.id,
+      ok: false,
+      error: `${SESSION_QUERY_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const page = await query.searchSessions({
+      query: frame.query,
+      ...frame.limit === undefined ? {} : { limit: frame.limit },
+    })
+    const cache = ctx.get(SESSION_PROJECTION_CACHE_SERVICE) as SessionProjectionCacheListCapability | undefined
+    client.send({
+      kind: 'session/search/response',
+      id: frame.id,
+      ok: true,
+      hits: page.items.map(item => ({
+        ...bridgeSessionSummary(item.header, cache),
+        seq: item.bestMatch.seq,
+        snippet: item.bestMatch.snippet,
+      })),
+    })
+  } catch (error) {
+    client.send({
+      kind: 'session/search/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Resolve one image a session log referenced into its stored bytes. The
+ * attachment store re-verifies the bytes against the reference, so a log
+ * entry whose object was collected fails here instead of rendering corruption.
+ */
+async function handleAttachmentRead(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'attachment/read' }>,
+): Promise<void> {
+  const store = ctx.get(ATTACHMENT_SERVICE) as AttachmentReadCapability | undefined
+  if (store === undefined) {
+    client.send({
+      kind: 'attachment/read/response',
+      id: frame.id,
+      ok: false,
+      error: `${ATTACHMENT_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const stored = await store.readImage(frame.ref)
+    client.send({
+      kind: 'attachment/read/response',
+      id: frame.id,
+      ok: true,
+      mediaType: frame.ref.mediaType,
+      data: Buffer.from(stored.data).toString('base64'),
+    })
+  } catch (error) {
+    client.send({
+      kind: 'attachment/read/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * List one session's durable subagent children, or its whole descendant tree.
+ * Enumeration is projection-backed and resumes no Agent, so a cold child is
+ * still listed; activity is re-sampled from the live registry, so a row
+ * reports work in progress rather than mere residency.
+ */
+async function handleSubagentList(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'subagent/list' }>,
+): Promise<void> {
+  const runtime = ctx.get(SUBAGENT_SERVICE) as SubagentListCapability | undefined
+  if (runtime === undefined) {
+    client.send({
+      kind: 'subagent/list/response',
+      id: frame.id,
+      ok: false,
+      error: `${SUBAGENT_SERVICE} service is not available`,
+    })
+    return
+  }
+  const agents = ctx.get(AGENTS_SERVICE) as IdeBridgeAgents | undefined
+  try {
+    const entries = frame.scope === 'descendants'
+      ? (await runtime.listDescendants(frame.sessionId)).map(row =>
+        subagentEntry(row, agents, { parentSessionId: row.parentId, depth: row.depth }))
+      : (await runtime.listChildren(frame.sessionId)).map(row => subagentEntry(row, agents))
+    client.send({
+      kind: 'subagent/list/response',
+      id: frame.id,
+      ok: true,
+      sessionLive: agents?.get(frame.sessionId) !== undefined,
+      entries,
+    })
+  } catch (error) {
+    client.send({
+      kind: 'subagent/list/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Project one classified durable row onto the wire, overriding the row's
+ * residency `activity` with the live driver's status.
+ * @param row - durable row the runtime's projection fold classified.
+ * @param agents - live-agent registry, absent when the runtime mounts none.
+ * @param position - tree position, present only for a descendant listing.
+ * @returns the wire row the Host renders.
+ */
+function subagentEntry(
+  row: SubagentListRow,
+  agents: IdeBridgeAgents | undefined,
+  position?: { readonly parentSessionId: string; readonly depth: number },
+): BridgeSubagentEntry {
+  const placed = position === undefined
+    ? {}
+    : { parentSessionId: position.parentSessionId, depth: position.depth }
+  if (row.kind === 'diagnostic') {
+    return { kind: 'diagnostic', sessionId: row.id, reason: row.reason, ...placed }
+  }
+  return {
+    kind: 'child',
+    sessionId: row.id,
+    mode: row.mode,
+    ...row.label === undefined ? {} : { label: row.label },
+    activity: agents?.get(row.id)?.status === 'running' ? 'running' : 'inactive',
+    hasChildren: row.hasChildren,
+    ...placed,
+  }
+}
+
+/**
+ * Deliver one human message to a continuable child through its live direct
+ * parent. The message identity is minted here and persisted on the accepted
+ * message, so the receipt the Host reports is the runtime's own.
+ */
+async function handleSubagentPrompt(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'subagent/prompt' }>,
+): Promise<void> {
+  const runtime = ctx.get(SUBAGENT_SERVICE) as SubagentPromptCapability | undefined
+  if (runtime === undefined) {
+    client.send({
+      kind: 'subagent/prompt/response',
+      id: frame.id,
+      ok: false,
+      error: `${SUBAGENT_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const receipt = await runtime.prompt({
+      requestId: randomUUID(),
+      parentSessionId: frame.parentSessionId,
+      childSessionId: frame.childSessionId,
+      mode: 'continuable',
+      content: [{ type: 'text', text: frame.text }],
+    })
+    client.send({
+      kind: 'subagent/prompt/response',
+      id: frame.id,
+      ok: true,
+      messageId: receipt.messageId,
+    })
+  } catch (error) {
+    client.send({
+      kind: 'subagent/prompt/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Abort one child's active turn under the durable parent's authority. The
+ * runtime admits an absent, idle, or already-completed target as a no-op, so
+ * racing a natural completion answers success rather than an error.
+ */
+function handleSubagentInterrupt(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'subagent/interrupt' }>,
+): void {
+  const runtime = ctx.get(SUBAGENT_SERVICE) as SubagentInterruptCapability | undefined
+  if (runtime === undefined) {
+    client.send({
+      kind: 'subagent/interrupt/response',
+      id: frame.id,
+      ok: false,
+      error: `${SUBAGENT_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    runtime.interrupt(frame.childSessionId, { kind: 'user', parentSessionId: frame.parentSessionId })
+    client.send({ kind: 'subagent/interrupt/response', id: frame.id, ok: true })
+  } catch (error) {
+    client.send({
+      kind: 'subagent/interrupt/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Read the SpecDev status of one live session's workspace (`.specdev`), so the
+ * IDE can show the workflow and its pending Human Gate without reading status
+ * files itself. Absence of an active workflow is a `null` snapshot, not a failure.
+ */
+function handleSpecdevSnapshot(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'specdev/snapshot' }>,
+): void {
+  const specdev = ctx.get(SPECDEV_SERVICE) as SpecdevStatusCapability | undefined
+  if (specdev === undefined) {
+    client.send({
+      kind: 'specdev/snapshot/response',
+      id: frame.id,
+      ok: false,
+      error: `${SPECDEV_SERVICE} service is not available`,
+    })
+    return
+  }
+  const session = specdevSession(ctx, frame.sessionId)
+  if (session === undefined) {
+    client.send({
+      kind: 'specdev/snapshot/response',
+      id: frame.id,
+      ok: false,
+      error: `unknown session "${frame.sessionId}"`,
+    })
+    return
+  }
+  try {
+    client.send({
+      kind: 'specdev/snapshot/response',
+      id: frame.id,
+      ok: true,
+      snapshot: specdev.snapshot(session),
+    })
+  } catch (error) {
+    client.send({
+      kind: 'specdev/snapshot/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Apply one Human Gate decision through `ctx.specdev.confirmGate`, the sole
+ * accepted write path, so gate order and durable status stay the runtime's.
+ * A refusal (wrong gate order, missing artifacts, no active workflow) is a
+ * response with `ok: false` carrying the runtime's own code and message.
+ */
+async function handleSpecdevConfirmGate(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'specdev/confirm-gate' }>,
+): Promise<void> {
+  const specdev = ctx.get(SPECDEV_SERVICE) as SpecdevStatusCapability | undefined
+  if (specdev === undefined) {
+    client.send({
+      kind: 'specdev/confirm-gate/response',
+      id: frame.id,
+      ok: false,
+      error: `${SPECDEV_SERVICE} service is not available`,
+    })
+    return
+  }
+  const session = specdevSession(ctx, frame.sessionId)
+  if (session === undefined) {
+    client.send({
+      kind: 'specdev/confirm-gate/response',
+      id: frame.id,
+      ok: false,
+      error: `unknown session "${frame.sessionId}"`,
+    })
+    return
+  }
+  try {
+    const result = await specdev.confirmGate(session, {
+      gate: frame.gate,
+      decision: frame.decision,
+      ...frame.note === undefined ? {} : { note: frame.note },
+    })
+    if (!result.ok) {
+      const detail = [result.code, result.message].filter(part => part !== undefined && part !== '')
+      client.send({
+        kind: 'specdev/confirm-gate/response',
+        id: frame.id,
+        ok: false,
+        error: detail.length === 0 ? 'gate decision refused' : detail.join(': '),
+      })
+      return
+    }
+    client.send({
+      kind: 'specdev/confirm-gate/response',
+      id: frame.id,
+      ok: true,
+      snapshot: result.snapshot ?? null,
+    })
+  } catch (error) {
+    client.send({
+      kind: 'specdev/confirm-gate/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Resolve the live session object the SpecDev service must receive.
+ * @param ctx - runtime context.
+ * @param sessionId - session identity addressed by the frame.
+ * @returns the runtime session, or `undefined` when no service or session resolves.
+ */
+function specdevSession(ctx: Context, sessionId: string): SpecdevSessionHandle | undefined {
+  return (ctx.get(SESSIONS_SERVICE) as SpecdevSessionsCapability | undefined)?.get(sessionId)
 }
 
 /**
@@ -750,6 +1281,54 @@ async function handleCancel(
 }
 
 /**
+ * Accept an explicit user title through `sessionTitle.rename`, which commits a
+ * `session/title` event with the `user` source (the only way a rename reaches the log).
+ */
+function handleRename(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'session/rename' }>,
+): void {
+  const titles = ctx.get(SESSION_TITLE_SERVICE) as IdeBridgeSessionTitles | undefined
+  const sessions = ctx.get(SESSIONS_SERVICE) as IdeBridgeSessions | undefined
+  if (titles === undefined || sessions === undefined) {
+    client.send({
+      kind: 'session/rename/response',
+      id: frame.id,
+      ok: false,
+      error: `${SESSION_TITLE_SERVICE} or ${SESSIONS_SERVICE} service is not available`,
+    })
+    return
+  }
+  const session = sessions.get(frame.sessionId)
+  if (session === undefined) {
+    client.send({
+      kind: 'session/rename/response',
+      id: frame.id,
+      ok: false,
+      error: `unknown session "${frame.sessionId}"`,
+    })
+    return
+  }
+  try {
+    const snapshot = titles.rename(session, frame.title)
+    client.send({
+      kind: 'session/rename/response',
+      id: frame.id,
+      ok: true,
+      title: snapshot.title,
+    })
+  } catch (error) {
+    client.send({
+      kind: 'session/rename/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
  * Fork a live parent session via SDK-owned `sdkSessionFork` (AD-CUX-5).
  * Returns the child session id on success.
  */
@@ -820,50 +1399,6 @@ async function handleDelete(
       error: error instanceof Error ? error.message : String(error),
     })
   }
-}
-
-/**
- * Probe continueCapability for one session (AD-CU-8).
- * Prefer same-id when resume service is mounted and the session log exists.
- */
-async function handleContinueCapability(
-  ctx: Context,
-  client: IdeBridgeClient,
-  frame: Extract<BridgeFrame, { kind: 'session/continue-capability' }>,
-): Promise<void> {
-  const resumer = ctx.get(SDK_SESSION_RESUME_SERVICE) as SdkSessionResumeCapability | undefined
-  const persistence = ctx.get(SESSION_PERSISTENCE_SERVICE) as SessionPersistenceReadCapability | undefined
-  if (resumer === undefined) {
-    client.send({
-      kind: 'session/continue-capability/response',
-      id: frame.id,
-      ok: true,
-      capability: 'unknown',
-    })
-    return
-  }
-  let sessionExists = false
-  if (persistence !== undefined) {
-    try {
-      const handle = await persistence.open(frame.sessionId, 'read')
-      try {
-        const events = await handle.read(0)
-        sessionExists = events.length > 0
-      } finally {
-        await handle.close()
-      }
-    } catch {
-      sessionExists = false
-    }
-  }
-  // T-0b Gate is same-id PASS; without a log the probe stays unknown.
-  const capability = sessionExists ? 'same-id' as const : 'unknown' as const
-  client.send({
-    kind: 'session/continue-capability/response',
-    id: frame.id,
-    ok: true,
-    capability,
-  })
 }
 
 async function applyInterruptClosers(events: unknown[]): Promise<unknown[]> {
@@ -967,13 +1502,114 @@ function handlePermissionList(
     })
     return
   }
+  const current = presets.current(session)
   client.send({
     kind: 'permission/list/response',
     id: frame.id,
     ok: true,
-    presets: [...presets.names],
-    current: presets.current(session),
+    // The table's own labels and descriptions, so a client renders what the
+    // preset declares instead of the raw keys. `custom` joins the list exactly
+    // while it is effective, mirroring the `permissions` projection.
+    options: [
+      ...presets.names.map(name => presets.optionOf(name)),
+      ...presets.names.includes(current) ? [] : [presets.optionOf(current)],
+    ],
+    current,
   })
+}
+
+/**
+ * Report one session's effective approval policy: its own last logged override,
+ * else the configured default.
+ */
+function handleApprovalPolicy(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'approval/policy' }>,
+): void {
+  const approval = ctx.get(APPROVAL_SERVICE) as ApprovalPolicyCapability | undefined
+  const sessions = ctx.get(SESSIONS_SERVICE) as IdeBridgeSessions | undefined
+  if (approval === undefined || sessions === undefined) {
+    client.send({
+      kind: 'approval/policy/response',
+      id: frame.id,
+      ok: false,
+      error: `${APPROVAL_SERVICE} or ${SESSIONS_SERVICE} service is not available`,
+    })
+    return
+  }
+  const session = sessions.get(frame.sessionId)
+  if (session === undefined) {
+    client.send({
+      kind: 'approval/policy/response',
+      id: frame.id,
+      ok: false,
+      error: `unknown session "${frame.sessionId}"`,
+    })
+    return
+  }
+  try {
+    client.send({
+      kind: 'approval/policy/response',
+      id: frame.id,
+      ok: true,
+      policy: approval.overrideOf(session) ?? approval.config.policy ?? 'ask',
+    })
+  } catch (error) {
+    client.send({
+      kind: 'approval/policy/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Switch one session's approval policy through the approval service, which logs
+ * the change durably and states it to the model on its next step.
+ */
+async function handleApprovalPolicySet(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'approval/policy/set' }>,
+): Promise<void> {
+  const approval = ctx.get(APPROVAL_SERVICE) as ApprovalPolicyCapability | undefined
+  if (approval === undefined) {
+    client.send({
+      kind: 'approval/policy/set/response',
+      id: frame.id,
+      ok: false,
+      error: `${APPROVAL_SERVICE} service is not available`,
+    })
+    return
+  }
+  try {
+    const agent = await liveAgentFor(ctx, frame.sessionId)
+    if (agent === undefined) {
+      client.send({
+        kind: 'approval/policy/set/response',
+        id: frame.id,
+        ok: false,
+        error: `session "${frame.sessionId}" has no live agent`,
+      })
+      return
+    }
+    approval.setPolicy(agent, frame.policy)
+    client.send({
+      kind: 'approval/policy/set/response',
+      id: frame.id,
+      ok: true,
+      policy: frame.policy,
+    })
+  } catch (error) {
+    client.send({
+      kind: 'approval/policy/set/response',
+      id: frame.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 /** Duck-typed LLM runtime model listing surface. */
@@ -998,6 +1634,15 @@ interface AgentDefaultModelCapability {
     model: string
     reasoningEffort?: string
   }): Promise<void>
+}
+
+/** Duck-typed live model selection surface the SDK server provides when mounted. */
+interface SdkModelSelectCapability {
+  selectModel(selection: {
+    provider: string
+    model: string
+    reasoningEffort?: string
+  }): Promise<{ applied: number }>
 }
 
 /** List provider models with their optional context window and reasoning efforts. */
@@ -1046,7 +1691,7 @@ async function handleModelList(
   }
 }
 
-/** Save the Host-selected default model, reporting a failed write to the Host. */
+/** Save the Host-selected default model and hand the route to the live runtime. */
 async function handleModelSelect(
   ctx: Context,
   client: IdeBridgeClient,
@@ -1057,12 +1702,16 @@ async function handleModelSelect(
     client.send({ kind: 'model/select/response', id: frame.id, ok: false, error: 'agentDefaultModel service is not available' })
     return
   }
+  const selection = {
+    provider: frame.provider,
+    model: frame.model,
+    ...frame.reasoningEffort !== undefined ? { reasoningEffort: frame.reasoningEffort } : {},
+  }
   try {
-    await defaultModel.saveSelection({
-      provider: frame.provider,
-      model: frame.model,
-      ...frame.reasoningEffort !== undefined ? { reasoningEffort: frame.reasoningEffort } : {},
-    })
+    // The live runtime adopts the route first: a route it rejects must not be
+    // written as the default that later sessions would fail to use.
+    await (ctx.get('sdkModelSelect') as SdkModelSelectCapability | undefined)?.selectModel(selection)
+    await defaultModel.saveSelection(selection)
     client.send({ kind: 'model/select/response', id: frame.id, ok: true })
   } catch (error) {
     client.send({ kind: 'model/select/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })

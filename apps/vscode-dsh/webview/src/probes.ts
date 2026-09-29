@@ -43,6 +43,8 @@ export interface DshProbes {
   queryMessages(): Array<{ id: string; role: string; text: string }>
   getStreaming(): boolean
   getStatusText(): string
+  /** Host-authored decision mirrors applied to this Webview (never Webview-invented). */
+  getHostDecisions(): { parentReadonly?: boolean; continueSealed?: boolean }
   queryTestIds(): string[]
   getRenderState(): RenderState
 }
@@ -118,6 +120,13 @@ export function mountDshProbes(): DshProbes {
     },
     getStatusText() {
       return getChatUiState().statusText
+    },
+    getHostDecisions() {
+      const probes = getChatUiState().hostProbes
+      return {
+        ...probes?.parentReadonly === true ? { parentReadonly: true } : {},
+        ...probes?.continueSealed === true ? { continueSealed: true } : {},
+      }
     },
     queryTestIds() {
       return queryTestIdsInDom()

@@ -6,8 +6,12 @@
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions/types'
 import {
   APPROVAL_OUTCOMES,
+  APPROVAL_POLICIES,
   type ApprovalOutcome,
+  type BridgeApprovalPolicy,
   type BridgeFrame,
+  type BridgePermissionPreset,
+  type BridgeSpecdevSnapshot,
   type SettingsNamespaceView,
 } from './types.ts'
 
@@ -132,6 +136,163 @@ function isListedSessionArray(value: unknown): value is ListedSession[] {
   return Array.isArray(value) && value.every(isListedSession)
 }
 
+/** Whether `value` is one optional non-negative count of a `session/stat/response`. */
+function isOptionalCount(value: unknown): value is number | undefined {
+  if (value === undefined) return true
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+/** Whether `value` is one optional positive page size of a `session/search`. */
+function isOptionalLimit(value: unknown): value is number | undefined {
+  if (value === undefined) return true
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+/** One hit row of a `session/search/response`. */
+type SearchHitRow = Extract<BridgeFrame, { kind: 'session/search/response'; ok: true }>['hits'][number]
+
+/** Whether `value` is one hit row of a `session/search/response`. */
+function isSearchHit(value: unknown): value is SearchHitRow {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.sessionId) || !Number.isSafeInteger(value.createdAt)) return false
+  if (!Number.isSafeInteger(value.seq) || typeof value.snippet !== 'string') return false
+  return isOptionalSessionId(value.cwd)
+    && isOptionalSessionId(value.parentSessionId)
+    && isOptionalSessionId(value.title)
+}
+
+/** Whether `value` is the hit array of a `session/search/response`. */
+function isSearchHitArray(value: unknown): value is SearchHitRow[] {
+  return Array.isArray(value) && value.every(isSearchHit)
+}
+
+/** Whether `value` is a non-empty list of projection unit keys. */
+function isUnitKeyArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.every(isNonEmptyString)
+}
+
+/** Whether `value` is one legal `subagent/list` scope. */
+function isSubagentScope(value: unknown): value is 'children' | 'descendants' {
+  return value === 'children' || value === 'descendants'
+}
+
+/** One durable image reference a session log recorded. */
+type AttachmentRefRow = Extract<BridgeFrame, { kind: 'attachment/read' }>['ref']
+
+/** Whether `value` is the reference fields one `attachment/read` may carry. */
+function isAttachmentRef(value: unknown): value is AttachmentRefRow {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.attachmentId) || !isNonEmptyString(value.mediaType)) return false
+  for (const dimension of ['width', 'height', 'bytes'] as const) {
+    const size = value[dimension]
+    if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) return false
+  }
+  if (value.name !== undefined && typeof value.name !== 'string') return false
+  return true
+}
+
+/** One entry row of a `subagent/list/response`. */
+type SubagentEntryRow = Extract<BridgeFrame, { kind: 'subagent/list/response'; ok: true }>['entries'][number]
+
+/** Whether `value` is one entry row of a `subagent/list/response`. */
+function isSubagentEntry(value: unknown): value is SubagentEntryRow {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.sessionId) || !isOptionalSessionId(value.parentSessionId)) return false
+  const { depth } = value
+  if (depth !== undefined
+    && (typeof depth !== 'number' || !Number.isSafeInteger(depth) || depth < 1)) return false
+  if (value.kind === 'child') {
+    if (value.mode !== 'one-shot' && value.mode !== 'continuable') return false
+    if (value.activity !== 'running' && value.activity !== 'inactive') return false
+    if (typeof value.hasChildren !== 'boolean') return false
+    return value.label === undefined || typeof value.label === 'string'
+  }
+  if (value.kind === 'diagnostic') {
+    return value.reason === 'corrupt'
+      || value.reason === 'unsupported'
+      || value.reason === 'unavailable'
+  }
+  return false
+}
+
+/** Whether `value` is the entry array of a `subagent/list/response`. */
+function isSubagentEntryArray(value: unknown): value is SubagentEntryRow[] {
+  return Array.isArray(value) && value.every(isSubagentEntry)
+}
+
+/** One workflow step row of a SpecDev snapshot. */
+type SpecdevStepRow = BridgeSpecdevSnapshot['steps'][string]
+
+/** One step's three role states. */
+function isSpecdevStepRow(value: unknown): value is SpecdevStepRow {
+  if (!isJsonObject(value)) return false
+  return isSpecdevStepState(value.implementer)
+    && isSpecdevStepState(value.reviewer)
+    && isSpecdevStepState(value.verifier)
+}
+
+/** Whether `value` is one legal step state. */
+function isSpecdevStepState(value: unknown): boolean {
+  return value === 'pending' || value === 'in_progress' || value === 'completed' || value === 'failed'
+}
+
+/** Whether `value` is one legal gate state. */
+function isSpecdevGateState(value: unknown): boolean {
+  return value === 'pending' || value === 'passed'
+}
+
+/** Whether `value` is one legal gate id. */
+function isSpecdevGateId(value: unknown): value is BridgeSpecdevSnapshot['pendingGate'] {
+  return value === 'hg1' || value === 'hg2' || value === 'hg3' || value === 'phase-entry'
+}
+
+/** Whether `value` is a non-negative integer count of a SpecDev snapshot. */
+function isSpecdevCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+/**
+ * Whether `value` is one SpecDev status snapshot. Optional schema-v2 fields
+ * stay optional so both versions the runtime folds remain legal on the wire.
+ */
+function isSpecdevSnapshot(value: unknown): value is BridgeSpecdevSnapshot {
+  if (!isJsonObject(value)) return false
+  if (!isSpecdevCount(value.schemaVersion) || value.schemaVersion < 1) return false
+  if (!isNonEmptyString(value.slug) || !isNonEmptyString(value.stage)) return false
+  if (value.phase !== null && !isNonEmptyString(value.phase)) return false
+  const { gates, steps } = value
+  if (!isJsonObject(gates)) return false
+  if (!isSpecdevGateState(gates.hg1) || !isSpecdevGateState(gates.hg2) || !isSpecdevGateState(gates.hg3)) {
+    return false
+  }
+  if (!isJsonObject(steps)) return false
+  for (const row of Object.values(steps)) {
+    if (!isSpecdevStepRow(row)) return false
+  }
+  if (value.pendingGate !== null && !isSpecdevGateId(value.pendingGate)) return false
+  if (!isSpecdevCount(value.loopCount)) return false
+  if (value.nextAction !== undefined && !isNonEmptyString(value.nextAction)) return false
+  const { techDebtSummary } = value
+  if (techDebtSummary !== undefined) {
+    if (!isJsonObject(techDebtSummary)) return false
+    if (!isSpecdevCount(techDebtSummary.blocking) || !isSpecdevCount(techDebtSummary.total)) return false
+  }
+  for (const field of [value.initiatingCommand, value.pipelineMode]) {
+    if (field !== undefined && !isNonEmptyString(field)) return false
+  }
+  return true
+}
+
+/** Whether `value` is a `snapshot` field that may be null when no workflow is active. */
+function isOptionalSpecdevSnapshot(value: unknown): value is BridgeSpecdevSnapshot | null {
+  return value === null || isSpecdevSnapshot(value)
+}
+
+/** Whether `value` is one legal {@link BridgeApprovalPolicy}. */
+function isApprovalPolicy(value: unknown): value is BridgeApprovalPolicy {
+  return typeof value === 'string' && (APPROVAL_POLICIES as readonly string[]).includes(value)
+}
+
 /** One command row of a `commands/list/response`. */
 type ListedCommand = Extract<BridgeFrame, { kind: 'commands/list/response'; ok: true }>['commands'][number]
 
@@ -215,11 +376,13 @@ type SessionScopedKind =
   | 'session/read-log'
   | 'session/resume'
   | 'session/cancel'
-  | 'session/continue-capability'
   | 'session/delete'
+  | 'session/stat'
+  | 'approval/policy'
   | 'permission/list'
   | 'commands/list'
   | 'skills/list'
+  | 'specdev/snapshot'
 
 /**
  * Validate the `id` + `sessionId` pair shared by the session-scoped request frames.
@@ -243,6 +406,7 @@ type OkResponseKind =
   | 'session/cancel/response'
   | 'session/delete/response'
   | 'model/select/response'
+  | 'subagent/interrupt/response'
 
 /**
  * Validate the `ok` / `error` pair shared by the plain response frames.
@@ -271,6 +435,13 @@ function isSettingsNamespaceView(value: unknown): value is SettingsNamespaceView
     return false
   }
   return true
+}
+
+/** Whether `value` is one selectable permission preset option. */
+function isPermissionPresetOption(value: unknown): value is BridgePermissionPreset {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.value) || !isNonEmptyString(value.name)) return false
+  return value.description === undefined || typeof value.description === 'string'
 }
 
 /** Whether `value` is an array of projected settings namespaces. */
@@ -352,6 +523,22 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
     case 'session/resume/response': return okResponseFrame('session/resume/response', record)
     case 'session/cancel': return sessionScopedFrame('session/cancel', record)
     case 'session/cancel/response': return okResponseFrame('session/cancel/response', record)
+    case 'session/rename': {
+      // An empty title is a Host-side mistake, not a valid clear: the runtime
+      // rejects it, so the frame never reaches it in that shape.
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
+      if (!isNonEmptyString(record.title)) return undefined
+      return { kind, id: record.id, sessionId: record.sessionId, title: record.title }
+    }
+    case 'session/rename/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isNonEmptyString(record.title)) return undefined
+        return { kind, id: record.id, ok: true, title: record.title }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
     case 'session/fork': {
       if (!isNonEmptyString(record.id) || !isNonEmptyString(record.parentSessionId)) return undefined
       const frame: Extract<BridgeFrame, { kind: 'session/fork' }> = {
@@ -385,19 +572,6 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       if (typeof record.error !== 'string') return undefined
       return { kind, id: record.id, ok: false, error: record.error }
     }
-    case 'session/continue-capability': return sessionScopedFrame('session/continue-capability', record)
-    case 'session/continue-capability/response': {
-      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
-      if (record.ok) {
-        const capability = record.capability
-        if (capability !== 'same-id' && capability !== 'derive-only' && capability !== 'unknown') {
-          return undefined
-        }
-        return { kind, id: record.id, ok: true, capability }
-      }
-      if (typeof record.error !== 'string') return undefined
-      return { kind, id: record.id, ok: false, error: record.error }
-    }
     case 'session/delete': return sessionScopedFrame('session/delete', record)
     case 'session/delete/response': return okResponseFrame('session/delete/response', record)
     case 'session/list': return idOnlyFrame('session/list', record)
@@ -406,6 +580,157 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       if (record.ok) {
         if (!isListedSessionArray(record.sessions)) return undefined
         return { kind, id: record.id, ok: true, sessions: record.sessions }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'session/search': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.query)) return undefined
+      const { limit } = record
+      if (!isOptionalLimit(limit)) return undefined
+      return { kind, id: record.id, query: record.query, ...limit === undefined ? {} : { limit } }
+    }
+    case 'session/search/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isSearchHitArray(record.hits)) return undefined
+        return { kind, id: record.id, ok: true, hits: record.hits }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'attachment/read': {
+      if (!isNonEmptyString(record.id) || !isAttachmentRef(record.ref)) return undefined
+      return { kind, id: record.id, ref: record.ref }
+    }
+    case 'attachment/read/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isNonEmptyString(record.mediaType) || typeof record.data !== 'string') return undefined
+        return { kind, id: record.id, ok: true, mediaType: record.mediaType, data: record.data }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'subagent/list': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
+      const { scope } = record
+      if (!isSubagentScope(scope)) return undefined
+      return { kind, id: record.id, sessionId: record.sessionId, scope }
+    }
+    case 'subagent/list/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (typeof record.sessionLive !== 'boolean') return undefined
+        if (!isSubagentEntryArray(record.entries)) return undefined
+        return {
+          kind,
+          id: record.id,
+          ok: true,
+          sessionLive: record.sessionLive,
+          entries: record.entries,
+        }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'subagent/prompt': {
+      if (!isNonEmptyString(record.id)) return undefined
+      if (!isNonEmptyString(record.parentSessionId) || !isNonEmptyString(record.childSessionId)) {
+        return undefined
+      }
+      if (!isNonEmptyString(record.text)) return undefined
+      return {
+        kind,
+        id: record.id,
+        parentSessionId: record.parentSessionId,
+        childSessionId: record.childSessionId,
+        text: record.text,
+      }
+    }
+    case 'subagent/prompt/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isNonEmptyString(record.messageId)) return undefined
+        return { kind, id: record.id, ok: true, messageId: record.messageId }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'subagent/interrupt': {
+      if (!isNonEmptyString(record.id)) return undefined
+      if (!isNonEmptyString(record.parentSessionId) || !isNonEmptyString(record.childSessionId)) {
+        return undefined
+      }
+      return {
+        kind,
+        id: record.id,
+        parentSessionId: record.parentSessionId,
+        childSessionId: record.childSessionId,
+      }
+    }
+    case 'subagent/interrupt/response': return okResponseFrame('subagent/interrupt/response', record)
+    case 'specdev/snapshot': return sessionScopedFrame('specdev/snapshot', record)
+    case 'specdev/snapshot/response':
+    case 'specdev/confirm-gate/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isOptionalSpecdevSnapshot(record.snapshot)) return undefined
+        return { kind, id: record.id, ok: true, snapshot: record.snapshot }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'specdev/confirm-gate': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
+      if (!isNonEmptyString(record.gate) || !isNonEmptyString(record.decision)) return undefined
+      if (record.note !== undefined && typeof record.note !== 'string') return undefined
+      return {
+        kind,
+        id: record.id,
+        sessionId: record.sessionId,
+        gate: record.gate,
+        decision: record.decision,
+        ...record.note === undefined ? {} : { note: record.note },
+      }
+    }
+    case 'session/stat': return sessionScopedFrame('session/stat', record)
+    case 'session/stat/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (typeof record.found !== 'boolean') return undefined
+        const { eventCount, sizeBytes } = record
+        if (!isOptionalCount(eventCount) || !isOptionalCount(sizeBytes)) return undefined
+        return {
+          kind,
+          id: record.id,
+          ok: true,
+          found: record.found,
+          ...eventCount === undefined ? {} : { eventCount },
+          ...sizeBytes === undefined ? {} : { sizeBytes },
+        }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'projection/read': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
+      const { keys } = record
+      if (keys !== undefined && !isUnitKeyArray(keys)) return undefined
+      return {
+        kind,
+        id: record.id,
+        sessionId: record.sessionId,
+        ...keys === undefined ? {} : { keys },
+      }
+    }
+    case 'projection/read/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        const { asOfSeq } = record
+        if (typeof asOfSeq !== 'number' || !Number.isSafeInteger(asOfSeq)) return undefined
+        if (!isJsonObject(record.values)) return undefined
+        return { kind, id: record.id, ok: true, asOfSeq, values: record.values }
       }
       if (typeof record.error !== 'string') return undefined
       return { kind, id: record.id, ok: false, error: record.error }
@@ -454,7 +779,7 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
     case 'permission/list/response': {
       if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
       if (record.ok) {
-        if (!Array.isArray(record.presets) || !record.presets.every(isNonEmptyString)) {
+        if (!Array.isArray(record.options) || !record.options.every(isPermissionPresetOption)) {
           return undefined
         }
         if (!isNonEmptyString(record.current)) return undefined
@@ -462,12 +787,28 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
           kind,
           id: record.id,
           ok: true,
-          presets: record.presets,
+          options: record.options,
           current: record.current,
         }
       }
       if (typeof record.error !== 'string') return undefined
       return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'approval/policy': return sessionScopedFrame('approval/policy', record)
+    case 'approval/policy/response':
+    case 'approval/policy/set/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isApprovalPolicy(record.policy)) return undefined
+        return { kind, id: record.id, ok: true, policy: record.policy }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'approval/policy/set': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
+      if (!isApprovalPolicy(record.policy)) return undefined
+      return { kind, id: record.id, sessionId: record.sessionId, policy: record.policy }
     }
     case 'settings/describe': return idOnlyFrame('settings/describe', record)
     case 'settings/describe/response': {
@@ -558,15 +899,6 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       }
       if (typeof record.error !== 'string') return undefined
       return { kind, id: record.id, ok: false, error: record.error }
-    }
-    case 'error': {
-      if (typeof record.message !== 'string') return undefined
-      if (record.id !== undefined && typeof record.id !== 'string') return undefined
-      return {
-        kind,
-        message: record.message,
-        ...record.id === undefined ? {} : { id: record.id },
-      }
     }
     default:
       return undefined

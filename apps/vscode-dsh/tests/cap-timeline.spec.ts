@@ -122,6 +122,38 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         expect(foreign.some(item => item.label.includes('hello'))).toBe(false)
       })
 
+      it('CAP-TIMELINE-050 projects each approval ask and decision the same way live and on replay', () => {
+        const session = 'sess-approval'
+        const log: HydratorSessionEvent[] = [
+          { type: 'approval/asked', seq: 3, data: { id: 'ap-1', toolName: 'bash', callId: 'call-9', reason: '越界写入工作区' } },
+          { type: 'approval/decided', seq: 4, data: { id: 'ap-1', outcome: 'allowed-once' } },
+          // An ask the log records without a reason keeps the plain audit line.
+          { type: 'approval/asked', seq: 5, data: { id: 'ap-2', toolName: 'write' } },
+        ]
+
+        const store = new TimelineStore()
+        for (const record of log) store.apply(event(session, record.type, record.data as Record<string, unknown>))
+        const live = store.itemsForSession(session)
+        expect(live.map(item => item.kind)).toEqual(['approval', 'approval', 'approval'])
+        expect(live[0]).toMatchObject({
+          label: 'approval bash',
+          description: 'asked · 越界写入工作区',
+          toolName: 'bash',
+          callId: 'call-9',
+        })
+        expect(live[1]).toMatchObject({ label: 'approval allowed-once', description: 'decided' })
+        expect(live[2]).toMatchObject({ label: 'approval write', description: 'asked' })
+
+        // Replay folds the same log into the same rows, so neither view hides an audit line.
+        const replayed = hydrateFromAuthoritativeLog(session, log).timelineItems
+        expect(replayed).toEqual(live.map(item => ({
+          kind: item.kind,
+          label: item.label,
+          description: item.description,
+          depth: 0,
+        })))
+      })
+
       it('CAP-TIMELINE-002 marks subagent hierarchy under the parent session tree', () => {
         const store = new TimelineStore()
         const parent = 'parent-1'
@@ -503,13 +535,11 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         expect(child?.continueHint).toMatch(/可继续/)
       })
 
-      it('CAP-TIMELINE-008 parses ui/delete-request and ui/open-timeline intents', () => {
+      it('CAP-TIMELINE-008 parses the ui/delete-request intent', () => {
         expect(parseWebviewToHostMessage({
           type: 'ui/delete-request',
           sessionId: 's1',
         })).toEqual({ type: 'ui/delete-request', sessionId: 's1' })
-        expect(parseWebviewToHostMessage({ type: 'ui/open-timeline' }))
-          .toEqual({ type: 'ui/open-timeline' })
         expect(parseWebviewToHostMessage({ type: 'ui/delete-request' })).toBeUndefined()
       })
     })

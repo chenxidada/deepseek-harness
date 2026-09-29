@@ -25,6 +25,8 @@ The IDE application as a `dsh` profile bundle stacked on [`dsh-base`](../base/RE
 
 `dsh --profile ide` auto-initializes from `PROFILE_TEMPLATES.ide` as `dsh-base` + `dsh-sdk-app` + `dsh-ide`. Launch from a Host that listens on the bridge socket and injects `DSH_IDE_BRIDGE_SOCK` before spawn. `dsh --profile ide --help` prints help without claiming stdio, matching sdk-app startup gating.
 
+The patch also restates the `session-query-sqlite` row with `openAt: first-search`, so the runtime's full-text index opens on the user's first content search instead of staying closed as it does in `dsh-base`; the IDE search box then answers content hits, snippets, and paging from the index rather than scanning log bodies itself.
+
 <a id="model-experience"></a>
 ## Model Experience
 
@@ -35,6 +37,8 @@ None, as the ide layer only inserts the Host bridge and renames the sdk-app prof
 No additional model-request effect beyond the stacked sdk-app and base layers.
 
 ## Known Limitations and Deferred Work
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - **User patches can violate mutual exclusion** — profile and `--patch` overlays are trusted; the shipped bundle asserts absence of Web UI answerer rows, but cannot contain arbitrary later inserts.
 - **Replaceability scope** — transport / UI presenter / permission-presets are swappable without `agent-loop` edits; Spec/hooks product packs remain out of scope. See [`dsh-ide-bridge` replaceability](../../ide/ide-bridge/README.md#replaceability-contract-ad-8).

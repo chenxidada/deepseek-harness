@@ -141,11 +141,14 @@ Step 5 has to produce the model's own `meta.diffs`, and the shipped orchestrator
 | `dsh.closeConversation` | Close (unload) the active Tab — **does not** dispose the session |
 | `dsh.deleteConversation` | Explicitly delete: confirm → `session/dispose` + clear index. Offline → **「Host 连接后可删除」** (no fake delete, no auto-start) |
 | `dsh.deleteHistory` | Delete a history-list session (`session/dispose` + clear index). Offline → **「Host 连接后可删除」** (no fake delete, no auto-start) |
+| `dsh.deleteSessionFromDisk` | Delete the active Tab's session from disk on the confirmed path, without its own prompt (scripting / palette entry). Offline → **「Host 连接后可删除」** |
 | `dsh.continueConversation` | Continue this session (auto-starts Host if needed) |
 | `dsh.restoreMoreTabs` | Hydrate deferred restore Tabs（「查看更多 / 全部恢复」） |
 | `dsh.promptActiveConversation` | Prompt the active Tab's `sessionId` (tests / scripting; auto-starts if needed) |
 | `dsh.insertFileReference` | Type a workspace-relative path and insert its `@path` mention into the composer (auto-starts if needed) |
 | `dsh.selectPermissionPreset` | Pick a permission-presets name for the active Tab |
+| `dsh.selectModel` | Keyboard entry (ctrl+shift+alt+m) to model selection: reveal the Conversation panel and push the settings state its model dropdown renders |
+| `dsh.triggerCompact` | Run `/compact` on the active Tab — the same path as the composer's 压缩上下文 button. No active Tab → notice, no runtime call |
 | `dsh.reviewWorkspaceDiffs` | Open post-hoc Diff for write/edit paths on the active Tab |
 | `dsh.openTimelineDiff` | Open Diff from a Timeline write row (AC-25) |
 | `dsh.showPanel` | Reveal Conversation view / connection error details (**does not** force Start) |
@@ -157,8 +160,8 @@ Step 5 has to produce the model's own `meta.diffs`, and the shipped orchestrator
 | Class | Commands | Auto Start? |
 |---|---|:---:|
 | **Start** | `dsh.startSession` | ✅ (`command-start`) |
-| **Send / New** | `dsh.newConversation`, `dsh.promptActiveConversation`, `dsh.continueConversation`, `dsh.insertFileReference`; Webview `action/new-conversation` / `action/continue` | ✅ (`command-send`) |
-| **Query / browse** | `dsh.openHistory`, `dsh.searchSessions`, `dsh.switchConversation`, History/Conversations refresh | ❌ |
+| **Send / New** | `dsh.newConversation`, `dsh.promptActiveConversation`, `dsh.continueConversation`, `dsh.insertFileReference`; Webview `ui/tab-new` / `action/continue` | ✅ (`command-send`) |
+| **Query / browse** | `dsh.openHistory`, `dsh.searchSessions`, `dsh.listSubagents`, `dsh.specdevStatus`, `dsh.switchConversation`, History/Conversations refresh | ❌ |
 | **Delete** | `dsh.deleteConversation`, `dsh.deleteHistory` | ❌ — offline shows「Host 连接后可删除」; never fake-deletes authority |
 | **Panel / settings** | `dsh.showPanel`, `dsh.openExtensionSettings` | ❌ (show details / settings only) |
 | **Status bar** | `dsh.statusBarAction` | ✅ (`status-bar`) |
@@ -213,8 +216,11 @@ Registered **only** when `VSCODE_DSH_TEST=1` or when `activate` receives an inje
 | View id | Contents |
 |---|---|
 | `dsh.history` | Session history list — this Extension's own WebviewView: session rows (open / row menu), New conversation, empty state |
+| `dsh.todo` | Todo list of the active conversation Tab — one `TreeView` row per written todo item, with 进行中 / 已完成 as the row description |
 
-The conversation surface is the editor panel (`dsh.editorChat`); the Activity Bar contributes History only. The Activity Bar icon reveals this view and nothing else, so the first reveal also opens the Conversation Panel — once per window, and only when the user opens the container.
+The conversation surface is the editor panel (`dsh.editorChat`); the Activity Bar container `dsh` contributes History and Todo. History's first reveal also opens the Conversation Panel — once per window, and only when the user opens the container.
+
+The Todo view renders `todoItemsForSession` of the active Tab, so it is empty without an active session and shows the list after the model writes one; the controller refreshes it on todo writes and Tab switches.
 
 History is a **WebviewView**, not a `TreeView`: the row typography and the row menu belong to this Extension, and VS Code owns the native tree's font. Each row shows the recorded time and the first user text, plus 「可继续」when the runtime can resume that session. Right-clicking a row (or `Shift+F10` with the row focused) opens the row menu — **打开回放 / 继续本会话 / 复制会话 ID / 删除会话**. **继续本会话** is disabled for a session the runtime cannot resume, and it opens the replay first, then continues, because continue acts on the active Tab. **删除会话** asks for confirmation and then takes the same confirmed delete path as the panel. With no eligible sessions the view renders its own empty state, whose buttons start a conversation or open the panel.
 
@@ -259,7 +265,7 @@ The composer's 压缩上下文 button and `dsh.triggerCompact` take the same pat
 ## Conversation chrome —「新建会话」(AD-CR-8)
 
 - Top-bar **「新建会话」** is the **product primary** entry (always labeled; narrow sidebar may wrap or use overflow「⋯」where「新建会话」is the first menu item).
-- Click → Webview `action/new-conversation` → same Host path as `dsh.newConversation`: offline **Start first** (`ensureHostForSend` / `command-send`), wait banner「正在连接到 Host…」(composer **not** sendable `live`), then `newConversationOrReuseEmpty` + reveal Conversation.
+- Click → Webview `ui/tab-new` → same Host path as `dsh.newConversation`: offline **Start first** (`ensureHostForSend` / `command-send`), wait banner「正在连接到 Host…」(composer **not** sendable `live`), then `newConversationOrReuseEmpty` + reveal Conversation.
 - Keyboard `contributes.keybindings` bind **`ctrl+shift+alt+n`** / mac **`cmd+shift+alt+n`** to `dsh.newConversation` (same ensureHost / Start-first path as the chrome button). Users may override or disable the chord in VS Code Keyboard Shortcuts. Keybindings are a **Must secondary** entry and must **not** replace or weaken the top-bar「新建会话」button (AC-34).
 - Webview `action/continue` also auto-starts Host when offline (same send-class path as `dsh.continueConversation`).
 
@@ -274,6 +280,46 @@ The composer's 压缩上下文 button and `dsh.triggerCompact` take the same pat
 - Diff is available only when `meta.diffs` carries recoverable snapshots (`path` + `newText` + `oldText: string|null`). Patch-only (missing `oldText`) → Diff unavailable with explanation.
 - Both Diff sides open as virtual `dsh-diff` documents from the log — **never** current workspace files as before/after.
 - Incomplete / interrupted turns are marked on messages (`incomplete`) with notice「已停止/未完成」(AC-77).
+
+## Subagent control (AD-CU-11)
+
+- `dsh.listSubagents` shows one session's roster from bridge `subagent/list` — `children` by default, `'descendants'` for the whole subtree with `parentId` / `depth`. Each row carries `mode` (`one-shot` / `continuable`), an `activity` re-sampled from the live Agent registry, and unreadable children appear as「无法识别 <id8>」.
+- A `continuable` child accepts messages only while its parent Tab is live and the child is not running: the composer then shows「发送给子代理 <label>」and delivers through bridge `subagent/prompt`. One-shot children, running children, replay parents, and an unreachable bridge keep the composer read-only.
+- A running child card offers「中断」→ bridge `subagent/interrupt` under the parent session's authority; one-shot and continuable children are both interruptible.
+- Runtime refusals (parent not live, child not continuable, service unavailable) surface verbatim in a banner.
+
+## SpecDev status (AD-CU-12)
+
+- The workspace's Spec-driven workflow (`.specdev`) is durable state, not log state, so the panel reads it from the runtime: a status card appears whenever bridge `specdev/snapshot` answers a workflow, and no card appears when the workspace has none.
+- The card shows slug, stage/phase, the HG-1/2/3 marks, the tech-debt counts, and the pending gate. Activation and every `specdev/*` event re-read it, so a workflow that advanced elsewhere stops owning the card.
+- `dsh.specdevStatus` shows the same status as rows (gates, each phase's implementer/reviewer/verifier, loop count, next action) with「确认门禁 <gate>…」as the first row when a gate is pending.
+- A decision is chosen in a QuickPick (通过 / 驳回 / 推迟, plus an optional note for the latter two) and applied through bridge `specdev/confirm-gate`; the card's「确认门禁…」button takes the same path. Gate order, artifact preconditions, and the durable write stay the runtime's, so a refusal (`SPECDEV_GATE_NOT_PENDING: …`) is shown verbatim while an accepted decision replaces the card's status.
+
+## Images in the conversation
+
+- The composer attaches an image from a paste, a drop, or a file, and declares the media type its bytes carry rather than the platform's `File.type`, because the runtime refuses a declaration its own detection contradicts.
+- A route whose model catalog omits `image` sends the attachment to the model as placeholder text, and the composer says so above the send button before the send.
+- The sent image is echoed in the user bubble from the composer's own bytes. A session folded from the log carries only the attachment reference, so each of its images is read back through bridge `attachment/read` and patched onto the bubble; an image the store no longer holds leaves that bubble without it instead of failing the replay.
+- A refused send returns the text and the attachments to the composer behind a `send-failed` banner, so the runtime's own message is what the user reads.
+
+## Runtime resolution
+
+The Extension ships no runtime: its own bundle carries the Extension's code, and the session subprocess runs the `dsh` the environment provides. Two inputs are resolved per window, at activation and again at every start.
+
+- **Node.js** — `DSH_NODE_BIN`, then the `dsh.nodeBin` setting, then the Extension Host's own Node.js, validated against `^22.19.0 || >=24.0.0` and the APIs the harness needs.
+- **The dsh CLI entry point** — the `dshBin` start option, then `DSH_BIN`, then the `dsh.cliPath` setting, then the workspace's own `@deepseek-ai/dsh` dependency, then a dsh checkout above the workspace, then the `dsh` executable on `PATH`, then this Extension's own installation.
+
+A configured path (`DSH_BIN`, `dsh.cliPath`) that does not exist fails the resolution instead of falling through to an automatic source, and the diagnostic names both levers.
+
+Activation writes one line to the **DeepSeek Harness** output channel: the entry, the source that provided it, and the version its package declares, beside this Extension's own version and without blocking on a mismatch. A window where no source provides a runtime says so at load time, naming every source it probed; a start in such a window fails as `dsh-entry` before any bridge socket is opened.
+
+```
+dsh runtime check failed — source: none
+Probed: DSH_BIN environment variable (unset); dsh.cliPath setting (unset); the workspace @deepseek-ai/dsh dependency (no @deepseek-ai/dsh in a node_modules at /work/app or above); the dsh executable on PATH (no dsh executable on PATH)
+Actual: no source provided a dsh CLI entry point
+Expected: a dsh CLI entry point: the "dsh" bin file of @deepseek-ai/dsh (lib/bin.js)
+Fix: install @deepseek-ai/dsh in the workspace so its "dsh" bin is found automatically, or set DSH_BIN or the dsh.cliPath setting to one
+```
 
 ## Dual channel
 

@@ -110,7 +110,7 @@ describe('ide-bridge session/read-log (T-0a / AD-CU-2)', () => {
       const dir = dirs.pop()!
       await rm(dir, { recursive: true, force: true })
     }
-    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    if (previousSock === undefined) Reflect.deleteProperty(process.env, IDE_BRIDGE_SOCK_ENV)
     else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
   })
 
@@ -172,7 +172,7 @@ describe('ide-bridge session/resume (GAP-001 / Continue)', () => {
       const dir = dirs.pop()!
       await rm(dir, { recursive: true, force: true })
     }
-    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    if (previousSock === undefined) Reflect.deleteProperty(process.env, IDE_BRIDGE_SOCK_ENV)
     else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
   })
 
@@ -213,22 +213,11 @@ describe('ide-bridge session/resume (GAP-001 / Continue)', () => {
     await host.close()
   })
 
-  it('parses session/resume and continue-capability frames', () => {
+  it('parses session/resume and session/cancel frames', () => {
     expect(parseBridgeFrame('{"kind":"session/resume","id":"1","sessionId":"s"}')).toEqual({
       kind: 'session/resume',
       id: '1',
       sessionId: 's',
-    })
-    expect(validateBridgeFrame({
-      kind: 'session/continue-capability/response',
-      id: '1',
-      ok: true,
-      capability: 'same-id',
-    })).toEqual({
-      kind: 'session/continue-capability/response',
-      id: '1',
-      ok: true,
-      capability: 'same-id',
     })
     expect(parseBridgeFrame('{"kind":"session/cancel","id":"c1","sessionId":"s"}')).toEqual({
       kind: 'session/cancel',
@@ -255,7 +244,7 @@ describe('ide-bridge session/dispose (AC-8 / Q-3)', () => {
       const dir = dirs.pop()!
       await rm(dir, { recursive: true, force: true })
     }
-    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    if (previousSock === undefined) Reflect.deleteProperty(process.env, IDE_BRIDGE_SOCK_ENV)
     else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
   })
 
@@ -306,7 +295,7 @@ describe('ide-bridge session/cancel (AD-CUX-3 / I-真)', () => {
       const dir = dirs.pop()!
       await rm(dir, { recursive: true, force: true })
     }
-    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    if (previousSock === undefined) Reflect.deleteProperty(process.env, IDE_BRIDGE_SOCK_ENV)
     else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
   })
 
@@ -357,7 +346,7 @@ describe('ide-bridge session/fork (AD-CUX-5)', () => {
       const dir = dirs.pop()!
       await rm(dir, { recursive: true, force: true })
     }
-    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    if (previousSock === undefined) Reflect.deleteProperty(process.env, IDE_BRIDGE_SOCK_ENV)
     else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
   })
 
@@ -421,7 +410,7 @@ describe('ide-bridge approval / user-questions round-trip (AC-16/17/20)', () => 
     while (dirs.length > 0) {
       await rm(dirs.pop()!, { recursive: true, force: true })
     }
-    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    if (previousSock === undefined) Reflect.deleteProperty(process.env, IDE_BRIDGE_SOCK_ENV)
     else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
   })
 
@@ -502,13 +491,13 @@ describe('ide-bridge fail-closed (AC-19)', () => {
     while (dirs.length > 0) {
       await rm(dirs.pop()!, { recursive: true, force: true })
     }
-    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    if (previousSock === undefined) Reflect.deleteProperty(process.env, IDE_BRIDGE_SOCK_ENV)
     else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
   })
 
   it('returns unavailable when bridge env is unset (no next)', async () => {
     previousSock = process.env[IDE_BRIDGE_SOCK_ENV]
-    delete process.env[IDE_BRIDGE_SOCK_ENV]
+    Reflect.deleteProperty(process.env, IDE_BRIDGE_SOCK_ENV)
     const ctx = new Context()
     apply(ctx, {})
     let nextCalled = false
@@ -588,7 +577,7 @@ describe('ide-bridge permission RPC (AC-21/22)', () => {
     while (dirs.length > 0) {
       await rm(dirs.pop()!, { recursive: true, force: true })
     }
-    if (previousSock === undefined) delete process.env[IDE_BRIDGE_SOCK_ENV]
+    if (previousSock === undefined) Reflect.deleteProperty(process.env, IDE_BRIDGE_SOCK_ENV)
     else process.env[IDE_BRIDGE_SOCK_ENV] = previousSock
   })
 

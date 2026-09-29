@@ -14,7 +14,10 @@ import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  AGENTS_SERVICE,
   apply,
+  APPROVAL_SERVICE,
+  ATTACHMENT_SERVICE,
   IDE_BRIDGE_SOCK_ENV,
   IdeBridgeClient,
   IdeBridgeHostServer,
@@ -28,7 +31,11 @@ import {
   SDK_SESSION_RESUME_SERVICE,
   SESSION_PERSISTENCE_SERVICE,
   SESSION_PROJECTION_CACHE_SERVICE,
+  SESSION_PROJECTION_REGISTRY_SERVICE,
   SESSION_QUERY_SERVICE,
+  SESSION_TITLE_SERVICE,
+  SPECDEV_SERVICE,
+  SUBAGENT_SERVICE,
   validateBridgeFrame,
   type BridgeFrame,
   type IdeBridgeConnectionState,
@@ -517,6 +524,22 @@ describe('ide-bridge remaining frame-kind validation (AC-31)', () => {
     expect(validateBridgeFrame({ kind: 'session/cancel/response', ok: true })).toBeUndefined()
   })
 
+  it('validates session/rename frames and rejects an empty title', () => {
+    expect(validateBridgeFrame({ kind: 'session/rename', id: 'rn-1', sessionId: 'sess-1', title: '新标题' }))
+      .toEqual({ kind: 'session/rename', id: 'rn-1', sessionId: 'sess-1', title: '新标题' })
+    expect(validateBridgeFrame({ kind: 'session/rename', id: 'rn-1', sessionId: 'sess-1' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/rename', id: 'rn-1', sessionId: 'sess-1', title: '' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/rename', id: 'rn-1', title: '新标题' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/rename', sessionId: 'sess-1', title: '新标题' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/rename/response', id: 'rn-1', ok: true, title: '新标题' }))
+      .toEqual({ kind: 'session/rename/response', id: 'rn-1', ok: true, title: '新标题' })
+    expect(validateBridgeFrame({ kind: 'session/rename/response', id: 'rn-1', ok: false, error: 'not live' }))
+      .toEqual({ kind: 'session/rename/response', id: 'rn-1', ok: false, error: 'not live' })
+    expect(validateBridgeFrame({ kind: 'session/rename/response', id: 'rn-1', ok: true })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/rename/response', id: 'rn-1', ok: true, title: '' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/rename/response', id: 'rn-1', ok: false })).toBeUndefined()
+  })
+
   it('validates session/fork frames and their boundary options', () => {
     expect(validateBridgeFrame({ kind: 'session/fork', id: 'f-1', parentSessionId: 'parent-1' }))
       .toEqual({ kind: 'session/fork', id: 'f-1', parentSessionId: 'parent-1' })
@@ -554,46 +577,6 @@ describe('ide-bridge remaining frame-kind validation (AC-31)', () => {
     expect(validateBridgeFrame({ kind: 'session/fork/response', id: 'f-1', ok: 'yes' })).toBeUndefined()
   })
 
-  it('validates continue-capability frames and their capability vocabulary', () => {
-    expect(validateBridgeFrame({ kind: 'session/continue-capability', id: 'cc-1', sessionId: 'sess-1' }))
-      .toEqual({ kind: 'session/continue-capability', id: 'cc-1', sessionId: 'sess-1' })
-    expect(validateBridgeFrame({ kind: 'session/continue-capability', id: 'cc-1' })).toBeUndefined()
-    expect(validateBridgeFrame({
-      kind: 'session/continue-capability/response',
-      id: 'cc-1',
-      ok: true,
-      capability: 'derive-only',
-    })).toEqual({
-      kind: 'session/continue-capability/response',
-      id: 'cc-1',
-      ok: true,
-      capability: 'derive-only',
-    })
-    expect(validateBridgeFrame({
-      kind: 'session/continue-capability/response',
-      id: 'cc-1',
-      ok: true,
-      capability: 'guess',
-    })).toBeUndefined()
-    expect(validateBridgeFrame({
-      kind: 'session/continue-capability/response',
-      id: 'cc-1',
-      ok: false,
-      error: 'probe failed',
-    })).toEqual({
-      kind: 'session/continue-capability/response',
-      id: 'cc-1',
-      ok: false,
-      error: 'probe failed',
-    })
-    expect(validateBridgeFrame({ kind: 'session/continue-capability/response', id: 'cc-1', ok: false })).toBeUndefined()
-    expect(validateBridgeFrame({
-      kind: 'session/continue-capability/response',
-      ok: true,
-      capability: 'unknown',
-    })).toBeUndefined()
-  })
-
   it('validates permission frames', () => {
     expect(validateBridgeFrame({ kind: 'permission/select', id: 'p-1', sessionId: 'sess-1', preset: 'workspace-write' }))
       .toEqual({ kind: 'permission/select', id: 'p-1', sessionId: 'sess-1', preset: 'workspace-write' })
@@ -614,13 +597,13 @@ describe('ide-bridge remaining frame-kind validation (AC-31)', () => {
       kind: 'permission/list/response',
       id: 'pl-1',
       ok: true,
-      presets: ['workspace-write'],
+      options: [{ value: 'workspace-write', name: 'Workspace write', description: '写入工作区' }],
       current: 'workspace-write',
     })).toEqual({
       kind: 'permission/list/response',
       id: 'pl-1',
       ok: true,
-      presets: ['workspace-write'],
+      options: [{ value: 'workspace-write', name: 'Workspace write', description: '写入工作区' }],
       current: 'workspace-write',
     })
     expect(validateBridgeFrame({ kind: 'permission/list/response', id: 'pl-1', ok: false, error: 'no sessions' }))
@@ -629,28 +612,26 @@ describe('ide-bridge remaining frame-kind validation (AC-31)', () => {
       kind: 'permission/list/response',
       id: 'pl-1',
       ok: true,
-      presets: 'workspace-write',
+      options: 'workspace-write',
       current: 'workspace-write',
     })).toBeUndefined()
     expect(validateBridgeFrame({
       kind: 'permission/list/response',
       id: 'pl-1',
       ok: true,
-      presets: [''],
+      options: [{ value: '', name: 'Workspace write' }],
       current: 'workspace-write',
     })).toBeUndefined()
-    expect(validateBridgeFrame({ kind: 'permission/list/response', id: 'pl-1', ok: true, presets: ['workspace-write'] })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'permission/list/response',
+      id: 'pl-1',
+      ok: true,
+      options: [{ value: 'workspace-write', name: '' }],
+      current: 'workspace-write',
+    })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'permission/list/response', id: 'pl-1', ok: true, options: [{ value: 'workspace-write', name: 'W' }] })).toBeUndefined()
     expect(validateBridgeFrame({ kind: 'permission/list/response', id: 'pl-1', ok: false })).toBeUndefined()
-    expect(validateBridgeFrame({ kind: 'permission/list/response', ok: true, presets: [], current: 'workspace-write' })).toBeUndefined()
-  })
-
-  it('accepts error frames with and without an id', () => {
-    expect(validateBridgeFrame({ kind: 'error', message: 'Host failed' }))
-      .toEqual({ kind: 'error', message: 'Host failed' })
-    expect(validateBridgeFrame({ kind: 'error', id: 'e-1', message: 'Host failed' }))
-      .toEqual({ kind: 'error', id: 'e-1', message: 'Host failed' })
-    expect(validateBridgeFrame({ kind: 'error', id: 7, message: 'Host failed' })).toBeUndefined()
-    expect(validateBridgeFrame({ kind: 'error' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'permission/list/response', ok: true, options: [], current: 'workspace-write' })).toBeUndefined()
   })
 })
 
@@ -801,6 +782,679 @@ describe('ide-bridge session/list frames', () => {
         id: 'sl-text',
         ok: false,
         error: 'persistence is read-only',
+      })
+    })
+  })
+})
+
+describe('ide-bridge approval/policy frames', () => {
+  it('validates both requests, both responses, and the policy vocabulary', () => {
+    expect(validateBridgeFrame({ kind: 'approval/policy', id: 'ap-1', sessionId: 'sess-1' }))
+      .toEqual({ kind: 'approval/policy', id: 'ap-1', sessionId: 'sess-1' })
+    expect(validateBridgeFrame({ kind: 'approval/policy', id: 'ap-1' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'approval/policy/response', id: 'ap-1', ok: true, policy: 'never' }))
+      .toEqual({ kind: 'approval/policy/response', id: 'ap-1', ok: true, policy: 'never' })
+    // A policy outside the closed vocabulary never reaches the runtime.
+    expect(validateBridgeFrame({ kind: 'approval/policy/response', id: 'ap-1', ok: true, policy: 'maybe' }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'approval/policy/response', id: 'ap-1', ok: false, error: 'no store' }))
+      .toEqual({ kind: 'approval/policy/response', id: 'ap-1', ok: false, error: 'no store' })
+
+    expect(validateBridgeFrame({
+      kind: 'approval/policy/set',
+      id: 'ap-2',
+      sessionId: 'sess-1',
+      policy: 'ask',
+    })).toEqual({ kind: 'approval/policy/set', id: 'ap-2', sessionId: 'sess-1', policy: 'ask' })
+    expect(validateBridgeFrame({ kind: 'approval/policy/set', id: 'ap-2', sessionId: 'sess-1', policy: 'sometimes' }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'approval/policy/set', id: 'ap-2', policy: 'ask' })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'approval/policy/set/response',
+      id: 'ap-2',
+      ok: true,
+      policy: 'never',
+    })).toEqual({ kind: 'approval/policy/set/response', id: 'ap-2', ok: true, policy: 'never' })
+    expect(validateBridgeFrame({ kind: 'approval/policy/set/response', id: 'ap-2', ok: false, error: 'refused' }))
+      .toEqual({ kind: 'approval/policy/set/response', id: 'ap-2', ok: false, error: 'refused' })
+    expect(validateBridgeFrame({ kind: 'approval/policy/set/response', id: 'ap-2', ok: true })).toBeUndefined()
+  })
+
+  it('reads the session override, the configured default, and reports unknown sessions', async () => {
+    const session = { id: 'sess-policy' }
+    await withBridge((ctx) => {
+      ctx.provide(APPROVAL_SERVICE, { config: { policy: 'ask' }, overrideOf: () => undefined, setPolicy: () => {} })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'approval/policy', id: 'ap-nosessions', sessionId: 'sess-policy' }))
+        .toEqual({
+          kind: 'approval/policy/response',
+          id: 'ap-nosessions',
+          ok: false,
+          error: 'approval or sessions service is not available',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: (id: string) => id === session.id ? session : undefined })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'approval/policy', id: 'ap-noapproval', sessionId: 'sess-policy' }))
+        .toEqual({
+          kind: 'approval/policy/response',
+          id: 'ap-noapproval',
+          ok: false,
+          error: 'approval or sessions service is not available',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: (id: string) => id === session.id ? session : undefined })
+      ctx.provide(APPROVAL_SERVICE, {
+        config: { policy: 'ask' },
+        overrideOf: () => undefined,
+        setPolicy: () => {},
+      })
+    }, async (harness) => {
+      // Without a logged override the configured default answers.
+      expect(await roundTrip(harness, { kind: 'approval/policy', id: 'ap-default', sessionId: 'sess-policy' }))
+        .toEqual({ kind: 'approval/policy/response', id: 'ap-default', ok: true, policy: 'ask' })
+      expect(await roundTrip(harness, { kind: 'approval/policy', id: 'ap-unknown', sessionId: 'sess-other' }))
+        .toEqual({
+          kind: 'approval/policy/response',
+          id: 'ap-unknown',
+          ok: false,
+          error: 'unknown session "sess-other"',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: (id: string) => id === session.id ? session : undefined })
+      ctx.provide(APPROVAL_SERVICE, {
+        config: {},
+        overrideOf: () => 'never',
+        setPolicy: () => {},
+      })
+    }, async (harness) => {
+      // A logged override outranks the configured default, which the schema may omit.
+      expect(await roundTrip(harness, { kind: 'approval/policy', id: 'ap-override', sessionId: 'sess-policy' }))
+        .toEqual({ kind: 'approval/policy/response', id: 'ap-override', ok: true, policy: 'never' })
+    })
+  })
+
+  it('switches the policy of a live agent and reports a session without one', async () => {
+    const applied: Array<[string, string]> = []
+    const agent = { session: { id: 'sess-policy' } }
+    await withBridge((ctx) => {
+      ctx.provide(APPROVAL_SERVICE, {
+        config: { policy: 'ask' },
+        overrideOf: () => undefined,
+        setPolicy: (target: unknown, policy: string) => {
+          applied.push([(target as { session: { id: string } }).session.id, policy])
+        },
+      })
+      ctx.provide(AGENTS_SERVICE, { get: (id: string) => id === 'sess-policy' ? agent : undefined })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'approval/policy/set',
+        id: 'aps-live',
+        sessionId: 'sess-policy',
+        policy: 'never',
+      })).toEqual({ kind: 'approval/policy/set/response', id: 'aps-live', ok: true, policy: 'never' })
+      expect(applied).toEqual([['sess-policy', 'never']])
+
+      expect(await roundTrip(harness, {
+        kind: 'approval/policy/set',
+        id: 'aps-dead',
+        sessionId: 'sess-unknown',
+        policy: 'never',
+      })).toEqual({
+        kind: 'approval/policy/set/response',
+        id: 'aps-dead',
+        ok: false,
+        error: 'session "sess-unknown" has no live agent',
+      })
+    })
+
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'approval/policy/set',
+        id: 'aps-nosvc',
+        sessionId: 'sess-policy',
+        policy: 'ask',
+      })).toEqual({
+        kind: 'approval/policy/set/response',
+        id: 'aps-nosvc',
+        ok: false,
+        error: 'approval service is not available',
+      })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(APPROVAL_SERVICE, {
+        config: { policy: 'ask' },
+        overrideOf: () => undefined,
+        setPolicy: () => {
+          throw new Error('policy switch refused outside a live turn')
+        },
+      })
+      ctx.provide(AGENTS_SERVICE, { get: () => agent })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'approval/policy/set',
+        id: 'aps-error',
+        sessionId: 'sess-policy',
+        policy: 'never',
+      })).toEqual({
+        kind: 'approval/policy/set/response',
+        id: 'aps-error',
+        ok: false,
+        error: 'policy switch refused outside a live turn',
+      })
+    })
+  })
+})
+
+describe('ide-bridge session/stat frames', () => {
+  it('validates the request and both response arms', () => {
+    expect(validateBridgeFrame({ kind: 'session/stat', id: 'st-1', sessionId: 'sess-1' })).toEqual({
+      kind: 'session/stat',
+      id: 'st-1',
+      sessionId: 'sess-1',
+    })
+    expect(validateBridgeFrame({ kind: 'session/stat', id: 'st-1' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/stat', id: 'st-1', sessionId: '' })).toBeUndefined()
+
+    expect(validateBridgeFrame({
+      kind: 'session/stat/response',
+      id: 'st-1',
+      ok: true,
+      found: true,
+      eventCount: 12,
+      sizeBytes: 4096,
+    })).toEqual({
+      kind: 'session/stat/response',
+      id: 'st-1',
+      ok: true,
+      found: true,
+      eventCount: 12,
+      sizeBytes: 4096,
+    })
+    // A backend that reports no size still answers with its presence.
+    expect(validateBridgeFrame({ kind: 'session/stat/response', id: 'st-1', ok: true, found: false }))
+      .toEqual({ kind: 'session/stat/response', id: 'st-1', ok: true, found: false })
+    expect(validateBridgeFrame({ kind: 'session/stat/response', id: 'st-1', ok: true })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'session/stat/response',
+      id: 'st-1',
+      ok: true,
+      found: true,
+      eventCount: -1,
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'session/stat/response',
+      id: 'st-1',
+      ok: true,
+      found: true,
+      sizeBytes: 1.5,
+    })).toBeUndefined()
+
+    expect(validateBridgeFrame({ kind: 'session/stat/response', id: 'st-1', ok: false, error: 'no store' }))
+      .toEqual({ kind: 'session/stat/response', id: 'st-1', ok: false, error: 'no store' })
+    expect(validateBridgeFrame({ kind: 'session/stat/response', id: 'st-1', ok: false })).toBeUndefined()
+  })
+
+  it('answers the reported size for a stored session and found:false for any other id', async () => {
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_PERSISTENCE_SERVICE, {
+        stat: async (sessionId: string) => sessionId === 'sess-stored'
+          ? { eventCount: 12, sizeBytes: 4096 }
+          : undefined,
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/stat', id: 'st-stored', sessionId: 'sess-stored' }))
+        .toEqual({
+          kind: 'session/stat/response',
+          id: 'st-stored',
+          ok: true,
+          found: true,
+          eventCount: 12,
+          sizeBytes: 4096,
+        })
+      expect(await roundTrip(harness, { kind: 'session/stat', id: 'st-gone', sessionId: 'sess-gone' }))
+        .toEqual({ kind: 'session/stat/response', id: 'st-gone', ok: true, found: false })
+    })
+  })
+
+  it('reports a missing persistence service and a failing stat', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/stat', id: 'st-nosvc', sessionId: 'sess-a' }))
+        .toEqual({
+          kind: 'session/stat/response',
+          id: 'st-nosvc',
+          ok: false,
+          error: 'sessionPersistence service is not available',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_PERSISTENCE_SERVICE, {
+        stat: async () => {
+          throw new Error('log store is offline')
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/stat', id: 'st-error', sessionId: 'sess-a' }))
+        .toEqual({
+          kind: 'session/stat/response',
+          id: 'st-error',
+          ok: false,
+          error: 'log store is offline',
+        })
+    })
+  })
+})
+
+describe('ide-bridge projection/read frames', () => {
+  it('validates the request, its key filter, and both response arms', () => {
+    expect(validateBridgeFrame({ kind: 'projection/read', id: 'pr-1', sessionId: 'sess-1' }))
+      .toEqual({ kind: 'projection/read', id: 'pr-1', sessionId: 'sess-1' })
+    expect(validateBridgeFrame({
+      kind: 'projection/read',
+      id: 'pr-1',
+      sessionId: 'sess-1',
+      keys: ['contextPressure', 'sessionStats'],
+    })).toEqual({
+      kind: 'projection/read',
+      id: 'pr-1',
+      sessionId: 'sess-1',
+      keys: ['contextPressure', 'sessionStats'],
+    })
+    expect(validateBridgeFrame({ kind: 'projection/read', id: 'pr-1' })).toBeUndefined()
+    // An empty filter would read no unit at all; the runtime's own default is omission.
+    expect(validateBridgeFrame({ kind: 'projection/read', id: 'pr-1', sessionId: 'sess-1', keys: [] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'projection/read', id: 'pr-1', sessionId: 'sess-1', keys: [''] }))
+      .toBeUndefined()
+
+    expect(validateBridgeFrame({
+      kind: 'projection/read/response',
+      id: 'pr-1',
+      ok: true,
+      asOfSeq: 7,
+      values: { contextPressure: { projectedTokens: 1_500 } },
+    })).toEqual({
+      kind: 'projection/read/response',
+      id: 'pr-1',
+      ok: true,
+      asOfSeq: 7,
+      values: { contextPressure: { projectedTokens: 1_500 } },
+    })
+    // A live session may register no client-visible unit yet.
+    expect(validateBridgeFrame({ kind: 'projection/read/response', id: 'pr-1', ok: true, asOfSeq: 0, values: {} }))
+      .toEqual({ kind: 'projection/read/response', id: 'pr-1', ok: true, asOfSeq: 0, values: {} })
+    expect(validateBridgeFrame({ kind: 'projection/read/response', id: 'pr-1', ok: true, values: {} }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'projection/read/response', id: 'pr-1', ok: true, asOfSeq: 1.5, values: {} }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'projection/read/response',
+      id: 'pr-1',
+      ok: true,
+      asOfSeq: 1,
+      values: [],
+    })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'projection/read/response', id: 'pr-1', ok: false, error: 'no registry' }))
+      .toEqual({ kind: 'projection/read/response', id: 'pr-1', ok: false, error: 'no registry' })
+    expect(validateBridgeFrame({ kind: 'projection/read/response', id: 'pr-1', ok: false })).toBeUndefined()
+  })
+
+  it('answers one cut of the requested keys and passes the key filter through', async () => {
+    const session = { id: 'sess-projection' }
+    const asked: Array<readonly string[] | undefined> = []
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: (id: string) => id === session.id ? session : undefined })
+      ctx.provide(SESSION_PROJECTION_REGISTRY_SERVICE, {
+        snapshot: (_session: object, keys?: readonly string[]) => {
+          asked.push(keys)
+          return { asOfSeq: 7, values: { contextPressure: { projectedTokens: 1_500, contextWindow: 200_000 } } }
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'projection/read',
+        id: 'pr-keys',
+        sessionId: 'sess-projection',
+        keys: ['contextPressure'],
+      })).toEqual({
+        kind: 'projection/read/response',
+        id: 'pr-keys',
+        ok: true,
+        asOfSeq: 7,
+        values: { contextPressure: { projectedTokens: 1_500, contextWindow: 200_000 } },
+      })
+      // Omitting the filter views every registered client-visible unit.
+      expect(await roundTrip(harness, { kind: 'projection/read', id: 'pr-all', sessionId: 'sess-projection' }))
+        .toEqual({
+          kind: 'projection/read/response',
+          id: 'pr-all',
+          ok: true,
+          asOfSeq: 7,
+          values: { contextPressure: { projectedTokens: 1_500, contextWindow: 200_000 } },
+        })
+      expect(asked).toEqual([['contextPressure'], undefined])
+    })
+  })
+
+  it('reports a missing service, unknown sessions, and a failing read', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'projection/read', id: 'pr-nosvc', sessionId: 'sess-a' }))
+        .toEqual({
+          kind: 'projection/read/response',
+          id: 'pr-nosvc',
+          ok: false,
+          error: 'sessionProjections or sessions service is not available',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_PROJECTION_REGISTRY_SERVICE, {
+        snapshot: () => ({ asOfSeq: 0, values: {} }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'projection/read', id: 'pr-nosessions', sessionId: 'sess-a' }))
+        .toEqual({
+          kind: 'projection/read/response',
+          id: 'pr-nosessions',
+          ok: false,
+          error: 'sessionProjections or sessions service is not available',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => undefined })
+      ctx.provide(SESSION_PROJECTION_REGISTRY_SERVICE, {
+        snapshot: () => ({ asOfSeq: 0, values: {} }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'projection/read', id: 'pr-unknown', sessionId: 'sess-other' }))
+        .toEqual({
+          kind: 'projection/read/response',
+          id: 'pr-unknown',
+          ok: false,
+          error: 'unknown session "sess-other"',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => ({ id: 'sess-a' }) })
+      ctx.provide(SESSION_PROJECTION_REGISTRY_SERVICE, {
+        snapshot: () => {
+          throw new Error('cell fold rejected its view')
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'projection/read', id: 'pr-error', sessionId: 'sess-a' }))
+        .toEqual({
+          kind: 'projection/read/response',
+          id: 'pr-error',
+          ok: false,
+          error: 'cell fold rejected its view',
+        })
+    })
+  })
+})
+
+describe('ide-bridge session/search frames', () => {
+  it('validates the query, its page size, and both response arms', () => {
+    expect(validateBridgeFrame({ kind: 'session/search', id: 'sq-1', query: 'needle' }))
+      .toEqual({ kind: 'session/search', id: 'sq-1', query: 'needle' })
+    expect(validateBridgeFrame({ kind: 'session/search', id: 'sq-1', query: 'needle', limit: 20 }))
+      .toEqual({ kind: 'session/search', id: 'sq-1', query: 'needle', limit: 20 })
+    expect(validateBridgeFrame({ kind: 'session/search', id: 'sq-1' })).toBeUndefined()
+    // An empty query would match nothing; the caller either asks or does not.
+    expect(validateBridgeFrame({ kind: 'session/search', id: 'sq-1', query: '' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/search', id: 'sq-1', query: 'needle', limit: 0 }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/search', id: 'sq-1', query: 'needle', limit: 1.5 }))
+      .toBeUndefined()
+
+    const hit = {
+      sessionId: 'sess-hit',
+      createdAt: 1_700_000_000_000,
+      cwd: '/work',
+      parentSessionId: 'sess-parent',
+      title: 'Hit title',
+      seq: 7,
+      snippet: '…needle…',
+    }
+    expect(validateBridgeFrame({ kind: 'session/search/response', id: 'sq-1', ok: true, hits: [hit] }))
+      .toEqual({ kind: 'session/search/response', id: 'sq-1', ok: true, hits: [hit] })
+    // A snippet-less or position-less row is not a hit the caller can render or locate.
+    expect(validateBridgeFrame({
+      kind: 'session/search/response',
+      id: 'sq-1',
+      ok: true,
+      hits: [{ sessionId: 'sess-hit', createdAt: 1, seq: 7 }],
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'session/search/response',
+      id: 'sq-1',
+      ok: true,
+      hits: [{ sessionId: 'sess-hit', createdAt: 1, seq: 7, snippet: '' }],
+    })).toEqual({
+      kind: 'session/search/response',
+      id: 'sq-1',
+      ok: true,
+      hits: [{ sessionId: 'sess-hit', createdAt: 1, seq: 7, snippet: '' }],
+    })
+    expect(validateBridgeFrame({ kind: 'session/search/response', id: 'sq-1', ok: true, hits: {} }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/search/response', id: 'sq-1', ok: true })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'session/search/response',
+      id: 'sq-1',
+      ok: false,
+      error: 'search is disabled',
+    })).toEqual({ kind: 'session/search/response', id: 'sq-1', ok: false, error: 'search is disabled' })
+  })
+
+  it('answers ranked hits with the cached title and passes the page size through', async () => {
+    const asked: Array<{ query: string; limit?: number }> = []
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_QUERY_SERVICE, {
+        searchSessions: async (request: { query: string; limit?: number }) => {
+          asked.push(request)
+          return {
+            items: [{
+              header: {
+                id: 'sess-hit',
+                createdAt: 1_700_000_000_000,
+                cwd: '/work',
+                isSeeded: false,
+                parentSession: 'sess-parent',
+              },
+              bestMatch: { seq: 7, snippet: '…needle…' },
+            }],
+          }
+        },
+      })
+      ctx.provide(SESSION_PROJECTION_CACHE_SERVICE, {
+        cachedSnapshot: () => ({ values: { title: 'Cached title' } }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/search', id: 'sq-hit', query: 'needle', limit: 20 }))
+        .toEqual({
+          kind: 'session/search/response',
+          id: 'sq-hit',
+          ok: true,
+          hits: [{
+            sessionId: 'sess-hit',
+            createdAt: 1_700_000_000_000,
+            cwd: '/work',
+            parentSessionId: 'sess-parent',
+            title: 'Cached title',
+            seq: 7,
+            snippet: '…needle…',
+          }],
+        })
+      // An omitted page size leaves the runtime's own default in charge.
+      expect(await roundTrip(harness, { kind: 'session/search', id: 'sq-all', query: 'needle' }))
+        .toMatchObject({ ok: true })
+      expect(asked).toEqual([{ query: 'needle', limit: 20 }, { query: 'needle' }])
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_QUERY_SERVICE, {
+        searchSessions: async () => ({
+          items: [{ header: { id: 'sess-seeded', createdAt: 1, isSeeded: true }, bestMatch: { seq: 1, snippet: 'x' } }],
+        }),
+      })
+      ctx.provide(SESSION_PROJECTION_CACHE_SERVICE, {
+        cachedSnapshot: () => ({ values: { title: 'Unwitnessed title' } }),
+      })
+    }, async (harness) => {
+      // A seeded log's inherited prefix is unwitnessed, so it carries no cached title.
+      expect(await roundTrip(harness, { kind: 'session/search', id: 'sq-seeded', query: 'x' }))
+        .toEqual({
+          kind: 'session/search/response',
+          id: 'sq-seeded',
+          ok: true,
+          hits: [{ sessionId: 'sess-seeded', createdAt: 1, seq: 1, snippet: 'x' }],
+        })
+    })
+  })
+
+  it('reports a missing service and the runtime search refusal', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/search', id: 'sq-nosvc', query: 'needle' }))
+        .toEqual({
+          kind: 'session/search/response',
+          id: 'sq-nosvc',
+          ok: false,
+          error: 'sessionQuery service is not available',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_QUERY_SERVICE, {
+        searchSessions: async () => {
+          throw new Error('session-query: full-text search is disabled on this profile')
+        },
+      })
+    }, async (harness) => {
+      // A profile with `openAt: never` fails loud; the Host renders no content hits.
+      expect(await roundTrip(harness, { kind: 'session/search', id: 'sq-off', query: 'needle' }))
+        .toEqual({
+          kind: 'session/search/response',
+          id: 'sq-off',
+          ok: false,
+          error: 'session-query: full-text search is disabled on this profile',
+        })
+    })
+  })
+})
+
+describe('ide-bridge attachment/read frames', () => {
+  /** The reference shape one session log records for an admitted image. */
+  const ref = {
+    attachmentId: 'sha256:0000000000000000000000000000000000000000000000000000000000000001',
+    mediaType: 'image/png',
+    width: 64,
+    height: 32,
+    bytes: 8,
+    name: 'shot.png',
+  }
+
+  it('validates the reference and both response arms', () => {
+    expect(validateBridgeFrame({ kind: 'attachment/read', id: 'ar-1', ref }))
+      .toEqual({ kind: 'attachment/read', id: 'ar-1', ref })
+    // `name` is optional: admission records one only when the upload carried it.
+    const { name: _name, ...anonymous } = ref
+    expect(validateBridgeFrame({ kind: 'attachment/read', id: 'ar-1', ref: anonymous }))
+      .toEqual({ kind: 'attachment/read', id: 'ar-1', ref: anonymous })
+    expect(validateBridgeFrame({ kind: 'attachment/read', id: 'ar-1' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'attachment/read', id: 'ar-1', ref: { ...ref, attachmentId: '' } }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'attachment/read', id: 'ar-1', ref: { ...ref, mediaType: '' } }))
+      .toBeUndefined()
+    // The store re-checks the bytes against these numbers, so a fractional or
+    // negative count cannot be trusted to describe a stored object.
+    for (const field of ['width', 'height', 'bytes'] as const) {
+      expect(validateBridgeFrame({ kind: 'attachment/read', id: 'ar-1', ref: { ...ref, [field]: -1 } }))
+        .toBeUndefined()
+      expect(validateBridgeFrame({ kind: 'attachment/read', id: 'ar-1', ref: { ...ref, [field]: 1.5 } }))
+        .toBeUndefined()
+      expect(validateBridgeFrame({ kind: 'attachment/read', id: 'ar-1', ref: { ...ref, [field]: '8' } }))
+        .toBeUndefined()
+    }
+    expect(validateBridgeFrame({ kind: 'attachment/read', id: 'ar-1', ref: { ...ref, name: 7 } }))
+      .toBeUndefined()
+
+    expect(validateBridgeFrame({
+      kind: 'attachment/read/response',
+      id: 'ar-1',
+      ok: true,
+      mediaType: 'image/png',
+      data: 'ZmFrZQ==',
+    })).toEqual({
+      kind: 'attachment/read/response',
+      id: 'ar-1',
+      ok: true,
+      mediaType: 'image/png',
+      data: 'ZmFrZQ==',
+    })
+    expect(validateBridgeFrame({ kind: 'attachment/read/response', id: 'ar-1', ok: true, mediaType: 'image/png' }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'attachment/read/response', id: 'ar-1', ok: true, data: 'ZmFrZQ==' }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'attachment/read/response', id: 'ar-1', ok: false, error: 'missing object' }))
+      .toEqual({ kind: 'attachment/read/response', id: 'ar-1', ok: false, error: 'missing object' })
+    expect(validateBridgeFrame({ kind: 'attachment/read/response', id: 'ar-1', ok: false })).toBeUndefined()
+  })
+
+  it('answers the stored bytes as base64 for the reference it was asked about', async () => {
+    const asked: unknown[] = []
+    await withBridge((ctx) => {
+      ctx.provide(ATTACHMENT_SERVICE, {
+        readImage: async (requested: unknown) => {
+          asked.push(requested)
+          return { data: new Uint8Array([0x66, 0x61, 0x6b, 0x65]) }
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'attachment/read', id: 'ar-ok', ref })).toEqual({
+        kind: 'attachment/read/response',
+        id: 'ar-ok',
+        ok: true,
+        mediaType: 'image/png',
+        data: 'ZmFrZQ==',
+      })
+      expect(asked).toEqual([ref])
+    })
+  })
+
+  it('reports a missing store and the store refusal', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'attachment/read', id: 'ar-nosvc', ref })).toEqual({
+        kind: 'attachment/read/response',
+        id: 'ar-nosvc',
+        ok: false,
+        error: 'attachments service is not available',
+      })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(ATTACHMENT_SERVICE, {
+        readImage: async () => {
+          throw new Error('Attachment object is missing.')
+        },
+      })
+    }, async (harness) => {
+      // A collected object fails the read instead of rendering corruption.
+      expect(await roundTrip(harness, { kind: 'attachment/read', id: 'ar-gone', ref })).toEqual({
+        kind: 'attachment/read/response',
+        id: 'ar-gone',
+        ok: false,
+        error: 'Attachment object is missing.',
       })
     })
   })
@@ -999,6 +1653,57 @@ describe('ide-bridge model/select frames', () => {
         .toEqual({ kind: 'model/select/response', id: 'ms-error', ok: false, error: 'settings are read-only' })
       expect(await roundTrip(harness, { kind: 'model/select', id: 'ms-text', provider: 'pi-ai', model: 'glm' }))
         .toEqual({ kind: 'model/select/response', id: 'ms-text', ok: false, error: 'settings file is locked' })
+    })
+  })
+
+  it('hands the route to the live runtime before writing the default', async () => {
+    const calls: string[] = []
+    await withBridge((ctx) => {
+      ctx.provide('sdkModelSelect', {
+        selectModel: async (selection: { provider: string; model: string; reasoningEffort?: string }) => {
+          calls.push(`runtime:${selection.provider}/${selection.model}/${selection.reasoningEffort ?? '-'}`)
+          return { applied: 2 }
+        },
+      })
+      ctx.provide('agentDefaultModel', {
+        currentSelection: () => ({ provider: 'deepseek-official', model: 'v4' }),
+        saveSelection: async (next: { provider: string; model: string; reasoningEffort?: string }) => {
+          calls.push(`default:${next.provider}/${next.model}/${next.reasoningEffort ?? '-'}`)
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'model/select',
+        id: 'ms-live',
+        provider: 'deepseek-official',
+        model: 'v4-pro',
+        reasoningEffort: 'low',
+      })).toEqual({ kind: 'model/select/response', id: 'ms-live', ok: true })
+      expect(calls).toStrictEqual([
+        'runtime:deepseek-official/v4-pro/low',
+        'default:deepseek-official/v4-pro/low',
+      ])
+    })
+  })
+
+  it('keeps the default unwritten when the live runtime rejects the route', async () => {
+    const saved: unknown[] = []
+    await withBridge((ctx) => {
+      ctx.provide('sdkModelSelect', {
+        selectModel: async () => {
+          throw new Error('no adapter registered for provider "ghost"')
+        },
+      })
+      ctx.provide('agentDefaultModel', {
+        currentSelection: () => ({ provider: 'deepseek-official', model: 'v4' }),
+        saveSelection: async (next: unknown) => {
+          saved.push(next)
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'model/select', id: 'ms-rejected', provider: 'ghost', model: 'x' }))
+        .toEqual({ kind: 'model/select/response', id: 'ms-rejected', ok: false, error: 'no adapter registered for provider "ghost"' })
+      expect(saved).toStrictEqual([])
     })
   })
 })
@@ -1371,6 +2076,61 @@ describe('ide-bridge Host frame service-failure paths', () => {
     })
   })
 
+  it('renames through the session title service and reports missing, unknown, and failing paths', async () => {
+    const session = { id: 'sess-rename' }
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/rename', id: 'rn-missing', sessionId: 'sess-rename', title: '标题' }))
+        .toEqual({
+          kind: 'session/rename/response',
+          id: 'rn-missing',
+          ok: false,
+          error: 'sessionTitle or sessions service is not available',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, {
+        get: (id: string) => id === session.id ? session : undefined,
+      })
+      ctx.provide(SESSION_TITLE_SERVICE, {
+        rename: (target: { id: string }, title: string) => {
+          if (target.id !== session.id) throw new Error('session is not live in this store')
+          // The real service normalizes before committing; the stand-in trims.
+          return { title: title.trim() }
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/rename', id: 'rn-unknown', sessionId: 'sess-other', title: '标题' }))
+        .toEqual({
+          kind: 'session/rename/response',
+          id: 'rn-unknown',
+          ok: false,
+          error: 'unknown session "sess-other"',
+        })
+      expect(await roundTrip(harness, { kind: 'session/rename', id: 'rn-ok', sessionId: 'sess-rename', title: '  新标题  ' }))
+        .toEqual({ kind: 'session/rename/response', id: 'rn-ok', ok: true, title: '新标题' })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, {
+        get: (id: string) => id === session.id ? session : undefined,
+      })
+      ctx.provide(SESSION_TITLE_SERVICE, {
+        rename: () => {
+          throw new Error('session title must contain visible characters')
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/rename', id: 'rn-reject', sessionId: 'sess-rename', title: 'x' }))
+        .toEqual({
+          kind: 'session/rename/response',
+          id: 'rn-reject',
+          ok: false,
+          error: 'session title must contain visible characters',
+        })
+    })
+  })
+
   it('forks with emptySeed plus childSessionId and reports a missing and a failing fork', async () => {
     const forked: Array<{ parent: string; options?: { boundarySeq?: number; emptySeed?: boolean; childSessionId?: string } }> = []
     await withBridge((ctx) => {
@@ -1423,67 +2183,6 @@ describe('ide-bridge Host frame service-failure paths', () => {
         .toEqual({ kind: 'session/fork/response', id: 'fork-error', ok: false, error: 'parent session is not live' })
       expect(await roundTrip(harness, { kind: 'session/fork', id: 'fork-text', parentSessionId: 'parent-text' }))
         .toEqual({ kind: 'session/fork/response', id: 'fork-text', ok: false, error: 'fork is disabled for this profile' })
-    })
-  })
-
-  it('answers continueCapability unknown without a resume service or a stored log', async () => {
-    await withBridge(() => {}, async (harness) => {
-      expect(await roundTrip(harness, { kind: 'session/continue-capability', id: 'cc-noservice', sessionId: 'sess-a' }))
-        .toEqual({
-          kind: 'session/continue-capability/response',
-          id: 'cc-noservice',
-          ok: true,
-          capability: 'unknown',
-        })
-    })
-
-    await withBridge((ctx) => {
-      ctx.provide(SDK_SESSION_RESUME_SERVICE, { resumeSession: async () => {} })
-    }, async (harness) => {
-      expect(await roundTrip(harness, { kind: 'session/continue-capability', id: 'cc-nolog', sessionId: 'sess-a' }))
-        .toEqual({ kind: 'session/continue-capability/response', id: 'cc-nolog', ok: true, capability: 'unknown' })
-    })
-  })
-
-  it('answers continueCapability same-id only for a non-empty stored log', async () => {
-    await withBridge((ctx) => {
-      ctx.provide(SDK_SESSION_RESUME_SERVICE, { resumeSession: async () => {} })
-      ctx.provide(SESSION_PERSISTENCE_SERVICE, {
-        open: async () => ({
-          read: async () => [{ type: 'user/message' }],
-          close: async () => {},
-        }),
-      })
-    }, async (harness) => {
-      expect(await roundTrip(harness, { kind: 'session/continue-capability', id: 'cc-exists', sessionId: 'sess-a' }))
-        .toEqual({ kind: 'session/continue-capability/response', id: 'cc-exists', ok: true, capability: 'same-id' })
-    })
-
-    await withBridge((ctx) => {
-      ctx.provide(SDK_SESSION_RESUME_SERVICE, { resumeSession: async () => {} })
-      ctx.provide(SESSION_PERSISTENCE_SERVICE, {
-        open: async () => ({ read: async () => [], close: async () => {} }),
-      })
-    }, async (harness) => {
-      expect(await roundTrip(harness, { kind: 'session/continue-capability', id: 'cc-empty', sessionId: 'sess-a' }))
-        .toEqual({ kind: 'session/continue-capability/response', id: 'cc-empty', ok: true, capability: 'unknown' })
-    })
-
-    await withBridge((ctx) => {
-      ctx.provide(SDK_SESSION_RESUME_SERVICE, { resumeSession: async () => {} })
-      ctx.provide(SESSION_PERSISTENCE_SERVICE, {
-        open: async () => {
-          throw new Error('no stored log for sess-a')
-        },
-      })
-    }, async (harness) => {
-      expect(await roundTrip(harness, { kind: 'session/continue-capability', id: 'cc-open-fails', sessionId: 'sess-a' }))
-        .toEqual({
-          kind: 'session/continue-capability/response',
-          id: 'cc-open-fails',
-          ok: true,
-          capability: 'unknown',
-        })
     })
   })
 
@@ -1609,6 +2308,9 @@ describe('ide-bridge Host frame service-failure paths', () => {
       })
       ctx.provide(PERMISSION_PRESETS_SERVICE, {
         names: ['workspace-write', 'danger-full-access'],
+        optionOf: (name: string) => name === 'workspace-write'
+          ? { value: name, name: 'Workspace write', description: '写入工作区' }
+          : { value: name, name: 'Full access' },
         set: () => {},
         current: () => 'workspace-write',
       })
@@ -1625,8 +2327,39 @@ describe('ide-bridge Host frame service-failure paths', () => {
           kind: 'permission/list/response',
           id: 'list-ok',
           ok: true,
-          presets: ['workspace-write', 'danger-full-access'],
+          options: [
+            { value: 'workspace-write', name: 'Workspace write', description: '写入工作区' },
+            { value: 'danger-full-access', name: 'Full access' },
+          ],
           current: 'workspace-write',
+        })
+    })
+
+    // A session matching no table entry derives `custom`; the list reports it so the
+    // client can show why nothing in the table is current.
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, {
+        get: (id: string) => id === session.id ? session : undefined,
+      })
+      ctx.provide(PERMISSION_PRESETS_SERVICE, {
+        names: ['workspace-write'],
+        optionOf: (name: string) => name === 'custom'
+          ? { value: 'custom', name: 'Custom', description: 'Current sandbox and approval settings do not match a preset.' }
+          : { value: name, name: 'Workspace write' },
+        set: () => {},
+        current: () => 'custom',
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'permission/list', id: 'list-custom', sessionId: 'sess-perm' }))
+        .toEqual({
+          kind: 'permission/list/response',
+          id: 'list-custom',
+          ok: true,
+          options: [
+            { value: 'workspace-write', name: 'Workspace write' },
+            { value: 'custom', name: 'Custom', description: 'Current sandbox and approval settings do not match a preset.' },
+          ],
+          current: 'custom',
         })
     })
   })
@@ -1890,10 +2623,10 @@ describe('ide-bridge transport lifecycle paths', () => {
       expect(host.connectionCount()).toBe(1)
     }, { timeout: WAIT_MS })
 
-    expect(host.broadcast({ kind: 'error', id: 'small', message: 'ok' })).toBe(1)
+    expect(host.broadcast({ kind: 'session/list', id: 'small' })).toBe(1)
     // A frame larger than the socket's writable buffer is refused by write(),
     // and the Host must count it as unsent rather than as delivered.
-    expect(host.broadcast({ kind: 'error', id: 'huge', message: 'm'.repeat(2_000_000) })).toBe(0)
+    expect(host.broadcast({ kind: 'session/list/response', id: 'huge', ok: false, error: 'm'.repeat(2_000_000) })).toBe(0)
   })
 
   it('rejects a second listen and a close with no running server', async () => {
@@ -2041,5 +2774,664 @@ describe('ide-bridge session/read-log closer fallbacks', () => {
       vi.doUnmock('@deepseek-ai/dsh-session')
       vi.resetModules()
     }
+  })
+})
+
+describe('ide-bridge subagent control frames', () => {
+  it('validates the listing scope, the prompt text, and both response arms', () => {
+    expect(validateBridgeFrame({ kind: 'subagent/list', id: 'sa-1', sessionId: 'sess-parent', scope: 'children' }))
+      .toEqual({ kind: 'subagent/list', id: 'sa-1', sessionId: 'sess-parent', scope: 'children' })
+    expect(validateBridgeFrame({ kind: 'subagent/list', id: 'sa-1', sessionId: 'sess-parent', scope: 'descendants' }))
+      .toEqual({ kind: 'subagent/list', id: 'sa-1', sessionId: 'sess-parent', scope: 'descendants' })
+    // The traversal is the caller's decision, so an omitted scope is not defaulted here.
+    expect(validateBridgeFrame({ kind: 'subagent/list', id: 'sa-1', sessionId: 'sess-parent' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'subagent/list', id: 'sa-1', sessionId: 'sess-parent', scope: 'tree' }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'subagent/list', id: 'sa-1', scope: 'children' })).toBeUndefined()
+
+    const child = {
+      kind: 'child',
+      sessionId: 'sess-child',
+      mode: 'continuable',
+      label: 'Researcher',
+      activity: 'inactive',
+      hasChildren: true,
+    }
+    const diagnostic = { kind: 'diagnostic', sessionId: 'sess-broken', reason: 'corrupt' }
+    expect(validateBridgeFrame({
+      kind: 'subagent/list/response',
+      id: 'sa-1',
+      ok: true,
+      sessionLive: false,
+      entries: [child, diagnostic],
+    })).toEqual({
+      kind: 'subagent/list/response',
+      id: 'sa-1',
+      ok: true,
+      sessionLive: false,
+      entries: [child, diagnostic],
+    })
+    // A row the runtime cannot classify is a diagnostic, never a half-built child.
+    expect(validateBridgeFrame({
+      kind: 'subagent/list/response',
+      id: 'sa-1',
+      ok: true,
+      sessionLive: false,
+      entries: [{ ...child, mode: 'resumable' }],
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'subagent/list/response',
+      id: 'sa-1',
+      ok: true,
+      sessionLive: false,
+      entries: [{ kind: 'child', sessionId: 'sess-child', mode: 'one-shot', hasChildren: false }],
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'subagent/list/response',
+      id: 'sa-1',
+      ok: true,
+      sessionLive: false,
+      entries: [{ kind: 'diagnostic', sessionId: 'sess-broken', reason: 'mystery' }],
+    })).toBeUndefined()
+    // Depth counts edges from the root, so `0` names the root itself, never a row.
+    expect(validateBridgeFrame({
+      kind: 'subagent/list/response',
+      id: 'sa-1',
+      ok: true,
+      sessionLive: true,
+      entries: [{ ...child, parentSessionId: 'sess-parent', depth: 0 }],
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'subagent/list/response',
+      id: 'sa-1',
+      ok: true,
+      sessionLive: true,
+      entries: [{ ...child, parentSessionId: 'sess-parent', depth: 2 }],
+    })).toMatchObject({ ok: true })
+    expect(validateBridgeFrame({ kind: 'subagent/list/response', id: 'sa-1', ok: false, error: 'no registry' }))
+      .toEqual({ kind: 'subagent/list/response', id: 'sa-1', ok: false, error: 'no registry' })
+
+    expect(validateBridgeFrame({
+      kind: 'subagent/prompt',
+      id: 'sp-1',
+      parentSessionId: 'sess-parent',
+      childSessionId: 'sess-child',
+      text: 'keep going',
+    })).toEqual({
+      kind: 'subagent/prompt',
+      id: 'sp-1',
+      parentSessionId: 'sess-parent',
+      childSessionId: 'sess-child',
+      text: 'keep going',
+    })
+    // An empty message has nothing the child's inbox could admit.
+    expect(validateBridgeFrame({
+      kind: 'subagent/prompt',
+      id: 'sp-1',
+      parentSessionId: 'sess-parent',
+      childSessionId: 'sess-child',
+      text: '',
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'subagent/prompt',
+      id: 'sp-1',
+      parentSessionId: 'sess-parent',
+      text: 'keep going',
+    })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'subagent/prompt/response', id: 'sp-1', ok: true, messageId: 'msg-1' }))
+      .toEqual({ kind: 'subagent/prompt/response', id: 'sp-1', ok: true, messageId: 'msg-1' })
+    expect(validateBridgeFrame({ kind: 'subagent/prompt/response', id: 'sp-1', ok: true })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'subagent/prompt/response', id: 'sp-1', ok: false, error: 'not resumable' }))
+      .toEqual({ kind: 'subagent/prompt/response', id: 'sp-1', ok: false, error: 'not resumable' })
+
+    expect(validateBridgeFrame({
+      kind: 'subagent/interrupt',
+      id: 'si-1',
+      parentSessionId: 'sess-parent',
+      childSessionId: 'sess-child',
+    })).toEqual({
+      kind: 'subagent/interrupt',
+      id: 'si-1',
+      parentSessionId: 'sess-parent',
+      childSessionId: 'sess-child',
+    })
+    expect(validateBridgeFrame({ kind: 'subagent/interrupt', id: 'si-1', childSessionId: 'sess-child' }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'subagent/interrupt/response', id: 'si-1', ok: true }))
+      .toEqual({ kind: 'subagent/interrupt/response', id: 'si-1', ok: true })
+    expect(validateBridgeFrame({ kind: 'subagent/interrupt/response', id: 'si-1', ok: false }))
+      .toBeUndefined()
+  })
+
+  it('lists durable children, re-sampling activity from the live registry', async () => {
+    await withBridge((ctx) => {
+      ctx.provide(SUBAGENT_SERVICE, {
+        listChildren: async () => [
+          {
+            kind: 'child',
+            id: 'sess-live',
+            mode: 'continuable',
+            label: 'Researcher',
+            activity: 'inactive',
+            hasChildren: false,
+          },
+          { kind: 'child', id: 'sess-cold', mode: 'one-shot', activity: 'running', hasChildren: true },
+          { kind: 'diagnostic', id: 'sess-broken', reason: 'corrupt' },
+        ],
+        listDescendants: async () => [],
+      })
+      ctx.provide(AGENTS_SERVICE, {
+        get: (id: string) => id === 'sess-parent'
+          ? { session: { header: {} } }
+          : id === 'sess-live' ? { session: { header: {} }, status: 'running' } : undefined,
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/list',
+        id: 'sa-children',
+        sessionId: 'sess-parent',
+        scope: 'children',
+      })).toEqual({
+        kind: 'subagent/list/response',
+        id: 'sa-children',
+        ok: true,
+        sessionLive: true,
+        entries: [
+          {
+            kind: 'child',
+            sessionId: 'sess-live',
+            mode: 'continuable',
+            label: 'Researcher',
+            activity: 'running',
+            hasChildren: false,
+          },
+          // The durable row claimed residency; no driver holds it, so it is not working.
+          { kind: 'child', sessionId: 'sess-cold', mode: 'one-shot', activity: 'inactive', hasChildren: true },
+          { kind: 'diagnostic', sessionId: 'sess-broken', reason: 'corrupt' },
+        ],
+      })
+    })
+  })
+
+  it('lists the descendant tree with each row position and reports a cold root', async () => {
+    await withBridge((ctx) => {
+      ctx.provide(SUBAGENT_SERVICE, {
+        listChildren: async () => [],
+        listDescendants: async () => [
+          {
+            kind: 'child',
+            id: 'sess-child',
+            mode: 'continuable',
+            label: 'Child',
+            activity: 'inactive',
+            hasChildren: true,
+            parentId: 'sess-root',
+            depth: 1,
+          },
+          {
+            kind: 'child',
+            id: 'sess-grandchild',
+            mode: 'one-shot',
+            activity: 'inactive',
+            hasChildren: false,
+            parentId: 'sess-child',
+            depth: 2,
+          },
+        ],
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/list',
+        id: 'sa-tree',
+        sessionId: 'sess-root',
+        scope: 'descendants',
+      })).toEqual({
+        kind: 'subagent/list/response',
+        id: 'sa-tree',
+        ok: true,
+        sessionLive: false,
+        entries: [
+          {
+            kind: 'child',
+            sessionId: 'sess-child',
+            mode: 'continuable',
+            label: 'Child',
+            activity: 'inactive',
+            hasChildren: true,
+            parentSessionId: 'sess-root',
+            depth: 1,
+          },
+          {
+            kind: 'child',
+            sessionId: 'sess-grandchild',
+            mode: 'one-shot',
+            activity: 'inactive',
+            hasChildren: false,
+            parentSessionId: 'sess-child',
+            depth: 2,
+          },
+        ],
+      })
+    })
+  })
+
+  it('reports a missing service and a failing enumeration', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/list',
+        id: 'sa-nosvc',
+        sessionId: 'sess-parent',
+        scope: 'children',
+      })).toEqual({
+        kind: 'subagent/list/response',
+        id: 'sa-nosvc',
+        ok: false,
+        error: 'subagents service is not available',
+      })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SUBAGENT_SERVICE, {
+        listChildren: async () => {
+          throw new Error('listing subagents requires the sessionProjections registry')
+        },
+        listDescendants: async () => [],
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/list',
+        id: 'sa-nofold',
+        sessionId: 'sess-parent',
+        scope: 'children',
+      })).toEqual({
+        kind: 'subagent/list/response',
+        id: 'sa-nofold',
+        ok: false,
+        error: 'listing subagents requires the sessionProjections registry',
+      })
+    })
+  })
+
+  it('prompts a continuable child through its live parent and reports the receipt', async () => {
+    const asked: Array<Record<string, unknown>> = []
+    await withBridge((ctx) => {
+      ctx.provide(SUBAGENT_SERVICE, {
+        listChildren: async () => [],
+        listDescendants: async () => [],
+        prompt: async (request: Record<string, unknown>) => {
+          asked.push(request)
+          return { messageId: 'msg-accepted' }
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/prompt',
+        id: 'sp-ok',
+        parentSessionId: 'sess-parent',
+        childSessionId: 'sess-child',
+        text: 'keep going',
+      })).toEqual({ kind: 'subagent/prompt/response', id: 'sp-ok', ok: true, messageId: 'msg-accepted' })
+    })
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toEqual({
+      requestId: expect.any(String),
+      parentSessionId: 'sess-parent',
+      childSessionId: 'sess-child',
+      mode: 'continuable',
+      content: [{ type: 'text', text: 'keep going' }],
+    })
+    expect(asked[0]!.requestId as string).not.toBe('')
+
+    await withBridge((ctx) => {
+      ctx.provide(SUBAGENT_SERVICE, {
+        listChildren: async () => [],
+        listDescendants: async () => [],
+        prompt: async () => {
+          throw new Error('parent session "sess-parent" is not live')
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/prompt',
+        id: 'sp-cold',
+        parentSessionId: 'sess-parent',
+        childSessionId: 'sess-child',
+        text: 'keep going',
+      })).toEqual({
+        kind: 'subagent/prompt/response',
+        id: 'sp-cold',
+        ok: false,
+        error: 'parent session "sess-parent" is not live',
+      })
+    })
+
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/prompt',
+        id: 'sp-nosvc',
+        parentSessionId: 'sess-parent',
+        childSessionId: 'sess-child',
+        text: 'keep going',
+      })).toEqual({
+        kind: 'subagent/prompt/response',
+        id: 'sp-nosvc',
+        ok: false,
+        error: 'subagents service is not available',
+      })
+    })
+  })
+
+  it('interrupts under the claimed parent and reports a refusal', async () => {
+    const asked: Array<{ childSessionId: string; authority: unknown }> = []
+    await withBridge((ctx) => {
+      ctx.provide(SUBAGENT_SERVICE, {
+        listChildren: async () => [],
+        listDescendants: async () => [],
+        interrupt: (childSessionId: string, authority: unknown) => {
+          asked.push({ childSessionId, authority })
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/interrupt',
+        id: 'si-ok',
+        parentSessionId: 'sess-parent',
+        childSessionId: 'sess-child',
+      })).toEqual({ kind: 'subagent/interrupt/response', id: 'si-ok', ok: true })
+    })
+    expect(asked).toEqual([{
+      childSessionId: 'sess-child',
+      authority: { kind: 'user', parentSessionId: 'sess-parent' },
+    }])
+
+    await withBridge((ctx) => {
+      ctx.provide(SUBAGENT_SERVICE, {
+        listChildren: async () => [],
+        listDescendants: async () => [],
+        interrupt: () => {
+          throw new Error('subagent does not belong to this parent')
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/interrupt',
+        id: 'si-denied',
+        parentSessionId: 'sess-parent',
+        childSessionId: 'sess-child',
+      })).toEqual({
+        kind: 'subagent/interrupt/response',
+        id: 'si-denied',
+        ok: false,
+        error: 'subagent does not belong to this parent',
+      })
+    })
+
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/interrupt',
+        id: 'si-nosvc',
+        parentSessionId: 'sess-parent',
+        childSessionId: 'sess-child',
+      })).toEqual({
+        kind: 'subagent/interrupt/response',
+        id: 'si-nosvc',
+        ok: false,
+        error: 'subagents service is not available',
+      })
+    })
+  })
+})
+
+describe('ide-bridge specdev frames', () => {
+  /** One complete v2 snapshot, the value both SpecDev responses carry. */
+  const snapshot = {
+    schemaVersion: 2,
+    slug: 'add-tag-filter',
+    stage: 'implementation',
+    phase: 'phase-1',
+    gates: { hg1: 'passed', hg2: 'pending', hg3: 'pending' },
+    steps: { 'phase-1': { implementer: 'completed', reviewer: 'in_progress', verifier: 'pending' } },
+    pendingGate: 'hg2',
+    loopCount: 1,
+    nextAction: 'confirm HG-2',
+    techDebtSummary: { blocking: 0, total: 3 },
+    initiatingCommand: 'feature',
+    pipelineMode: 'feature',
+  }
+
+  it('validates both requests and both response arms', () => {
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot', id: 'sd-1', sessionId: 'sess-1' }))
+      .toEqual({ kind: 'specdev/snapshot', id: 'sd-1', sessionId: 'sess-1' })
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot', id: 'sd-1' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot }))
+      .toEqual({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot })
+    // No active workflow is a legal answer, not a refusal.
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: null }))
+      .toEqual({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: null })
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: false, error: 'no runtime' }))
+      .toEqual({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: false, error: 'no runtime' })
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...snapshot, loopCount: -1 } }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...snapshot, gates: { hg1: 'passed', hg2: 'done', hg3: 'pending' } } }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...snapshot, pendingGate: 'hg4' } }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...snapshot, steps: { 'phase-1': { implementer: 'completed' } } } }))
+      .toBeUndefined()
+    // Schema v1 payloads carry none of the v2 fields and must stay legal; the
+    // three omitted names are exactly those fields.
+    const { initiatingCommand: _initiatingCommand, pipelineMode: _pipelineMode, techDebtSummary: _techDebtSummary, ...v1 } = snapshot
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...v1, schemaVersion: 1 } }))
+      .toMatchObject({ ok: true })
+
+    expect(validateBridgeFrame({
+      kind: 'specdev/confirm-gate',
+      id: 'sg-1',
+      sessionId: 'sess-1',
+      gate: 'hg2',
+      decision: 'pass',
+    })).toEqual({
+      kind: 'specdev/confirm-gate',
+      id: 'sg-1',
+      sessionId: 'sess-1',
+      gate: 'hg2',
+      decision: 'pass',
+    })
+    expect(validateBridgeFrame({
+      kind: 'specdev/confirm-gate',
+      id: 'sg-1',
+      sessionId: 'sess-1',
+      gate: 'hg2',
+      decision: 'reject',
+      note: 'reviews missing',
+    })).toMatchObject({ note: 'reviews missing' })
+    expect(validateBridgeFrame({ kind: 'specdev/confirm-gate', id: 'sg-1', sessionId: 'sess-1', gate: 'hg2' }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/confirm-gate', id: 'sg-1', sessionId: 'sess-1', gate: '', decision: 'pass' }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/confirm-gate/response', id: 'sg-1', ok: true, snapshot }))
+      .toEqual({ kind: 'specdev/confirm-gate/response', id: 'sg-1', ok: true, snapshot })
+    expect(validateBridgeFrame({ kind: 'specdev/confirm-gate/response', id: 'sg-1', ok: false, error: 'SPECDEV_NO_ACTIVE_WORKFLOW: no active SpecDev workflow' }))
+      .toEqual({
+        kind: 'specdev/confirm-gate/response',
+        id: 'sg-1',
+        ok: false,
+        error: 'SPECDEV_NO_ACTIVE_WORKFLOW: no active SpecDev workflow',
+      })
+  })
+
+  it('serves the active workflow status to the addressed session', async () => {
+    const session = { header: { cwd: '/ws' }, append: () => undefined }
+    const asked: unknown[] = []
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: (id: string) => id === 'sess-1' ? session : undefined })
+      ctx.provide(SPECDEV_SERVICE, {
+        snapshot: (received: unknown) => {
+          asked.push(received)
+          return snapshot
+        },
+        confirmGate: async () => ({ ok: true }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'specdev/snapshot', id: 'sd-ok', sessionId: 'sess-1' }))
+        .toEqual({ kind: 'specdev/snapshot/response', id: 'sd-ok', ok: true, snapshot })
+      expect(await roundTrip(harness, { kind: 'specdev/snapshot', id: 'sd-cold', sessionId: 'sess-other' }))
+        .toEqual({
+          kind: 'specdev/snapshot/response',
+          id: 'sd-cold',
+          ok: false,
+          error: 'unknown session "sess-other"',
+        })
+    })
+    // The runtime's own session object is what the workspace resolver and log append need.
+    expect(asked).toEqual([session])
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SPECDEV_SERVICE, {
+        snapshot: () => null,
+        confirmGate: async () => ({ ok: true }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'specdev/snapshot', id: 'sd-none', sessionId: 'sess-1' }))
+        .toEqual({ kind: 'specdev/snapshot/response', id: 'sd-none', ok: true, snapshot: null })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SPECDEV_SERVICE, {
+        snapshot: () => {
+          throw new Error('current-status.json is not readable')
+        },
+        confirmGate: async () => ({ ok: true }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'specdev/snapshot', id: 'sd-bad', sessionId: 'sess-1' }))
+        .toEqual({
+          kind: 'specdev/snapshot/response',
+          id: 'sd-bad',
+          ok: false,
+          error: 'current-status.json is not readable',
+        })
+    })
+
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'specdev/snapshot', id: 'sd-nosvc', sessionId: 'sess-1' }))
+        .toEqual({
+          kind: 'specdev/snapshot/response',
+          id: 'sd-nosvc',
+          ok: false,
+          error: 'specdev service is not available',
+        })
+    })
+  })
+
+  it('applies one gate decision through the runtime and reports its refusal', async () => {
+    const session = { header: { cwd: '/ws' }, append: () => undefined }
+    const asked: Array<Record<string, unknown>> = []
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SPECDEV_SERVICE, {
+        snapshot: () => snapshot,
+        confirmGate: async (_session: unknown, request: Record<string, unknown>) => {
+          asked.push(request)
+          return { ok: true, snapshot: { ...snapshot, gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' }, pendingGate: null } }
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'specdev/confirm-gate',
+        id: 'sg-ok',
+        sessionId: 'sess-1',
+        gate: 'hg2',
+        decision: 'pass',
+        note: 'requirements reviewed',
+      })).toEqual({
+        kind: 'specdev/confirm-gate/response',
+        id: 'sg-ok',
+        ok: true,
+        snapshot: { ...snapshot, gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' }, pendingGate: null },
+      })
+    })
+    expect(asked).toEqual([{ gate: 'hg2', decision: 'pass', note: 'requirements reviewed' }])
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SPECDEV_SERVICE, {
+        snapshot: () => snapshot,
+        confirmGate: async () => ({
+          ok: false,
+          code: 'SPECDEV_GATE_NOT_PENDING',
+          message: 'gate hg1 is not the current pending gate (hg2)',
+        }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'specdev/confirm-gate',
+        id: 'sg-denied',
+        sessionId: 'sess-1',
+        gate: 'hg1',
+        decision: 'reject',
+      })).toEqual({
+        kind: 'specdev/confirm-gate/response',
+        id: 'sg-denied',
+        ok: false,
+        error: 'SPECDEV_GATE_NOT_PENDING: gate hg1 is not the current pending gate (hg2)',
+      })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SPECDEV_SERVICE, {
+        snapshot: () => snapshot,
+        // The runtime may accept a decision without repeating the status it wrote.
+        confirmGate: async () => ({ ok: true }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'specdev/confirm-gate',
+        id: 'sg-bare',
+        sessionId: 'sess-1',
+        gate: 'hg2',
+        decision: 'defer',
+      })).toEqual({ kind: 'specdev/confirm-gate/response', id: 'sg-bare', ok: true, snapshot: null })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => undefined })
+      ctx.provide(SPECDEV_SERVICE, {
+        snapshot: () => snapshot,
+        confirmGate: async () => ({ ok: true }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'specdev/confirm-gate',
+        id: 'sg-cold',
+        sessionId: 'sess-1',
+        gate: 'hg2',
+        decision: 'pass',
+      })).toEqual({
+        kind: 'specdev/confirm-gate/response',
+        id: 'sg-cold',
+        ok: false,
+        error: 'unknown session "sess-1"',
+      })
+    })
+
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'specdev/confirm-gate',
+        id: 'sg-nosvc',
+        sessionId: 'sess-1',
+        gate: 'hg2',
+        decision: 'pass',
+      })).toEqual({
+        kind: 'specdev/confirm-gate/response',
+        id: 'sg-nosvc',
+        ok: false,
+        error: 'specdev service is not available',
+      })
+    })
   })
 })

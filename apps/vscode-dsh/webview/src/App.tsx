@@ -6,6 +6,7 @@ import { MessageList } from './components/MessageList.tsx'
 import { Composer } from './components/Composer.tsx'
 import { DeleteConfirmModal } from './components/DeleteConfirmModal.tsx'
 import { SettingsPanel } from './components/SettingsPanel.tsx'
+import { SpecdevCard } from './components/SpecdevCard.tsx'
 import {
   getChatUiState,
   setPendingContinue,
@@ -52,21 +53,29 @@ export function App({ bridge }: AppProps) {
     bridge,
   ])
 
-  const disabledReason = ui.mode === 'readonly-live'
-    ? '子代理运行中 — 只读直播，不可直接发送'
-    : ui.composerState === 'readonly'
-      ? '只读回放 — 不可直接发送'
-      : ui.composerState === 'error'
-        ? (ui.connectionMessage || ui.banner || '出错 — 暂不可发送')
-        : ui.composerState === 'waiting'
-          ? '等待 Host 连接…'
-          : undefined
+  const parentReadonly = ui.hostProbes?.parentReadonly === true
+  const composerState = parentReadonly && ui.composerState === 'live' ? 'readonly' : ui.composerState
+  const disabledReason = parentReadonly
+    ? '父会话已派生新分叉 — 只读'
+    : ui.mode === 'readonly-live'
+      ? '子代理运行中 — 只读直播，不可直接发送'
+      : composerState === 'readonly'
+        ? '只读回放 — 不可直接发送'
+        : composerState === 'error'
+          ? (ui.connectionMessage || ui.banner || '出错 — 暂不可发送')
+          : composerState === 'waiting'
+            ? '等待 Host 连接…'
+            : undefined
+  const canRetryConnect = ui.connectionPhase === 'failed' || ui.connectionPhase === 'disconnected-manual'
 
   return (
     <div
       data-testid="editor-chat-root"
       data-follow-state={ui.followState}
       data-mode={ui.mode}
+      data-tab-id={ui.tabId ?? ''}
+      data-theme-kind={ui.themeKind ?? ''}
+      data-parent-readonly={parentReadonly ? 'true' : undefined}
     >
       <TabChrome
         tabs={ui.tabs}
@@ -84,6 +93,8 @@ export function App({ bridge }: AppProps) {
         forkParentTitle={ui.forkParentTitle}
         contextSessionId={ui.contextSessionId}
         breadcrumb={ui.breadcrumb}
+        newConversation={ui.newConversationChrome}
+        deferredRestoreCount={ui.deferredRestoreCount}
       />
       <HistoryPanel
         open={ui.historyOpen}
@@ -99,7 +110,10 @@ export function App({ bridge }: AppProps) {
           loading={ui.messagesLoading}
           emptyHint={ui.mode === 'empty' ? '点击 + 新建会话，或打开历史' : undefined}
           bridge={bridge}
-          readonly={ui.mode === 'replay' || ui.mode === 'empty' || ui.mode === 'readonly-live'}
+          readonly={parentReadonly
+            || ui.mode === 'replay'
+            || ui.mode === 'empty'
+            || ui.mode === 'readonly-live'}
           streaming={ui.streaming}
           followState={ui.followState}
           todoItems={ui.todoItems}
@@ -119,20 +133,58 @@ export function App({ bridge }: AppProps) {
           onClose={() => setSettingsOpen(false)}
         />
       </div>
+      {ui.specdev === undefined ? null : (
+        <SpecdevCard status={ui.specdev} bridge={bridge} sessionId={ui.sessionId} />
+      )}
       <div
         data-testid="status"
         role="status"
         className="dsh-statusline"
-        data-empty={ui.statusText || ui.tokenStatus ? undefined : 'true'}
+        data-empty={ui.statusText || ui.tokenStatus || ui.route ? undefined : 'true'}
+        data-banner-kind={ui.bannerKind ?? ''}
       >
         <span className="dsh-status-text">{ui.statusText}</span>
+        {ui.settingsDeepLinkAvailable ? (
+          <button
+            type="button"
+            data-testid="btn-deeplink-settings"
+            className="dsh-secondary-btn"
+            title="在扩展设置中填写凭据"
+            onClick={() => {
+              bridge.emitIntent({ type: 'action/open-settings' })
+              setSettingsOpen(true)
+            }}
+          >
+            打开设置
+          </button>
+        ) : null}
+        {canRetryConnect ? (
+          <button
+            type="button"
+            data-testid="btn-retry-connect"
+            className="dsh-secondary-btn"
+            onClick={() => bridge.emitIntent({ type: 'action/retry-connect' })}
+          >
+            重试连接
+          </button>
+        ) : null}
+        {ui.route === undefined ? null : (
+          <span
+            data-testid="session-route"
+            className="dsh-muted"
+            title={`${ui.route.provider}/${ui.route.model}`}
+          >
+            {ui.route.model}
+          </span>
+        )}
         <TokenMeter status={ui.tokenStatus} />
       </div>
       <Composer
-        state={ui.composerState}
+        state={composerState}
         text={ui.composerText}
         bridge={bridge}
         disabledReason={disabledReason}
+        continueSealed={ui.hostProbes?.continueSealed === true}
         streaming={ui.streaming}
         stopping={ui.stopping}
         continueChrome={ui.continueChrome}
@@ -140,6 +192,12 @@ export function App({ bridge }: AppProps) {
         tokenStatus={ui.tokenStatus}
         atCompletion={ui.atCompletion}
         slashCompletion={ui.slashCompletion}
+        sendRestore={ui.sendRestore}
+        route={ui.route}
+        modelState={ui.modelState}
+        subagentTarget={ui.subagentPrompt === undefined
+          ? undefined
+          : ui.subagentPrompt.label ?? ui.subagentPrompt.childSessionId.slice(0, 8)}
       />
       {ui.deleteConfirm ? (
         <DeleteConfirmModal confirm={ui.deleteConfirm} bridge={bridge} />
@@ -161,7 +219,9 @@ function formatTokenCount(count: number): string {
  */
 function TokenMeter({ status }: { status?: TokenStatus }) {
   if (!status) return null
-  const ratio = status.contextWindow > 0 ? status.totalTokens / status.contextWindow : 0
+  // The runtime's next-prompt estimate follows compaction; the log's own total cannot.
+  const used = status.projectedTokens ?? status.totalTokens
+  const ratio = status.contextWindow > 0 ? used / status.contextWindow : 0
   const percent = Math.min(100, Math.max(0, Math.round(ratio * 1000) / 10))
   const warn = ratio >= status.thresholdRatio
   const detail = [
@@ -189,7 +249,7 @@ function TokenMeter({ status }: { status?: TokenStatus }) {
         />
       </div>
       <span data-testid="token-meter-text" className="dsh-token-text">
-        {`${formatTokenCount(status.totalTokens)} / ${formatTokenCount(status.contextWindow)} · ${percent}%`}
+        {`${formatTokenCount(used)} / ${formatTokenCount(status.contextWindow)} · ${percent}%`}
       </span>
     </div>
   )

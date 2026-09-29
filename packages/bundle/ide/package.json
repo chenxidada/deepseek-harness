@@ -35,7 +35,9 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-file-reference-local": "workspace:^",
-    "@deepseek-ai/dsh-ide-bridge": "workspace:^"
+    "@deepseek-ai/dsh-ide-bridge": "workspace:^",
+    "@deepseek-ai/dsh-session-stats": "workspace:^",
+    "@deepseek-ai/dsh-session-turn-outline": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^"

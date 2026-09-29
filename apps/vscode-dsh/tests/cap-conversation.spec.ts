@@ -152,6 +152,644 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
         await host.shutdown()
       })
+
+      it('CAP-CONVERSATION-089 renames a session through the runtime and follows the title event', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-rename-'))
+        dirs.push(dir)
+        const renameLog = join(dir, 'renames.ndjson')
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-rename-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_RENAME_LOG: renameLog,
+          },
+        })
+        await viWaitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const tab = controller.newConversation()
+        await controller.promptActive('rename me')
+
+        const accepted = await controller.renameSession(tab.sessionId, '  重命名后的标题  ')
+        expect(accepted).toBe('重命名后的标题')
+
+        const logged = (await readFile(renameLog, 'utf8')).trim().split('\n')
+          .map(line => JSON.parse(line) as { sessionId: string; title: string })
+        expect(logged).toEqual([{ sessionId: tab.sessionId, title: '重命名后的标题' }])
+
+        // The session log owns the title: the `session/title` event drives Tab chrome and the index row.
+        expect(controller.registry.get(tab.tabId)?.title).toBe('重命名后的标题')
+        await viWaitFor(
+          () => controller.index.read().sessions.find(row => row.sessionId === tab.sessionId)?.title === '重命名后的标题',
+          1_000,
+        )
+
+        // A title the runtime refuses rejects the call and leaves the recorded title alone.
+        await expect(controller.renameSession(tab.sessionId, '   ')).rejects.toThrow(
+          'session title must contain visible characters',
+        )
+        expect(controller.registry.get(tab.tabId)?.title).toBe('重命名后的标题')
+
+        await host.shutdown()
+      })
+
+      it('CAP-CONVERSATION-091 session/stat answers for the prompted session and for an id this runtime never stored', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-stat-'))
+        dirs.push(dir)
+        const statLog = join(dir, 'stats.ndjson')
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-stat-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_PROMPT_LOG: join(dir, 'prompts.ndjson'),
+            FAKE_STAT_LOG: statLog,
+          },
+        })
+        await viWaitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const tab = controller.newConversation()
+        await controller.promptActive('stat me')
+
+        expect(await host.statSession(tab.sessionId)).toEqual({ found: true, eventCount: 2, sizeBytes: 512 })
+        expect(await host.statSession('sess-never-stored')).toEqual({ found: false })
+
+        const logged = (await readFile(statLog, 'utf8')).trim().split('\n')
+          .map(line => JSON.parse(line) as { sessionId: string; found: boolean })
+        expect(logged).toEqual([
+          { sessionId: tab.sessionId, found: true },
+          { sessionId: 'sess-never-stored', found: false },
+        ])
+
+        await host.shutdown()
+      })
+
+      it('CAP-CONVERSATION-092 projection/read reports one cut over the requested units', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-projection-'))
+        dirs.push(dir)
+        const projectionLog = join(dir, 'projections.ndjson')
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-projection-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_PROMPT_LOG: join(dir, 'prompts.ndjson'),
+            FAKE_PROJECTION_LOG: projectionLog,
+          },
+        })
+        await viWaitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const tab = controller.newConversation()
+        await controller.promptActive('project me')
+
+        const pressure = { pressureTokens: 1_200, projectedTokens: 1_500, contextWindow: 200_000 }
+        expect(await host.readProjection(tab.sessionId, ['contextPressure']))
+          .toEqual({ asOfSeq: 7, values: { contextPressure: pressure } })
+        // Omitting the filter views every registered client-visible unit.
+        expect(await host.readProjection(tab.sessionId)).toEqual({
+          asOfSeq: 7,
+          values: {
+            contextPressure: pressure,
+            sessionStats: { turns: 1, steps: 1 },
+            turnOutline: { turns: [] },
+          },
+        })
+
+        const logged = (await readFile(projectionLog, 'utf8')).trim().split('\n')
+          .map(line => JSON.parse(line) as { sessionId: string; keys: string[] | null })
+        expect(logged).toEqual([
+          { sessionId: tab.sessionId, keys: ['contextPressure'] },
+          { sessionId: tab.sessionId, keys: null },
+        ])
+
+        await host.shutdown()
+      })
+
+      it('CAP-CONVERSATION-093 session/search returns the runtime index hits for a matching query', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-search-'))
+        dirs.push(dir)
+        const searchLog = join(dir, 'searches.ndjson')
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-search-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_SEARCH_LOG: searchLog,
+            FAKE_SEARCH_BODY: 'the indexed needle sentence',
+            FAKE_SEARCH_SESSION: 'sess-search-hit',
+          },
+        })
+        await viWaitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const hits = await controller.searchSessionContent('needle', 5)
+        expect(hits).toHaveLength(1)
+        expect(hits[0]).toMatchObject({
+          sessionId: 'sess-search-hit',
+          title: 'Fake search hit',
+          seq: 3,
+          snippet: '…the indexed needle sentence…',
+        })
+        // A query the index does not match answers no hits rather than an error.
+        expect(await controller.searchSessionContent('absent-needle')).toEqual([])
+
+        const logged = (await readFile(searchLog, 'utf8')).trim().split('\n')
+          .map(line => JSON.parse(line) as { query: string; limit: number | null })
+        expect(logged).toEqual([
+          { query: 'needle', limit: 5 },
+          { query: 'absent-needle', limit: null },
+        ])
+
+        await host.shutdown()
+      })
+
+      it('CAP-CONVERSATION-095 subagent/list, prompt, and interrupt round-trip the runtime address', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-subagent-'))
+        dirs.push(dir)
+        const listLog = join(dir, 'subagent-lists.ndjson')
+        const promptLog = join(dir, 'subagent-prompts.ndjson')
+        const interruptLog = join(dir, 'subagent-interrupts.ndjson')
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-subagent-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_SUBAGENT_LIST_LOG: listLog,
+            FAKE_SUBAGENT_PROMPT_LOG: promptLog,
+            FAKE_SUBAGENT_INTERRUPT_LOG: interruptLog,
+            FAKE_SUBAGENT_CHILD: 'sess-child-durable',
+            FAKE_SUBAGENT_LABEL: 'Researcher child',
+            FAKE_SUBAGENT_ACTIVITY: 'running',
+          },
+        })
+        await viWaitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const tab = controller.newConversation()
+        await controller.promptActive('parent prompt')
+
+        // The durable listing answers a child this window never ran a driver for.
+        const listed = await controller.listSubagents(tab.sessionId, 'children')
+        expect(listed.sessionLive).toBe(true)
+        expect(listed.entries).toEqual([{
+          kind: 'child',
+          sessionId: 'sess-child-durable',
+          mode: 'continuable',
+          label: 'Researcher child',
+          activity: 'running',
+          hasChildren: false,
+        }])
+        // The tree listing carries the position the runtime reported.
+        const tree = await controller.listSubagents(tab.sessionId, 'descendants')
+        expect(tree.entries).toEqual([{
+          kind: 'child',
+          sessionId: 'sess-child-durable',
+          mode: 'continuable',
+          label: 'Researcher child',
+          activity: 'running',
+          hasChildren: false,
+          parentSessionId: 'fake-parent',
+          depth: 1,
+        }])
+
+        const messageId = await controller.promptSubagent(tab.sessionId, 'sess-child-durable', 'keep going')
+        expect(messageId).toBe('fake-subagent-message')
+        await controller.interruptSubagent(tab.sessionId, 'sess-child-durable')
+
+        const lists = (await readFile(listLog, 'utf8')).trim().split('\n')
+          .map(line => JSON.parse(line) as { sessionId: string; scope: string })
+        expect(lists).toEqual([
+          { sessionId: tab.sessionId, scope: 'children' },
+          { sessionId: tab.sessionId, scope: 'descendants' },
+        ])
+        const prompts = (await readFile(promptLog, 'utf8')).trim().split('\n')
+          .map(line => JSON.parse(line) as { parentSessionId: string; childSessionId: string; text: string })
+        expect(prompts).toEqual([{
+          parentSessionId: tab.sessionId,
+          childSessionId: 'sess-child-durable',
+          text: 'keep going',
+        }])
+        const interrupts = (await readFile(interruptLog, 'utf8')).trim().split('\n')
+          .map(line => JSON.parse(line) as { parentSessionId: string; childSessionId: string })
+        expect(interrupts).toEqual([{
+          parentSessionId: tab.sessionId,
+          childSessionId: 'sess-child-durable',
+        }])
+
+        await host.shutdown()
+      })
+
+      it('CAP-CONVERSATION-096 a refused subagent prompt carries the runtime text', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-subagent-refuse-'))
+        dirs.push(dir)
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-subagent-refuse-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_SUBAGENT_PROMPT_ERROR: 'parent session "sess-parent" is not live',
+            FAKE_SUBAGENT_INTERRUPT_ERROR: 'subagent does not belong to this parent',
+          },
+        })
+        await viWaitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const tab = controller.newConversation()
+        await controller.promptActive('parent prompt')
+
+        await expect(controller.promptSubagent(tab.sessionId, 'sess-child', 'hello'))
+          .rejects.toThrow('parent session "sess-parent" is not live')
+        await expect(controller.interruptSubagent(tab.sessionId, 'sess-child'))
+          .rejects.toThrow('subagent does not belong to this parent')
+
+        await host.shutdown()
+      })
+
+      it('CAP-CONVERSATION-097 the panel resolves a writable subagent address from the durable mode', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-subagent-target-'))
+        dirs.push(dir)
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-subagent-target-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_SUBAGENT_CHILD: 'child-continuable',
+            FAKE_SUBAGENT_LABEL: 'Researcher',
+            FAKE_SUBAGENT_LIST_LOG: join(dir, 'subagent-lists.ndjson'),
+          },
+        })
+        await viWaitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const parent = controller.newConversation()
+        await controller.promptActive('parent prompt')
+        // The child already carries content, so entering it hydrates nothing.
+        controller.messages.replace('child-continuable', [{
+          id: 'm-child',
+          sessionId: 'child-continuable',
+          role: 'user',
+          kind: 'text',
+          text: 'do the thing',
+          turn: 0,
+        }])
+        await controller.applyTestSubagentNotification('started', parent.sessionId, 'child-continuable')
+        await controller.applyTestSubagentNotification('finished', parent.sessionId, 'child-continuable')
+        await controller.openSubagentContext('child-continuable')
+
+        // The runtime classifies the child continuable, so the panel may write to it.
+        await viWaitFor(() => controller.resolveSubagentPromptTarget() !== undefined, 3_000)
+        expect(controller.resolveSubagentPromptTarget()).toEqual({
+          parentSessionId: parent.sessionId,
+          childSessionId: 'child-continuable',
+          label: 'Researcher',
+        })
+        expect(controller.resolvePanelProjection()?.subagentPrompt).toEqual({
+          parentSessionId: parent.sessionId,
+          childSessionId: 'child-continuable',
+          label: 'Researcher',
+        })
+
+        // A running child stays mirror-only, whatever its durable mode says.
+        await controller.applyTestSubagentNotification('started', parent.sessionId, 'child-continuable')
+        expect(controller.resolveSubagentPromptTarget()).toBeUndefined()
+
+        await host.shutdown()
+
+        // A one-shot child never becomes a writable address, even once it ended.
+        const oneShotHost = new IdeSessionHost()
+        await oneShotHost.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh-oneshot'),
+          bridgeSockPath: join(dir, 'bridge-oneshot.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-subagent-target-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_SUBAGENT_CHILD: 'child-one-shot',
+            FAKE_SUBAGENT_MODE: 'one-shot',
+          },
+        })
+        await viWaitFor(() => oneShotHost.bridgeConnected(), 3_000)
+        const oneShotController = new ConversationController(oneShotHost)
+        const oneShotParent = oneShotController.newConversation()
+        await oneShotController.promptActive('parent prompt')
+        oneShotController.messages.replace('child-one-shot', [{
+          id: 'm-child',
+          sessionId: 'child-one-shot',
+          role: 'user',
+          kind: 'text',
+          text: 'do the thing',
+          turn: 0,
+        }])
+        await oneShotController.applyTestSubagentNotification('started', oneShotParent.sessionId, 'child-one-shot')
+        await oneShotController.applyTestSubagentNotification('finished', oneShotParent.sessionId, 'child-one-shot')
+        await oneShotController.openSubagentContext('child-one-shot')
+        await viWaitFor(() => oneShotController.resolveSubagentPromptTarget() === undefined, 300)
+        // Give the catalog read time to land before asserting it changed nothing.
+        await new Promise(resolve => setTimeout(resolve, 200))
+        expect(oneShotController.resolveSubagentPromptTarget()).toBeUndefined()
+        expect(oneShotController.resolvePanelProjection()?.subagentPrompt).toBeUndefined()
+
+        await oneShotHost.shutdown()
+      }, 10_000)
+
+      it('CAP-CONVERSATION-098 specdev/snapshot and confirm-gate round-trip the runtime status', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-specdev-'))
+        dirs.push(dir)
+        const snapshotLog = join(dir, 'specdev-snapshots.ndjson')
+        const gateLog = join(dir, 'specdev-gates.ndjson')
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-specdev-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_SPECDEV_SNAPSHOT_LOG: snapshotLog,
+            FAKE_SPECDEV_GATE_LOG: gateLog,
+            FAKE_SPECDEV_SLUG: 'add-tag-filter',
+            FAKE_SPECDEV_STAGE_AFTER: 'review',
+          },
+        })
+        await viWaitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const tab = controller.newConversation()
+        await controller.promptActive('parent prompt')
+
+        await controller.refreshSpecdev(tab.sessionId)
+        expect(controller.cachedSpecdev(tab.sessionId)).toMatchObject({
+          slug: 'add-tag-filter',
+          stage: 'implementation',
+          phase: 'phase-1',
+          gates: { hg1: 'passed', hg2: 'pending', hg3: 'pending' },
+          pendingGate: 'hg2',
+          loopCount: 1,
+          nextAction: 'confirm HG-2',
+        })
+
+        const after = await controller.confirmSpecdevGate(tab.sessionId, 'hg2', 'pass', 'reviewed')
+        expect(after).toMatchObject({ stage: 'review', pendingGate: null })
+        // The confirmed status replaces the cached one the card renders.
+        expect(controller.cachedSpecdev(tab.sessionId)).toMatchObject({ stage: 'review', pendingGate: null })
+
+        const logged = JSON.parse((await readFile(gateLog, 'utf8')).trim()) as Record<string, unknown>
+        expect(logged).toEqual({
+          sessionId: tab.sessionId,
+          gate: 'hg2',
+          decision: 'pass',
+          note: 'reviewed',
+        })
+
+        await host.shutdown()
+      })
+
+      it('CAP-CONVERSATION-099 a specdev event re-reads the status and pushes the card', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-specdev-push-'))
+        dirs.push(dir)
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-specdev-push-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_SPECDEV_SLUG: 'fake-workflow',
+          },
+        })
+        await viWaitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const tab = controller.newConversation()
+        await controller.promptActive('parent prompt')
+        const panel = new ChatPanelHost({
+          registry: controller.registry,
+          messages: controller.messages,
+          isHostReady: () => true,
+          acceptSend: text => controller.promptActive(text),
+        })
+        controller.setPanelHost(panel)
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+        fake.receivedFromHost.length = 0
+        // Opening a Tab alone reads no workflow: the card follows the log.
+        expect(fake.receivedFromHost.filter(m => m.type === 'specdev/status')).toEqual([])
+
+        controller.applyTestSessionEvent(tab.sessionId, 'specdev/gate-pending', {
+          kind: 'specdev/gate-pending',
+          version: 1,
+          gate: 'hg2',
+          snapshot: { slug: 'fake-workflow' },
+        })
+        await viWaitFor(() => fake.receivedFromHost.some(m => m.type === 'specdev/status'), 3_000)
+        const frame = fake.receivedFromHost.filter(m => m.type === 'specdev/status').at(-1)
+        expect(frame?.type === 'specdev/status' ? frame.sessionId : undefined).toBe(tab.sessionId)
+        expect(frame?.type === 'specdev/status' ? frame.snapshot : undefined).toMatchObject({
+          slug: 'fake-workflow',
+          pendingGate: 'hg2',
+        })
+
+        // Activating the Tab re-reads the workspace, so a workflow that ended
+        // elsewhere stops owning the card.
+        fake.receivedFromHost.length = 0
+        controller.switchConversation(tab.tabId)
+        await viWaitFor(() => fake.receivedFromHost.some(m => m.type === 'specdev/status'), 3_000)
+
+        await host.shutdown()
+      }, 10_000)
+
+      it('CAP-CONVERSATION-101 reopening a session reads its logged images back onto the bubbles', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-replay-images-'))
+        dirs.push(dir)
+        const attachmentLog = join(dir, 'attachments.ndjson')
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-replay-images-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_ATTACHMENT_LOG: attachmentLog,
+            FAKE_ATTACHMENT_DATA: 'cG5n',
+          },
+        })
+        await viWaitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const panel = new ChatPanelHost({
+          registry: controller.registry,
+          messages: controller.messages,
+          isHostReady: () => true,
+          acceptSend: text => controller.promptActive(text),
+        })
+        controller.setPanelHost(panel)
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+        fake.receivedFromHost.length = 0
+
+        const reference = {
+          attachmentId: 'sha256:0000000000000000000000000000000000000000000000000000000000000001',
+          mediaType: 'image/png',
+          width: 4,
+          height: 4,
+          bytes: 70,
+          name: 'shot.png',
+        }
+        const opened = await controller.openFromHistory('sess-replay-images', {
+          events: [
+            {
+              type: 'user/message',
+              seq: 0,
+              data: {
+                id: 'm-image',
+                role: 'user',
+                content: [
+                  { type: 'text', text: '看这张图' },
+                  { type: 'image', attachment: reference },
+                ],
+              },
+            },
+            {
+              type: 'assistant/message',
+              seq: 1,
+              data: {
+                message: { id: 'm-reply', role: 'assistant', content: [{ type: 'text', text: '收到' }] },
+              },
+            },
+          ],
+        })
+        expect(opened.outcome).toBe('opened')
+
+        // The log records a reference, so the bubble carries the bytes the
+        // attachment store answered for it.
+        const bubble = controller.messages.get('sess-replay-images')[0]
+        expect(bubble?.text).toBe('看这张图')
+        expect(bubble?.images).toEqual([{ mimeType: 'image/png', data: 'cG5n' }])
+        expect(controller.messages.get('sess-replay-images')[1]?.images).toBeUndefined()
+
+        const patch = fake.receivedFromHost.filter(m => m.type === 'messages/patch').at(-1)
+        expect(patch).toMatchObject({
+          sessionId: 'sess-replay-images',
+          messageId: 'm-image',
+          images: [{ mimeType: 'image/png', data: 'cG5n' }],
+        })
+
+        const logged = (await readFile(attachmentLog, 'utf8')).trim().split('\n')
+          .map(line => JSON.parse(line) as { attachmentId: string; mediaType: string })
+        expect(logged).toEqual([{ attachmentId: reference.attachmentId, mediaType: 'image/png' }])
+
+        await host.shutdown()
+      }, 10_000)
+
+      it('CAP-CONVERSATION-102 a refused image read leaves the replayed bubble text-only', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-replay-images-gone-'))
+        dirs.push(dir)
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          disposeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-replay-images-gone-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_ATTACHMENT_ERROR: 'Attachment object is missing.',
+          },
+        })
+        await viWaitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const opened = await controller.openFromHistory('sess-replay-gone', {
+          events: [{
+            type: 'user/message',
+            seq: 0,
+            data: {
+              id: 'm-gone',
+              role: 'user',
+              content: [
+                { type: 'text', text: '图已不在' },
+                {
+                  type: 'image',
+                  attachment: {
+                    attachmentId: 'sha256:0000000000000000000000000000000000000000000000000000000000000002',
+                    mediaType: 'image/png',
+                    width: 4,
+                    height: 4,
+                    bytes: 70,
+                  },
+                },
+              ],
+            },
+          }],
+        })
+        expect(opened.outcome).toBe('opened')
+        const bubble = controller.messages.get('sess-replay-gone')[0]
+        expect(bubble?.text).toBe('图已不在')
+        expect(bubble?.images).toBeUndefined()
+
+        await host.shutdown()
+      }, 10_000)
     })
 
     async function viWaitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
@@ -993,7 +1631,9 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       })
 
       function activateWithPanel(opts?: {
-        showQuickPick?: (items: Array<{ tabId: string }>) => Promise<{ tabId: string } | undefined>
+        showQuickPick?: (
+          items: Array<{ tabId: string; label: string; description: string; detail?: string }>,
+        ) => Promise<{ tabId: string } | undefined>
       }): {
         createWebviewPanel: ReturnType<typeof vi.fn>
         revealCount: { n: number }
@@ -1136,6 +1776,69 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(result.outcome).toBe('opened')
         expect(createWebviewPanel).toHaveBeenCalledTimes(1)
         expect(controller!.registry.getBySessionId(sessionId)).toBeDefined()
+      })
+
+      it('CAP-CONVERSATION-094 dsh.searchSessions merges runtime content hits and falls back to metadata tiers', async () => {
+        const sessionId = 'search-merge-1'
+        const rows: Array<{ tabId: string; label: string; description: string; detail?: string }> = []
+        activateWithPanel({
+          showQuickPick: async (items) => {
+            rows.push(...items)
+            return undefined
+          },
+        })
+        await startHostConnected()
+        const controller = getConversationController()
+        expect(controller).toBeDefined()
+        controller!.index.upsertSession({
+          sessionId,
+          title: 'Content merge session',
+          mtime: Date.now(),
+          firstUserPreview: 'find the merge',
+        })
+        const searchSpy = vi.spyOn(IdeSessionHost.prototype, 'searchSessions').mockResolvedValue([
+          {
+            sessionId,
+            createdAt: 1,
+            title: 'Content merge session',
+            seq: 5,
+            snippet: '…the indexed needle…',
+          },
+          {
+            sessionId: 'search-remote-2',
+            createdAt: 2,
+            title: 'Remote only hit',
+            seq: 7,
+            snippet: '…remote needle…',
+          },
+        ])
+
+        const merged = await commands.get('dsh.searchSessions')!({ text: 'Content merge' }) as {
+          outcome: string
+          hits: Array<{ sessionId: string; matchTiers: number[] }>
+        }
+        expect(merged.outcome).toBe('cancelled')
+        expect(merged.hits.map(h => h.sessionId)).toEqual([sessionId, 'search-remote-2'])
+        expect(merged.hits[0]!.matchTiers).toEqual([1, 3])
+        expect(merged.hits[1]!.matchTiers).toEqual([3])
+        expect(rows[0]!.description).toContain('t1:title')
+        expect(rows[0]!.description).toContain('t3:content')
+        expect(rows[0]!.detail).toBe('…the indexed needle…')
+        expect(rows[1]!.label).toBe('Remote only hit')
+        expect(rows[1]!.detail).toBe('…remote needle…')
+
+        rows.length = 0
+        searchSpy.mockRejectedValue(new Error('session search is not enabled'))
+        const metadataOnly = await commands.get('dsh.searchSessions')!({ text: 'Content merge' }) as {
+          outcome: string
+          hits: Array<{ sessionId: string; matchTiers: number[] }>
+        }
+        expect(metadataOnly.outcome).toBe('cancelled')
+        expect(metadataOnly.hits.map(h => h.sessionId)).toEqual([sessionId])
+        expect(metadataOnly.hits[0]!.matchTiers).toEqual([1])
+        expect(rows[0]!.description).not.toContain('t3:content')
+        expect(rows[0]!.detail).toBe('find the merge')
+        searchSpy.mockRestore()
       })
     })
   })
@@ -1535,6 +2238,38 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(activity?.resultPreview?.startsWith('line 0')).toBe(true)
       })
 
+      it('CAP-CONVERSATION-103 a fold reports the complete image references a log recorded', () => {
+        const complete = {
+          attachmentId: 'sha256:0000000000000000000000000000000000000000000000000000000000000001',
+          mediaType: 'image/png',
+          width: 4,
+          height: 4,
+          bytes: 70,
+          name: 'shot.png',
+        }
+        const hydrated = hydrateFromAuthoritativeLog('sess-fold-images', [{
+          type: 'user/message',
+          seq: 3,
+          data: {
+            id: 'u-image',
+            role: 'user',
+            content: [
+              { type: 'text', text: '看这张图' },
+              { type: 'image', attachment: complete },
+              // Admission recorded dimensions for every stored object; a block
+              // without them is not a reference the store can verify.
+              { type: 'image', attachment: { attachmentId: 'sha256:partial', mediaType: 'image/png' } },
+            ],
+          },
+        }])
+
+        expect(hydrated.pendingImages).toEqual([{ messageId: 'u-image', images: [complete] }])
+        // Folding is synchronous and reads no bytes, so the row is text-only
+        // until the caller fills it from the reported references.
+        expect(hydrated.messages[0]?.images).toBeUndefined()
+        expect(hydrated.messages[0]?.text).toBe('看这张图')
+      })
+
       it('CAP-CONVERSATION-080 activity rows merge into the message bars by log seq', () => {
         const events = [
           { type: 'turn/start', seq: 0, data: { turn: 1 } },
@@ -1740,6 +2475,39 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           expect(again.tabId).toBe(opened.tabId)
         }
         expect(controller.registry.list().filter(t => t.sessionId === sessionId)).toHaveLength(1)
+      })
+
+      it('CAP-CONVERSATION-090 a vanished log tombstones its row, and a stored one keeps the read error', async () => {
+        const host = stubHost()
+        const controller = new ConversationController(host)
+        const goneTab = controller.newConversation('Gone')
+        await controller.promptTab(goneTab.tabId, 'gone soon')
+        await controller.closeConversation(goneTab.tabId)
+        const storedTab = controller.newConversation('Stored')
+        await controller.promptTab(storedTab.tabId, 'still stored')
+        await controller.closeConversation(storedTab.tabId)
+
+        host.readSessionLog = async (sessionId: string) => {
+          throw new Error(`no stored log for ${sessionId}`)
+        }
+        host.statSession = async (sessionId: string) => ({ found: sessionId !== goneTab.sessionId })
+
+        const gone = await controller.openFromHistory(goneTab.sessionId)
+        expect(gone.outcome).toBe('missing')
+        expect(controller.index.isDeleted(goneTab.sessionId)).toBe(true)
+        expect(controller.registry.getBySessionId(goneTab.sessionId)).toBeUndefined()
+
+        const stored = await controller.openFromHistory(storedTab.sessionId)
+        expect(stored.outcome).toBe('error')
+        if (stored.outcome === 'error') expect(stored.error).toContain('no stored log')
+        expect(controller.index.isDeleted(storedTab.sessionId)).toBe(false)
+
+        // An unanswered stat leaves the read failure as the reported cause.
+        host.statSession = async () => {
+          throw new Error('session/stat timed out after 5000ms')
+        }
+        const unclear = await controller.openFromHistory(storedTab.sessionId)
+        expect(unclear.outcome).toBe('error')
       })
     })
 
@@ -2384,13 +3152,13 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         }, vscode)
       }
 
-      it('CAP-CONVERSATION-050 chrome HTML always exposes labeled 新建会话 + action/new-conversation', () => {
+      it('CAP-CONVERSATION-050 chrome HTML always exposes labeled 新建会话 + ui/tab-new', () => {
         // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
         expect(html).toContain('id="newConversationBtn"')
         expect(html).toContain('新建会话')
-        expect(html).toContain('action/new-conversation')
-        expect(html).toMatch(/newConversationBtn[\s\S]*action\/new-conversation/)
+        expect(html).toContain('ui/tab-new')
+        expect(html).toMatch(/newConversationBtn[\s\S]*ui\/tab-new/)
         // Not icon-only as sole substitute: label text present on the primary control.
         expect(html).toMatch(/id="newConversationBtn"[^>]*>[\s]*新建会话/)
         // Narrow overflow: either wrap chrome or overflow expand with New as first item.
@@ -2399,13 +3167,13 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         ).toBe(true)
       })
 
-      it('CAP-CONVERSATION-051 keybindings bind dsh.newConversation; protocol parses action/new-conversation; chrome button remains', async () => {
+      it('CAP-CONVERSATION-051 keybindings bind dsh.newConversation; protocol parses ui/tab-new; chrome button remains', async () => {
         const pkg = await import('../package.json', { with: { type: 'json' } })
         const bindings = pkg.default.contributes.keybindings
         expect(Array.isArray(bindings)).toBe(true)
         expect(bindings.some((b: { command?: string }) => b.command === 'dsh.newConversation')).toBe(true)
-        expect(parseWebviewToHostMessage({ type: 'action/new-conversation' })).toEqual({
-          type: 'action/new-conversation',
+        expect(parseWebviewToHostMessage({ type: 'ui/tab-new' })).toEqual({
+          type: 'ui/tab-new',
         })
         // oxlint-disable-next-line typescript/no-deprecated -- fixture-only legacy HTML (AD-ECP-8).
         const html = buildThinChatHtml()
@@ -2418,7 +3186,10 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         const views = pkg.default.contributes.views.dsh
         // A native welcome page would be a second copy of an empty state the view's own
         // document already renders, so the view is a webview and contributes no welcome.
-        expect(views).toEqual([{ id: 'dsh.history', name: 'History', type: 'webview' }])
+        expect(views).toEqual([
+          { id: 'dsh.history', name: 'History', type: 'webview' },
+          { id: 'dsh.todo', name: 'Todo', type: 'tree' },
+        ])
         expect(pkg.default.contributes.viewsWelcome).toBeUndefined()
         expect(pkg.default.contributes.commands.some(
           (c: { command?: string }) => c.command === 'dsh.showPanel',
@@ -2497,7 +3268,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
         activateWith(makeVscode({ history: true }))
         await commands.get('dsh.test.setCredentialPresence')!(true)
-        await getChatPanelHost()!.handleWebviewMessage({ type: 'action/new-conversation' })
+        await getChatPanelHost()!.handleWebviewMessage({ type: 'ui/tab-new' })
         await vi.waitFor(() => {
           expect(getConversationSnapshot().tabs.length).toBeGreaterThanOrEqual(1)
         })
@@ -2569,7 +3340,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         // prompt, which picks nothing, so the row menu must leave the session alone.
         activateWith(makeVscode({ history: true }))
         await commands.get('dsh.test.setCredentialPresence')!(true)
-        await getChatPanelHost()!.handleWebviewMessage({ type: 'action/new-conversation' })
+        await getChatPanelHost()!.handleWebviewMessage({ type: 'ui/tab-new' })
         await vi.waitFor(() => {
           expect(getConversationSnapshot().tabs.length).toBeGreaterThanOrEqual(1)
         })
@@ -2598,7 +3369,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
         activateWith(makeVscode({ history: true, confirmDelete: true }))
         await commands.get('dsh.test.setCredentialPresence')!(true)
-        await getChatPanelHost()!.handleWebviewMessage({ type: 'action/new-conversation' })
+        await getChatPanelHost()!.handleWebviewMessage({ type: 'ui/tab-new' })
         await vi.waitFor(() => {
           expect(getConversationSnapshot().tabs.length).toBeGreaterThanOrEqual(1)
         })
@@ -2615,7 +3386,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(getConversationSnapshot().tabs).toHaveLength(0)
       })
 
-      it('CAP-CONVERSATION-052 disconnected action/new-conversation → connecting wait (not sendable live) → live', async () => {
+      it('CAP-CONVERSATION-052 disconnected ui/tab-new → connecting wait (not sendable live) → live', async () => {
         let releaseStart!: () => void
         const startGate = new Promise<void>((resolve) => {
           releaseStart = resolve
@@ -2634,7 +3405,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(panel).toBeDefined()
         panel!.clearOutboundLog()
 
-        const pending = panel!.handleWebviewMessage({ type: 'action/new-conversation' })
+        const pending = panel!.handleWebviewMessage({ type: 'ui/tab-new' })
 
         await vi.waitFor(() => {
           expect(panel!.getConnectionPhase()).toBe('connecting')
@@ -2682,7 +3453,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         await commands.get('dsh.test.setCredentialPresence')!(false)
 
         const panel = getChatPanelHost()!
-        await panel.handleWebviewMessage({ type: 'action/new-conversation' })
+        await panel.handleWebviewMessage({ type: 'ui/tab-new' })
 
         const snap = await commands.get('dsh.test.getStartState')!() as {
           state: string
@@ -2695,7 +3466,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(getConversationController()).toBeUndefined()
       })
 
-      it('CAP-CONVERSATION-054 connected action/new-conversation → Tab+1 live (or reuse) + reveal', async () => {
+      it('CAP-CONVERSATION-054 connected ui/tab-new → Tab+1 live (or reuse) + reveal', async () => {
         vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (
           this: IdeSessionHost,
         ) {
@@ -2723,7 +3494,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
         const panel = getChatPanelHost()!
         panel.clearOutboundLog()
-        await panel.handleWebviewMessage({ type: 'action/new-conversation' })
+        await panel.handleWebviewMessage({ type: 'ui/tab-new' })
 
         expect(getConversationSnapshot().tabs.length).toBe(before + 1)
         const states = panel.getOutboundLog().filter(m => m.type === 'panel/state')
@@ -2748,7 +3519,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(getConversationSnapshot().tabs).toHaveLength(1)
 
         // (a) active empty → reuse (Tab count stays 1)
-        await panel.handleWebviewMessage({ type: 'action/new-conversation' })
+        await panel.handleWebviewMessage({ type: 'ui/tab-new' })
         expect(getConversationSnapshot().tabs).toHaveLength(1)
         const emptyId = getConversationSnapshot().tabs[0]!.tabId
 
@@ -2766,7 +3537,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         const tabsBefore = getConversationSnapshot().tabs.length
 
         // (b) active has content + leftover empty elsewhere → New (not steal leftover)
-        await panel.handleWebviewMessage({ type: 'action/new-conversation' })
+        await panel.handleWebviewMessage({ type: 'ui/tab-new' })
         const after = getConversationSnapshot()
         expect(after.tabs.length).toBe(tabsBefore + 1)
         expect(after.activeTabId).not.toBe(leftover.tabId)
@@ -2894,7 +3665,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
     })
 
     describe('phase-4 Host unit: requestNewConversation wiring', () => {
-      it('CAP-CONVERSATION-058 ChatPanelHost routes action/new-conversation to deps.requestNewConversation', async () => {
+      it('CAP-CONVERSATION-058 ChatPanelHost routes ui/tab-new to deps.requestNewConversation', async () => {
         const calls: string[] = []
         const host = new IdeSessionHost()
         host.status = 'connected'
@@ -2911,7 +3682,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         })
         const fake = new FakeWebviewPort()
         panel.attach(fake)
-        await panel.handleWebviewMessage({ type: 'action/new-conversation' })
+        await panel.handleWebviewMessage({ type: 'ui/tab-new' })
         expect(calls).toEqual(['new'])
         expect(controller.registry.list()).toHaveLength(1)
       })
@@ -3325,6 +4096,102 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       const state = panel!.getOutboundLog().find(m => m.type === 'settings/state')
       expect(state?.type === 'settings/state' ? state.namespaces.map(row => row.ns) : []).toEqual(['fake-settings'])
     })
+
+    it('CAP-CONVERSATION-087 the contributed Todo TreeView lists the active Tab todo items', async () => {
+      const treeViews: string[] = []
+      const providers = new Map<string, () => Array<{ label: string; description?: string }>>()
+      let fires = 0
+      vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (
+        this: IdeSessionHost,
+      ) {
+        this.status = 'connected'
+      })
+      activate(
+        {
+          subscriptions: [],
+          extensionPath: '/tmp/dsh-todo-view',
+          workspaceState: {
+            // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors WorkspaceStateLike.get<T>.
+            get<T>(key: string) { return mem.get(key) as T | undefined },
+            update(key: string, value: unknown) { mem.set(key, value) },
+          },
+        },
+        {
+          TreeItem: class {
+            label: string
+            description?: string
+            constructor(label: string) {
+              this.label = label
+            }
+          },
+          TreeItemCollapsibleState: { None: 0 },
+          EventEmitter: class {
+            event = {}
+            fire() { fires += 1 }
+            dispose() {}
+          },
+          window: {
+            async showErrorMessage() {},
+            async showInformationMessage() {},
+            registerWebviewViewProvider() { return { dispose() {} } },
+            createTreeView(viewId: string, options: {
+              treeDataProvider: { getChildren(): Array<{ label: string; description?: string }> }
+            }) {
+              treeViews.push(viewId)
+              providers.set(viewId, () => options.treeDataProvider.getChildren())
+              return { dispose() {} }
+            },
+          },
+          workspace: {
+            workspaceFolders: [{ uri: { fsPath: '/tmp/dsh-todo-view' } }],
+            getConfiguration() { return { get: () => undefined } },
+          },
+          commands: {
+            registerCommand(command: string, callback: (...args: unknown[]) => unknown) {
+              commands.set(command, callback)
+              return { dispose() {} }
+            },
+            async executeCommand() {},
+          },
+        },
+      )
+      await commands.get('dsh.test.setCredentialPresence')!(true)
+      await commands.get('dsh.test.requestStart')!('command-start')
+      const tab = await commands.get('dsh.test.newConversation')!() as { sessionId: string }
+
+      expect(treeViews).toContain('dsh.todo')
+      const rows = providers.get('dsh.todo')!
+      // No written list yet, so the declared view is empty rather than absent.
+      expect(rows()).toEqual([])
+
+      getConversationController()!.applyTestSessionEvent(tab.sessionId, 'todo/write', {
+        todos: [
+          { content: 'done item', status: 'completed' },
+          { content: 'active item', status: 'in_progress' },
+          { content: 'queued item', status: 'pending' },
+        ],
+      })
+
+      expect(fires).toBeGreaterThan(0)
+      expect(rows().map(row => [row.label, row.description])).toEqual([
+        ['done item', '已完成'],
+        ['active item', '进行中'],
+        ['queued item', undefined],
+      ])
+    })
+
+    it('CAP-CONVERSATION-088 every registered dsh command is declared in contributes.commands', async () => {
+      await startWithLiveTab()
+      const pkg = await import('../package.json', { with: { type: 'json' } })
+      const declared = new Set<string>(
+        pkg.default.contributes.commands.map((entry: { command: string }) => entry.command),
+      )
+      // A registered command the manifest omits reaches no Command Palette row and no
+      // keybinding, which is how the keyboard entries above were unreachable.
+      const undeclared = [...commands.keys()]
+        .filter(id => id.startsWith('dsh.') && !id.startsWith('dsh.test.') && !declared.has(id))
+      expect(undeclared).toEqual([])
+    })
   })
 
   describe('applyTestSessionEvent (dsh.test.* injection entry)', () => {
@@ -3437,6 +4304,34 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         .find(message => message.kind === 'workflow')
       expect(card?.workflow?.members.map(member => member.label)).toEqual(['member-a'])
       expect(card?.workflow?.stopReason).toBe('completed')
+    })
+
+    it('CAP-CONVERSATION-100 a prompted image rides the optimistic user bubble', async () => {
+      const prompted: Array<{ blocks: unknown[] }> = []
+      const host = {
+        status: 'connected',
+        interactions: { failClosedSession() {}, listPending() { return [] } },
+        setConversationRegistry() {},
+        onNotification() { return () => {} },
+        async prompt(_sessionId: string, blocks: unknown[]) {
+          prompted.push({ blocks })
+          return 'msg-image'
+        },
+        async disposeSession() {},
+      } as unknown as IdeSessionHost
+      const controller = new ConversationController(host)
+      const tab = controller.newConversation('images')
+      await controller.promptTab(tab.tabId, '看这张', [{ data: 'AA==', mimeType: 'image/png' }])
+
+      expect(prompted[0]?.blocks).toEqual([
+        { type: 'text', text: '看这张' },
+        { type: 'image', data: 'AA==', mimeType: 'image/png' },
+      ])
+      // The bubble carries the composer's own bytes, so the attachment is visible
+      // in the flow without a second read of the runtime store.
+      const bubble = controller.messages.get(tab.sessionId)[0]
+      expect(bubble?.text).toBe('看这张')
+      expect(bubble?.images).toEqual([{ mimeType: 'image/png', data: 'AA==' }])
     })
   })
 

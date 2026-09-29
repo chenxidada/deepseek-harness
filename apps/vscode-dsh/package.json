@@ -44,7 +44,8 @@
     "onCommand:dsh.askAboutSelection",
     "onCommand:dsh.insertFileReference",
     "onCommand:dsh.openSettingsPage",
-    "onView:dsh.history"
+    "onView:dsh.history",
+    "onView:dsh.todo"
   ],
   "contributes": {
     "configuration": {
@@ -56,6 +57,13 @@
           "scope": "machine-overridable",
           "description": "Absolute path to the Node.js executable that runs the dsh session subprocess. The check requires the two Node APIs the harness needs, zlib.createZstdDecompress and Promise.withResolvers; the supported range is Node.js ^22.19.0 || >=24.0.0. Resolution order: the DSH_NODE_BIN environment variable, then this setting, then the Node.js of the Extension Host. Leave empty to not participate in resolution.",
           "markdownDescription": "Absolute path to the Node.js executable that runs the `dsh` session subprocess. The check requires the two Node APIs the harness needs, `zlib.createZstdDecompress` and `Promise.withResolvers`; the supported range is Node.js `^22.19.0 || >=24.0.0`. Resolution order: the `DSH_NODE_BIN` environment variable, then this setting, then the Node.js of the Extension Host. Leave empty to not participate in resolution."
+        },
+        "dsh.cliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Path to the dsh CLI entry point that the session subprocess runs: the \"dsh\" bin file of the @deepseek-ai/dsh package, lib/bin.js. A relative path resolves against the workspace folder. Resolution order: the DSH_BIN environment variable, then this setting, then the workspace's own @deepseek-ai/dsh dependency, then a dsh checkout above the workspace, then the dsh executable on PATH. A configured path that does not exist fails the start with the resolution diagnostic instead of being skipped. Leave empty to not participate in resolution.",
+          "markdownDescription": "Path to the dsh CLI entry point that the session subprocess runs: the \"dsh\" bin file of the `@deepseek-ai/dsh` package, `lib/bin.js`. A relative path resolves against the workspace folder. Resolution order: the `DSH_BIN` environment variable, then this setting, then the workspace's own `@deepseek-ai/dsh` dependency, then a dsh checkout above the workspace, then the `dsh` executable on `PATH`. A configured path that does not exist fails the start with the resolution diagnostic instead of being skipped. Leave empty to not participate in resolution."
         }
       }
     },
@@ -85,6 +93,10 @@
         "title": "DeepSeek Harness: Delete Conversation"
       },
       {
+        "command": "dsh.renameConversation",
+        "title": "DeepSeek Harness: Rename Conversation"
+      },
+      {
         "command": "dsh.promptActiveConversation",
         "title": "DeepSeek Harness: Prompt Active Conversation"
       },
@@ -99,6 +111,10 @@
       {
         "command": "dsh.selectPermissionPreset",
         "title": "DeepSeek Harness: Select Permission Preset"
+      },
+      {
+        "command": "dsh.selectModel",
+        "title": "DeepSeek Harness: Select Model"
       },
       {
         "command": "dsh.reviewWorkspaceDiffs",
@@ -117,12 +133,28 @@
         "title": "DeepSeek Harness: Search Sessions"
       },
       {
+        "command": "dsh.listSubagents",
+        "title": "DeepSeek Harness: List Subagents"
+      },
+      {
+        "command": "dsh.specdevStatus",
+        "title": "DeepSeek Harness: SpecDev Status"
+      },
+      {
         "command": "dsh.deleteHistory",
         "title": "DeepSeek Harness: Delete History Session"
       },
       {
+        "command": "dsh.deleteSessionFromDisk",
+        "title": "DeepSeek Harness: Delete Active Session from Disk"
+      },
+      {
         "command": "dsh.continueConversation",
         "title": "DeepSeek Harness: Continue This Session"
+      },
+      {
+        "command": "dsh.triggerCompact",
+        "title": "DeepSeek Harness: Compact Active Conversation"
       },
       {
         "command": "dsh.restoreMoreTabs",
@@ -177,6 +209,11 @@
           "id": "dsh.history",
           "name": "History",
           "type": "webview"
+        },
+        {
+          "id": "dsh.todo",
+          "name": "Todo",
+          "type": "tree"
         }
       ]
     },

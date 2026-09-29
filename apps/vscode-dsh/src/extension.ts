@@ -56,11 +56,19 @@ import {
   confirmStopAndClose,
   createVscodeInteractionUi,
   pickPermissionPreset,
+  pickSpecdevGateDecision,
   type InteractionWindow,
   type InteractionQuickPick,
 } from './interaction-ui.ts'
 import { redactSecrets } from './redact.ts'
 import { NODE_BIN_SETTING } from './node-env-guard.ts'
+import {
+  CLI_PATH_SETTING,
+  dshEntrySourceLabel,
+  formatDshEntryDiagnostics,
+  resolveDshEntry,
+  type ResolvedDshEntry,
+} from './dsh-entry-guard.ts'
 import type { ConversationRegistrySnapshot, ConversationTab } from './conversation-registry.ts'
 import type { TimelineDiffHunk, TimelineItem } from './timeline-store.ts'
 import {
@@ -69,6 +77,7 @@ import {
   type WorkspaceStateLike,
 } from './extension-index.ts'
 import { EMPTY_LIVE_TITLE } from './conversation-titles.ts'
+import type { SearchHit } from './search/index.ts'
 import {
   ChatPanelHost,
   canCreateEditorChatPanel,
@@ -115,6 +124,7 @@ import {
   WorkspaceFileSearch,
 } from '@deepseek-ai/dsh-file-reference-local/search'
 import type { FileReferenceCandidate } from '@deepseek-ai/dsh-file-reference/types'
+import type { BridgeSessionSearchHit, BridgeSpecdevSnapshot, BridgeSubagentEntry } from '@deepseek-ai/dsh-ide-bridge'
 import {
   gateKey,
   type RevertGate,
@@ -131,12 +141,14 @@ interface QuickPickItemLike {
   tabId: string
   value?: string
   hunkIndex?: number
+  /** SpecDev gate the row offers to decide. */
+  gate?: string
 }
 
 /** Minimal vscode API surface used by this Extension. */
 interface VsCodeLike {
   window: {
-    showErrorMessage(message: string): Promise<unknown>
+    showErrorMessage(message: string, ...items: string[]): Promise<unknown>
     showInformationMessage(message: string, ...items: string[]): Promise<unknown>
     showWarningMessage?(message: string, ...items: string[]): Promise<unknown>
     showQuickPick?(
@@ -147,6 +159,8 @@ interface VsCodeLike {
       prompt?: string
       title?: string
       placeHolder?: string
+      /** Prefilled text, so an edit starts from the current value. */
+      value?: string
     }): Promise<string | undefined>
     createQuickPick?(): InteractionQuickPick
     createTreeView?(viewId: string, options: unknown): { dispose(): void }
@@ -333,6 +347,8 @@ interface ExtensionContextLike {
   storageUri?: { fsPath: string }
   /** Fallback SnapshotStore root when storageUri is absent. */
   globalStorageUri?: { fsPath: string }
+  /** This extension's own manifest; the environment check reports its version against the resolved runtime. */
+  extension?: { packageJSON?: { version?: unknown } }
 }
 
 let host: IdeSessionHost | undefined
@@ -401,6 +417,9 @@ const TEST_VISION_PNG_BASE64 =
 
 /** Settings namespace whose `thresholdRatio` the compaction observability hooks report. */
 const COMPACTION_SETTINGS_NAMESPACE = 'compaction-basic'
+
+/** Latest `compaction-basic` `thresholdRatio` the Extension read, when it read one. */
+let compactionThresholdRatio: number | undefined
 
 /**
  * Body of the summary the compaction-injection hook frames with
@@ -552,6 +571,9 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
 
   const startPort = createStartHostPort(vscode, diagnostics)
   orchestrator = new AutoStartOrchestrator(startPort)
+  // The runtime is confirmed at load time as well as at the first Start, so a
+  // window that has none reports it before the user asks for a session.
+  confirmRuntimeEnvironment(vscode, context)
   stopOrchestratorWatch?.()
   const recordOrchestratorFailure = createStartFailureListener(diagnostics)
   stopOrchestratorWatch = orchestrator.onChange((snap) => {
@@ -884,8 +906,8 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         }
         const typed = await vscode.window.showInputBox({
           title: 'Search Sessions',
-          placeHolder: 'Title / preview text, or path:src/foo.ts',
-          prompt: 'Tier 1 metadata search. Prefix with path: for tier 2 path→session.',
+          placeHolder: 'Title / preview text, session content, or path:src/foo.ts',
+          prompt: 'Searches titles, first prompts, session content, and paths. Prefix with path: for path→session only.',
         })
         if (typed === undefined || typed.trim() === '') {
           return { outcome: 'cancelled' as const, hits: [] as const }
@@ -897,10 +919,17 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
           text = trimmed
         }
       }
-      const hits = controller.searchSessions({
+      const localHits = controller.searchSessions({
         ...text === undefined || text.trim() === '' ? {} : { text },
         ...path === undefined || path.trim() === '' ? {} : { path },
       })
+      // The runtime's full-text index joins the metadata tiers when the profile
+      // enables it; a disabled index or an offline bridge leaves them as the answer.
+      const contentHits = text === undefined || text.trim() === ''
+        ? []
+        : await readContentHits(controller, text.trim())
+      const titles = new Map(controller.index.listHistorySessions().map(row => [row.sessionId, row.title]))
+      const hits = mergeContentHits(localHits, contentHits, sessionId => titles.get(sessionId))
       if (hits.length === 0) {
         await vscode.window.showInformationMessage('No matching sessions.')
         return { outcome: 'empty' as const, hits }
@@ -914,9 +943,10 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
           description: [
             hit.matchTiers.includes(1) ? `t1:${hit.matchField ?? 'meta'}` : undefined,
             hit.matchTiers.includes(2) ? `t2:${hit.matchedPath ?? 'path'}` : undefined,
+            hit.matchTiers.includes(3) ? 't3:content' : undefined,
             hit.sessionId.slice(0, 8),
           ].filter(Boolean).join(' · '),
-          detail: hit.firstUserPreview ?? hit.matchedPath,
+          detail: hit.snippet ?? hit.firstUserPreview ?? hit.matchedPath,
           tabId: hit.sessionId,
         })),
         { title: 'Search Sessions', placeHolder: 'Open a matching session (replay / activate)' },
@@ -942,6 +972,119 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       return { outcome: 'opened' as const, hits, open: result }
     },
   )
+
+  /**
+   * Durable subagent roster of the active session, read from the runtime's own
+   * projection fold: a session reopened from disk still lists the delegations
+   * its log recorded, which its local notifications never replayed.
+   * Opening a row enters that child context — the same view a card opens.
+   */
+  const listSubagents = vscode.commands.registerCommand(
+    'dsh.listSubagents',
+    async (scopeArg?: unknown) => {
+      const controller = requireConversations()
+      if (controller === undefined) {
+        await vscode.window.showErrorMessage(
+          'DeepSeek Harness Host is not connected. Connect Host before listing subagents.',
+        )
+        return { outcome: 'host-not-ready' as const, entries: [] as const }
+      }
+      const active = controller.registry.getActive()
+      if (active === undefined) {
+        await vscode.window.showInformationMessage('Open a session before listing its subagents.')
+        return { outcome: 'no-active' as const, entries: [] as const }
+      }
+      const scope: 'children' | 'descendants' = scopeArg === 'descendants' ? 'descendants' : 'children'
+      let entries: BridgeSubagentEntry[]
+      try {
+        entries = (await controller.listSubagents(active.sessionId, scope)).entries
+      } catch (error) {
+        await vscode.window.showErrorMessage(
+          `Failed to list subagents: ${error instanceof Error ? error.message : String(error)}`,
+        )
+        return { outcome: 'error' as const, entries: [] as const }
+      }
+      if (entries.length === 0) {
+        await vscode.window.showInformationMessage('This session has no subagents.')
+        return { outcome: 'empty' as const, entries }
+      }
+      if (vscode.window.showQuickPick === undefined) {
+        return { outcome: 'listed' as const, entries }
+      }
+      const pick = await vscode.window.showQuickPick(
+        entries.map(entry => ({
+          label: entry.kind === 'child'
+            ? entry.label ?? `子代理 ${entry.sessionId.slice(0, 8)}`
+            : `无法识别 ${entry.sessionId.slice(0, 8)}`,
+          description: entry.kind === 'child'
+            ? [
+              entry.mode,
+              entry.activity,
+              entry.hasChildren ? '有下级' : undefined,
+              entry.depth === undefined ? undefined : `depth ${entry.depth}`,
+            ].filter(Boolean).join(' · ')
+            : entry.reason,
+          detail: entry.sessionId,
+          tabId: entry.sessionId,
+        })),
+        { title: 'Subagents', placeHolder: '进入一个子代理会话（回放 / 只读直播）' },
+      )
+      const chosen = Array.isArray(pick) ? pick[0] : pick
+      if (chosen === undefined) {
+        return { outcome: 'cancelled' as const, entries }
+      }
+      const result = await controller.openSubagentContext(chosen.tabId)
+      tabBarRefresh?.()
+      panelHost?.pushFullState()
+      if (result.outcome === 'deleted') {
+        await vscode.window.showErrorMessage('子会话已删除，无法进入。')
+      }
+      return { outcome: 'opened' as const, entries, open: result }
+    },
+  )
+
+  /**
+   * Show the active Tab workspace's SpecDev status, and decide its pending gate
+   * when the user picks that row. The card in the panel offers the same action.
+   */
+  const specdevStatus = vscode.commands.registerCommand('dsh.specdevStatus', async () => {
+    const controller = requireConversations()
+    if (controller === undefined) {
+      await vscode.window.showErrorMessage(
+        'DeepSeek Harness Host is not connected. Connect Host before reading SpecDev status.',
+      )
+      return { outcome: 'host-not-ready' as const }
+    }
+    const active = controller.registry.getActive()
+    if (active === undefined) {
+      await vscode.window.showInformationMessage('Open a session before reading its SpecDev status.')
+      return { outcome: 'no-active' as const }
+    }
+    await controller.refreshSpecdev(active.sessionId)
+    const snapshot = controller.cachedSpecdev(active.sessionId) ?? null
+    if (snapshot === null) {
+      await vscode.window.showInformationMessage('当前工作区没有活动的 SpecDev 工作流。')
+      return { outcome: 'none' as const, snapshot }
+    }
+    if (vscode.window.showQuickPick === undefined) {
+      return { outcome: 'ready' as const, snapshot }
+    }
+    const picked = await vscode.window.showQuickPick(
+      specdevStatusRows(snapshot, active.tabId),
+      {
+        title: `SpecDev · ${snapshot.slug}`,
+        placeHolder: snapshot.pendingGate === null
+          ? `${snapshot.stage}${snapshot.phase === null ? '' : ` · ${snapshot.phase}`}`
+          : `等待门禁 ${snapshot.pendingGate}`,
+      },
+    )
+    const chosen = Array.isArray(picked) ? picked[0] : picked
+    if (chosen?.gate !== undefined) {
+      await runSpecdevGateDecision(vscode, active.sessionId, chosen.gate)
+      panelHost?.pushFullState()
+    }
+    return { outcome: 'ready' as const, snapshot }
+  })
 
   const promptActive = vscode.commands.registerCommand('dsh.promptActiveConversation', async (text?: unknown) => {
     await ensureHostForSend(vscode)
@@ -979,6 +1122,16 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     async () => runInsertFileReference(vscode),
   )
 
+  const renameConversation = vscode.commands.registerCommand('dsh.renameConversation', async () => {
+    const controller = requireConversations()
+    const active = controller?.registry.getActive()
+    if (active === undefined) {
+      await vscode.window.showErrorMessage('没有可重命名的会话')
+      return
+    }
+    await runRenameSession(vscode, active.sessionId)
+  })
+
   const selectPermission = vscode.commands.registerCommand('dsh.selectPermissionPreset', async () => {
     const controller = requireConversations()
     if (controller === undefined) {
@@ -991,10 +1144,12 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     }
     try {
       const listed = await controller.listPermissionPresets()
+      const policy = await readApprovalPolicyText(controller)
       const picked = await pickPermissionPreset(
         vscode.window as InteractionWindow,
-        listed.presets,
+        listed.options,
         listed.current,
+        policy,
       )
       if (picked === undefined) return
       const applied = await controller.selectPermissionPreset(picked)
@@ -1948,6 +2103,8 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       /**
        * Latest `token/status` sample the projection pushed. `sane` folds the two
        * degenerate cases a driver must reject: no sample at all, and zeroed counters.
+       * `projectedTokens` reports the runtime's `contextPressure` refinement; it
+       * stays 0 when no live runtime answered the read.
        */
       vscode.commands.registerCommand('dsh.test.getTokenStatus', () => {
         const controller = conversations
@@ -1958,6 +2115,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
             ok: true as const,
             present: false as const,
             totalTokens: 0,
+            projectedTokens: 0,
             contextWindow: 0,
             sane: false,
           }
@@ -1966,6 +2124,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
           ok: true as const,
           present: true as const,
           totalTokens: status.totalTokens,
+          projectedTokens: status.projectedTokens ?? 0,
           contextWindow: status.contextWindow,
           sane: status.totalTokens > 0 && status.contextWindow > 0,
         }
@@ -2115,12 +2274,15 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     deleteConversation,
     openHistory,
     searchSessions,
+    listSubagents,
+    specdevStatus,
     deleteHistory,
     continueConversation,
     restoreMore,
     promptActive,
     askAboutSelectionCmd,
     insertFileReferenceCmd,
+    renameConversation,
     selectPermission,
     reviewDiffs,
     openDiff,
@@ -2408,15 +2570,11 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     },
     acceptCommand: async (sessionId, line) => await runCommand(sessionId, line),
     readSlashCatalog: async sessionId => await readSlashCatalog(sessionId),
-    requestDelete: async () => {
-      await runDeleteActive(vscode)
-    },
     requestDeleteConfirmed: async (sessionId) => {
       await runDeleteConfirmed(vscode, sessionId)
     },
-    requestOpenTimeline: async () => {
-      // Reveal activity-bar container; Timeline is a sibling view under `dsh`.
-      await vscode.commands.executeCommand?.('workbench.view.extension.dsh')
+    requestRename: async (sessionId) => {
+      await runRenameSession(vscode, sessionId)
     },
     requestContinue: async () => {
       // DEBT-003: Webview Continue must auto-start like dsh.continueConversation.
@@ -2506,7 +2664,12 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestSearchSessions: async (query) => {
       const controller = conversations
       if (controller === undefined) return []
-      return controller.searchSessions(query)
+      const local = controller.searchSessions(query)
+      const text = query.text?.trim() ?? ''
+      if (text === '') return local
+      const content = await readContentHits(controller, text)
+      const titles = new Map(controller.index.listHistorySessions().map(row => [row.sessionId, row.title]))
+      return mergeContentHits(local, content, sessionId => titles.get(sessionId))
     },
     requestOpenSearchHit: async (sessionId) => {
       const controller = conversations
@@ -2557,6 +2720,21 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       if (result.outcome === 'deleted') {
         await vscode.window.showErrorMessage('子会话已删除，无法钉住。')
       }
+    },
+    acceptSubagentPrompt: async (target, text) => {
+      const controller = requireConversations()
+      if (controller === undefined) throw new Error('no-host')
+      const messageId = await controller.promptSubagent(target.parentSessionId, target.childSessionId, text)
+      panelHost?.pushFullState()
+      return messageId
+    },
+    requestInterruptSubagent: async (parentSessionId, childSessionId) => {
+      const controller = requireConversations()
+      if (controller === undefined) throw new Error('no-host')
+      await controller.interruptSubagent(parentSessionId, childSessionId)
+    },
+    requestSpecdevGate: async (sessionId, gate) => {
+      await runSpecdevGateDecision(vscode, sessionId, gate)
     },
     requestOpenWorkspaceDiffs: async () => {
       await vscode.commands.executeCommand?.('dsh.reviewWorkspaceDiffs')
@@ -2688,9 +2866,6 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
         await vscode.window.showErrorMessage('History session not found or deleted.')
       }
     },
-    requestOpenSearch: async () => {
-      await vscode.commands.executeCommand?.('dsh.searchSessions')
-    },
     requestSelectModel: async (provider, model, reasoningEffort) => {
       const liveHost = host
       if (liveHost === undefined || liveHost.status !== 'connected') {
@@ -2707,6 +2882,7 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       return await liveHost.describeSettings()
     },
     resolveContinueChrome: () => conversations?.continueChromeForTab(),
+    resolveTabParentHint: sessionId => conversations?.parentLineageLabel(sessionId),
     resolveDeferredRestoreCount: () => conversations?.panelSnapshot().deferredRestoreCount ?? 0,
     resolveReveal: (callId) => {
       const controller = conversations
@@ -3277,7 +3453,12 @@ async function readSettingsNamespaces(
 ): Promise<SettingsNamespaceView[] | undefined> {
   if (liveHost === undefined) return undefined
   try {
-    return await liveHost.describeSettings()
+    const namespaces = await liveHost.describeSettings()
+    // The token ring reads the same ratio the runtime compacts at, so the last
+    // described value is kept here instead of being asked for per message.
+    const ratio = compactionSettingsSummary(namespaces).thresholdRatio
+    if (ratio >= 0) compactionThresholdRatio = ratio
+    return namespaces
   } catch {
     return undefined
   }
@@ -3445,6 +3626,202 @@ async function runDeleteConfirmed(vscode: VsCodeLike, sessionId: string): Promis
     const message = redactSecrets(error instanceof Error ? error.message : String(error))
     await vscode.window.showErrorMessage(`Failed to delete conversation: ${message}`)
   }
+}
+
+/**
+ * Ask the user for a title and write it through the runtime `session/rename`.
+ * The runtime normalizes the text and commits a `session/title` event; chrome
+ * follows that event, so a rejected title leaves every label untouched.
+ * @param vscode - duck-typed vscode module.
+ * @param sessionId - session to rename.
+ */
+async function runRenameSession(vscode: VsCodeLike, sessionId: string): Promise<void> {
+  const controller = requireConversations()
+  if (controller === undefined) {
+    await vscode.window.showErrorMessage('Host 连接后可重命名')
+    return
+  }
+  if (sessionId === '') return
+  const current = controller.snapshot().tabs.find(tab => tab.sessionId === sessionId)?.title ?? ''
+  const title = await vscode.window.showInputBox?.({
+    prompt: '设置会话标题',
+    value: current,
+    placeHolder: '输入新的会话标题',
+  })
+  // A cancelled input leaves the session alone.
+  if (title === undefined) return
+  if (title.trim() === '') {
+    await vscode.window.showErrorMessage('会话标题不能为空')
+    return
+  }
+  try {
+    const accepted = await controller.renameSession(sessionId, title)
+    historyRefresh?.()
+    panelHost?.pushFullState()
+    await vscode.window.showInformationMessage(`已重命名为「${accepted}」`)
+  } catch (error) {
+    const message = redactSecrets(error instanceof Error ? error.message : String(error))
+    await vscode.window.showErrorMessage(`重命名失败：${message}`)
+  }
+}
+
+/**
+ * Ask for one SpecDev Human Gate decision and apply it through the runtime.
+ * Gate order and the durable write belong to the runtime, so a cancelled pick
+ * writes nothing and a refusal surfaces as the thrown error.
+ * @param vscode - duck-typed vscode module.
+ * @param sessionId - session owning the workflow log.
+ * @param gate - pending gate the caller reported.
+ */
+async function runSpecdevGateDecision(vscode: VsCodeLike, sessionId: string, gate: string): Promise<void> {
+  const controller = requireConversations()
+  if (controller === undefined) {
+    throw new Error('DeepSeek Harness Host is not connected')
+  }
+  const choice = await pickSpecdevGateDecision(vscode.window as InteractionWindow, gate)
+  if (choice === undefined) return
+  const snapshot = await controller.confirmSpecdevGate(sessionId, gate, choice.decision, choice.note)
+  panelHost?.pushFullState()
+  await vscode.window.showInformationMessage(
+    `${gate} 已记录为 ${choice.decision}${snapshot === null ? '' : `：${snapshot.stage}`}`,
+  )
+}
+
+/**
+ * Render one SpecDev status as QuickPick rows: the workflow header, its gates,
+ * each phase's steps, and — first, when one is pending — the row that decides it.
+ * @param snapshot - status the runtime served.
+ * @param tabId - Tab the rows belong to (the row carries no other address).
+ * @returns the rows, with the pending-gate action first.
+ */
+function specdevStatusRows(snapshot: BridgeSpecdevSnapshot, tabId: string): QuickPickItemLike[] {
+  const rows: QuickPickItemLike[] = [
+    {
+      label: snapshot.slug,
+      description: `${snapshot.stage}${snapshot.phase === null ? '' : ` · ${snapshot.phase}`}`,
+      tabId,
+    },
+    {
+      label: '门禁 (Human Gates)',
+      description: `HG-1 ${snapshot.gates.hg1} · HG-2 ${snapshot.gates.hg2} · HG-3 ${snapshot.gates.hg3}`,
+      tabId,
+    },
+    ...Object.entries(snapshot.steps).map(([phaseId, steps]): QuickPickItemLike => ({
+      label: `阶段 ${phaseId}`,
+      description: `实现 ${steps.implementer} · 评审 ${steps.reviewer} · 验证 ${steps.verifier}`,
+      tabId,
+    })),
+    { label: '必须修复轮次 (loop_count)', description: String(snapshot.loopCount), tabId },
+  ]
+  if (snapshot.nextAction !== undefined) {
+    rows.push({ label: '下一步', description: snapshot.nextAction, tabId })
+  }
+  if (snapshot.techDebtSummary !== undefined) {
+    rows.push({
+      label: '技术债',
+      description: `阻塞 ${snapshot.techDebtSummary.blocking} / 共 ${snapshot.techDebtSummary.total}`,
+      tabId,
+    })
+  }
+  if (snapshot.pendingGate !== null) {
+    rows.unshift({
+      label: `确认门禁 ${snapshot.pendingGate}…`,
+      description: '选择通过 / 驳回 / 推迟',
+      tabId,
+      gate: snapshot.pendingGate,
+    })
+  }
+  return rows
+}
+
+/**
+ * Read the active session's effective approval policy for a picker title.
+ * @param controller - conversation controller owning the Host bridge.
+ * @returns the policy, or `undefined` when the runtime cannot answer; the picker
+ *   then states no policy instead of failing the preset listing beside it.
+ */
+async function readApprovalPolicyText(controller: ConversationController): Promise<string | undefined> {
+  try {
+    return (await controller.readApprovalPolicy()).policy
+  } catch {
+    // Only the title's policy sentence is dropped; the preset listing stays actionable.
+    return undefined
+  }
+}
+
+/**
+ * Read the runtime's content-search hits, or none when it cannot answer (no
+ * index enabled on the profile, an offline bridge, or a timed-out search).
+ * @param controller - conversation controller owning the Host bridge.
+ * @param text - query text the caller already trimmed.
+ * @returns ranked content hits, empty when content search is unavailable.
+ */
+async function readContentHits(
+  controller: ConversationController,
+  text: string,
+): Promise<BridgeSessionSearchHit[]> {
+  try {
+    return await controller.searchSessionContent(text)
+  } catch {
+    // The metadata tiers already answered; content search is additive.
+    return []
+  }
+}
+
+/** One `search/results` row: the metadata tiers plus the runtime's content match. */
+interface SearchResultRow {
+  sessionId: string
+  title: string
+  mtime: number
+  matchTiers: Array<1 | 2 | 3>
+  matchField?: 'title' | 'firstUserPreview'
+  firstUserPreview?: string
+  matchedPath?: string
+  /** Runtime excerpt around the content match (tier 3). */
+  snippet?: string
+}
+
+/**
+ * Merge the runtime's content hits (tier 3) into the metadata rows.
+ * @param local - tier-1/2 rows from the extension index.
+ * @param content - runtime hits, ranked by their strongest matching event.
+ * @param titleOf - local title for a session this window's index knows.
+ * @returns metadata rows in their order, then the content-only sessions.
+ */
+function mergeContentHits(
+  local: SearchHit[],
+  content: readonly BridgeSessionSearchHit[],
+  titleOf: (sessionId: string) => string | undefined,
+): SearchResultRow[] {
+  const rows: SearchResultRow[] = local.map(hit => ({
+    sessionId: hit.sessionId,
+    title: hit.title,
+    mtime: hit.mtime,
+    matchTiers: [...hit.matchTiers],
+    ...hit.matchField === undefined ? {} : { matchField: hit.matchField },
+    ...hit.firstUserPreview === undefined ? {} : { firstUserPreview: hit.firstUserPreview },
+    ...hit.matchedPath === undefined ? {} : { matchedPath: hit.matchedPath },
+  }))
+  const byId = new Map(rows.map(row => [row.sessionId, row]))
+  for (const hit of content) {
+    const existing = byId.get(hit.sessionId)
+    if (existing !== undefined) {
+      if (!existing.matchTiers.includes(3)) existing.matchTiers.push(3)
+      existing.snippet = hit.snippet
+      continue
+    }
+    // A session outside this window's index still opens: the runtime owns the log.
+    const row: SearchResultRow = {
+      sessionId: hit.sessionId,
+      title: hit.title ?? titleOf(hit.sessionId) ?? hit.sessionId.slice(0, 8),
+      mtime: hit.createdAt,
+      matchTiers: [3],
+      snippet: hit.snippet,
+    }
+    byId.set(hit.sessionId, row)
+    rows.push(row)
+  }
+  return rows
 }
 
 /**
@@ -3698,25 +4075,6 @@ function loadDotEnv(workspaceRoot: string): void {
   }
 }
 
-/**
- * Locate the dsh CLI entry point so that `HarnessClient` does not call
- * `import.meta.resolve('@deepseek-ai/dsh/package.json')` which fails
- * when the extension is installed as a standalone VSIX outside the monorepo.
- * Walks up from `cwd` looking for `apps/cli/lib/bin.js` (built) or
- * `apps/cli/src/bin.ts` (source) in a monorepo checkout.
- */
-function resolveDshBin(cwd: string): string | undefined {
-  let dir = cwd
-  for (let i = 0; i < 10; i++) {
-    const built = join(dir, 'apps/cli/lib/bin.js')
-    if (existsSync(built)) return built
-    const parent = dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  return undefined
-}
-
 function detectCredentialsFromEnv(): boolean {
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && value !== '' && /KEY|PASSWORD|SECRET|TOKEN/i.test(key)) {
@@ -3745,6 +4103,101 @@ function readNodeBinSetting(vscode: VsCodeLike): string | undefined {
     )
   }
   return value
+}
+
+/**
+ * Read the `dsh.cliPath` dsh entry setting. A non-string value fails loud under
+ * the `invalid-setting` class for the same reason the Node selection reader
+ * does: ignoring a misconfigured path would silently fall back to a runtime the
+ * setting exists to replace.
+ * @param vscode - duck-typed vscode.
+ * @returns the configured dsh CLI entry path (possibly empty), or `undefined` when unset.
+ */
+function readCliPathSetting(vscode: VsCodeLike): string | undefined {
+  const configuration = vscode.workspace.getConfiguration?.('dsh')
+  const value: unknown = configuration === undefined ? undefined : configuration.get?.('cliPath')
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string') {
+    throw new HostStartError(
+      'invalid-setting',
+      `${CLI_PATH_SETTING} must be a path to a dsh CLI entry point string, got ${typeof value}`,
+    )
+  }
+  return value
+}
+
+/** Load-time action that opens the extension's settings page for `dsh.cliPath`. */
+const OPEN_SETTINGS_ACTION = 'Open Settings'
+
+/** Load-time action that reveals the diagnostics channel holding the full report. */
+const SHOW_DIAGNOSTICS_ACTION = 'Show Diagnostics'
+
+/**
+ * This extension's own version, which a runtime from the same release reports as
+ * its own.
+ * @param context - extension context.
+ * @returns the version string, or `undefined` when the manifest carries none.
+ */
+function extensionVersion(context: ExtensionContextLike): string | undefined {
+  const version: unknown = context.extension?.packageJSON?.version
+  return typeof version === 'string' ? version : undefined
+}
+
+/**
+ * One-line record of the runtime this window will start.
+ * @param entry - resolved dsh CLI entry point.
+ * @param version - this extension's own version, when known.
+ * @returns entry, source, and runtime version, plus this extension's version when the two differ.
+ */
+function formatRuntimeEnvironmentLine(entry: ResolvedDshEntry, version: string | undefined): string {
+  const runtimeVersion = entry.version === undefined ? 'version unknown' : `version ${entry.version}`
+  const mismatch = version !== undefined && entry.version !== undefined && entry.version !== version
+    ? ` — this extension is ${version}`
+    : ''
+  return `[dsh] runtime: ${entry.path} (source: ${dshEntrySourceLabel(entry.source)}, ${runtimeVersion})${mismatch}`
+}
+
+/**
+ * Confirm the runtime this window starts, once at activation: resolve the same
+ * dsh CLI entry point the first Start resolves, write where it came from, and
+ * raise an actionable message when no source provides one. A window without a
+ * runtime says so at load time instead of at its first failed session, and the
+ * version the resolved package reports is reported beside this extension's own
+ * without blocking a mismatch.
+ * @param vscode - duck-typed vscode.
+ * @param context - extension context supplying this extension's own version.
+ */
+function confirmRuntimeEnvironment(vscode: VsCodeLike, context: ExtensionContextLike): void {
+  let cliPathSetting: string | undefined
+  try {
+    cliPathSetting = readCliPathSetting(vscode)
+  } catch {
+    // A wrong-typed setting fails the start as `invalid-setting`; this check
+    // reports the resolution outcome of the remaining sources instead.
+    cliPathSetting = undefined
+  }
+  const resolution = resolveDshEntry({
+    cwd: resolveStartCwd(vscode),
+    ...cliPathSetting === undefined ? {} : { cliPathSetting },
+  })
+  if (resolution.ok) {
+    hostDiagnosticsChannel?.appendLine(formatRuntimeEnvironmentLine(resolution.entry, extensionVersion(context)))
+    return
+  }
+  const report = formatDshEntryDiagnostics(resolution.failure)
+  hostDiagnosticsChannel?.appendLine(report)
+  void (async () => {
+    const choice = await vscode.window.showErrorMessage(
+      report,
+      OPEN_SETTINGS_ACTION,
+      SHOW_DIAGNOSTICS_ACTION,
+    )
+    if (choice === OPEN_SETTINGS_ACTION) {
+      await vscode.commands.executeCommand?.('workbench.action.openSettings', CLI_PATH_SETTING)
+    } else if (choice === SHOW_DIAGNOSTICS_ACTION) {
+      hostDiagnosticsChannel?.show()
+    }
+  })()
 }
 
 /**
@@ -3795,7 +4248,13 @@ function createStartHostPort(
       const next = new IdeSessionHost(diagnostics)
       hostCreateCount += 1
       if (vscode.window.showQuickPick !== undefined) {
-        const nativeUi = createVscodeInteractionUi(vscode.window as InteractionWindow)
+        const nativeUi = createVscodeInteractionUi(vscode.window as InteractionWindow, {
+          // The user allowed one call and asked not to be asked again in this session;
+          // the runtime logs the switch and states it to the model on its next step.
+          rememberApproval: async (sessionId) => {
+            await next.setApprovalPolicy(sessionId, 'never')
+          },
+        })
         next.setInteractionUi(createPanelFirstInteractionUi(nativeUi))
       }
       stopErrorWatch = next.onError((message) => {
@@ -3818,12 +4277,12 @@ function createStartHostPort(
       try {
         const credentials = collectCredentialsEnv()
         const nodeBinSetting = readNodeBinSetting(vscode)
-        const dshBin = resolveDshBin(cwd)
+        const cliPathSetting = readCliPathSetting(vscode)
         await next.start({
           cwd,
           ...nodeBinSetting === undefined ? {} : { nodeBinSetting },
+          ...cliPathSetting === undefined ? {} : { cliPathSetting },
           ...Object.keys(credentials).length === 0 ? {} : { credentials },
-          ...dshBin === undefined ? {} : { dshBin },
         })
         bindConversations(new ConversationController(
           next,
@@ -3832,6 +4291,7 @@ function createStartHostPort(
           changeStorageRoot === undefined
             ? undefined
             : { snapshotStore: new SnapshotStore({ storageRoot: changeStorageRoot }) },
+          { compactionThresholdRatio: () => compactionThresholdRatio },
         ))
         // AutoReady owns restore/New when Conversation is visible (AD-CR-3 / DEBT-001).
         panelHost?.pushFullState()
@@ -3938,7 +4398,7 @@ async function ensureHostForSend(_vscode: VsCodeLike): Promise<void> {
 }
 
 /**
- * Shared New path used by `dsh.newConversation` and Webview `action/new-conversation` (AD-CR-8).
+ * Shared New path used by `dsh.newConversation` and Webview `ui/tab-new` (AD-CR-8).
  * Offline → Start via {@link ensureHostForSend}; then reuse/create + reveal Conversation.
  * @param vscode - duck-typed vscode.
  * @param opts - `announce` shows the command-palette toast (panel path stays silent).

@@ -49,12 +49,11 @@ export type ChromeIntent =
   | { type: 'ui/history-open' }
   | { type: 'ui/history-close' }
   | { type: 'ui/history-select'; sessionId: string }
-  | { type: 'ui/search-open' }
   | { type: 'ui/delete-request'; sessionId: string }
-  | { type: 'ui/open-timeline' }
+  /** Ask the Host to collect and write a new title for one session. */
+  | { type: 'ui/rename-request'; sessionId: string }
   | { type: 'action/stop' }
   | { type: 'action/continue' }
-  | { type: 'action/delete' }
   | { type: 'action/copy-code'; text: string }
   | { type: 'action/copy-message'; messageId: string; text?: string }
   | { type: 'action/retry'; messageId: string }
@@ -74,12 +73,14 @@ export type ChromeIntent =
   | { type: 'nav/open-subagent'; childSessionId: string }
   | { type: 'nav/back' }
   | { type: 'action/pin-subagent'; childSessionId: string }
-  | { type: 'action/new-conversation' }
+  /** Abort one subagent card's active turn under the parent the card renders. */
+  | { type: 'action/interrupt-subagent'; parentSessionId: string; childSessionId: string }
+  /** Decide the SpecDev pending gate the status card renders (AD-CU-12). */
+  | { type: 'action/specdev-gate'; sessionId: string; gate: string }
   | { type: 'action/restore-more'; all?: boolean }
   | { type: 'action/retry-connect' }
   | { type: 'action/open-settings' }
-  | { type: 'change/reveal-source'; changeId: string }
-  | { type: 'change/mark-reviewed'; changeIds: string[] }
+  | { type: 'change/reveal-source'; sourceMessageId: string }
   | { type: 'change/revert-many'; changeIds: string[] }
   | { type: 'scroll/reveal'; callId?: string }
   | { type: 'interaction/approve'; id: string; outcome: 'allowed-once' | 'rejected' | 'cancelled' }

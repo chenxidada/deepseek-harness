@@ -1409,6 +1409,12 @@ importers:
       '@deepseek-ai/dsh-ide-bridge':
         specifier: workspace:^
         version: link:../../ide/ide-bridge
+      '@deepseek-ai/dsh-session-stats':
+        specifier: workspace:^
+        version: link:../../session/session-stats
+      '@deepseek-ai/dsh-session-turn-outline':
+        specifier: workspace:^
+        version: link:../../session/session-turn-outline
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^
@@ -6948,6 +6954,9 @@ importers:
       '@deepseek-ai/dsh-agent':
         specifier: workspace:^
         version: link:../../core/agent
+      '@deepseek-ai/dsh-agent-default-model':
+        specifier: workspace:^
+        version: link:../../core/agent-default-model
       '@deepseek-ai/dsh-agent-loop':
         specifier: workspace:^
         version: link:../../core/agent-loop

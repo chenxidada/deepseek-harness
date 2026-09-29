@@ -1,7 +1,7 @@
 import { ConversationController } from '../src/conversation-controller.ts'
 import { ConversationRegistry } from '../src/conversation-registry.ts'
 import { InteractionCoordinator, type InteractionUi } from '../src/interaction-coordinator.ts'
-import { type InteractionQuickPick, type InteractionWindow, createVscodeInteractionUi } from '../src/interaction-ui.ts'
+import { type InteractionQuickPick, type InteractionWindow, createVscodeInteractionUi, pickPermissionPreset, pickSpecdevGateDecision } from '../src/interaction-ui.ts'
 import { IdeSessionHost, type IdeSessionHost as IdeSessionHostType } from '../src/session-host.ts'
 import { type ApprovalOutcome } from '@deepseek-ai/dsh-ide-bridge'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -235,7 +235,12 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
         const controller = new ConversationController(host)
         controller.newConversation('perm')
         const listed = await controller.listPermissionPresets()
-        expect(listed.presets).toEqual(['workspace-write', 'danger-full-access'])
+        // The list carries the preset table's own labels and descriptions, so the
+        // QuickPick never renders raw keys in place of product copy.
+        expect(listed.options).toEqual([
+          { value: 'workspace-write', name: 'Workspace write', description: '写入工作区，越界操作先询问' },
+          { value: 'danger-full-access', name: 'Full access', description: '不询问，允许全部操作' },
+        ])
         expect(listed.current).toBe('workspace-write')
 
         const applied = await controller.selectPermissionPreset('danger-full-access')
@@ -244,6 +249,44 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
         const lines = (await readFile(permissionLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { kind: string; preset?: string })
         expect(lines.some(line => line.kind === 'list')).toBe(true)
         expect(lines.some(line => line.kind === 'select' && line.preset === 'danger-full-access')).toBe(true)
+
+        await host.shutdown()
+      })
+
+      it('CAP-INTERACTION-025 reads and switches the session approval policy only through the bridge', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-policy-e2e-'))
+        dirs.push(dir)
+        const policyLog = join(dir, 'policy.ndjson')
+        const host = new IdeSessionHost()
+        await host.start({
+          cwd: dir,
+          dshHome: join(dir, '.dsh'),
+          bridgeSockPath: join(dir, 'bridge.sock'),
+          dshBin: fakeSdkRuntime,
+          initializeTimeoutMs: 5_000,
+          credentials: {
+            DEEPSEEK_API_KEY: 'keyless-policy-no-call',
+            DSH_TELEMETRY_DISABLED: '1',
+            FAKE_APPROVAL_POLICY_LOG: policyLog,
+          },
+        })
+        await waitFor(() => host.bridgeConnected(), 3_000)
+
+        const controller = new ConversationController(host)
+        const tab = controller.newConversation('policy')
+        // The composed default answers until a switch, and the read states it as chrome.
+        expect(await controller.readApprovalPolicy()).toEqual({ sessionId: tab.sessionId, policy: 'ask' })
+
+        expect(await host.setApprovalPolicy(tab.sessionId, 'never')).toBe('never')
+        expect(await host.readApprovalPolicy(tab.sessionId)).toBe('never')
+
+        const lines = (await readFile(policyLog, 'utf8')).trim().split('\n')
+          .map(line => JSON.parse(line) as { kind: string; sessionId: string; policy?: string })
+        expect(lines).toEqual([
+          { kind: 'read', sessionId: tab.sessionId },
+          { kind: 'set', sessionId: tab.sessionId, policy: 'never' },
+          { kind: 'read', sessionId: tab.sessionId },
+        ])
 
         await host.shutdown()
       })
@@ -691,6 +734,139 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
           questions: [{ id: 'q1', question: 'Anything?', options: [] }],
         })
         expect(answer).toEqual({ answers: [{ id: 'q1', selected: [] }] })
+      })
+    })
+
+    describe('approval policy chrome', () => {
+      /** A window that replays the approve choice whose label matches, recording what it was offered. */
+      function windowChoosing(label: string, offered: string[], warnings: string[]): InteractionWindow {
+        return {
+          async showQuickPick(items) {
+            offered.push(...items.map(item => item.label))
+            return items.find(item => item.label === label)
+          },
+          async showErrorMessage() {},
+          async showWarningMessage(message) {
+            warnings.push(message)
+          },
+        }
+      }
+
+      it('CAP-INTERACTION-022 the remember choice grants once, switches the session policy, and only exists with a hook', async () => {
+        const offered: string[] = []
+        const warnings: string[] = []
+        const remembered: string[] = []
+        const ui = createVscodeInteractionUi(
+          windowChoosing('Allow, and stop asking', offered, warnings),
+          { rememberApproval: async (sessionId) => { remembered.push(sessionId) } },
+        )
+
+        const outcome = await ui.presentApproval({ id: 'a1', sessionId: 'sess-policy', toolName: 'bash' })
+        expect(outcome).toBe('allowed-once')
+        expect(remembered).toEqual(['sess-policy'])
+        expect(offered).toEqual(['Allow once', 'Reject', 'Cancel', 'Allow, and stop asking'])
+        expect(warnings).toEqual([])
+
+        // Without the Host action the choice is never offered, so a pick cannot silently do nothing.
+        const bare: string[] = []
+        const bareUi = createVscodeInteractionUi(windowChoosing('Allow once', bare, warnings))
+        expect(await bareUi.presentApproval({ id: 'a2', sessionId: 'sess-policy', toolName: 'bash' }))
+          .toBe('allowed-once')
+        expect(bare).toEqual(['Allow once', 'Reject', 'Cancel'])
+      })
+
+      it('CAP-INTERACTION-023 a refused policy switch keeps the grant and says so', async () => {
+        const warnings: string[] = []
+        const ui = createVscodeInteractionUi(
+          windowChoosing('Allow, and stop asking', [], warnings),
+          {
+            rememberApproval: async () => {
+              throw new Error('approval service is not available')
+            },
+          },
+        )
+
+        expect(await ui.presentApproval({ id: 'a1', sessionId: 'sess-policy', toolName: 'bash' }))
+          .toBe('allowed-once')
+        expect(warnings).toEqual(['本会话的审批策略未能切换：approval service is not available'])
+      })
+
+      it('CAP-INTERACTION-024 the permission picker states the effective policy it was given', async () => {
+        const titles: string[] = []
+        const policyWindow: InteractionWindow = {
+          async showQuickPick(_items, options) {
+            titles.push(options?.title ?? '')
+            return undefined
+          },
+          async showErrorMessage() {},
+        }
+        const options = [
+          { value: 'workspace-write', name: 'Workspace write', description: '写入工作区，越界操作先询问' },
+        ]
+        await pickPermissionPreset(policyWindow, options, 'custom', 'never')
+        await pickPermissionPreset(policyWindow, options, 'workspace-write')
+        expect(titles).toEqual([
+          'DeepSeek Harness Permissions · 本会话审批：不再询问',
+          // A picker without a policy read keeps its plain title instead of an empty claim.
+          'DeepSeek Harness Permissions',
+        ])
+      })
+
+      it('CAP-INTERACTION-025 the SpecDev gate picker collects a decision and its note', async () => {
+        const offered: string[][] = []
+        const asked: string[] = []
+        const gateWindow: InteractionWindow = {
+          async showQuickPick(items) {
+            offered.push(items.map(item => item.label))
+            return items.find(item => item.value === 'reject')
+          },
+          async showInputBox() {
+            asked.push('note')
+            return '  reviews missing  '
+          },
+          async showErrorMessage() {},
+        }
+        expect(await pickSpecdevGateDecision(gateWindow, 'hg2')).toEqual({
+          decision: 'reject',
+          note: 'reviews missing',
+        })
+        expect(offered).toEqual([['通过 (Pass)', '驳回 (Reject)', '推迟 (Defer)']])
+
+        // Passing needs no note, so the InputBox is not opened again for it.
+        const askedBefore = asked.length
+        const passWindow: InteractionWindow = {
+          async showQuickPick(items) {
+            return items.find(item => item.value === 'pass')
+          },
+          async showInputBox() {
+            asked.push('note')
+            return undefined
+          },
+          async showErrorMessage() {},
+        }
+        expect(await pickSpecdevGateDecision(passWindow, 'hg1')).toEqual({ decision: 'pass' })
+        expect(asked.length).toBe(askedBefore)
+
+        // A blank note is not recorded on the decision.
+        const blankWindow: InteractionWindow = {
+          async showQuickPick(items) {
+            return items.find(item => item.value === 'defer')
+          },
+          async showInputBox() {
+            return '   '
+          },
+          async showErrorMessage() {},
+        }
+        expect(await pickSpecdevGateDecision(blankWindow, 'hg3')).toEqual({ decision: 'defer' })
+
+        // A cancelled pick decides nothing.
+        const cancelWindow: InteractionWindow = {
+          async showQuickPick() {
+            return undefined
+          },
+          async showErrorMessage() {},
+        }
+        expect(await pickSpecdevGateDecision(cancelWindow, 'hg2')).toBeUndefined()
       })
     })
 

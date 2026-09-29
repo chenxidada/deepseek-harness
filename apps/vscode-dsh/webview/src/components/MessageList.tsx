@@ -332,6 +332,18 @@ function MessageBubble({
           </pre>
         </details>
       ) : null}
+      {isUser && (msg.images?.length ?? 0) > 0 ? (
+        <div className="dsh-msg-images" data-testid="message-images">
+          {msg.images?.map((image, index) => (
+            <img
+              key={`${msg.id}-image-${index}`}
+              data-testid="message-image"
+              src={`data:${image.mimeType};base64,${image.data}`}
+              alt=""
+            />
+          ))}
+        </div>
+      ) : null}
       {isUser ? (
         <UserBody text={msg.text} bridge={bridge} />
       ) : settled ? (
@@ -638,6 +650,17 @@ function ActivityRow({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge })
         <span className="dsh-activity-summary">{summary}</span>
         <span className="dsh-activity-status">{status}</span>
       </button>
+      {activity?.callId === undefined ? null : (
+        <button
+          type="button"
+          data-testid="activity-reveal"
+          className="dsh-ghost-btn"
+          title="定位到触发该工具调用的消息"
+          onClick={() => bridge.emitIntent({ type: 'scroll/reveal', callId: activity.callId })}
+        >
+          定位
+        </button>
+      )}
       {expanded ? (
         <div data-testid="activity-body" className="dsh-activity-detail">
           {invocation === undefined ? null : (
@@ -698,6 +721,21 @@ function SubagentCard({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge }
           <span className="dsh-muted dsh-subagent-enter">进入 →</span>
         ) : null}
       </button>
+      {status === 'running' && clickable && msg.sessionId !== undefined ? (
+        <button
+          type="button"
+          data-testid="subagent-interrupt"
+          title="中断该子代理"
+          onClick={() => bridge.emitIntent({
+            type: 'action/interrupt-subagent',
+            parentSessionId: msg.sessionId as string,
+            childSessionId: childSessionId as string,
+          })}
+          className="dsh-secondary-btn"
+        >
+          中断
+        </button>
+      ) : null}
     </article>
   )
 }
@@ -714,10 +752,21 @@ function ChangeListBubble({
   lastRevertResult?: ChatUiState['lastRevertResult']
 }) {
   const [expandedDiffs, setExpandedDiffs] = useState<Set<string>>(new Set())
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const payload = msg.changeList
+  const sourceMessageId = payload?.sourceMessageId ?? msg.sourceMessageId
 
   const toggleDiff = (changeId: string): void => {
     setExpandedDiffs((prev) => {
+      const next = new Set(prev)
+      if (next.has(changeId)) next.delete(changeId)
+      else next.add(changeId)
+      return next
+    })
+  }
+
+  const toggleSelected = (changeId: string): void => {
+    setSelected((prev) => {
       const next = new Set(prev)
       if (next.has(changeId)) next.delete(changeId)
       else next.add(changeId)
@@ -738,7 +787,31 @@ function ChangeListBubble({
       data-source-message-id={payload?.sourceMessageId ?? ''}
       className="dsh-card dsh-change-list"
     >
-      <div className="dsh-card-head">{msg.text || '文件变更'}</div>
+      <div className="dsh-card-head">
+        {msg.text || '文件变更'}
+        <button
+          type="button"
+          data-testid="change-list-open-diffs"
+          className="dsh-ghost-btn"
+          title="在工作区变更视图中查看"
+          onClick={() => bridge.emitIntent({ type: 'action/open-workspace-diffs' })}
+        >
+          全部变更
+        </button>
+        {selected.size === 0 ? null : (
+          <button
+            type="button"
+            data-testid="change-revert-many"
+            className="dsh-ghost-btn"
+            onClick={() => {
+              bridge.emitIntent({ type: 'change/revert-many', changeIds: [...selected] })
+              setSelected(new Set())
+            }}
+          >
+            {`撤销选中（${selected.size}）`}
+          </button>
+        )}
+      </div>
       {payload?.emptyNotice ? (
         <div data-empty="true" className="dsh-muted dsh-card-body">本回合没有可展示的文件变更</div>
       ) : (
@@ -748,6 +821,14 @@ function ChangeListBubble({
           return (
             <div key={change.changeId} className="dsh-change-row">
               <div className="dsh-change-item">
+                <input
+                  type="checkbox"
+                  data-testid="change-select"
+                  data-change-id={change.changeId}
+                  aria-label={`选择 ${change.path}`}
+                  checked={selected.has(change.changeId)}
+                  onChange={() => toggleSelected(change.changeId)}
+                />
                 <button
                   type="button"
                   data-testid="change-list-item"
@@ -800,6 +881,33 @@ function ChangeListBubble({
                     })}
                   >
                     撤销
+                  </button>
+                ) : null}
+                {change.status === 'reviewed' ? null : (
+                  <button
+                    type="button"
+                    data-testid="change-mark-reviewed"
+                    className="dsh-ghost-btn"
+                    onClick={() => bridge.emitIntent({
+                      type: 'change/mark-reviewed',
+                      changeId: change.changeId,
+                    })}
+                  >
+                    标记已审阅
+                  </button>
+                )}
+                {sourceMessageId ? (
+                  <button
+                    type="button"
+                    data-testid="change-reveal-source"
+                    className="dsh-ghost-btn"
+                    title="定位到产生该变更的消息"
+                    onClick={() => bridge.emitIntent({
+                      type: 'change/reveal-source',
+                      sourceMessageId,
+                    })}
+                  >
+                    定位源消息
                   </button>
                 ) : null}
               </div>

@@ -57,14 +57,15 @@ export function containsUnsafeHtml(html: string): boolean {
 /**
  * Read one parser-indexed entry. markdown-it fills `bMarks`, `tShift`, `eMarks`
  * and the token list for every line and token it visits, so an index the parser
- * itself produced always holds a value; the cast states that invariant once
- * instead of asserting it at every use.
+ * itself produced always holds a value; the `any` result states that invariant
+ * once instead of asserting it at every use. The parameter is `any`-typed
+ * because markdown-it hands these arrays to untyped ruler callbacks.
  * @param values - dense parser array.
  * @param index - position produced by the parser.
  * @returns the entry at `index`.
  */
-function indexed<T>(values: readonly T[], index: number): T {
-  return values[index] as T
+function indexed(values: readonly any[], index: number): any {
+  return values[index]
 }
 
 function katexPlugin(md: any): void {

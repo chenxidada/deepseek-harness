@@ -14,6 +14,40 @@ export interface BreadcrumbState {
   label?: string
 }
 
+/**
+ * Subagent address mirrored from Host `panel/state.subagentPrompt`. Its presence
+ * is the Host's decision that the composer may deliver a message into the
+ * projected child, so the Webview enables the composer without deriving why.
+ */
+export interface SubagentPromptState {
+  parentSessionId: string
+  childSessionId: string
+  label?: string
+}
+
+/**
+ * SpecDev workflow status mirrored from Host `specdev/status` (AD-CU-12). The
+ * Webview renders what the workspace's durable status holds; a pending gate is
+ * shown with the action that asks the Host to decide it.
+ */
+export interface SpecdevStatusState {
+  slug: string
+  stage: string
+  phase: string | null
+  gates: { hg1: 'pending' | 'passed'; hg2: 'pending' | 'passed'; hg3: 'pending' | 'passed' }
+  /** Per-phase step states, in the order the runtime reported them. */
+  steps: Array<{
+    phaseId: string
+    implementer: string
+    reviewer: string
+    verifier: string
+  }>
+  pendingGate: 'hg1' | 'hg2' | 'hg3' | 'phase-entry' | null
+  loopCount: number
+  nextAction?: string
+  techDebtSummary?: { blocking: number; total: number }
+}
+
 export interface TabChromeItem {
   tabId: string
   /** Session bound to this tab — required for Q-6 tab context-menu delete. */
@@ -101,7 +135,9 @@ export interface UiMessage {
   id: string
   role: string
   text: string
-  kind?: 'text' | 'reasoning' | 'compaction' | 'workflow' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity'
+  /** Images the user attached to this message, in send order. */
+  images?: Array<{ mimeType: string; data: string }>
+  kind?: 'text' | 'compaction' | 'workflow' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity'
   streaming?: boolean
   /** Reasoning/thinking text from model. */
   reasoning?: string
@@ -112,6 +148,12 @@ export interface UiMessage {
   workflow?: UiWorkflow
   sourceMessageId?: string
   turn?: number
+  /**
+   * Session this message was published under. A message list is projected per
+   * session, so the field is redundant for rendering — it exists for an action
+   * that must address the owning session, e.g. a subagent card's parent.
+   */
+  sessionId?: string
   /** Subagent child session identity for `kind:'subagent'` cards (phase-4). */
   childSessionId?: string
   /** Subagent card lifecycle status (phase-4). */
@@ -130,10 +172,13 @@ export interface SearchHit {
   sessionId: string
   title: string
   mtime: number
-  matchTiers: Array<1 | 2>
+  /** Which index matched: 1 title/preview, 2 path, 3 runtime content. */
+  matchTiers: Array<1 | 2 | 3>
   matchField?: 'title' | 'firstUserPreview'
   firstUserPreview?: string
   matchedPath?: string
+  /** Runtime excerpt around the content match (tier 3). */
+  snippet?: string
 }
 
 export interface DeleteConfirmState {
@@ -141,6 +186,12 @@ export interface DeleteConfirmState {
   title?: string
   /** chrome = overflow; tab-context = Tab right-click; history = history row. */
   source: 'chrome' | 'tab-context' | 'history'
+}
+
+/** Composer payload kept from `send` until its outcome is observed. */
+export interface SendDraft {
+  text: string
+  images?: Array<{ data: string; mimeType: string; name?: string }>
 }
 
 /** One model route offered by a provider, mirrored from Host `model/state`. */
@@ -189,6 +240,8 @@ export interface TokenStatus {
   totalTokens: number
   cacheReadTokens?: number
   reasoningTokens?: number
+  /** Runtime estimate of the next prompt's size; preferred by the ring over `totalTokens`. */
+  projectedTokens?: number
   contextWindow: number
   thresholdRatio: number
 }
@@ -274,7 +327,23 @@ export interface ChatUiState {
   statusText: string
   composerState: ComposerState
   composerText: string
+  /** Payload of a send whose acceptance frame has not arrived yet. */
+  pendingSend?: SendDraft
+  /** Payload a refused send hands back to the composer, consumed once. */
+  sendRestore?: SendDraft
   banner?: string
+  /** Semantic kind of the current banner, mirrored from Host `ui/banner`. */
+  bannerKind?: string
+  /** VS Code theme kind broadcast by Host `ui/theme`; a CSS hook, not a color table. */
+  themeKind?: string
+  /** Host decision for the「新建会话」chrome; absent means always available. */
+  newConversationChrome?: { visibility: 'hidden' | 'disabled' | 'enabled' }
+  /** Deferred restore Tabs the「查看更多」entry can bring back. */
+  deferredRestoreCount: number
+  /** Whether the missing-credential banner can deep-link into extension settings. */
+  settingsDeepLinkAvailable: boolean
+  /** Host decision mirrors to apply verbatim (never invented in the Webview). */
+  hostProbes?: { parentReadonly?: boolean; continueSealed?: boolean }
   followState: FollowState
   streaming: boolean
   /** Local stopping chrome (R7) — not a fifth composer state. */
@@ -285,6 +354,10 @@ export interface ChatUiState {
   contextSessionId?: string
   /** Parent→child lineage chrome mirrored from Host (phase-4). */
   breadcrumb?: BreadcrumbState
+  /** Writable subagent address mirrored from Host (phase-4 continuation). */
+  subagentPrompt?: SubagentPromptState
+  /** SpecDev workflow status mirrored from Host `specdev/status` (AD-CU-12). */
+  specdev?: SpecdevStatusState
   searchOpen: boolean
   searchQuery: string
   searchHits: SearchHit[]
@@ -298,6 +371,8 @@ export interface ChatUiState {
   modelState?: ModelState
   /** Current token usage (feature: token-status). */
   tokenStatus?: TokenStatus
+  /** Route the active session's last request used (feature: model-route). */
+  route?: { provider: string; model: string }
   /** Todo items for active session (feature: todo-panel). */
   todoItems: TodoItem[]
   overflowOpen: boolean
@@ -352,6 +427,8 @@ const initialState: ChatUiState = {
   todoItems: [],
   overflowOpen: false,
   settingsOpen: false,
+  deferredRestoreCount: 0,
+  settingsDeepLinkAvailable: false,
   pendingReveal: null,
   pendingChangeListReveal: null,
   pendingSourceReveal: null,
@@ -372,6 +449,9 @@ function emit(): void {
 function deriveComposerState(next: ChatUiState): ComposerState {
   if (next.mode === 'waiting-host' || next.status === 'disconnected') return 'waiting'
   if (next.mode === 'error') return 'error'
+  // A continuable child stays writable while its projection is otherwise
+  // read-only: the Host delivers through the parent's live Agent.
+  if (next.subagentPrompt !== undefined) return 'live'
   // A running child session is read-only live: streaming is mirror-only (AC-71).
   if (next.mode === 'replay' || next.mode === 'empty' || next.mode === 'readonly-live') {
     return 'readonly'
@@ -546,6 +626,7 @@ function mapMessage(m: unknown, index: number): UiMessage {
   const changeList = mapChangeList(rec.changeList)
   const compaction = mapCompaction(rec.compaction)
   const workflow = mapWorkflow(rec.workflow)
+  const images = mapMessageImages(rec.images)
   return {
     id: typeof rec.id === 'string' ? rec.id : `msg-${index}`,
     role: typeof rec.role === 'string' ? rec.role : 'assistant',
@@ -553,9 +634,11 @@ function mapMessage(m: unknown, index: number): UiMessage {
     kind,
     streaming: rec.streaming === true,
     incomplete: rec.incomplete === true,
+    ...images ? { images } : {},
     ...typeof rec.reasoning === 'string' ? { reasoning: rec.reasoning } : {},
     ...typeof rec.turn === 'number' ? { turn: rec.turn } : {},
     ...typeof rec.sourceMessageId === 'string' ? { sourceMessageId: rec.sourceMessageId } : {},
+    ...typeof rec.sessionId === 'string' ? { sessionId: rec.sessionId } : {},
     ...typeof rec.childSessionId === 'string' ? { childSessionId: rec.childSessionId } : {},
     ...(rec.subagentStatus === 'running' || rec.subagentStatus === 'ended' || rec.subagentStatus === 'deleted')
       ? { subagentStatus: rec.subagentStatus }
@@ -565,6 +648,25 @@ function mapMessage(m: unknown, index: number): UiMessage {
     ...compaction ? { compaction } : {},
     ...workflow ? { workflow } : {},
   }
+}
+
+/**
+ * Keep the attached images one user bubble renders, dropping entries without
+ * both a media type and a payload.
+ * @param raw - the frame's `images` field.
+ * @returns validated images, or undefined when the frame carries none.
+ */
+function mapMessageImages(raw: unknown): Array<{ mimeType: string; data: string }> | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const images: Array<{ mimeType: string; data: string }> = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const { mimeType, data } = entry as Record<string, unknown>
+    if (typeof mimeType !== 'string' || mimeType === '') continue
+    if (typeof data !== 'string' || data === '') continue
+    images.push({ mimeType, data })
+  }
+  return images.length === 0 ? undefined : images
 }
 
 /** Drop items whose `content` is not a string or whose `status` is outside the closed set. */
@@ -677,6 +779,121 @@ function mapModelCurrent(raw: unknown): ModelState['current'] {
   }
 }
 
+/**
+ * Parse the `chrome.newConversation` decision mirror. `undefined` keeps the
+ * protocol default (a Webview that was never told otherwise stays enabled).
+ */
+function parseNewConversationChrome(
+  raw: unknown,
+): { visibility: 'hidden' | 'disabled' | 'enabled' } | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const newConversation = (raw as Record<string, unknown>).newConversation
+  if (typeof newConversation !== 'object' || newConversation === null) return undefined
+  const visibility = (newConversation as Record<string, unknown>).visibility
+  if (visibility !== 'hidden' && visibility !== 'disabled' && visibility !== 'enabled') return undefined
+  return { visibility }
+}
+
+/** Parse the Host decision mirrors; both fields are optional and taken verbatim. */
+function parseHostProbes(raw: unknown): { parentReadonly?: boolean; continueSealed?: boolean } | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const rec = raw as Record<string, unknown>
+  const parentReadonly = rec.parentReadonly === true
+  const continueSealed = rec.continueSealed === true
+  if (!parentReadonly && !continueSealed) return undefined
+  return {
+    ...parentReadonly ? { parentReadonly: true } : {},
+    ...continueSealed ? { continueSealed: true } : {},
+  }
+}
+
+/** Whether one Host field is the writable subagent address of this projection. */
+function parseSubagentPrompt(raw: unknown): SubagentPromptState | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const rec = raw as Record<string, unknown>
+  if (typeof rec.parentSessionId !== 'string' || rec.parentSessionId === '') return undefined
+  if (typeof rec.childSessionId !== 'string' || rec.childSessionId === '') return undefined
+  return {
+    parentSessionId: rec.parentSessionId,
+    childSessionId: rec.childSessionId,
+    ...typeof rec.label === 'string' ? { label: rec.label } : {},
+  }
+}
+
+/**
+ * Parse one Host `specdev/status` snapshot. A malformed payload renders no card,
+ * which is the same presentation as a workspace without an active workflow.
+ */
+function parseSpecdevStatus(raw: unknown): SpecdevStatusState | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const rec = raw as Record<string, unknown>
+  if (typeof rec.slug !== 'string' || rec.slug === '') return undefined
+  if (typeof rec.stage !== 'string' || rec.stage === '') return undefined
+  const phase = rec.phase === null ? null : typeof rec.phase === 'string' ? rec.phase : undefined
+  if (phase === undefined) return undefined
+  if (typeof rec.gates !== 'object' || rec.gates === null) return undefined
+  const gateRec = rec.gates as Record<string, unknown>
+  const hg1 = gateState(gateRec.hg1)
+  const hg2 = gateState(gateRec.hg2)
+  const hg3 = gateState(gateRec.hg3)
+  if (hg1 === undefined || hg2 === undefined || hg3 === undefined) return undefined
+  const pendingGate = rec.pendingGate === null ? null : gateId(rec.pendingGate)
+  if (pendingGate === undefined) return undefined
+  if (typeof rec.steps !== 'object' || rec.steps === null || Array.isArray(rec.steps)) return undefined
+  const steps: SpecdevStatusState['steps'] = []
+  for (const [phaseId, value] of Object.entries(rec.steps as Record<string, unknown>)) {
+    if (typeof value !== 'object' || value === null) return undefined
+    const row = value as Record<string, unknown>
+    if (typeof row.implementer !== 'string' || typeof row.reviewer !== 'string') return undefined
+    if (typeof row.verifier !== 'string') return undefined
+    steps.push({ phaseId, implementer: row.implementer, reviewer: row.reviewer, verifier: row.verifier })
+  }
+  const debt = rec.techDebtSummary
+  return {
+    slug: rec.slug,
+    stage: rec.stage,
+    phase,
+    gates: { hg1, hg2, hg3 },
+    steps,
+    pendingGate,
+    loopCount: typeof rec.loopCount === 'number' ? rec.loopCount : 0,
+    ...typeof rec.nextAction === 'string' && rec.nextAction !== '' ? { nextAction: rec.nextAction } : {},
+    ...typeof debt !== 'object' || debt === null ? {} : {
+      techDebtSummary: {
+        blocking: Number((debt as Record<string, unknown>).blocking) || 0,
+        total: Number((debt as Record<string, unknown>).total) || 0,
+      },
+    },
+  }
+}
+
+/** One gate state of a parsed status, or `undefined` when unrecognized. */
+function gateState(raw: unknown): 'pending' | 'passed' | undefined {
+  return raw === 'pending' || raw === 'passed' ? raw : undefined
+}
+
+/** One gate id of a parsed status, or `undefined` when unrecognized. */
+function gateId(raw: unknown): SpecdevStatusState['pendingGate'] | undefined {
+  return raw === 'hg1' || raw === 'hg2' || raw === 'hg3' || raw === 'phase-entry' ? raw : undefined
+}
+
+/**
+ * Banner copy for one Host send-gate reason. The `@` reference reasons have a
+ * specific Host banner of their own, so the caller keeps that text instead.
+ */
+function rejectSendCopy(reason: string): string {
+  if (reason === 'replay') return '只读回放 — 不可直接发送'
+  if (reason === 'readonly-live') return '子代理运行中 — 只读直播，不可直接发送'
+  if (reason === 'no-host') return 'Host 未就绪 — 请稍后重试'
+  if (reason === 'disconnected') return 'Host 连接已断开 — 请稍后重试'
+  if (reason === 'no-active') return '没有可发送的会话'
+  if (reason === 'empty') return '消息为空'
+  if (reason === 'not-found' || reason === 'outside-workspace' || reason === 'ambiguous-root') {
+    return '@ 引用无效 — 请检查路径'
+  }
+  return `无法发送（${reason}）`
+}
+
 export function getChatUiState(): ChatUiState {
   return state
 }
@@ -706,6 +923,27 @@ export function subscribeChatUi(listener: ChatUiListener): () => void {
 export function setComposerText(text: string): void {
   state = { ...state, composerText: text }
   emit()
+}
+
+/**
+ * Remember one outgoing composer payload until the conversation answers it.
+ * @param draft - trimmed text and the attachments that were sent with it.
+ */
+export function setPendingSend(draft: SendDraft): void {
+  state = { ...state, pendingSend: draft }
+  emit()
+}
+
+/**
+ * Take back the payload of a refused send.
+ * @returns the draft the composer restores, or undefined when nothing failed.
+ */
+export function consumeSendRestore(): SendDraft | undefined {
+  const draft = state.sendRestore
+  if (draft === undefined) return undefined
+  state = { ...state, sendRestore: undefined }
+  emit()
+  return draft
 }
 
 export function setFollowState(followState: FollowState): void {
@@ -840,6 +1078,12 @@ export function applyHostFrame(raw: unknown): void {
   hostFrameDelivered = true
   const frame = raw as Record<string, unknown>
   const type = frame.type
+  // A conversation frame is the acceptance signal for the send it answers, so the
+  // draft is no longer at risk and a failure must not hand it back later.
+  if ((type === 'messages/replace' || type === 'messages/append' || type === 'messages/patch')
+    && state.pendingSend !== undefined) {
+    state = { ...state, pendingSend: undefined }
+  }
   if (type === 'panel/state') {
     const mode = typeof frame.mode === 'string' ? frame.mode as PanelMode : state.mode
     const cont = frame.continue
@@ -874,16 +1118,30 @@ export function applyHostFrame(raw: unknown): void {
             : {},
         }
         : undefined
+    const nextSessionId = typeof frame.sessionId === 'string' ? frame.sessionId : undefined
+    // Per-session samples describe the conversation in front of the user: switching
+    // Tabs drops them instead of leaving the previous session's numbers on screen.
+    const sessionChanged = nextSessionId !== state.sessionId
+    const nextTabId = typeof frame.tabId === 'string' ? frame.tabId : undefined
     state = {
       ...state,
       mode,
-      sessionId: typeof frame.sessionId === 'string' ? frame.sessionId : undefined,
-      tabId: typeof frame.tabId === 'string' ? frame.tabId : undefined,
+      sessionId: nextSessionId,
+      tabId: nextTabId,
+      // The panel state names the Tab it projects, so it is also the active-marker
+      // fallback for a Tab list frame that has not arrived yet.
+      ...nextTabId === undefined ? {} : { activeTabId: nextTabId },
       title: typeof frame.title === 'string' ? frame.title : undefined,
       connectionPhase: typeof frame.connectionPhase === 'string' ? frame.connectionPhase : state.connectionPhase,
       connectionMessage: typeof frame.connectionMessage === 'string'
         ? frame.connectionMessage
         : undefined,
+      newConversationChrome: parseNewConversationChrome(frame.chrome),
+      deferredRestoreCount: typeof frame.deferredRestoreCount === 'number' && Number.isFinite(frame.deferredRestoreCount)
+        ? Math.max(0, Math.trunc(frame.deferredRestoreCount))
+        : 0,
+      settingsDeepLinkAvailable: frame.settingsDeepLinkAvailable === true,
+      hostProbes: parseHostProbes(frame.probes),
       messagesLoading: mode === 'waiting-host',
       continueChrome,
       forkParentTitle: typeof frame.forkParentTitle === 'string' ? frame.forkParentTitle : undefined,
@@ -891,6 +1149,8 @@ export function applyHostFrame(raw: unknown): void {
         ? frame.contextSessionId
         : undefined,
       breadcrumb,
+      subagentPrompt: parseSubagentPrompt(frame.subagentPrompt),
+      ...sessionChanged ? { tokenStatus: undefined, todoItems: [], route: undefined, specdev: undefined } : {},
     }
   } else if (type === 'panel/tabs') {
     const tabs: TabChromeItem[] = Array.isArray(frame.tabs)
@@ -1015,6 +1275,10 @@ export function applyHostFrame(raw: unknown): void {
           if (workflow && workflowPatch) {
             workflow = mapWorkflow({ ...workflow, ...workflowPatch }) ?? workflow
           }
+          // Replay echo: a patch carrying images replaces the bubble's list, so a
+          // session folded from its log shows its images once they are read back.
+          const patchImages = mapMessageImages(frame.images)
+          const images = patchImages ?? m.images
           return {
             ...m,
             text,
@@ -1022,6 +1286,7 @@ export function applyHostFrame(raw: unknown): void {
             // Only overwrite streaming when Host explicitly sends the field
             ...(frame.streaming !== undefined ? { streaming: frame.streaming === true } : {}),
             incomplete: frame.incomplete === true ? true : m.incomplete,
+            ...images ? { images } : {},
             ...activity ? { activity } : {},
             ...compaction ? { compaction } : {},
             ...workflow ? { workflow } : {},
@@ -1052,24 +1317,36 @@ export function applyHostFrame(raw: unknown): void {
       stopping: streaming ? state.stopping : false,
     }
   } else if (type === 'ui/banner') {
+    const kind = typeof frame.kind === 'string' && frame.kind !== '' ? frame.kind : undefined
+    const retracted = !(typeof frame.text === 'string' && frame.text !== '')
     state = {
       ...state,
       // Empty text retracts an earlier banner: the frame carries no separate clear op.
       banner: typeof frame.text === 'string' && frame.text !== '' ? frame.text : undefined,
+      bannerKind: retracted ? undefined : kind,
       stopping: false,
+      // A refused send returns its payload so the composer can restore the draft.
+      ...!retracted && kind === 'send-failed' && state.pendingSend !== undefined
+        ? { pendingSend: undefined, sendRestore: state.pendingSend }
+        : {},
     }
   } else if (type === 'ui/reject-send') {
     const reason = String(frame.reason ?? 'unknown')
-    const reasonCopy = reason === 'readonly' || reason === 'replay'
-      ? '只读回放 — 不可直接发送'
-      : reason === 'readonly-live'
-        ? '子代理运行中 — 只读直播，不可直接发送'
-        : reason === 'waiting-host' || reason === 'disconnected'
-          ? 'Host 未就绪 — 请稍后重试'
-          : `无法发送（${reason}）`
+    const atPathReason = reason === 'not-found' || reason === 'outside-workspace' || reason === 'ambiguous-root'
+    // An `@` reference rejection already produced a specific Host banner; the frame
+    // repeats the reason, so it must not replace that text with generic copy.
+    const keepBanner = atPathReason && state.banner !== undefined
     state = {
       ...state,
-      banner: reasonCopy,
+      ...keepBanner ? {} : { banner: rejectSendCopy(reason), bannerKind: 'reject-send' },
+      // The gate rejected this payload; the composer takes the draft back.
+      ...state.pendingSend === undefined
+        ? {}
+        : { pendingSend: undefined, sendRestore: state.pendingSend },
+    }
+  } else if (type === 'ui/theme') {
+    if (typeof frame.themeKind === 'string' && frame.themeKind !== '') {
+      state = { ...state, themeKind: frame.themeKind }
     }
   } else if (type === 'composer/prefill') {
     if (typeof frame.text === 'string') {
@@ -1093,13 +1370,14 @@ export function applyHostFrame(raw: unknown): void {
           title: String(h.title ?? ''),
           mtime: typeof h.mtime === 'number' ? h.mtime : 0,
           matchTiers: Array.isArray(h.matchTiers)
-            ? h.matchTiers.filter((t): t is 1 | 2 => t === 1 || t === 2)
+            ? h.matchTiers.filter((t): t is 1 | 2 | 3 => t === 1 || t === 2 || t === 3)
             : [],
           ...typeof h.matchField === 'string'
             ? { matchField: h.matchField as SearchHit['matchField'] }
             : {},
           ...typeof h.firstUserPreview === 'string' ? { firstUserPreview: h.firstUserPreview } : {},
           ...typeof h.matchedPath === 'string' ? { matchedPath: h.matchedPath } : {},
+          ...typeof h.snippet === 'string' ? { snippet: h.snippet } : {},
         }))
         .filter(h => h.sessionId !== '')
       : []
@@ -1129,6 +1407,9 @@ export function applyHostFrame(raw: unknown): void {
       settingsState: { namespaces },
     }
   } else if (type === 'token/status') {
+    // A background session's sample must not own this panel's ring (multi-Tab).
+    const sampleSessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''
+    if (sampleSessionId !== '' && state.sessionId !== undefined && sampleSessionId !== state.sessionId) return
     state = {
       ...state,
       tokenStatus: {
@@ -1140,14 +1421,34 @@ export function applyHostFrame(raw: unknown): void {
         totalTokens: typeof frame.totalTokens === 'number' ? frame.totalTokens : 0,
         ...typeof frame.cacheReadTokens === 'number' ? { cacheReadTokens: frame.cacheReadTokens } : {},
         ...typeof frame.reasoningTokens === 'number' ? { reasoningTokens: frame.reasoningTokens } : {},
+        ...typeof frame.projectedTokens === 'number' ? { projectedTokens: frame.projectedTokens } : {},
         contextWindow: typeof frame.contextWindow === 'number' ? frame.contextWindow : 0,
         thresholdRatio: typeof frame.thresholdRatio === 'number' ? frame.thresholdRatio : 0.8,
       },
     }
+  } else if (type === 'session/route') {
+    // The route describes one conversation; another Tab's request must not relabel this one.
+    const routeSessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''
+    const provider = typeof frame.provider === 'string' ? frame.provider : ''
+    const model = typeof frame.model === 'string' ? frame.model : ''
+    if (routeSessionId === '' || provider === '' || model === '') return
+    if (state.sessionId !== undefined && routeSessionId !== state.sessionId) return
+    state = { ...state, route: { provider, model } }
   } else if (type === 'todo/state') {
+    // Same guard as token/status: the card shows the conversation in front of the user.
+    const todoSessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''
+    if (todoSessionId !== '' && state.sessionId !== undefined && todoSessionId !== state.sessionId) return
     state = {
       ...state,
       todoItems: mapTodoItems(frame.items),
+    }
+  } else if (type === 'specdev/status') {
+    // A background Tab's workflow must not own the card this panel shows.
+    const specdevSessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''
+    if (specdevSessionId !== '' && state.sessionId !== undefined && specdevSessionId !== state.sessionId) return
+    state = {
+      ...state,
+      specdev: parseSpecdevStatus(frame.snapshot),
     }
   } else if (type === 'scroll/reveal') {
     const sessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''

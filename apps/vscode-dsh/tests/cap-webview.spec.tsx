@@ -713,6 +713,240 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expectOutsideStrips('tab-context-menu')
       })
 
+      it('CAP-WEBVIEW-075 warns on a text-only route while an image is attached', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'model/state',
+            providers: [{
+              id: 'deepseek',
+              name: 'DeepSeek',
+              models: [
+                { id: 'deepseek-v4-pro', name: 'V4 Pro' },
+                { id: 'deepseek-v4-flash', name: 'V4 Flash', vision: true },
+              ],
+            }],
+            current: { provider: 'deepseek', model: 'deepseek-v4-pro' },
+          })
+          applyHostFrame({ type: 'session/route', sessionId: 's1', provider: 'deepseek', model: 'deepseek-v4-pro' })
+        })
+        const input = screen.getByTestId('composer-input')
+        expect(screen.queryByTestId('vision-warning')).toBeNull()
+
+        // An attachment alone is not a problem: the route is what decides.
+        await act(async () => {
+          fireEvent.drop(input, {
+            dataTransfer: { files: [new File(['x'], 'a.png', { type: 'image/png' })], getData: () => '' },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('image-preview-area')).toBeTruthy()
+        })
+        // The runtime projects the image down to a placeholder for this route, so the
+        // composer says so before the send instead of after it.
+        expect(screen.getByTestId('vision-warning').textContent).toContain('deepseek-v4-pro')
+
+        await act(async () => {
+          applyHostFrame({ type: 'session/route', sessionId: 's1', provider: 'deepseek', model: 'deepseek-v4-flash' })
+        })
+        await waitFor(() => {
+          expect(screen.queryByTestId('vision-warning')).toBeNull()
+        })
+        expect(screen.getByTestId('image-preview-area')).toBeTruthy()
+      })
+
+      it('CAP-WEBVIEW-076 a failed send hands the draft and its images back to the composer', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '看看这张图' } })
+        })
+        await act(async () => {
+          fireEvent.drop(input, {
+            dataTransfer: { files: [new File(['x'], 'a.png', { type: 'image/png' })], getData: () => '' },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('image-preview-area')).toBeTruthy()
+        })
+
+        fireEvent.click(screen.getByTestId('btn-send'))
+        expect(posts.some(p => (p as { type?: string }).type === 'composer/send-rich')).toBe(true)
+        expect(input.value).toBe('')
+        expect(screen.queryByTestId('image-preview-area')).toBeNull()
+
+        await act(async () => {
+          applyHostFrame({ type: 'ui/banner', kind: 'send-failed', text: '发送失败：附件过大' })
+        })
+        await waitFor(() => {
+          expect(input.value).toBe('看看这张图')
+        })
+        expect(screen.getByTestId('image-preview-area')).toBeTruthy()
+        expect(screen.getByTestId('status').textContent).toContain('发送失败：附件过大')
+
+        // A conversation frame is the acceptance signal: a later banner must not
+        // resurrect the payload the user has already seen answered.
+        await act(async () => {
+          applyHostFrame({ type: 'messages/replace', messages: [] })
+          fireEvent.change(input, { target: { value: '' } })
+          applyHostFrame({ type: 'ui/banner', kind: 'send-failed', text: '发送失败：先前那次' })
+        })
+        expect(input.value).toBe('')
+      })
+
+      it('CAP-WEBVIEW-094 an attachment declares the media type its bytes carry', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+        // PNG signature bytes behind an `image/jpg` label: exactly the declaration the
+        // runtime's attachment admission refuses with IMAGE_TYPE_MISMATCH.
+        const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+        await act(async () => {
+          fireEvent.drop(input, {
+            dataTransfer: { files: [new File([png], 'shot.jpg', { type: 'image/jpg' })], getData: () => '' },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('image-preview-area')).toBeTruthy()
+        })
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '看这张' } })
+        })
+        fireEvent.click(screen.getByTestId('btn-send'))
+        const send = posts.find(entry => (entry as { type?: string }).type === 'composer/send-rich') as
+          | { images?: Array<{ mimeType: string }> }
+          | undefined
+        expect(send?.images?.[0]?.mimeType).toBe('image/png')
+      })
+
+      it('CAP-WEBVIEW-095 an attachment whose bytes carry no signature keeps the declared type', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+        await act(async () => {
+          fireEvent.drop(input, {
+            dataTransfer: { files: [new File(['x'], 'a.webp', { type: 'image/webp' })], getData: () => '' },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('image-preview-area')).toBeTruthy()
+        })
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '再看' } })
+        })
+        fireEvent.click(screen.getByTestId('btn-send'))
+        const send = posts.find(entry => (entry as { type?: string }).type === 'composer/send-rich') as
+          | { images?: Array<{ mimeType: string }> }
+          | undefined
+        expect(send?.images?.[0]?.mimeType).toBe('image/webp')
+      })
+
+      it('CAP-WEBVIEW-096 a user bubble renders the images it carried', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/replace',
+            sessionId: 's1',
+            messages: [
+              {
+                id: 'm1',
+                sessionId: 's1',
+                role: 'user',
+                kind: 'text',
+                text: '看这张',
+                images: [{ mimeType: 'image/png', data: 'AA==' }],
+              },
+              { id: 'm2', sessionId: 's1', role: 'assistant', kind: 'text', text: '好的' },
+            ],
+          })
+        })
+        const rendered = screen.getAllByTestId('message-image')
+        expect(rendered).toHaveLength(1)
+        expect(rendered[0]?.getAttribute('src')).toBe('data:image/png;base64,AA==')
+      })
+
+      it('CAP-WEBVIEW-097 a patch from the replay image read adds the images to its bubble', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'replay', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/replace',
+            sessionId: 's1',
+            messages: [
+              { id: 'm1', sessionId: 's1', role: 'user', kind: 'text', text: '看这张' },
+              { id: 'm2', sessionId: 's1', role: 'assistant', kind: 'text', text: '好的' },
+            ],
+          })
+        })
+        // A session folded from its log has references, not bytes: the bubble
+        // paints before the attachment store answers.
+        expect(screen.queryAllByTestId('message-image')).toHaveLength(0)
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'messages/patch',
+            sessionId: 's1',
+            messageId: 'm1',
+            images: [{ mimeType: 'image/png', data: 'AA==' }],
+          })
+        })
+        const rendered = screen.getAllByTestId('message-image')
+        expect(rendered).toHaveLength(1)
+        expect(rendered[0]?.getAttribute('src')).toBe('data:image/png;base64,AA==')
+        // The patched bubble keeps its text beside the image.
+        expect(screen.getByText('看这张')).toBeTruthy()
+      })
+
+      it('CAP-WEBVIEW-077 token, todo, and route frames from another session stay off this panel', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'token/status',
+            sessionId: 's2',
+            inputTokens: 1,
+            outputTokens: 1,
+            totalTokens: 2,
+            contextWindow: 128000,
+            thresholdRatio: 0.8,
+          })
+          applyHostFrame({ type: 'todo/state', sessionId: 's2', items: [{ content: '别的会话', status: 'running' }] })
+          applyHostFrame({ type: 'session/route', sessionId: 's2', provider: 'deepseek', model: 'deepseek-v4-pro' })
+        })
+        expect(screen.queryByTestId('token-meter')).toBeNull()
+        expect(screen.queryByTestId('todo-card')).toBeNull()
+        expect(screen.queryByTestId('session-route')).toBeNull()
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'token/status',
+            sessionId: 's1',
+            inputTokens: 9000,
+            outputTokens: 3300,
+            totalTokens: 12300,
+            contextWindow: 128000,
+            thresholdRatio: 0.8,
+          })
+          applyHostFrame({ type: 'messages/replace', messages: [{ id: 'm1', role: 'assistant', text: '好' }] })
+          applyHostFrame({ type: 'todo/state', sessionId: 's1', items: [{ content: '本会话', status: 'pending' }] })
+          applyHostFrame({ type: 'session/route', sessionId: 's1', provider: 'deepseek', model: 'deepseek-v4-flash' })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('token-meter')).toBeTruthy()
+        })
+        expect(screen.getByTestId('todo-card').textContent).toContain('本会话')
+        expect(screen.getByTestId('session-route').textContent).toBe('deepseek-v4-flash')
+      })
+
       it('CAP-WEBVIEW-008 composer four states + Stop / stopping DOM ( / R7)', async () => {
         render(<App bridge={bridge} />)
         await act(async () => {
@@ -785,8 +1019,6 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expect(posts.some(p =>
           (p as { type?: string; sessionId?: string }).type === 'action/open-search-hit'
       && (p as { sessionId?: string }).sessionId === 's-hit')).toBe(true)
-        // Must not open QuickPick path for in-panel search typing
-        expect(posts.some(p => (p as { type?: string }).type === 'ui/search-open')).toBe(false)
       })
 
       it('CAP-WEBVIEW-010 history Continue / delete modal / parent lineage (–57/60)', async () => {
@@ -827,7 +1059,7 @@ describe('cap:webview — editor chat shell React rendering', () => {
       && (p as { sessionId?: string }).sessionId === 'child-1')).toBe(true)
       })
 
-      it('CAP-WEBVIEW-011 overflow menu: delete session + open Timeline', async () => {
+      it('CAP-WEBVIEW-011 overflow menu: delete session', async () => {
         render(<App bridge={bridge} />)
         await act(async () => {
           applyHostFrame({
@@ -842,12 +1074,8 @@ describe('cap:webview — editor chat shell React rendering', () => {
         await waitFor(() => {
           expect(screen.getByTestId('overflow-menu')).toBeTruthy()
           expect(screen.getByTestId('menu-delete-session')).toBeTruthy()
-          expect(screen.getByTestId('menu-open-timeline')).toBeTruthy()
         })
-        fireEvent.click(screen.getByTestId('menu-open-timeline'))
-        expect(posts.some(p => (p as { type?: string }).type === 'ui/open-timeline')).toBe(true)
 
-        fireEvent.click(screen.getByTestId('btn-overflow'))
         fireEvent.click(screen.getByTestId('menu-delete-session'))
         await waitFor(() => {
           expect(screen.getByTestId('delete-confirm-modal')).toBeTruthy()
@@ -1084,6 +1312,324 @@ describe('cap:webview — editor chat shell React rendering', () => {
           expect(screen.queryByTestId('search-panel')).toBeNull()
           expect(screen.getByTestId('history-row').getAttribute('data-session-id')).toBe('hit-remote')
         })
+      })
+    })
+  })
+
+  describe('layer-a-rtl/host-chrome-wiring.spec.tsx', () => {
+    describe('Host decision mirrors and frame-driven chrome', () => {
+      const posts: unknown[] = []
+      let bridge: ReturnType<typeof createMessageBridge>
+
+      beforeEach(() => {
+        cleanup()
+        posts.length = 0
+        resetChatUiState()
+        mountDshProbes()
+        bridge = createMessageBridge({
+          postToHost: (msg) => {
+            posts.push(msg)
+          },
+          onHostMessage: () => () => {},
+        })
+      })
+
+      afterEach(() => {
+        bridge.dispose()
+        cleanup()
+      })
+
+      it('CAP-WEBVIEW-078 the theme broadcast and the projected Tab id reach the root element', async () => {
+        render(<App bridge={bridge} />)
+        expect(screen.getByTestId('editor-chat-root').getAttribute('data-theme-kind')).toBe('')
+        await act(async () => {
+          applyHostFrame({ type: 'ui/theme', themeKind: 'dark' })
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const root = screen.getByTestId('editor-chat-root')
+        expect(root.getAttribute('data-theme-kind')).toBe('dark')
+        // panel/state names the projected Tab, so a Tab list frame is not required
+        // before the strip can mark one Tab active.
+        expect(root.getAttribute('data-tab-id')).toBe('t1')
+        expect(getChatUiState().activeTabId).toBe('t1')
+      })
+
+      it('CAP-WEBVIEW-079 chrome.newConversation hides or disables the new-session entry', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'empty', chrome: { newConversation: { visibility: 'hidden' } } })
+        })
+        expect(screen.queryByTestId('btn-new-tab')).toBeNull()
+
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'empty', chrome: { newConversation: { visibility: 'disabled' } } })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('btn-new-tab').hasAttribute('disabled')).toBe(true)
+        })
+
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'empty', chrome: { newConversation: { visibility: 'enabled' } } })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('btn-new-tab').hasAttribute('disabled')).toBe(false)
+        })
+      })
+
+      it('CAP-WEBVIEW-080 deferredRestoreCount surfaces the restore entries and they emit both shapes', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/state',
+            mode: 'live',
+            sessionId: 's1',
+            tabId: 't1',
+            chrome: { newConversation: { visibility: 'enabled' } },
+            deferredRestoreCount: 3,
+          })
+        })
+        fireEvent.click(screen.getByTestId('btn-overflow'))
+        await waitFor(() => {
+          expect(screen.getByTestId('menu-restore-more')).toBeTruthy()
+        })
+        expect(screen.getByTestId('menu-restore-more').textContent).toContain('3')
+
+        fireEvent.click(screen.getByTestId('menu-restore-more'))
+        expect(posts).toContainEqual({ type: 'action/restore-more' })
+
+        fireEvent.click(screen.getByTestId('btn-overflow'))
+        await waitFor(() => {
+          expect(screen.getByTestId('menu-restore-all')).toBeTruthy()
+        })
+        fireEvent.click(screen.getByTestId('menu-restore-all'))
+        expect(posts).toContainEqual({ type: 'action/restore-more', all: true })
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/state',
+            mode: 'live',
+            sessionId: 's1',
+            tabId: 't1',
+            deferredRestoreCount: 0,
+          })
+        })
+        fireEvent.click(screen.getByTestId('btn-overflow'))
+        await waitFor(() => {
+          expect(screen.queryByTestId('menu-restore-more')).toBeNull()
+        })
+      })
+
+      it('CAP-WEBVIEW-081 a failed connection offers retry, and missing credentials deep-link into settings', async () => {
+        render(<App bridge={bridge} />)
+        expect(screen.queryByTestId('btn-retry-connect')).toBeNull()
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/state',
+            mode: 'error',
+            connectionPhase: 'disconnected-manual',
+            connectionMessage: 'Host 连接已断开 — 请重试',
+            settingsDeepLinkAvailable: true,
+          })
+        })
+        const retry = screen.getByTestId('btn-retry-connect')
+        fireEvent.click(retry)
+        expect(posts).toContainEqual({ type: 'action/retry-connect' })
+
+        const deeplink = screen.getByTestId('btn-deeplink-settings')
+        fireEvent.click(deeplink)
+        expect(posts).toContainEqual({ type: 'action/open-settings' })
+        expect(getChatUiState().settingsOpen).toBe(true)
+
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', connectionPhase: 'connected' })
+        })
+        await waitFor(() => {
+          expect(screen.queryByTestId('btn-retry-connect')).toBeNull()
+          expect(screen.queryByTestId('btn-deeplink-settings')).toBeNull()
+        })
+      })
+
+      it('CAP-WEBVIEW-082 parentReadonly mirrors the Host: read-only composer and no mutation actions', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/state',
+            mode: 'live',
+            sessionId: 's1',
+            tabId: 't1',
+            probes: { parentReadonly: true },
+          })
+          applyHostFrame({
+            type: 'messages/replace',
+            sessionId: 's1',
+            messages: [
+              { id: 'm1', role: 'user', text: '改一下' },
+              { id: 'm2', role: 'assistant', text: '好', turn: 1 },
+            ],
+          })
+        })
+        const root = screen.getByTestId('editor-chat-root')
+        expect(root.getAttribute('data-parent-readonly')).toBe('true')
+        expect(screen.getByTestId('composer').getAttribute('data-composer-state')).toBe('readonly')
+        expect(screen.getByTestId('composer-disabled-reason').textContent).toContain('父会话已派生新分叉')
+        expect(screen.queryByTestId('btn-branch')).toBeNull()
+        expect(screen.queryByTestId('btn-retry')).toBeNull()
+        expect(window.__dshProbes?.getHostDecisions()).toEqual({ parentReadonly: true })
+      })
+
+      it('CAP-WEBVIEW-083 continueSealed disables Continue even when the chrome offers it', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/state',
+            mode: 'replay',
+            sessionId: 's1',
+            tabId: 't1',
+            continue: { visibility: 'enabled', capability: 'same-id' },
+            probes: { continueSealed: true },
+          })
+        })
+        const button = screen.getByTestId('btn-continue')
+        expect(button.hasAttribute('disabled')).toBe(true)
+        expect(button.getAttribute('data-sealed')).toBe('true')
+        expect(screen.getByTestId('continue-reason').textContent).toContain('Continue 已封印')
+        expect(window.__dshProbes?.getHostDecisions()).toEqual({ continueSealed: true })
+      })
+
+      it('CAP-WEBVIEW-084 a change row exposes review, source reveal, and multi-select revert', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/replace',
+            sessionId: 's1',
+            messages: [{
+              id: 'cl1',
+              role: 'notice',
+              text: '本回合改了 2 个文件',
+              kind: 'change-list',
+              changeList: {
+                turn: 1,
+                sourceMessageId: 'a1',
+                emptyNotice: false,
+                changes: [
+                  { changeId: 'c1', path: 'src/a.ts', kind: 'modified', status: 'unreviewed', additions: 2, deletions: 1 },
+                  { changeId: 'c2', path: 'src/b.ts', kind: 'created', status: 'reviewed', additions: 5, deletions: 0 },
+                ],
+              },
+            }],
+          })
+        })
+
+        fireEvent.click(screen.getByTestId('change-list-open-diffs'))
+        expect(posts).toContainEqual({ type: 'action/open-workspace-diffs' })
+
+        const marked = screen.getAllByTestId('change-mark-reviewed')
+        // The reviewed row keeps no action; only the unreviewed one offers it.
+        expect(marked).toHaveLength(1)
+        fireEvent.click(marked[0]!)
+        expect(posts).toContainEqual({ type: 'change/mark-reviewed', changeId: 'c1' })
+
+        fireEvent.click(screen.getAllByTestId('change-reveal-source')[0]!)
+        expect(posts).toContainEqual({ type: 'change/reveal-source', sourceMessageId: 'a1' })
+
+        fireEvent.click(screen.getAllByTestId('change-select')[0]!)
+        fireEvent.click(screen.getAllByTestId('change-select')[1]!)
+        const batch = screen.getByTestId('change-revert-many')
+        expect(batch.textContent).toContain('2')
+        fireEvent.click(batch)
+        expect(posts).toContainEqual({ type: 'change/revert-many', changeIds: ['c1', 'c2'] })
+      })
+
+      it('CAP-WEBVIEW-085 an activity row with a tool call id asks the Host to locate its turn', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/replace',
+            sessionId: 's1',
+            messages: [
+              { id: 'act1', role: 'assistant', text: '', kind: 'activity', activity: { id: 'act1', status: 'done', callId: 'call-7', toolName: 'Read', expanded: false } },
+              { id: 'act2', role: 'assistant', text: '', kind: 'activity', activity: { id: 'act2', status: 'done', expanded: false } },
+            ],
+          })
+        })
+        const reveals = screen.getAllByTestId('activity-reveal')
+        // Only the row that knows its call id can be located.
+        expect(reveals).toHaveLength(1)
+        fireEvent.click(reveals[0]!)
+        expect(posts).toContainEqual({ type: 'scroll/reveal', callId: 'call-7' })
+      })
+
+      it('CAP-WEBVIEW-086 tabs carry their replay mode and lineage hint', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/tabs',
+            activeTabId: 't1',
+            tabs: [
+              { tabId: 't1', sessionId: 's1', title: '回放 Tab', status: 'idle', unread: false, approvalBadge: false, mode: 'replay' },
+              { tabId: 't2', sessionId: 's2', title: '子 Tab', status: 'idle', unread: false, approvalBadge: false, mode: 'live', parentHint: '派生自 主会话' },
+            ],
+          })
+        })
+        const replayTab = document.querySelector('[data-testid="tab-item"][data-tab-id="t1"]')
+        const childTab = document.querySelector('[data-testid="tab-item"][data-tab-id="t2"]')
+        expect(replayTab?.querySelector('[data-testid="tab-replay-badge"]')).not.toBeNull()
+        expect(childTab?.querySelector('[data-testid="tab-replay-badge"]')).toBeNull()
+        expect(childTab?.querySelector('[data-testid="tab-parent-hint"]')?.textContent).toBe('派生自 主会话')
+      })
+
+      it('CAP-WEBVIEW-087 reject reasons map to their own copy and keep a specific Host banner', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({ type: 'ui/reject-send', reason: 'no-active' })
+        })
+        expect(screen.getByTestId('status').textContent).toContain('没有可发送的会话')
+        expect(screen.getByTestId('status').getAttribute('data-banner-kind')).toBe('reject-send')
+
+        // An `@` rejection already produced a precise Host banner; the reason frame
+        // must not flatten it into the generic copy.
+        await act(async () => {
+          applyHostFrame({ type: 'ui/banner', kind: 'at-path', text: '@ 路径不在工作区内：../x.ts' })
+          applyHostFrame({ type: 'ui/reject-send', reason: 'outside-workspace' })
+        })
+        expect(screen.getByTestId('status').textContent).toContain('../x.ts')
+      })
+
+      it('CAP-WEBVIEW-088 both rename entries ask the Host for the Tab they name', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's-active', tabId: 't1' })
+          applyHostFrame({
+            type: 'panel/tabs',
+            activeTabId: 't1',
+            tabs: [
+              { tabId: 't1', sessionId: 's-active', title: '当前会话', status: 'idle', unread: false, approvalBadge: false, mode: 'live' },
+              { tabId: 't2', sessionId: 's-other', title: '另一个会话', status: 'idle', unread: false, approvalBadge: false, mode: 'live' },
+            ],
+          })
+        })
+
+        fireEvent.click(screen.getByTestId('btn-overflow'))
+        await waitFor(() => {
+          expect(screen.getByTestId('menu-rename-session')).toBeTruthy()
+        })
+        fireEvent.click(screen.getByTestId('menu-rename-session'))
+        expect(posts).toContainEqual({ type: 'ui/rename-request', sessionId: 's-active' })
+        // Choosing the entry closes the menu, like the delete entry does.
+        expect(screen.queryByTestId('overflow-menu')).toBeNull()
+
+        const otherTab = document.querySelector('[data-testid="tab-item"][data-tab-id="t2"]')
+        expect(otherTab).not.toBeNull()
+        fireEvent.contextMenu(otherTab!)
+        await waitFor(() => {
+          expect(screen.getByTestId('tab-context-menu')).toBeTruthy()
+        })
+        fireEvent.click(screen.getByTestId('menu-tab-rename-session'))
+        // The Tab menu names the Tab it was opened on, not the active Tab.
+        expect(posts).toContainEqual({ type: 'ui/rename-request', sessionId: 's-other' })
       })
     })
   })
@@ -1784,7 +2330,6 @@ describe('cap:webview — editor chat shell React rendering', () => {
         await waitFor(() => {
           expect(screen.getByTestId('overflow-menu')).toBeTruthy()
           expect(screen.getByTestId('menu-delete-session')).toBeTruthy()
-          expect(screen.getByTestId('menu-open-timeline')).toBeTruthy()
         })
         fireEvent.click(screen.getByTestId('menu-delete-session'))
         await waitFor(() => {
@@ -2037,6 +2582,29 @@ describe('cap:webview — editor chat shell React rendering', () => {
           expect(screen.getByTestId('token-meter-bar').style.width).toBe('100%')
         })
         expect(screen.getByTestId('token-meter').getAttribute('data-warn')).toBe('true')
+      })
+
+      it('CAP-WEBVIEW-089 the runtime contextPressure figures drive the status meter and the ring', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'token/status',
+            sessionId: 's1',
+            inputTokens: 9000,
+            outputTokens: 3300,
+            totalTokens: 12300,
+            projectedTokens: 40000,
+            contextWindow: 200000,
+            thresholdRatio: 0.8,
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('token-meter-text').textContent).toBe('40k / 200k · 20%')
+        })
+        // The log's own totals stay the tooltip's detail, not the occupancy reading.
+        expect(screen.getByTestId('token-meter').getAttribute('title')).toBe('input 9000 · output 3300')
+        expect(screen.getByTestId('context-ring').textContent).toContain('20%')
       })
 
       it('CAP-WEBVIEW-041 messages/patch updates compaction status, released tokens, and summary', async () => {
@@ -2876,6 +3444,255 @@ describe('cap:webview — editor chat shell React rendering', () => {
         await waitFor(() => {
           expect(screen.queryByTestId('sidebar-menu')).toBeNull()
         })
+      })
+    })
+  })
+
+  describe('ui/subagent-continuation', () => {
+    describe('a continuable child is writable and a running card is interruptible', () => {
+      let bridge: ReturnType<typeof createMessageBridge>
+      const posts: unknown[] = []
+
+      beforeEach(() => {
+        cleanup()
+        resetChatUiState()
+        posts.length = 0
+        bridge = createMessageBridge({
+          postToHost: (message) => { posts.push(message) },
+          onHostMessage: () => () => {},
+        })
+      })
+
+      afterEach(() => {
+        bridge.dispose()
+        cleanup()
+      })
+
+      it('CAP-WEBVIEW-090 the Host subagent address unlocks the composer for a replayed child', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/state',
+            mode: 'replay',
+            sessionId: 's-child',
+            tabId: 't1',
+            contextSessionId: 's-child',
+            breadcrumb: { parentSessionId: 's-parent', label: '返回父会话' },
+            subagentPrompt: {
+              parentSessionId: 's-parent',
+              childSessionId: 's-child',
+              label: 'Researcher',
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('composer').getAttribute('data-composer-state')).toBe('live')
+        })
+        // The composer names the child it writes to instead of looking like the child's own prompt.
+        expect(screen.getByTestId('composer-subagent-target').textContent).toContain('Researcher')
+
+        const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '继续排查' } })
+        })
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-send'))
+        })
+        await waitFor(() => {
+          expect(posts.some(p => (p as { type?: string }).type === 'composer/send')).toBe(true)
+        })
+        // The line travels as a plain composer send; the Host owns the subagent address.
+        expect(posts.find(p => (p as { type?: string }).type === 'composer/send'))
+          .toMatchObject({ text: '继续排查' })
+
+        // The same replay projection without an address stays read-only.
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/state',
+            mode: 'replay',
+            sessionId: 's-child',
+            tabId: 't1',
+            contextSessionId: 's-child',
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('composer').getAttribute('data-composer-state')).toBe('readonly')
+        })
+        expect(screen.queryByTestId('composer-subagent-target')).toBeNull()
+      })
+
+      it('CAP-WEBVIEW-091 a running subagent card interrupts under the parent it renders', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's-parent', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/append',
+            sessionId: 's-parent',
+            message: {
+              id: 'card-1',
+              role: 'notice',
+              kind: 'subagent',
+              sessionId: 's-parent',
+              text: '子代理运行中 — 点击进入',
+              childSessionId: 's-child',
+              subagentStatus: 'running',
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('subagent-card')).toBeTruthy()
+        })
+        fireEvent.click(screen.getByTestId('subagent-interrupt'))
+        await waitFor(() => {
+          expect(posts.some(p => (p as { type?: string }).type === 'action/interrupt-subagent')).toBe(true)
+        })
+        expect(posts.find(p => (p as { type?: string }).type === 'action/interrupt-subagent')).toEqual({
+          type: 'action/interrupt-subagent',
+          parentSessionId: 's-parent',
+          childSessionId: 's-child',
+        })
+
+        // An ended child offers no interrupt control.
+        await act(async () => {
+          applyHostFrame({
+            type: 'messages/replace',
+            sessionId: 's-parent',
+            messages: [{
+              id: 'card-1',
+              role: 'notice',
+              kind: 'subagent',
+              sessionId: 's-parent',
+              text: '已结束，可进入回放',
+              childSessionId: 's-child',
+              subagentStatus: 'ended',
+            }],
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('subagent-card').getAttribute('data-status')).toBe('ended')
+        })
+        expect(screen.queryByTestId('subagent-interrupt')).toBeNull()
+      })
+    })
+  })
+
+  describe('ui/specdev-status', () => {
+    describe('the SpecDev card mirrors the workspace workflow', () => {
+      let bridge: ReturnType<typeof createMessageBridge>
+      const posts: unknown[] = []
+
+      beforeEach(() => {
+        cleanup()
+        resetChatUiState()
+        posts.length = 0
+        bridge = createMessageBridge({
+          postToHost: (message) => { posts.push(message) },
+          onHostMessage: () => () => {},
+        })
+      })
+
+      afterEach(() => {
+        bridge.dispose()
+        cleanup()
+      })
+
+      it('CAP-WEBVIEW-092 a pending gate renders with its decision action', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's-parent', tabId: 't1' })
+        })
+        // No status yet: the workspace has no workflow to show.
+        expect(screen.queryByTestId('specdev-card')).toBeNull()
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'specdev/status',
+            sessionId: 's-parent',
+            snapshot: {
+              schemaVersion: 2,
+              slug: 'add-tag-filter',
+              stage: 'implementation',
+              phase: 'phase-1',
+              gates: { hg1: 'passed', hg2: 'pending', hg3: 'pending' },
+              steps: { 'phase-1': { implementer: 'completed', reviewer: 'in_progress', verifier: 'pending' } },
+              pendingGate: 'hg2',
+              loopCount: 1,
+              nextAction: 'confirm HG-2',
+              techDebtSummary: { blocking: 0, total: 2 },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('specdev-card').getAttribute('data-slug')).toBe('add-tag-filter')
+        })
+        expect(screen.getByTestId('specdev-card').getAttribute('data-pending-gate')).toBe('hg2')
+        expect(screen.getByTestId('specdev-stage').textContent).toContain('implementation')
+        expect(screen.getByTestId('specdev-gates').textContent).toContain('HG1 ✓')
+        expect(screen.getByTestId('specdev-debt').textContent).toContain('0/2')
+
+        fireEvent.click(screen.getByTestId('specdev-decide'))
+        await waitFor(() => {
+          expect(posts.some(p => (p as { type?: string }).type === 'action/specdev-gate')).toBe(true)
+        })
+        // The card names the gate; the Host asks for and applies the decision.
+        expect(posts.find(p => (p as { type?: string }).type === 'action/specdev-gate')).toEqual({
+          type: 'action/specdev-gate',
+          sessionId: 's-parent',
+          gate: 'hg2',
+        })
+
+        // A workflow with no pending gate keeps the card but drops the action.
+        await act(async () => {
+          applyHostFrame({
+            type: 'specdev/status',
+            sessionId: 's-parent',
+            snapshot: {
+              schemaVersion: 2,
+              slug: 'add-tag-filter',
+              stage: 'review',
+              phase: 'phase-1',
+              gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' },
+              steps: { 'phase-1': { implementer: 'completed', reviewer: 'completed', verifier: 'pending' } },
+              pendingGate: null,
+              loopCount: 1,
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('specdev-card').getAttribute('data-pending-gate')).toBe('')
+        })
+        expect(screen.queryByTestId('specdev-decide')).toBeNull()
+        expect(screen.queryByTestId('specdev-debt')).toBeNull()
+
+        // A workspace without a workflow clears the card (null status).
+        await act(async () => {
+          applyHostFrame({ type: 'specdev/status', sessionId: 's-parent', snapshot: null })
+        })
+        await waitFor(() => {
+          expect(screen.queryByTestId('specdev-card')).toBeNull()
+        })
+      })
+
+      it('CAP-WEBVIEW-093 a background session status never owns the card', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's-parent', tabId: 't1' })
+          applyHostFrame({
+            type: 'specdev/status',
+            sessionId: 's-other',
+            snapshot: {
+              schemaVersion: 2,
+              slug: 'other-workflow',
+              stage: 'review',
+              phase: null,
+              gates: { hg1: 'pending', hg2: 'pending', hg3: 'pending' },
+              steps: {},
+              pendingGate: null,
+              loopCount: 0,
+            },
+          })
+        })
+        expect(screen.queryByTestId('specdev-card')).toBeNull()
       })
     })
   })

@@ -23,7 +23,7 @@ function hitsToRows(hits: SearchHit[]): HistoryRow[] {
     sessionId: hit.sessionId,
     title: hit.title,
     updatedAt: hit.mtime > 0 ? new Date(hit.mtime).toISOString() : '',
-    previewOrPath: hit.firstUserPreview || hit.matchedPath || '',
+    previewOrPath: hit.snippet || hit.firstUserPreview || hit.matchedPath || '',
   }))
 }
 

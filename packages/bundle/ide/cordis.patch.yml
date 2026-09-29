@@ -7,9 +7,30 @@
   config:
     profile: ide
 
+# Full-text session search: the base row keeps `openAt: never`, so the IDE
+# search box could only match local metadata. This restatement opens the
+# runtime's own derived index on the first search (deferring the node:sqlite
+# import until a user searches) at a durable path, so content hits, snippets,
+# and paging come from the index that already owns them rather than from a
+# body scan in the Extension.
+- id: session-query-sqlite
+  config:
+    path: !!js dshHomePath('session-search.sqlite')
+    openAt: first-search
+
 - insert:
     - id: ide-bridge
       name: '@deepseek-ai/dsh-ide-bridge'
 
     - id: file-reference-local
       name: '@deepseek-ai/dsh-file-reference-local'
+
+    # Whole-log turn/step counts for the IDE chat stats (the sessionStats projection
+    # key); the projection registry itself is a base-layer row.
+    - id: session-stats
+      name: '@deepseek-ai/dsh-session-stats'
+
+    # Whole-log turn outline (the turnOutline projection key), so an IDE client can
+    # list a session's turns before their events page in.
+    - id: session-turn-outline
+      name: '@deepseek-ai/dsh-session-turn-outline'

@@ -1,4 +1,4 @@
-import { ChatPanelHost, FakeWebviewPort, type ChatPanelHostDeps, type HostToWebviewMessage, buildThinChatHtml, parseWebviewToHostMessage, resolveComposerKeydown } from '../src/chat-panel/index.ts'
+import { ChatPanelHost, FakeWebviewPort, type ChatPanelHostDeps, type HostToWebviewMessage, type ModelStatePayload, buildThinChatHtml, parseWebviewToHostMessage, resolveComposerKeydown } from '../src/chat-panel/index.ts'
 import { continueChromeFor } from '../src/continue-capability.ts'
 import { ConversationController } from '../src/conversation-controller.ts'
 import { ConversationRegistry } from '../src/conversation-registry.ts'
@@ -39,6 +39,22 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
     if (Date.now() - start > timeoutMs) throw new Error('waitFor timeout')
     await new Promise(r => setTimeout(r, 10))
   }
+}
+
+/**
+ * A ChatPanelHost whose decisions are settled for a test, with the caller's
+ * dependency overrides applied on top.
+ * @param settings - the dependencies this case replaces.
+ * @returns the Host the case drives.
+ */
+function createPanel(settings: Partial<ChatPanelHostDeps> = {}): ChatPanelHost {
+  return new ChatPanelHost({
+    registry: new ConversationRegistry(),
+    messages: new MessageStore(),
+    isHostReady: () => true,
+    acceptSend: async () => ({ messageId: 'm', sessionId: 's', tabId: 't' }),
+    ...settings,
+  })
 }
 
 describe('cap:chat-panel — activity stream, streaming follow, and chat chassis', () => {
@@ -1846,16 +1862,6 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         }
       }
 
-      function createPanel(settings: Partial<ChatPanelHostDeps>): ChatPanelHost {
-        return new ChatPanelHost({
-          registry: new ConversationRegistry(),
-          messages: new MessageStore(),
-          isHostReady: () => true,
-          acceptSend: async () => ({ messageId: 'm', sessionId: 's', tabId: 't' }),
-          ...settings,
-        })
-      }
-
       it('CAP-CHAT-PANEL-072 settings/open describes through the Host and pushes settings/state', async () => {
         let describeCalls = 0
         const panel = createPanel({
@@ -2156,6 +2162,132 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       await waitFor(() => sent.length > 0, 1_000)
       expect(sent).toEqual([{ text: '/compact', images: 1 }])
     })
+
+    it('CAP-CHAT-PANEL-103 a continuable child receives the composer line through acceptSubagentPrompt', async () => {
+      const asked: Array<{ target: unknown; text: string }> = []
+      const sent: string[] = []
+      const projection = {
+        mode: 'replay' as const,
+        sessionId: 's-child',
+        tabId: 't',
+        contextSessionId: 's-child',
+        messages: [],
+        tabStatus: 'idle' as const,
+        subagentPrompt: { parentSessionId: 's-parent', childSessionId: 's-child', label: 'Researcher' },
+      }
+      const panel = new ChatPanelHost(liveDeps('s-parent', {
+        resolvePanelProjection: () => projection,
+        acceptSend: async (text) => {
+          sent.push(text)
+          return { messageId: 'm', sessionId: 's-parent', tabId: 't' }
+        },
+        acceptSubagentPrompt: async (target, text) => {
+          asked.push({ target, text })
+          return 'msg-child'
+        },
+      }))
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      // The child's own mode is replay; the resolved address is what makes it writable.
+      fake.emitFromWebview({ type: 'composer/send', text: '  继续排查  ' })
+      await waitFor(() => asked.length === 1, 1_000)
+      expect(asked).toEqual([{
+        target: { parentSessionId: 's-parent', childSessionId: 's-child', label: 'Researcher' },
+        text: '继续排查',
+      }])
+      expect(sent).toEqual([])
+
+      const refused = new ChatPanelHost(liveDeps('s-parent', {
+        resolvePanelProjection: () => projection,
+        acceptSubagentPrompt: async () => {
+          throw new Error('parent session "s-parent" is not live')
+        },
+      }))
+      const refusedFake = new FakeWebviewPort()
+      refused.attach(refusedFake)
+      refusedFake.receivedFromHost.length = 0
+      refusedFake.emitFromWebview({ type: 'composer/send', text: 'hello' })
+      await waitFor(() => refusedFake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
+      // A refused delivery is the runtime's verdict on that address, so it is shown verbatim.
+      const banner = refusedFake.receivedFromHost.find(m => m.type === 'ui/banner')
+      expect(banner?.type === 'ui/banner' ? banner.text : '').toBe('parent session "s-parent" is not live')
+      expect(refusedFake.receivedFromHost.some(m => m.type === 'ui/reject-send')).toBe(true)
+    })
+
+    it('CAP-CHAT-PANEL-104 a subagent card interrupts under the parent it renders', async () => {
+      const asked: Array<{ parentSessionId: string; childSessionId: string }> = []
+      const panel = new ChatPanelHost(liveDeps('s-a', {
+        requestInterruptSubagent: async (parentSessionId, childSessionId) => {
+          asked.push({ parentSessionId, childSessionId })
+        },
+      }))
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({
+        type: 'action/interrupt-subagent',
+        parentSessionId: 's-parent',
+        childSessionId: 's-child',
+      })
+      await waitFor(() => asked.length === 1, 1_000)
+      expect(asked).toEqual([{ parentSessionId: 's-parent', childSessionId: 's-child' }])
+      // The card action is not a send: no composer gate runs and nothing is posted back.
+      expect(fake.receivedFromHost.some(m => m.type === 'ui/reject-send')).toBe(false)
+
+      const refused = new ChatPanelHost(liveDeps('s-a', {
+        requestInterruptSubagent: async () => {
+          throw new Error('subagent does not belong to this parent')
+        },
+      }))
+      const refusedFake = new FakeWebviewPort()
+      refused.attach(refusedFake)
+      refusedFake.receivedFromHost.length = 0
+      refusedFake.emitFromWebview({
+        type: 'action/interrupt-subagent',
+        parentSessionId: 's-other',
+        childSessionId: 's-child',
+      })
+      await waitFor(() => refusedFake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
+      const banner = refusedFake.receivedFromHost.find(m => m.type === 'ui/banner')
+      expect(banner?.type === 'ui/banner' ? banner.text : '')
+        .toBe('subagent does not belong to this parent')
+    })
+
+    it('CAP-CHAT-PANEL-105 a SpecDev card decides its gate through the Host and shows a refusal', async () => {
+      const asked: Array<{ sessionId: string; gate: string }> = []
+      const panel = new ChatPanelHost(liveDeps('s-a', {
+        requestSpecdevGate: async (sessionId, gate) => {
+          asked.push({ sessionId, gate })
+        },
+      }))
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({ type: 'action/specdev-gate', sessionId: 's-a', gate: 'hg2' })
+      await waitFor(() => asked.length === 1, 1_000)
+      expect(asked).toEqual([{ sessionId: 's-a', gate: 'hg2' }])
+      // The card action is not a send: nothing is rejected into the composer.
+      expect(fake.receivedFromHost.some(m => m.type === 'ui/reject-send')).toBe(false)
+
+      const refused = new ChatPanelHost(liveDeps('s-a', {
+        requestSpecdevGate: async () => {
+          throw new Error('SPECDEV_GATE_NOT_PENDING: gate hg1 is not the current pending gate (hg2)')
+        },
+      }))
+      const refusedFake = new FakeWebviewPort()
+      refused.attach(refusedFake)
+      refusedFake.receivedFromHost.length = 0
+      refusedFake.emitFromWebview({ type: 'action/specdev-gate', sessionId: 's-a', gate: 'hg1' })
+      await waitFor(() => refusedFake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
+      // The runtime owns gate order, so its refusal is shown verbatim.
+      const banner = refusedFake.receivedFromHost.find(m => m.type === 'ui/banner')
+      expect(banner?.type === 'ui/banner' ? banner.text : '')
+        .toBe('SPECDEV_GATE_NOT_PENDING: gate hg1 is not the current pending gate (hg2)')
+    })
   })
 
   describe('dsh.test.* hooks for the newer user-visible surfaces', () => {
@@ -2309,6 +2441,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         ok: true,
         present: false,
         totalTokens: 0,
+        projectedTokens: 0,
         contextWindow: 0,
         sane: false,
       })
@@ -2323,8 +2456,68 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         ok: true,
         present: true,
         totalTokens: 15,
+        projectedTokens: 0,
         contextWindow: 128_000,
         sane: true,
+      })
+    })
+
+    it('CAP-CHAT-PANEL-102 a live contextPressure read refines the token sample', async () => {
+      const tab = await startWithLiveTab()
+      const controller = getConversationController()
+      expect(controller).toBeDefined()
+
+      const asked: Array<{ sessionId: string; keys?: string[] }> = []
+      vi.spyOn(IdeSessionHost.prototype, 'readProjection').mockImplementation(async function (
+        this: IdeSessionHost,
+        sessionId: string,
+        keys?: string[],
+      ) {
+        asked.push({ sessionId, ...keys === undefined ? {} : { keys } })
+        return {
+          asOfSeq: 7,
+          values: {
+            contextPressure: { pressureTokens: 1_200, projectedTokens: 1_500, contextWindow: 200_000 },
+          },
+        }
+      })
+
+      controller!.applyTestSessionEvent(tab.sessionId, 'assistant/message', {
+        turn: 0,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'PRESSURE-PROBE' }] },
+        usage: { inputTokens: 900, outputTokens: 100, totalTokens: 1_000 },
+      })
+
+      // Only the runtime knows the route capacity and what the next prompt costs;
+      // the log's own total stays the fallback until the read answers.
+      await vi.waitFor(() => {
+        expect(commands.get('dsh.test.getTokenStatus')!()).toEqual({
+          ok: true,
+          present: true,
+          totalTokens: 1_000,
+          projectedTokens: 1_500,
+          contextWindow: 200_000,
+          sane: true,
+        })
+      })
+      expect(asked).toEqual([{ sessionId: tab.sessionId, keys: ['contextPressure'] }])
+
+      // A refusal or a unit-less answer leaves the pushed usage sample alone.
+      vi.spyOn(IdeSessionHost.prototype, 'readProjection').mockRejectedValue(new Error('bridge is gone'))
+      controller!.applyTestSessionEvent(tab.sessionId, 'assistant/message', {
+        turn: 0,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'PRESSURE-LOST' }] },
+        usage: { inputTokens: 2_000, outputTokens: 100, totalTokens: 2_100 },
+      })
+      await vi.waitFor(() => {
+        expect(commands.get('dsh.test.getTokenStatus')!()).toEqual({
+          ok: true,
+          present: true,
+          totalTokens: 2_100,
+          projectedTokens: 0,
+          contextWindow: 128_000,
+          sane: true,
+        })
       })
     })
 
@@ -2551,6 +2744,178 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         messageId: 'm1',
         appendReasoning: 'thinking...',
       })
+    })
+  })
+
+  describe('model route and send feedback', () => {
+    const catalog: ModelStatePayload = {
+      providers: [{
+        id: 'deepseek-official',
+        name: 'DeepSeek',
+        models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' }],
+      }],
+      current: { provider: 'deepseek-official', model: 'deepseek-v4-pro' },
+    }
+
+    it('CAP-CHAT-PANEL-095 action/select-model applies the route and re-reads the catalog', async () => {
+      const selected: Array<[string, string, string | undefined]> = []
+      let reads = 0
+      const panel = createPanel({
+        requestSelectModel: async (provider, model, reasoningEffort) => {
+          selected.push([provider, model, reasoningEffort])
+        },
+        requestModelList: async () => {
+          reads += 1
+          return catalog
+        },
+      })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      panel.clearOutboundLog()
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({
+        type: 'action/select-model',
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-pro',
+        reasoningEffort: 'low',
+      })
+      await waitFor(() => fake.receivedFromHost.some(m => m.type === 'model/state'), 1_000)
+
+      expect(selected).toEqual([['deepseek-official', 'deepseek-v4-pro', 'low']])
+      expect(reads).toBe(1)
+      expect(fake.receivedFromHost.find(m => m.type === 'model/state')).toMatchObject({
+        type: 'model/state',
+        current: catalog.current,
+      })
+    })
+
+    it('CAP-CHAT-PANEL-096 a refused route banners the runtime reason and pushes no catalog', async () => {
+      const panel = createPanel({
+        requestSelectModel: async () => {
+          throw new Error('no adapter registered for provider "ghost"')
+        },
+        requestModelList: async () => catalog,
+      })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      panel.clearOutboundLog()
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({ type: 'action/select-model', provider: 'ghost', model: 'ghost-model' })
+      await waitFor(() => fake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
+
+      expect(fake.receivedFromHost.find(m => m.type === 'ui/banner')).toMatchObject({
+        type: 'ui/banner',
+        kind: 'settings',
+        text: expect.stringContaining('no adapter registered for provider "ghost"'),
+      })
+      expect(fake.receivedFromHost.filter(m => m.type === 'model/state')).toHaveLength(0)
+    })
+
+    it('CAP-CHAT-PANEL-097 settings/open re-reads the catalog the page renders', async () => {
+      const panel = createPanel({
+        requestModelList: async () => catalog,
+        requestSettingsDescribe: async () => [],
+      })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      panel.clearOutboundLog()
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({ type: 'settings/open' })
+      await waitFor(() => fake.receivedFromHost.some(m => m.type === 'settings/state'), 1_000)
+
+      expect(fake.receivedFromHost.some(m => m.type === 'model/state')).toBe(true)
+    })
+
+    it('CAP-CHAT-PANEL-098 a live connection re-reads the catalog the mount lost', async () => {
+      const panel = createPanel({ requestModelList: async () => catalog })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      panel.clearOutboundLog()
+      fake.receivedFromHost.length = 0
+
+      panel.applyConnectionState({
+        phase: 'connected',
+        settingsDeepLinkAvailable: false,
+        statusBarVisible: false,
+      })
+      await waitFor(() => fake.receivedFromHost.some(m => m.type === 'model/state'), 1_000)
+
+      expect(fake.receivedFromHost.find(m => m.type === 'model/state')).toMatchObject({
+        type: 'model/state',
+        providers: catalog.providers,
+      })
+    })
+
+    it('CAP-CHAT-PANEL-099 a failed rich send banners the reason instead of swallowing it', async () => {
+      const panel = createPanel({
+        acceptSend: async () => {
+          throw new Error('SDK image prompt requires an attachment store')
+        },
+      })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      panel.clearOutboundLog()
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({
+        type: 'composer/send-rich',
+        text: 'look at this',
+        images: [{ data: 'AA==', mimeType: 'image/png', name: 'shot.png' }],
+      })
+      await waitFor(() => fake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
+
+      expect(fake.receivedFromHost.find(m => m.type === 'ui/banner')).toMatchObject({
+        type: 'ui/banner',
+        kind: 'send-failed',
+        text: expect.stringContaining('SDK image prompt requires an attachment store'),
+      })
+    })
+
+    it('CAP-CHAT-PANEL-100 the tabs frame carries lineage only for derived Tabs', () => {
+      const registry = new ConversationRegistry()
+      const rootTab = registry.create('主会话')
+      const childTab = registry.create('派生会话')
+      const panel = createPanel({
+        registry,
+        resolveTabParentHint: sessionId => sessionId === childTab.sessionId
+          ? '主会话'
+          : undefined,
+      })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      panel.clearOutboundLog()
+      fake.receivedFromHost.length = 0
+
+      panel.pushTabsFrame()
+
+      const frame = fake.receivedFromHost.find(m => m.type === 'panel/tabs')
+      const tabs = frame?.type === 'panel/tabs' ? frame.tabs : []
+      expect(tabs.find(t => t.tabId === childTab.tabId)?.parentHint).toBe('派生自 主会话')
+      // A root conversation stays without lineage chrome instead of an empty hint.
+      expect(tabs.find(t => t.tabId === rootTab.tabId)).not.toHaveProperty('parentHint')
+    })
+
+    it('CAP-CHAT-PANEL-101 ui/rename-request routes the asked session to the rename action', async () => {
+      const renamed: string[] = []
+      const panel = createPanel({
+        requestRename: async (sessionId) => {
+          renamed.push(sessionId)
+        },
+      })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      panel.clearOutboundLog()
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({ type: 'ui/rename-request', sessionId: 'sess-rename' })
+      await waitFor(() => renamed.length === 1, 1_000)
+
+      expect(renamed).toEqual(['sess-rename'])
+      // The rename chrome follows the runtime's `session/title` event, not this intent.
+      expect(fake.receivedFromHost).toHaveLength(0)
     })
   })
 

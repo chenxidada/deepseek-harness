@@ -39,6 +39,10 @@ import {
   SDK_SESSION_ENSURE_SERVICE,
   type SdkSessionEnsure,
 } from './session-ensure.ts'
+import {
+  SDK_MODEL_SELECT_SERVICE,
+  type SdkModelSelect,
+} from './session-model-select.ts'
 
 export * from './server.ts'
 export {
@@ -67,6 +71,11 @@ export {
   SDK_SESSION_ENSURE_SERVICE,
   type SdkSessionEnsure,
 } from './session-ensure.ts'
+export {
+  SDK_MODEL_SELECT_SERVICE,
+  type SdkModelSelect,
+  type SdkModelSelectInput,
+} from './session-model-select.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -76,6 +85,7 @@ declare module '@deepseek-ai/cordis' {
     sdkSessionFork: SdkSessionFork
     sdkSessionDelete: SdkSessionDelete
     sdkSessionEnsure: SdkSessionEnsure
+    sdkModelSelect: SdkModelSelect
   }
 }
 
@@ -155,6 +165,10 @@ export function apply(ctx: Context, config: JsonRpcConfig): void {
     ensureSession: sessionId => server.ensureSession(sessionId),
   }
   ctx.provide(SDK_SESSION_ENSURE_SERVICE, sessionEnsure)
+  const modelSelect: SdkModelSelect = {
+    selectModel: selection => server.selectModel(selection),
+  }
+  ctx.provide(SDK_MODEL_SELECT_SERVICE, modelSelect)
 
   // Share one exit task so racing shutdown requests cannot dispose the root or
   // exit the process more than once.

@@ -8,15 +8,16 @@ import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { HarnessNotification, SdkPromptContentBlock } from '@deepseek-ai/dsh-sdk-client'
+import type { BridgeApprovalPolicy, BridgeSessionSearchHit, BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
 import {
   ConversationRegistry,
   titleFromFirstMessage,
   type ConversationRegistrySnapshot,
   type ConversationTab,
 } from './conversation-registry.ts'
-import type { IdeSessionHost } from './session-host.ts'
+import type { IdeSessionHost, PermissionPresetList, SubagentListResult } from './session-host.ts'
 import { TimelineStore } from './timeline-store.ts'
-import { MessageStore, type ChatMessage, type MessagePatch } from './message-store.ts'
+import { MessageStore, type ChatMessage, type MessageImage, type MessagePatch } from './message-store.ts'
 import {
   activityMessageId,
   activityStatusFromToolResult,
@@ -46,6 +47,7 @@ import {
   workflowMemberFrom,
   workflowOutcomeFrom,
   workflowStopReasonFrom,
+  type HydratedMessageImages,
   type HydratorSessionEvent,
 } from './replay-hydrator.ts'
 import { planRestoreOpenTabs } from './restore-planner.ts'
@@ -221,6 +223,25 @@ export interface ConversationChangeOptions {
   getIgnoreOptions?: () => IgnoreRulesOptions
 }
 
+/** Optional observability wiring for the panel's token ring (feature: token-status). */
+export interface ConversationObservabilityOptions {
+  /**
+   * Compaction trigger ratio the runtime's `compaction-basic` settings declare, read
+   * by the Extension. Omitted falls back to the panel's built-in default.
+   */
+  compactionThresholdRatio?: () => number | undefined
+}
+
+/** Route one session's last request used, as recorded by its `request/context` event. */
+export interface SessionRequestRoute {
+  /** Provider route the request used. */
+  provider: string
+  /** Provider-owned model the request used. */
+  model: string
+  /** Prompt capacity the runtime declared for the request, when it declared one. */
+  contextWindow?: number
+}
+
 /**
  * Binds {@link ConversationRegistry} to a connected {@link IdeSessionHost}.
  * Close unloads UI without dispose; delete disposes via bridge (AD-CU-3).
@@ -271,6 +292,23 @@ export class ConversationController {
   private restoreInFlight: Promise<RestoreOpenTabsResult> | undefined
   /** Child session run state for banner / readonly-live (no child Tab required). */
   private readonly childRunState = new Map<string, 'running' | 'ended'>()
+  /**
+   * Durable mode of each parent's subagent children, keyed by parent session
+   * then child session. Only the runtime can classify a child as continuable,
+   * so this cache is filled by `subagent/list` and decides whether the composer
+   * may deliver a message into that child.
+   */
+  private readonly subagentCatalog = new Map<string, Map<string, { mode: 'one-shot' | 'continuable'; label?: string }>>()
+  /** Parents with a `subagent/list` read in flight. */
+  private readonly subagentCatalogRefreshes = new Set<string>()
+  /**
+   * SpecDev status per session. The active workflow lives in the workspace's
+   * `.specdev` layout, so this is read from the runtime rather than folded from
+   * the log, and refreshed whenever the log reports a SpecDev event.
+   */
+  private readonly specdevBySession = new Map<string, BridgeSpecdevSnapshot | null>()
+  /** Sessions with a `specdev/snapshot` read in flight. */
+  private readonly specdevRefreshes = new Set<string>()
   /** sessionId → turn awaiting assistant before settle. */
   private pendingSettleTurn = new Map<string, number>()
   /** Serialize per-session settle to keep last-assistant anchoring stable. */
@@ -283,6 +321,11 @@ export class ConversationController {
   private readonly todoBySession = new Map<string, TodoStateItem[]>()
   /** Latest `token/status` payload pushed to the panel (feature: token-status). */
   private lastTokenPayload: TokenStatusPayload | undefined
+  /** Sessions with a `contextPressure` read in flight (feature: token-status). */
+  private readonly pressureRefresh = new Set<string>()
+  /** Route each session's last request used, from its `request/context` event. */
+  private readonly requestRouteBySession = new Map<string, SessionRequestRoute>()
+  private readonly compactionThresholdRatio: () => number | undefined
   /** Sidebar refresh listeners notified after a todo snapshot lands (feature: todo-panel). */
   private readonly todoListeners = new Set<() => void>()
 
@@ -291,12 +334,14 @@ export class ConversationController {
    * @param workspaceState - optional workspaceState for immediate index writes.
    * @param workspaceKey - workspace identity key for the index.
    * @param changeOptions - optional SnapshotStore / workspace readers.
+   * @param observability - optional token-ring inputs read outside the session log.
    */
   constructor(
     private readonly host: IdeSessionHost,
     workspaceState?: WorkspaceStateLike,
     workspaceKey = '',
     changeOptions?: ConversationChangeOptions,
+    observability?: ConversationObservabilityOptions,
   ) {
     this.index = new ExtensionIndex(workspaceKey, workspaceState)
     this.pathSessionIndex = new PathSessionIndex(workspaceKey, workspaceState)
@@ -306,6 +351,7 @@ export class ConversationController {
       ?? (async () => undefined)
     this.getIgnoreOptions = changeOptions?.getIgnoreOptions
       ?? (() => ({ workspaceFolders: [] }))
+    this.compactionThresholdRatio = observability?.compactionThresholdRatio ?? (() => undefined)
     this.attributor = new ChangeAttributor({
       changeStore: this.changes,
       snapshotStore: this.snapshotStore,
@@ -406,6 +452,9 @@ export class ConversationController {
     this.registry.switchTo(tabId)
     const active = this.registry.getActive()
     this.host.interactions.onActiveSessionChange?.(active?.sessionId)
+    // The workspace's SpecDev workflow is session-independent, so a freshly
+    // activated Tab shows it before its own log reports any SpecDev event.
+    if (active !== undefined) void this.refreshSpecdev(active.sessionId)
     this.panelHost?.pushFullState()
   }
 
@@ -451,6 +500,14 @@ export class ConversationController {
       try {
         events = await this.host.readSessionLog(sessionId) as HydratorSessionEvent[]
       } catch (error) {
+        // A log that refuses to read may simply be gone: another window (or the CLI)
+        // can delete a session while this workspace keeps its index row. `stat`
+        // separates that from a transient read failure so the stale row is tombstoned
+        // instead of offering an open that can never succeed.
+        if (await this.sessionDataGone(sessionId)) {
+          this.index.markDeleted(sessionId)
+          return { outcome: 'missing', sessionId }
+        }
         return {
           outcome: 'error',
           sessionId,
@@ -461,10 +518,12 @@ export class ConversationController {
 
     const tab = this.registry.create(title, sessionId, 'replay')
     this.host.interactions.onActiveSessionChange?.(tab.sessionId)
+    void this.refreshSpecdev(sessionId)
     const hydrated = hydrateFromAuthoritativeLog(sessionId, events)
     this.messages.replace(sessionId, hydrated.messages)
     this.timeline.replace(sessionId, hydrated.timelineItems)
     await this.hydrateChangeListsFromIndex(sessionId)
+    await this.hydrateMessageImages(sessionId, hydrated.pendingImages)
     const capability = this.resolveContinueCapability(sessionId, events.length > 0)
     this.index.upsertSession({
       sessionId,
@@ -552,6 +611,7 @@ export class ConversationController {
         events: readonly HydratorSessionEvent[]
         messages: ReturnType<typeof hydrateFromAuthoritativeLog>['messages']
         timeline: ReturnType<typeof hydrateFromAuthoritativeLog>['timelineItems']
+        pendingImages: HydratedMessageImages[]
       }>()
       /** Sessions whose authoritative log could not be read this attempt (DEBT-006). */
       const loadFailed = new Set<string>()
@@ -564,6 +624,7 @@ export class ConversationController {
             events,
             messages: hydratedLog.messages,
             timeline: hydratedLog.timelineItems,
+            pendingImages: hydratedLog.pendingImages,
           })
         } catch {
           // Transient read failure: keep the index row; do not treat as empty strip.
@@ -635,6 +696,7 @@ export class ConversationController {
         this.timeline.replace(record.sessionId, cached.timeline)
         // AC-22: cold restore must hydrate change-list path/stats like openFromHistory.
         await this.hydrateChangeListsFromIndex(record.sessionId)
+        await this.hydrateMessageImages(record.sessionId, cached.pendingImages)
         const capability = this.resolveContinueCapability(record.sessionId, cached.events.length > 0)
         this.index.upsertSession({
           sessionId: record.sessionId,
@@ -1069,10 +1131,21 @@ export class ConversationController {
   forkParentTitleForActive(): string | undefined {
     const active = this.registry.getActive()
     if (active === undefined) return undefined
-    const row = this.index.read().sessions.find(s => s.sessionId === active.sessionId)
+    return this.parentLineageLabel(active.sessionId)
+  }
+
+  /**
+   * Lineage label of the session one Tab is derived from — a fork parent or a
+   * subagent parent, both of which the session index records as `parentSessionId`.
+   * @param sessionId - session the Tab is bound to.
+   * @returns parent title (or its short id), or undefined for a root session.
+   */
+  parentLineageLabel(sessionId: string): string | undefined {
+    const index = this.index.read()
+    const row = index.sessions.find(s => s.sessionId === sessionId)
     if (row?.parentSessionId === undefined) return undefined
-    const parent = this.index.read().sessions.find(s => s.sessionId === row.parentSessionId)
-    return parent?.title ?? row.forkLabel ?? `派生自 ${row.parentSessionId.slice(0, 8)}`
+    const parent = index.sessions.find(s => s.sessionId === row.parentSessionId)
+    return parent?.title ?? row.forkLabel ?? row.parentSessionId.slice(0, 8)
   }
 
   /**
@@ -1392,6 +1465,19 @@ export class ConversationController {
   }
 
   /**
+   * Search indexed event content through the runtime's own full-text index.
+   * The Extension sends the query and renders the returned excerpts; it never
+   * reads a log body to find a match (AC-50/51/53).
+   * @param query - full-text query text.
+   * @param limit - maximum sessions in one page.
+   * @returns hits ranked by their strongest matching event.
+   * @throws when the runtime has no search backend enabled or the bridge is not connected.
+   */
+  async searchSessionContent(query: string, limit?: number): Promise<BridgeSessionSearchHit[]> {
+    return this.host.searchSessions(query, limit)
+  }
+
+  /**
    * Open a search hit via the existing history/replay path (AC-52).
    * Does not Start a new live session.
    * @param sessionId - hit session id.
@@ -1466,6 +1552,42 @@ export class ConversationController {
   }
 
   /**
+   * Read back the images a hydrated session's log referenced and attach them to
+   * the bubbles that carried them. A replay fold has only the durable reference,
+   * so each image is read from the deployment attachment store through the Host.
+   * An image that refuses to read is left out: the log's text still projects the
+   * conversation, and a collected object must not fail the whole replay.
+   * @param sessionId - SDK session identity of the hydrated (replay) session.
+   * @param pending - bubbles with image references, keyed by projected message id.
+   */
+  async hydrateMessageImages(
+    sessionId: string,
+    pending: readonly HydratedMessageImages[],
+  ): Promise<void> {
+    if (pending.length === 0) return
+    const filled = await Promise.all(pending.map(async (row) => {
+      const images = await Promise.all(row.images.map(async (ref): Promise<MessageImage | undefined> => {
+        try {
+          const stored = await this.host.readAttachment(ref)
+          return { mimeType: stored.mediaType, data: stored.data }
+        } catch {
+          // Either the runtime is unreachable or the store refused this object;
+          // both mean this one image stays unread while the rest still load.
+          return undefined
+        }
+      }))
+      return { messageId: row.messageId, images: images.filter(image => image !== undefined) }
+    }))
+    for (const row of filled) {
+      if (row.images.length === 0) continue
+      if (this.messages.patch(sessionId, row.messageId, { images: row.images }) === undefined) continue
+      if (this.isProjectedSession(this.registry.getActive(), sessionId)) {
+        this.panelHost?.pushPatch(sessionId, row.messageId, { images: row.images })
+      }
+    }
+  }
+
+  /**
    * Locate a Timeline short-label target for scroll/reveal (AC-56 Should).
    * Priority: tool-triggered user → that turn's assistant → none.
    * @param sessionId - session to search.
@@ -1522,6 +1644,16 @@ export class ConversationController {
   }
 
   /**
+   * Route a session's last request used (feature: model-route).
+   * @param sessionId - session to read.
+   * @returns the recorded provider/model, or undefined before its first request.
+   */
+  requestRouteForSession(sessionId: string): SessionRequestRoute | undefined {
+    const route = this.requestRouteBySession.get(sessionId)
+    return route === undefined ? undefined : { ...route }
+  }
+
+  /**
    * Latest `token/status` sample this controller pushed (feature: token-status).
    * Retained so an unattended driver can assert the sample a Webview received
    * without scraping the panel outbound log.
@@ -1554,8 +1686,9 @@ export class ConversationController {
   }
 
   /**
-   * Context window of the current model from the cached `model/list` payload
-   * (feature: token-status). Absent when no list was read or the route declares none.
+   * Context window fallback from the cached `model/list` payload (feature:
+   * token-status). The session log's own `request/context` record wins; this
+   * covers sessions that prompted before any list was read.
    * @returns declared prompt capacity in tokens, or `undefined`.
    */
   private resolveContextWindow(): number | undefined {
@@ -1564,6 +1697,32 @@ export class ConversationController {
     const provider = list.providers.find(entry => entry.id === list.current.provider)
     const model = provider?.models.find(entry => entry.id === list.current.model)
     return model?.contextWindow
+  }
+
+  /**
+   * Refine the pushed token sample with the runtime's `contextPressure`
+   * projection (feature: token-status). Log usage sees neither compaction
+   * shadowing nor the route capacity the last request was sized against, so
+   * the ring prefers these values once the runtime reports them.
+   * @param sessionId - session whose projection is read.
+   */
+  private refreshContextPressure(sessionId: string): void {
+    // Nothing to refine until this session pushed a sample the panel shows.
+    if (this.lastTokenPayload?.sessionId !== sessionId) return
+    if (this.pressureRefresh.has(sessionId)) return
+    this.pressureRefresh.add(sessionId)
+    void this.host.readProjection(sessionId, ['contextPressure']).then((snapshot) => {
+      const pressure = contextPressureOf(snapshot.values.contextPressure)
+      const sample = this.lastTokenPayload
+      if (pressure === undefined || sample?.sessionId !== sessionId) return
+      const refined: TokenStatusPayload = { ...sample, ...pressure }
+      this.lastTokenPayload = refined
+      this.panelHost?.pushTokenStatus(refined)
+    }, () => {
+      // The pushed usage sample stays the shown value; the projection only refines it.
+    }).finally(() => {
+      this.pressureRefresh.delete(sessionId)
+    })
   }
 
   /**
@@ -1755,7 +1914,7 @@ export class ConversationController {
       }
     }
     const messageId = await this.host.prompt(tab.sessionId, blocks)
-    this.projectUserMessage(tab.sessionId, text, messageId)
+    this.projectUserMessage(tab.sessionId, text, messageId, images)
     if (tab.title === undefined) {
       const title = titleFromFirstMessage(text)
       if (title !== undefined) this.registry.setTitle(tabId, title)
@@ -1772,6 +1931,37 @@ export class ConversationController {
   }
 
   /**
+   * Accept an explicit user title for one session via Host bridge `session/rename`.
+   * The runtime commits a `session/title` event, so index and Tab chrome follow
+   * that event rather than this call's return value.
+   * @param sessionId - session to rename.
+   * @param title - title text the user typed.
+   * @returns the normalized title the runtime accepted.
+   */
+  async renameSession(sessionId: string, title: string): Promise<string> {
+    return await this.host.renameSession(sessionId, title)
+  }
+
+  /**
+   * Mirror a runtime `session/title` into local chrome: the index row, the bound
+   * Tab's label, and the panel chrome while that Tab is the one on screen.
+   * @param sessionId - session whose title changed.
+   * @param title - normalized title from the session log.
+   */
+  private applySessionTitle(sessionId: string, title: string): void {
+    const row = this.index.read().sessions.find(entry => entry.sessionId === sessionId)
+    if (row !== undefined && row.title !== title) {
+      this.index.upsertSession({ ...row, title })
+    }
+    const tab = this.registry.getBySessionId(sessionId)
+    if (tab !== undefined && tab.title !== title) {
+      this.registry.setTitle(tab.tabId, title)
+    }
+    this.panelHost?.pushTabsFrame()
+    if (this.registry.getActive()?.sessionId === sessionId) this.panelHost?.pushFullState()
+  }
+
+  /**
    * Apply a permission-presets name on the active Tab session (AC-21 / AC-22).
    * @param preset - preset table key from dsh-permission-presets.
    * @returns the applied preset name.
@@ -1785,13 +1975,24 @@ export class ConversationController {
 
   /**
    * List permission-presets for the active Tab via Host bridge (AC-21).
-   * @returns advertised presets and current selection from the runtime.
+   * @returns preset options (label + description) and the current selection.
    */
-  async listPermissionPresets(): Promise<{ sessionId: string; presets: string[]; current: string }> {
+  async listPermissionPresets(): Promise<{ sessionId: string } & PermissionPresetList> {
     const active = this.registry.getActive()
     if (active === undefined) throw new Error('no active conversation Tab')
     const listed = await this.host.listPermissionPresets(active.sessionId)
     return { sessionId: active.sessionId, ...listed }
+  }
+
+  /**
+   * Read the active Tab session's effective approval policy via the Host bridge.
+   * @returns the session the policy belongs to and the policy itself.
+   */
+  async readApprovalPolicy(): Promise<{ sessionId: string; policy: BridgeApprovalPolicy }> {
+    const active = this.registry.getActive()
+    if (active === undefined) throw new Error('no active conversation Tab')
+    const policy = await this.host.readApprovalPolicy(active.sessionId)
+    return { sessionId: active.sessionId, policy }
   }
 
   /**
@@ -1905,6 +2106,9 @@ export class ConversationController {
     if (run !== 'running') {
       await this.ensureChildHydrated(childSessionId)
     }
+    // Entering a child is when its durable mode decides composer delivery, so
+    // read the parent's catalog now rather than on every projection push.
+    void this.refreshSubagentCatalog(active.sessionId)
     this.registry.setContextSessionId(active.tabId, childSessionId)
     const mode: PanelMode = run === 'running' ? 'readonly-live' : 'replay'
     this.panelHost?.pushFullState()
@@ -1914,6 +2118,167 @@ export class ConversationController {
       mode,
       tabId: active.tabId,
     }
+  }
+
+  /**
+   * List one session's durable subagent children or subtree through the Host
+   * bridge. The runtime's projection fold classifies each row, so a child no
+   * longer in memory is still listed with the mode its descriptor recorded.
+   * @param sessionId - parent (`children`) or root (`descendants`) session.
+   * @param scope - direct children or the whole subtree.
+   * @returns the runtime's rows, or throws with the runtime's refusal text.
+   */
+  async listSubagents(sessionId: string, scope: 'children' | 'descendants' = 'children'): Promise<SubagentListResult> {
+    return await this.host.listSubagents(sessionId, scope)
+  }
+
+  /**
+   * Deliver one message to a continuable subagent child through its live
+   * direct parent (AD-CU-11 continuation path).
+   * @param parentSessionId - durable parent whose live Agent delivers the message.
+   * @param childSessionId - durable continuable child receiving it.
+   * @param text - message text.
+   * @returns identity of the message the child's inbox accepted.
+   */
+  async promptSubagent(parentSessionId: string, childSessionId: string, text: string): Promise<string> {
+    return await this.host.promptSubagent(parentSessionId, childSessionId, text)
+  }
+
+  /**
+   * Abort one subagent child's active turn under its durable parent's authority.
+   * @param parentSessionId - durable parent whose authority the request claims.
+   * @param childSessionId - durable child whose active turn is aborted.
+   */
+  async interruptSubagent(parentSessionId: string, childSessionId: string): Promise<void> {
+    await this.host.interruptSubagent(parentSessionId, childSessionId)
+  }
+
+  /**
+   * Read one session's SpecDev status into the cache and push it to the panel.
+   * The status is workspace state rather than log state, so it is read from the
+   * runtime; concurrent reads for one session coalesce, and a refusal keeps the
+   * last known status — the next SpecDev event or Tab activation reads again.
+   * @param sessionId - session whose workspace active workflow is read.
+   */
+  async refreshSpecdev(sessionId: string): Promise<void> {
+    if (this.specdevRefreshes.has(sessionId)) return
+    if (this.host.status !== 'connected') return
+    this.specdevRefreshes.add(sessionId)
+    try {
+      const snapshot = await this.host.readSpecdevSnapshot(sessionId)
+      this.specdevBySession.set(sessionId, snapshot)
+      this.panelHost?.pushSpecdevStatus(sessionId, snapshot)
+    } catch {
+      // A refusal leaves the card as it was; nothing else can act on it here.
+    } finally {
+      this.specdevRefreshes.delete(sessionId)
+    }
+  }
+
+  /**
+   * Apply one Human Gate decision and publish the status the runtime answered.
+   * @param sessionId - session owning the workflow log.
+   * @param gate - gate being decided.
+   * @param decision - decision to apply.
+   * @param note - optional human note recorded with the decision.
+   * @returns the post-change status, or null when the runtime returned none.
+   */
+  async confirmSpecdevGate(
+    sessionId: string,
+    gate: string,
+    decision: string,
+    note?: string,
+  ): Promise<BridgeSpecdevSnapshot | null> {
+    const snapshot = await this.host.confirmSpecdevGate(sessionId, {
+      gate,
+      decision,
+      ...note === undefined ? {} : { note },
+    })
+    const latest = snapshot ?? this.specdevBySession.get(sessionId) ?? null
+    this.specdevBySession.set(sessionId, latest)
+    this.panelHost?.pushSpecdevStatus(sessionId, latest)
+    return snapshot
+  }
+
+  /**
+   * Read the cached SpecDev status of one session.
+   * @param sessionId - session whose status was last read.
+   * @returns the status, or `undefined` when this session was never read.
+   */
+  cachedSpecdev(sessionId: string): BridgeSpecdevSnapshot | null | undefined {
+    return this.specdevBySession.get(sessionId)
+  }
+
+  /**
+   * Resolve the subagent address the Conversation composer may write to for the
+   * active Tab. A message needs a continuable child (the runtime's verdict, from
+   * the cached `subagent/list`), a child that is not running, and a parent whose
+   * Tab this window holds live — the runtime delivers through the parent's live
+   * Agent, so a replay Tab has no delivery route.
+   * @returns the address and label, or undefined when the composer stays read-only.
+   */
+  resolveSubagentPromptTarget(): { parentSessionId: string; childSessionId: string; label?: string } | undefined {
+    const active = this.registry.getActive()
+    if (active === undefined) return undefined
+    const childSessionId = active.contextSessionId
+      ?? (active.pinnedSubagent === true ? active.sessionId : undefined)
+    if (childSessionId === undefined) return undefined
+    if (this.childRunState.get(childSessionId) === 'running') return undefined
+    const parentSessionId = active.contextSessionId !== undefined
+      ? active.sessionId
+      : this.parentSessionIdOf(active.sessionId)
+    if (parentSessionId === undefined) return undefined
+    const parentTab = this.registry.getBySessionId(parentSessionId)
+    if (parentTab === undefined || parentTab.mode === 'replay' || parentTab.status === 'disconnected') {
+      return undefined
+    }
+    const entry = this.subagentCatalog.get(parentSessionId)?.get(childSessionId)
+    if (entry?.mode !== 'continuable') {
+      // The classification is not known here yet; a read for this parent may
+      // already be in flight, and a later push re-resolves once it lands.
+      void this.refreshSubagentCatalog(parentSessionId)
+      return undefined
+    }
+    return {
+      parentSessionId,
+      childSessionId,
+      ...entry.label === undefined ? {} : { label: entry.label },
+    }
+  }
+
+  /**
+   * Read one parent's durable subagent children into the cache that decides
+   * composer delivery. Concurrent reads for one parent coalesce, and a refusal
+   * leaves the previous cache in place — the composer simply stays read-only.
+   * @param parentSessionId - parent whose children are read.
+   */
+  private async refreshSubagentCatalog(parentSessionId: string): Promise<void> {
+    if (this.subagentCatalogRefreshes.has(parentSessionId)) return
+    if (this.host.status !== 'connected') return
+    this.subagentCatalogRefreshes.add(parentSessionId)
+    try {
+      const result = await this.host.listSubagents(parentSessionId, 'children')
+      const children = new Map<string, { mode: 'one-shot' | 'continuable'; label?: string }>()
+      for (const entry of result.entries) {
+        if (entry.kind !== 'child') continue
+        children.set(entry.sessionId, {
+          mode: entry.mode,
+          ...entry.label === undefined ? {} : { label: entry.label },
+        })
+      }
+      this.subagentCatalog.set(parentSessionId, children)
+      this.panelHost?.pushFullState()
+    } catch {
+      // The runtime could not answer; a later entry or finish retries the read.
+    } finally {
+      this.subagentCatalogRefreshes.delete(parentSessionId)
+    }
+  }
+
+  /** Durable parent of a session, from the timeline link or the workspace index. */
+  private parentSessionIdOf(sessionId: string): string | undefined {
+    return this.timeline.getParent(sessionId)
+      ?? this.index.read().sessions.find(row => row.sessionId === sessionId)?.parentSessionId
   }
 
   /**
@@ -2048,6 +2413,10 @@ export class ConversationController {
     const run = this.childRunState.get(childId)
     const mode: OpenTabMode = run === 'running' ? 'live' : 'replay'
     if (run !== 'running') await this.ensureChildHydrated(childId)
+    // The pinned Tab's durable parent is the address a composer send needs, so
+    // read that parent's catalog before the Tab becomes reachable.
+    const durableParent = this.parentSessionIdOf(childId)
+    if (durableParent !== undefined) void this.refreshSubagentCatalog(durableParent)
 
     // Clear context first so parent view is restored after pin (AC-79).
     this.registry.setContextSessionId(parentTabId, undefined)
@@ -2077,6 +2446,7 @@ export class ConversationController {
   resolvePanelProjection(): PanelProjection | undefined {
     const active = this.registry.getActive()
     if (active === undefined) return undefined
+    const subagentPrompt = this.resolveSubagentPromptTarget()
 
     const contextId = active.contextSessionId
     if (contextId !== undefined) {
@@ -2088,14 +2458,14 @@ export class ConversationController {
         tabId: active.tabId,
         contextSessionId: contextId,
         breadcrumb: this.buildBreadcrumb(active.sessionId),
+        ...subagentPrompt === undefined ? {} : { subagentPrompt },
         messages: this.messages.get(contextId),
         tabStatus: run === 'running' ? 'running' : 'idle',
         ...active.title === undefined ? {} : { title: active.title },
       }
     }
 
-    const parentSessionId = this.timeline.getParent(active.sessionId)
-      ?? this.index.read().sessions.find(s => s.sessionId === active.sessionId)?.parentSessionId
+    const parentSessionId = this.parentSessionIdOf(active.sessionId)
     const breadcrumb = parentSessionId === undefined
       ? undefined
       : this.buildBreadcrumb(parentSessionId)
@@ -2114,6 +2484,7 @@ export class ConversationController {
       tabStatus: active.status,
       ...active.title === undefined ? {} : { title: active.title },
       ...breadcrumb === undefined ? {} : { breadcrumb },
+      ...subagentPrompt === undefined ? {} : { subagentPrompt },
     }
   }
 
@@ -2185,6 +2556,10 @@ export class ConversationController {
     this.eventOverrides.clear()
     this.resumeOverride = undefined
     this.childRunState.clear()
+    this.subagentCatalog.clear()
+    this.subagentCatalogRefreshes.clear()
+    this.specdevBySession.clear()
+    this.specdevRefreshes.clear()
     this.timeline.clear()
     this.messages.clear()
     this.changes.clear()
@@ -2232,6 +2607,9 @@ export class ConversationController {
 
   private async onSubagentFinished(parentSessionId: string, childSessionId: string): Promise<void> {
     this.childRunState.set(childSessionId, 'ended')
+    // A finished child is the moment its durable mode becomes actionable, so
+    // re-read the parent's catalog and let the push below show the outcome.
+    void this.refreshSubagentCatalog(parentSessionId)
     this.messages.patchWhere(
       parentSessionId,
       m => m.kind === 'subagent' && m.childSessionId === childSessionId,
@@ -2329,6 +2707,7 @@ export class ConversationController {
       if (events.length === 0) return
       const hydrated = hydrateFromAuthoritativeLog(childSessionId, events)
       this.messages.replace(childSessionId, hydrated.messages)
+      await this.hydrateMessageImages(childSessionId, hydrated.pendingImages)
     } catch {
       // Missing child log leaves empty projection; enter still allowed for empty replay.
     }
@@ -2388,13 +2767,34 @@ export class ConversationController {
     })
   }
 
-  private projectUserMessage(sessionId: string, text: string, messageId: string): void {
+  /**
+   * Whether the runtime no longer stores this session's durable data.
+   * @param sessionId - session whose read failed.
+   * @returns true only when the runtime answered that nothing is stored; an absent
+   *   capability or an unanswered stat leaves the read failure as the reported cause.
+   */
+  private async sessionDataGone(sessionId: string): Promise<boolean> {
+    if (typeof this.host.statSession !== 'function') return false
+    try {
+      return (await this.host.statSession(sessionId)).found === false
+    } catch {
+      // The read failure this check follows already names the user-visible cause.
+      return false
+    }
+  }
+
+  private projectUserMessage(sessionId: string, text: string, messageId: string, images?: readonly PromptImage[]): void {
     const message: ChatMessage = {
       id: messageId,
       sessionId,
       role: 'user',
       kind: 'text',
       text,
+      // The composer's own bytes ride along, so the bubble shows the attachment
+      // the user sent without a second read.
+      ...images === undefined || images.length === 0
+        ? {}
+        : { images: images.map(image => ({ mimeType: image.mimeType, data: image.data })) },
     }
     this.messages.append(sessionId, message)
     this.panelHost?.pushAppend(message)
@@ -2751,6 +3151,7 @@ export class ConversationController {
     const active = this.registry.getActive()
     if (!this.isProjectedSession(active, sessionId)) return
     this.panelHost?.pushPatch(sessionId, compactionId, update)
+    if (error === undefined) this.refreshContextPressure(sessionId)
     if (error !== undefined) {
       this.panelHost?.pushBanner(`压缩失败：${error}`, 'compaction-failed')
     }
@@ -3196,6 +3597,33 @@ export class ConversationController {
       }
       return
     }
+    if (record.type === 'session/title') {
+      // The log is the title's source of truth: an explicit rename and an
+      // automatic title both reach the panel as this one event.
+      const title = data.title
+      if (typeof title === 'string' && title !== '') this.applySessionTitle(sessionId, title)
+      return
+    }
+    if (typeof record.type === 'string' && record.type.startsWith('specdev/')) {
+      // Every SpecDev event carries a whole post-change view, so the card follows
+      // the durable status; re-reading it keeps the card on the file's scalars.
+      void this.refreshSpecdev(sessionId)
+      return
+    }
+    if (record.type === 'request/context') {
+      const provider = data.provider
+      const model = data.model
+      if (typeof provider === 'string' && provider !== '' && typeof model === 'string' && model !== '') {
+        const contextWindow = data.contextWindow
+        this.requestRouteBySession.set(sessionId, {
+          provider,
+          model,
+          ...typeof contextWindow === 'number' && contextWindow > 0 ? { contextWindow } : {},
+        })
+        this.panelHost?.pushSessionRoute({ sessionId, provider, model })
+      }
+      return
+    }
     if (record.type === 'turn/end') {
       const reason = data.reason as Record<string, unknown> | undefined
       const reasonKind = typeof reason?.kind === 'string' ? reason.kind : undefined
@@ -3229,11 +3657,14 @@ export class ConversationController {
         totalTokens,
         ...typeof usage.cacheReadTokens === 'number' ? { cacheReadTokens: usage.cacheReadTokens } : {},
         ...typeof usage.reasoningTokens === 'number' ? { reasoningTokens: usage.reasoningTokens } : {},
-        contextWindow: this.resolveContextWindow() ?? 128_000,
-        thresholdRatio: 0.8,
+        contextWindow: this.requestRouteBySession.get(sessionId)?.contextWindow
+          ?? this.resolveContextWindow()
+          ?? 128_000,
+        thresholdRatio: this.compactionThresholdRatio() ?? 0.8,
       }
       this.lastTokenPayload = payload
       this.panelHost?.pushTokenStatus(payload)
+      this.refreshContextPressure(sessionId)
     }
     const message = data.message as Record<string, unknown> | undefined
     const text = firstAssistantText(message)
@@ -3249,6 +3680,28 @@ export class ConversationController {
     if (pending !== undefined && turn === pending) {
       this.pendingSettleTurn.delete(sessionId)
     }
+  }
+}
+
+/**
+ * Narrow a raw `contextPressure` projection value to the token-status
+ * refinements.
+ * @param value - projection value as it crossed the bridge.
+ * @returns the fields worth republishing, or `undefined` when none survived.
+ */
+function contextPressureOf(value: unknown): Partial<TokenStatusPayload> | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const pressure = value as Record<string, unknown>
+  const projectedTokens = typeof pressure.projectedTokens === 'number' && pressure.projectedTokens > 0
+    ? pressure.projectedTokens
+    : undefined
+  const contextWindow = typeof pressure.contextWindow === 'number' && pressure.contextWindow > 0
+    ? pressure.contextWindow
+    : undefined
+  if (projectedTokens === undefined && contextWindow === undefined) return undefined
+  return {
+    ...projectedTokens === undefined ? {} : { projectedTokens },
+    ...contextWindow === undefined ? {} : { contextWindow },
   }
 }
 

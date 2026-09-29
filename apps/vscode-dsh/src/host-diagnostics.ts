@@ -22,8 +22,13 @@ import { redactSecrets } from './redact.ts'
  * a start step was running. The field set is unchanged at 18 fields: the new
  * boundary is expressed through the existing `phase` member, not through a
  * second record surface.
+ *
+ * v3 added the `dsh-entry` member of {@link HostFailureKind}: a start that finds
+ * no dsh CLI entry point now reports the runtime resolution boundary instead of
+ * landing in `other`. The field set is unchanged at 18 fields: the entry path
+ * and the probed sources are carried by `detail`, and the remedy by `hint`.
  */
-export const HOST_DIAGNOSTIC_SCHEMA_VERSION = 2
+export const HOST_DIAGNOSTIC_SCHEMA_VERSION = 3
 
 /** Stable name of the VS Code Output Channel carrying Host start diagnostics (AC-13). */
 export const HOST_DIAGNOSTICS_CHANNEL_NAME = 'DeepSeek Harness'
@@ -32,23 +37,25 @@ export const HOST_DIAGNOSTICS_CHANNEL_NAME = 'DeepSeek Harness'
 export const HOST_DIAGNOSTIC_RECORD_LIMIT = 200
 
 /**
- * Which Host start boundary a record describes (AC-14 – AC-20): the Node
+ * Which Host start boundary a record describes (AC-14 – AC-20): the dsh CLI
+ * entry point not resolving before any spawn (`dsh-entry`), the Node
  * pre-flight refusing the spawn (`node-environment`), the ide-bridge socket
  * refusing to listen (`bridge-listen`), the runtime subprocess not launching
  * (`spawn`), `initialize` exceeding its bound (`handshake-timeout`), the runtime
  * process being reaped (`child-exited`, before the handshake or after it — the
  * record's `phase` says which), no
  * provider credentials for the Extension Host (`missing-credentials`), and a
- * failure no boundary claims (`other`, e.g. dsh entry resolution).
+ * failure no boundary claims (`other`).
  *
- * The vocabulary is exactly the six boundaries an AC names plus the `other`
- * bucket; a failure with no AC behind it has no member here. It is deliberately
- * **not** the same list as `StartErrorKind`: that type also carries
+ * The vocabulary is one member per boundary the Host classifies plus the `other`
+ * bucket; a failure with no boundary behind it has no member here. It is
+ * deliberately **not** the same list as `StartErrorKind`: that type also carries
  * `invalid-setting`, which the `StartHostPort` layer raises while reading a Node
  * selection setting — before any Host boundary exists — so no record can cover
  * it, and its message is carried by the Extension's `other` fallback instead.
  */
 export type HostFailureKind =
+  | 'dsh-entry'
   | 'node-environment'
   | 'bridge-listen'
   | 'spawn'
@@ -210,6 +217,7 @@ export interface HostDiagnosticRecorderOptions {
  * record always carries a non-empty reason.
  */
 const FAILURE_DETAILS: Readonly<Record<HostFailureKind, string>> = {
+  'dsh-entry': 'No source provided a dsh CLI entry point for this window.',
   'node-environment': 'The Node.js executable the Host resolved failed the pre-flight.',
   'bridge-listen': 'The Host could not listen on its ide-bridge socket.',
   spawn: 'The dsh runtime subprocess could not be launched.',
@@ -221,6 +229,7 @@ const FAILURE_DETAILS: Readonly<Record<HostFailureKind, string>> = {
 
 /** Per-kind remedy used when a boundary reports no `hint` of its own. */
 const FAILURE_HINTS: Readonly<Record<HostFailureKind, string>> = {
+  'dsh-entry': 'Install @deepseek-ai/dsh in the workspace, or set DSH_BIN or the dsh.cliPath setting to its dsh bin.',
   'node-environment': 'Point dsh.nodeBin or DSH_NODE_BIN at a Node.js ^22.19.0 || >=24.0.0 executable.',
   'bridge-listen': 'Remove a stale bridge socket at that path and retry the connection.',
   spawn: 'Check the Node.js executable path and the dsh CLI installation, then retry.',
@@ -237,6 +246,7 @@ const FAILURE_HINTS: Readonly<Record<HostFailureKind, string>> = {
  * total so a new kind cannot be added without deciding its orchestrator class.
  */
 const START_ERROR_KIND_BY_FAILURE: Readonly<Record<HostFailureKind, StartErrorKind>> = {
+  'dsh-entry': 'dsh-entry',
   'node-environment': 'node-environment',
   'bridge-listen': 'bridge-listen',
   spawn: 'spawn',
@@ -278,6 +288,7 @@ export function hostFailureKindForStartError(kind: StartErrorKind | undefined): 
       return 'missing-credentials'
     case 'invalid-setting':
       return null
+    case 'dsh-entry':
     case 'node-environment':
     case 'bridge-listen':
     case 'spawn':

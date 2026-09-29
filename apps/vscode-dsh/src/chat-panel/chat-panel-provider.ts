@@ -931,7 +931,8 @@ export function buildThinChatHtml(cspSource?: string): string {
       syncComposer();
     }
     function postNewConversation() {
-      vscode.postMessage({ type: 'action/new-conversation' });
+      // Same frame the React Webview's「新建会话」entry sends: one New path, one intent.
+      vscode.postMessage({ type: 'ui/tab-new' });
       if (chromeOverflow && chromeOverflow.open) chromeOverflow.open = false;
     }
     function sendComposer() {

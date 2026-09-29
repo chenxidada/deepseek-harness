@@ -6,6 +6,7 @@ import { decideFollowState } from '../src/chat-panel/render/follow-state.ts'
 import { ConnectionUiController, type StatusBarItemLike } from '../src/connection-ui.ts'
 import { ConversationController, type ContinueConversationResult } from '../src/conversation-controller.ts'
 import { ConversationRegistry } from '../src/conversation-registry.ts'
+import { CLI_PATH_SETTING, DSH_BIN_VARIABLE, DSH_PACKAGE_NAME, DshEntryError, formatDshEntryDiagnostics, resolveDshEntry } from '../src/dsh-entry-guard.ts'
 import { buildIdeChildEnv } from '../src/env.ts'
 import { EXTENSION_INDEX_STATE_KEY, type ExtensionIndexSnapshot } from '../src/extension-index.ts'
 import { activate, deactivate, getChatPanelHost, getConversationController, getConversationSnapshot } from '../src/extension.ts'
@@ -20,10 +21,10 @@ import * as sdkClient from '@deepseek-ai/dsh-sdk-client'
 import { HarnessClient, type ResolvedNodeExecutable, TransportClosedError, resolveNodeExecutableSpec } from '@deepseek-ai/dsh-sdk-client'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import Module from 'node:module'
 import { homedir, tmpdir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
@@ -1441,7 +1442,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         vi.restoreAllMocks()
       })
 
-      function makeVscode(readSetting: () => unknown): Record<string, unknown> {
+      function makeVscode(readSetting: (key: string) => unknown): Record<string, unknown> {
         return {
           window: {
             async showErrorMessage() {},
@@ -1457,7 +1458,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
               return {
                 get(key: string) {
                   configurationReads.push(`${section}.${key}`)
-                  return readSetting()
+                  return readSetting(key)
                 },
               }
             },
@@ -1473,13 +1474,22 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         }
       }
 
-      /** A `settings.json` on disk plus the reader a `vscode` double uses for `dsh.nodeBin`. */
-      async function settingsFile(dir: string, nodeBin: string): Promise<{ path: string; read: () => unknown }> {
+      /**
+ * A `settings.json` on disk plus the key-aware reader a `vscode` double uses.
+ * Keys are answered individually like the real API, so a case that points
+ * `dsh.nodeBin` at a path cannot silently configure `dsh.cliPath` with it too.
+ * @param dir - directory the settings file is written to.
+ * @param nodeBin - value of the `dsh.nodeBin` setting the file carries.
+ * @returns the file path and a reader that re-reads it on every call (AD-9).
+ */
+      async function settingsFile(dir: string, nodeBin: string): Promise<{ path: string; read: (key: string) => unknown }> {
         const path = join(dir, 'settings.json')
         await writeFile(path, `${JSON.stringify({ [NODE_BIN_SETTING]: nodeBin }, null, 2)}\n`)
         return {
           path,
-          read: () => (JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>)[NODE_BIN_SETTING],
+          read: (key: string) => key === 'nodeBin'
+            ? (JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>)[NODE_BIN_SETTING]
+            : undefined,
         }
       }
 
@@ -1605,6 +1615,249 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
     })
   })
 
+  describe('dsh-entry-guard.spec.ts', () => {
+    const dirs: string[] = []
+
+    afterEach(async () => {
+      while (dirs.length > 0) {
+        await rm(dirs.pop()!, { recursive: true, force: true })
+      }
+    })
+
+    async function workDir(label: string): Promise<string> {
+      const dir = await mkdtemp(join(tmpdir(), `dsh-entry-${label}-`))
+      dirs.push(dir)
+      return dir
+    }
+
+    /** Write a file, creating the directories above it. */
+    async function writeAt(path: string, contents: string): Promise<void> {
+      await mkdir(dirname(path), { recursive: true })
+      await writeFile(path, contents)
+    }
+
+    /**
+ * An installed `@deepseek-ai/dsh` copy: the manifest plus the bin file it
+ * declares.
+ * @returns the entry point path the manifest resolves to.
+ */
+    async function install(packageDir: string, version = '7.1.0'): Promise<string> {
+      const entry = join(packageDir, 'lib', 'bin.js')
+      await writeAt(
+        join(packageDir, 'package.json'),
+        `${JSON.stringify({ name: DSH_PACKAGE_NAME, version, bin: { dsh: 'lib/bin.js' } })}\n`,
+      )
+      await writeAt(entry, '// dsh entry\n')
+      return entry
+    }
+
+    /**
+ * An environment whose `PATH` holds nothing, so the PATH probe cannot reach
+ * the dsh a developer has installed on the machine running these tests.
+ */
+    function noPath(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+      return { PATH: '', ...extra }
+    }
+
+    it('CAP-SESSION-HOST-153 resolves the workspace dependency when no source is configured', async () => {
+      const cwd = await workDir('workspace')
+      const entry = await install(join(cwd, 'node_modules', DSH_PACKAGE_NAME))
+
+      expect(resolveDshEntry({ cwd, env: noPath() })).toEqual({
+        ok: true,
+        entry: { path: entry, source: 'workspace-dependency', version: '7.1.0' },
+      })
+    })
+
+    it('CAP-SESSION-HOST-154 resolves the built entry of a checkout above the workspace', async () => {
+      const repo = await workDir('checkout')
+      const entry = await install(join(repo, 'apps', 'cli'))
+      const cwd = join(repo, 'apps', 'vscode-dsh')
+      await mkdir(cwd, { recursive: true })
+
+      expect(resolveDshEntry({ cwd, env: noPath() })).toEqual({
+        ok: true,
+        entry: { path: entry, source: 'monorepo-checkout', version: '7.1.0' },
+      })
+    })
+
+    it('CAP-SESSION-HOST-155 resolves the dsh on PATH through the link a global install writes', async () => {
+      const installDir = await workDir('path-link')
+      const entry = await install(join(installDir, 'node_modules', DSH_PACKAGE_NAME))
+      const binDir = await workDir('path-bin')
+      await symlink(entry, join(binDir, 'dsh'))
+
+      const cwd = await workDir('path-workspace')
+      expect(resolveDshEntry({ cwd, env: { PATH: binDir } })).toEqual({
+        ok: true,
+        entry: { path: entry, source: 'path-executable', version: '7.1.0' },
+      })
+    })
+
+    it('CAP-SESSION-HOST-156 resolves a PATH install whose package sits beside the shim', async () => {
+      const binDir = await workDir('path-beside')
+      const entry = await install(join(binDir, 'node_modules', DSH_PACKAGE_NAME))
+      await writeFile(join(binDir, 'dsh'), '#!/bin/sh\n')
+
+      const cwd = await workDir('path-beside-workspace')
+      expect(resolveDshEntry({ cwd, env: { PATH: binDir } })).toEqual({
+        ok: true,
+        entry: { path: entry, source: 'path-executable', version: '7.1.0' },
+      })
+    })
+
+    it('CAP-SESSION-HOST-157 orders explicit inputs above automatic sources, and DSH_BIN above the setting', async () => {
+      const cwd = await workDir('precedence')
+      const workspaceEntry = await install(join(cwd, 'node_modules', DSH_PACKAGE_NAME), '1.0.0')
+      const explicitEntry = await install(join(cwd, 'explicit', DSH_PACKAGE_NAME), '2.0.0')
+      const variableEntry = await install(join(cwd, 'variable', DSH_PACKAGE_NAME), '3.0.0')
+      const settingEntry = await install(join(cwd, 'setting', DSH_PACKAGE_NAME), '4.0.0')
+
+      expect(resolveDshEntry({
+        cwd,
+        env: noPath({ [DSH_BIN_VARIABLE]: variableEntry }),
+        explicitPath: explicitEntry,
+        cliPathSetting: settingEntry,
+      })).toMatchObject({ ok: true, entry: { path: explicitEntry, source: 'explicit', version: '2.0.0' } })
+      expect(resolveDshEntry({
+        cwd,
+        env: noPath({ [DSH_BIN_VARIABLE]: variableEntry }),
+        cliPathSetting: settingEntry,
+      })).toMatchObject({ ok: true, entry: { path: variableEntry, source: 'dsh-bin', version: '3.0.0' } })
+      expect(resolveDshEntry({ cwd, env: noPath(), cliPathSetting: settingEntry }))
+        .toMatchObject({ ok: true, entry: { path: settingEntry, source: 'vscode-setting', version: '4.0.0' } })
+      expect(resolveDshEntry({ cwd, env: noPath() }))
+        .toMatchObject({ ok: true, entry: { path: workspaceEntry, source: 'workspace-dependency', version: '1.0.0' } })
+    })
+
+    it('CAP-SESSION-HOST-158 fails a configured path that does not exist instead of falling through to a usable source', async () => {
+      const cwd = await workDir('broken-setting')
+      await install(join(cwd, 'node_modules', DSH_PACKAGE_NAME))
+      const absent = join(cwd, 'absent', 'bin.js')
+
+      const resolution = resolveDshEntry({ cwd, env: noPath(), cliPathSetting: absent })
+      expect(resolution.ok).toBe(false)
+      if (resolution.ok) throw new Error('the configured path must fail the resolution')
+      expect(resolution.failure).toMatchObject({
+        source: 'vscode-setting',
+        kind: 'missing',
+        entryPath: absent,
+      })
+      const report = formatDshEntryDiagnostics(resolution.failure)
+      expect(report).toContain(absent)
+      expect(report).toContain('no such file')
+      expect(new DshEntryError(resolution.failure).message).toBe(report)
+      // The remedy names both levers, so a reader of either failure can act.
+      expect(report).toContain(CLI_PATH_SETTING)
+      expect(report).toContain(DSH_BIN_VARIABLE)
+    })
+
+    it('CAP-SESSION-HOST-159 rejects a configured path that is not a regular file', async () => {
+      const cwd = await workDir('directory-setting')
+      const directory = join(cwd, 'dsh-dir')
+      await mkdir(directory, { recursive: true })
+
+      const resolution = resolveDshEntry({ cwd, env: noPath(), explicitPath: directory })
+      expect(resolution.ok).toBe(false)
+      if (resolution.ok) throw new Error('a directory must fail the resolution')
+      expect(resolution.failure).toMatchObject({ source: 'explicit', kind: 'not-a-file', entryPath: directory })
+      expect(formatDshEntryDiagnostics(resolution.failure)).toContain('not a regular file')
+    })
+
+    it('CAP-SESSION-HOST-160 reports every probed source when no source provides a runtime', async () => {
+      const cwd = await workDir('empty')
+
+      const resolution = resolveDshEntry({ cwd, env: noPath() })
+      expect(resolution.ok).toBe(false)
+      if (resolution.ok) throw new Error('an empty environment must fail the resolution')
+      expect(resolution.failure.kind).toBe('not-found')
+      expect(resolution.failure.probed.map(probe => probe.source)).toEqual([
+        'dsh-bin',
+        'vscode-setting',
+        'workspace-dependency',
+        'monorepo-checkout',
+        'path-executable',
+        'extension-install',
+      ])
+      const report = formatDshEntryDiagnostics(resolution.failure)
+      // The report names where it looked, so "not found" is checkable by its reader.
+      expect(report).toContain('Probed:')
+      expect(report).toContain(cwd)
+      expect(report).toContain(DSH_BIN_VARIABLE)
+      expect(report).toContain(CLI_PATH_SETTING)
+    })
+
+    it('CAP-SESSION-HOST-161 resolves a relative configured path against the workspace', async () => {
+      const cwd = await workDir('relative')
+      const entry = await install(join(cwd, 'tools', DSH_PACKAGE_NAME))
+
+      expect(resolveDshEntry({
+        cwd,
+        env: noPath(),
+        cliPathSetting: join('tools', DSH_PACKAGE_NAME, 'lib', 'bin.js'),
+      })).toEqual({ ok: true, entry: { path: entry, source: 'vscode-setting', version: '7.1.0' } })
+    })
+
+    it('CAP-SESSION-HOST-162 reports an entry outside a package layout without a version', async () => {
+      const cwd = await workDir('bare')
+      const entry = join(cwd, 'bin.js')
+      await writeFile(entry, '// entry outside a package\n')
+
+      expect(resolveDshEntry({ cwd, env: noPath(), explicitPath: entry })).toEqual({
+        ok: true,
+        entry: { path: entry, source: 'explicit' },
+      })
+    })
+
+    it('CAP-SESSION-HOST-166 resolves a PATH install through the prefix layout a Unix npm install writes', async () => {
+      const prefix = await workDir('path-prefix')
+      const entry = await install(join(prefix, 'lib', 'node_modules', DSH_PACKAGE_NAME))
+      const binDir = join(prefix, 'bin')
+      await mkdir(binDir, { recursive: true })
+      await writeFile(join(binDir, 'dsh'), '#!/bin/sh\n')
+
+      const cwd = await workDir('path-prefix-workspace')
+      expect(resolveDshEntry({ cwd, env: { PATH: binDir } })).toEqual({
+        ok: true,
+        entry: { path: entry, source: 'path-executable', version: '7.1.0' },
+      })
+    })
+
+    it('CAP-SESSION-HOST-163 a start without a usable entry point fails as dsh-entry before any socket is opened', async () => {
+      const cwd = await workDir('host')
+      const recorder = new HostDiagnosticRecorder()
+      const host = new IdeSessionHost(recorder)
+      const absent = join(cwd, 'absent-dsh.js')
+      vi.stubEnv(DSH_BIN_VARIABLE, '')
+      try {
+        const error = await host.start({
+          cwd,
+          dshHome: join(cwd, '.dsh'),
+          bridgeSockPath: join(cwd, 'bridge.sock'),
+          cliPathSetting: absent,
+          credentials: { DEEPSEEK_API_KEY: 'keyless-no-call', DSH_TELEMETRY_DISABLED: '1' },
+        }).then(() => undefined, (thrown: unknown) => thrown)
+
+        expect(error).toBeInstanceOf(HostStartError)
+        const startError = error as HostStartError
+        expect(startError.kind).toBe('dsh-entry')
+        expect(startError.entryDiagnostic)
+          .toMatchObject({ source: 'vscode-setting', kind: 'missing', entryPath: absent })
+        expect(host.status).toBe('error')
+        // The failure precedes the bridge-listen boundary, so no socket was opened.
+        expect(existsSync(join(cwd, 'bridge.sock'))).toBe(false)
+
+        const records = recorder.records()
+        expect(records).toHaveLength(1)
+        expect(records[0]).toMatchObject({ kind: 'dsh-entry', phase: 'start' })
+        expect(records[0].hint).toContain(CLI_PATH_SETTING)
+        expect(records[0].detail).toContain(absent)
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+  })
+
   describe('host-diagnostics.spec.ts', () => {
     const RECORD_FIELDS: ReadonlyArray<{
       name: string
@@ -1621,11 +1874,12 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         name: 'kind',
         type: 'string',
         nullable: false,
-        // The design table's member list (AD-14 `kind` row), not a transcription of
-        // the implementation's type: six AC-named boundaries plus the `other` bucket.
+        // The design table's member list (AD-14 `kind` row), extended by v3 with
+        // `dsh-entry`: the boundaries the Host classifies plus the `other` bucket.
         // `invalid-setting` is deliberately absent — it names a `StartErrorKind` the
         // StartHostPort layer raises before any Host boundary exists.
         enum: [
+          'dsh-entry',
           'node-environment',
           'bridge-listen',
           'spawn',
@@ -1700,9 +1954,9 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         expect(Object.keys(produced).sort()).toEqual(RECORD_FIELDS.map(field => field.name).sort())
         for (const field of RECORD_FIELDS) expectFieldShape(produced, field)
 
-        // (c) The version is the literal v2 and it comes from the product constant:
+        // (c) The version is the literal v3 and it comes from the product constant:
         // bumping the constant without moving the field table fails right here.
-        expect(HOST_DIAGNOSTIC_SCHEMA_VERSION).toBe(2)
+        expect(HOST_DIAGNOSTIC_SCHEMA_VERSION).toBe(3)
         expect(record.schemaVersion).toBe(HOST_DIAGNOSTIC_SCHEMA_VERSION)
 
         // (d) No rendered-text field exists, by name and by value.
@@ -1738,14 +1992,14 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         expect(record.resolvedExecutable).toBeNull()
       })
 
-      it('CAP-SESSION-HOST-053 AD-14: the version is the v2 literal sourced from the single product constant', () => {
+      it('CAP-SESSION-HOST-053 AD-14: the version is the v3 literal sourced from the single product constant', () => {
         const recorder = new HostDiagnosticRecorder()
         const record = recorder.record({ kind: 'other' })
 
         // Literal assertion: bumping the constant must fail here, which is what
         // forces the field table and the version to move together.
-        expect(HOST_DIAGNOSTIC_SCHEMA_VERSION).toBe(2)
-        expect(record.schemaVersion).toBe(2)
+        expect(HOST_DIAGNOSTIC_SCHEMA_VERSION).toBe(3)
+        expect(record.schemaVersion).toBe(3)
         expect(record.schemaVersion).toBe(HOST_DIAGNOSTIC_SCHEMA_VERSION)
       })
 
@@ -2016,9 +2270,10 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
     })
 
     describe('start-failure classification (AD-3 / AD-4)', () => {
-      it('CAP-SESSION-HOST-069 keeps the record vocabulary to the six AC-named boundaries plus `other`', () => {
+      it('CAP-SESSION-HOST-069 keeps the record vocabulary to the boundaries the Host classifies plus `other`', () => {
         const kind = RECORD_FIELDS.find(field => field.name === 'kind')
         expect(kind?.enum).toEqual([
+          'dsh-entry',
           'node-environment',
           'bridge-listen',
           'spawn',
@@ -2043,6 +2298,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         expect(hostFailureKindForStartError('missing-credentials')).toBe('missing-credentials')
         // The Host records its own boundary for these, so this listener stays silent.
         const hostOwned: readonly StartErrorKind[] = [
+          'dsh-entry',
           'node-environment',
           'bridge-listen',
           'spawn',
@@ -2054,6 +2310,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       })
 
       it('CAP-SESSION-HOST-071 maps every record kind onto exactly one orchestrator class', () => {
+        expect(startErrorKindForFailure('dsh-entry')).toBe('dsh-entry')
         expect(startErrorKindForFailure('node-environment')).toBe('node-environment')
         expect(startErrorKindForFailure('bridge-listen')).toBe('bridge-listen')
         expect(startErrorKindForFailure('spawn')).toBe('spawn')
@@ -2526,6 +2783,8 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       const commands = new Map<string, (...args: unknown[]) => unknown>()
       const channels: FakeChannel[] = []
       const executed: string[] = []
+      /** Action labels each load-time error message offered, in call order. */
+      const errorActions: string[][] = []
       let statusBar: {
         text: string
         command?: string | { command: string }
@@ -2556,6 +2815,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         commands.clear()
         channels.length = 0
         executed.length = 0
+        errorActions.length = 0
         statusBar = undefined
         nodeBin = undefined
         for (const restore of secretRestores.splice(0)) restore()
@@ -2578,11 +2838,12 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         }
       }
 
-      function makeVscode(opts?: { withOutputChannel?: boolean }) {
+      function makeVscode(opts?: { withOutputChannel?: boolean; workspaceFolder?: string }) {
         return {
           window: {
-            async showErrorMessage(message: string) {
+            async showErrorMessage(message: string, ...items: string[]) {
               executed.push(`error:${message}`)
+              errorActions.push(items)
             },
             async showInformationMessage(message: string) {
               executed.push(`info:${message}`)
@@ -2609,7 +2870,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
             },
           },
           workspace: {
-            workspaceFolders: [{ uri: { fsPath: '/tmp/dsh-phase2' } }],
+            workspaceFolders: [{ uri: { fsPath: opts?.workspaceFolder ?? '/tmp/dsh-phase2' } }],
             getConfiguration() {
               return { get: (key: string) => (key === 'nodeBin' ? nodeBin : undefined) }
             },
@@ -2674,10 +2935,13 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         expect(commands.has('dsh.showHostDiagnostics')).toBe(true)
         expect(channels[0].shown).toBe(0)
 
+        // The load-time environment check may have reported the runtime already;
+        // the reveal command itself must add nothing to that record (AC-13).
+        const appendedAtActivation = channels[0].lines.length
         const shown = await commands.get('dsh.showHostDiagnostics')!() as { ok: boolean }
         expect(shown.ok).toBe(true)
         expect(channels[0].shown).toBe(1)
-        expect(channels[0].lines).toEqual([])
+        expect(channels[0].lines.length).toBe(appendedAtActivation)
 
         // A surface with no Output Channel still answers the command rather than throwing.
         await deactivate()
@@ -2691,6 +2955,68 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         activateWith(makeVscode())
         expect(commands.has('dsh.test.getDiagnosticsText')).toBe(true)
         expect(records()).toEqual([])
+      })
+
+      /**
+ * An environment whose `PATH` holds nothing, so the load-time check cannot
+ * resolve the dsh a developer has installed on the machine running these tests.
+ * @returns the restore function the case must call.
+ */
+      function withoutPath(): () => void {
+        const inherited = process.env.PATH
+        process.env.PATH = ''
+        return () => {
+          if (inherited === undefined) delete process.env.PATH
+          else process.env.PATH = inherited
+        }
+      }
+
+      it('CAP-SESSION-HOST-164 activation reports the runtime it resolved and raises no error', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-phase2-entry-'))
+        dirs.push(dir)
+        const packageDir = join(dir, 'node_modules', DSH_PACKAGE_NAME)
+        await mkdir(join(packageDir, 'lib'), { recursive: true })
+        await writeFile(
+          join(packageDir, 'package.json'),
+          `${JSON.stringify({ name: DSH_PACKAGE_NAME, version: '7.1.0', bin: { dsh: 'lib/bin.js' } })}\n`,
+        )
+        await writeFile(join(packageDir, 'lib', 'bin.js'), '// dsh entry\n')
+
+        const restorePath = withoutPath()
+        try {
+          activateWith(makeVscode({ workspaceFolder: dir }))
+        } finally {
+          restorePath()
+        }
+
+        // The load-time record names the entry, the source, and the version, so the
+        // window's runtime is known before any session starts.
+        expect(channels[0].lines).toHaveLength(1)
+        expect(channels[0].lines[0]).toContain(join(packageDir, 'lib', 'bin.js'))
+        expect(channels[0].lines[0]).toContain(`the workspace ${DSH_PACKAGE_NAME} dependency`)
+        expect(channels[0].lines[0]).toContain('7.1.0')
+        expect(executed.filter(entry => entry.startsWith('error:'))).toEqual([])
+      })
+
+      it('CAP-SESSION-HOST-165 activation reports a missing runtime with both levers and offers its actions', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-phase2-noruntime-'))
+        dirs.push(dir)
+
+        const restorePath = withoutPath()
+        try {
+          activateWith(makeVscode({ workspaceFolder: dir }))
+        } finally {
+          restorePath()
+        }
+
+        expect(channels[0].lines).toHaveLength(1)
+        const report = channels[0].lines[0]
+        expect(report).toContain('dsh runtime check failed')
+        expect(report).toContain('Probed:')
+        expect(report).toContain(DSH_BIN_VARIABLE)
+        expect(report).toContain(CLI_PATH_SETTING)
+        expect(executed).toContain(`error:${report}`)
+        expect(errorActions[0]).toEqual(['Open Settings', 'Show Diagnostics'])
       })
 
       it('CAP-SESSION-HOST-091 the approval hook is registered in the same gate and refuses without a Host', () => {
@@ -4457,7 +4783,6 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
     describe('verifier Phase-2 Layer-B Host (independent)', () => {
       it('CAP-SESSION-HOST-138 V-B1 : ui/delete-request → requestDeleteConfirmed only (param variation)', async () => {
         const deleted: string[] = []
-        const requestDelete = vi.fn()
         const registry = new ConversationRegistry()
         const tab = registry.create('active')
         const host = new ChatPanelHost({
@@ -4465,7 +4790,6 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
           messages: new MessageStore(),
           isHostReady: () => true,
           acceptSend: async () => ({ messageId: 'm', sessionId: tab.sessionId, tabId: tab.tabId }),
-          requestDelete,
           requestDeleteConfirmed: async (sessionId) => {
             deleted.push(sessionId)
           },
@@ -4478,7 +4802,6 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
           await flushMicrotasks()
         }
         expect(deleted).toEqual(['sess-a', 'sess-b', 'sess-c'])
-        expect(requestDelete).not.toHaveBeenCalled()
         expect(new Set(deleted).size).toBe(3)
       })
 

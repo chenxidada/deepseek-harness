@@ -64,6 +64,14 @@ export interface WorkflowMarker {
   members: WorkflowMember[]
 }
 
+/** One image a user attached to a message, carrying the bytes the composer sent. */
+export interface MessageImage {
+  /** Media type the composer verified from the upload's bytes. */
+  mimeType: string
+  /** Canonical base64 payload, so the bubble renders without a second read. */
+  data: string
+}
+
 /** One projected chat bubble for the Conversation Webview. */
 export interface ChatMessage {
   /** Stable message id within the session projection. */
@@ -76,6 +84,8 @@ export interface ChatMessage {
   kind: 'text' | 'reasoning' | 'compaction' | 'workflow' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity'
   /** Full readable text (user prompt or complete assistant turn). */
   text: string
+  /** Images the user attached to this message, in send order. */
+  images?: MessageImage[]
   /** Optional turn index when known. */
   turn?: number
   /** True when the turn ended incomplete / interrupted. */
@@ -114,6 +124,8 @@ export interface MessagePatch {
   appendText?: string
   /** Append to existing reasoning text. */
   appendReasoning?: string
+  /** Attach the images a replayed bubble carried; replaces the existing list. */
+  images?: MessageImage[]
   /** Incomplete / aborted marker. */
   incomplete?: boolean
   /** Streaming chrome flag on the message. */
@@ -188,6 +200,7 @@ export class MessageStore {
       if (update.streaming) next.streaming = true
       else delete next.streaming
     }
+    if (update.images !== undefined) next.images = update.images.map(image => ({ ...image }))
     if (update.activityStatus !== undefined && next.activity !== undefined) {
       next.activity = { ...next.activity, status: update.activityStatus }
       next.text = activityLabel(next.activity)
@@ -336,6 +349,7 @@ export class MessageStore {
 function copyMessage(message: ChatMessage): ChatMessage {
   return {
     ...message,
+    ...message.images === undefined ? {} : { images: message.images.map(image => ({ ...image })) },
     ...message.changeList === undefined
       ? {}
       : {

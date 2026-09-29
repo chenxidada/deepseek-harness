@@ -5,12 +5,15 @@ import {
   type ComposerState,
   type ContinueChrome,
   type SlashCompletionReply,
+  type SendDraft,
+  type ModelState,
   type TokenStatus,
   type UiAtCandidate,
   type UiSlashCandidate,
 } from '../store/chat-ui-store.ts'
-import { setComposerText, setStopping } from '../store/chat-ui-store.ts'
+import { consumeSendRestore, setComposerText, setPendingSend, setStopping } from '../store/chat-ui-store.ts'
 import { activeAtToken, formatFileMention } from '../utils/at-path-tokens.ts'
+import { sniffImageMediaType } from '../utils/image-media-type.ts'
 import { ContextRing } from './ContextRing.tsx'
 
 /** Monotonic id pairing one `@` query with its reply. */
@@ -120,6 +123,20 @@ export interface ComposerProps {
   atCompletion?: AtCompletionReply
   /** Latest Host reply to a composer `/` query (feature: slash-completion). */
   slashCompletion?: SlashCompletionReply
+  /** Payload a refused send handed back to be restored (feature: send-feedback). */
+  sendRestore?: SendDraft
+  /** Host decision mirror: the parent Tab's Continue is sealed after a fork. */
+  continueSealed?: boolean
+  /** Route the active session's last request used (feature: model-route). */
+  route?: { provider: string; model: string }
+  /** Model catalog mirrored from Host `model/state`; `vision` marks image-capable models. */
+  modelState?: ModelState
+  /**
+   * Display label of the subagent child this composer writes to, mirrored from
+   * Host `panel/state.subagentPrompt`. Present only when the Host resolved a
+   * writable child address, so its presence is what the composer renders.
+   */
+  subagentTarget?: string
 }
 
 export function Composer({
@@ -134,6 +151,11 @@ export function Composer({
   tokenStatus,
   atCompletion,
   slashCompletion,
+  sendRestore,
+  continueSealed,
+  route,
+  modelState,
+  subagentTarget,
 }: ComposerProps) {
   const [local, setLocal] = useState(text)
   const [images, setImages] = useState<Array<{ data: string; mimeType: string; name?: string }>>([])
@@ -148,6 +170,15 @@ export function Composer({
     setLocal(text)
   }, [text])
   useEffect(() => {
+    // A refused send hands its payload back: the user keeps the text and the
+    // attachments instead of losing them to an optimistic clear.
+    const draft = sendRestore === undefined ? undefined : consumeSendRestore()
+    if (draft === undefined) return
+    setLocal(draft.text)
+    setComposerText(draft.text)
+    setImages(draft.images ?? [])
+  }, [sendRestore])
+  useEffect(() => {
     const caret = pendingCaretRef.current
     if (caret === undefined) return
     pendingCaretRef.current = undefined
@@ -160,6 +191,13 @@ export function Composer({
   const disabled = state !== 'live'
   const value = local
   const showStop = streaming === true || stopping === true
+  // The runtime projects images down to a placeholder text for models that declare
+  // text only, so an attached image on such a route says so before the send.
+  const composedModelId = route?.model ?? modelState?.current.model
+  const composedModel = composedModelId === undefined
+    ? undefined
+    : modelState?.providers.flatMap(provider => provider.models).find(model => model.id === composedModelId)
+  const imagesUnsupported = images.length > 0 && composedModel !== undefined && composedModel.vision !== true
   const showContinue = mode === 'replay'
     && continueChrome !== undefined
     && continueChrome.visibility !== 'hidden'
@@ -261,7 +299,11 @@ export function Composer({
       if (typeof result !== 'string') return
       // data:image/png;base64,... → 提取 base64 部分
       const base64 = result.split(',')[1] ?? ''
-      setImages(prev => [...prev, { data: base64, mimeType: file.type, name: file.name }])
+      // The runtime's admission compares the declared type against the bytes, and a
+      // platform label lies for a mislabeled file (a WebP named `.png`, an `image/jpg`
+      // label); the sniffed signature wins whenever the bytes carry one.
+      const mimeType = sniffImageMediaType(base64) ?? file.type
+      setImages(prev => [...prev, { data: base64, mimeType, name: file.name }])
     }
     reader.readAsDataURL(file)
   }
@@ -273,6 +315,8 @@ export function Composer({
   const send = (): void => {
     const trimmed = value.trim()
     if ((!trimmed && images.length === 0) || disabled) return
+    // Register the payload before the frame leaves so a refusal can return it.
+    setPendingSend({ text: trimmed, ...images.length === 0 ? {} : { images } })
     if (images.length > 0) {
       bridge.emitIntent({ type: 'composer/send-rich', text: trimmed, images })
     } else {
@@ -298,6 +342,16 @@ export function Composer({
       {disabled && (disabledReason || composerReason(state, mode)) ? (
         <div data-testid="composer-disabled-reason" className="dsh-muted dsh-composer-meta">
           {disabledReason ?? composerReason(state, mode)}
+        </div>
+      ) : null}
+      {subagentTarget === undefined ? null : (
+        <div data-testid="composer-subagent-target" className="dsh-muted dsh-composer-meta">
+          {`发送给子代理 ${subagentTarget}`}
+        </div>
+      )}
+      {imagesUnsupported ? (
+        <div data-testid="vision-warning" className="dsh-muted dsh-composer-meta">
+          {`当前模型 ${composedModelId ?? ''} 不支持图片，模型只会收到占位说明`}
         </div>
       ) : null}
       {images.length > 0 ? (
@@ -378,7 +432,9 @@ export function Composer({
           data-testid="composer-input"
           value={value}
           disabled={disabled}
-          placeholder={disabled ? (disabledReason ?? composerPlaceholder(state, mode)) : '输入消息…'}
+          placeholder={disabled
+            ? (disabledReason ?? composerPlaceholder(state, mode))
+            : subagentTarget === undefined ? '输入消息…' : '发送给子代理…'}
           rows={2}
           onPaste={(event) => {
             const items = event.clipboardData?.items
@@ -487,7 +543,7 @@ export function Composer({
         {tokenStatus && tokenStatus.contextWindow > 0 ? (
           <>
             <ContextRing
-              usedTokens={tokenStatus.totalTokens}
+              usedTokens={tokenStatus.projectedTokens ?? tokenStatus.totalTokens}
               contextWindow={tokenStatus.contextWindow}
               thresholdRatio={tokenStatus.thresholdRatio}
               onCompactNow={() => bridge.emitIntent({ type: 'action/compact' })}
@@ -531,15 +587,20 @@ export function Composer({
           <button
             type="button"
             data-testid="btn-continue"
-            disabled={continueChrome?.visibility === 'disabled'}
-            title={continueChrome?.tooltip}
+            disabled={continueSealed === true || continueChrome?.visibility === 'disabled'}
+            title={continueSealed === true ? '父会话已接续分叉，Continue 已封印' : continueChrome?.tooltip}
             data-capability={continueChrome?.capability}
+            data-sealed={continueSealed === true ? 'true' : 'false'}
             onClick={() => bridge.emitIntent({ type: 'action/continue' })}
             className="dsh-secondary-btn"
           >
             Continue
           </button>
-          {continueChrome?.reasonText ? (
+          {continueSealed === true ? (
+            <span data-testid="continue-reason" className="dsh-muted">
+              父会话已接续分叉，Continue 已封印
+            </span>
+          ) : continueChrome?.reasonText ? (
             <span data-testid="continue-reason" className="dsh-muted">
               {continueChrome.reasonText}
             </span>

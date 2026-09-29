@@ -42,6 +42,22 @@ export interface HydratorSessionEvent {
   data?: unknown
 }
 
+/** One durable image reference a folded message carried, as the log recorded it. */
+export interface FoldedImageRef {
+  /** Content-addressed attachment identity (`sha256:<hex>`). */
+  attachmentId: string
+  /** Media type admission verified from the bytes. */
+  mediaType: string
+  /** Normalized pixel width. */
+  width: number
+  /** Normalized pixel height. */
+  height: number
+  /** Normalized byte length. */
+  bytes: number
+  /** Display name recorded at admission, when the upload carried one. */
+  name?: string
+}
+
 /** One folded chat-bar message for replay UI hydration. */
 export interface FoldedMessage {
   /** Stable message id when present on the event payload. */
@@ -52,6 +68,19 @@ export interface FoldedMessage {
   text: string
   /** Log seq of the source event (ordering oracle). */
   seq: number
+  /**
+   * Image references this message sent. The log carries references, not bytes,
+   * so a caller reads them back before the bubble can render them.
+   */
+  images?: FoldedImageRef[]
+}
+
+/** One hydrated bubble whose images still need reading back from the attachment store. */
+export interface HydratedMessageImages {
+  /** Id of the {@link HydrationResult.messages} row the images belong to. */
+  messageId: string
+  /** Durable references in send order. */
+  images: FoldedImageRef[]
 }
 
 /** One folded activity row for replay UI hydration. */
@@ -78,11 +107,13 @@ export interface FoldedWorkflowRun {
   message: ChatMessage
 }
 
-/** One Timeline turn/step/tool row derived from the log. */
+/** One Timeline turn/step/tool/approval row derived from the log. */
 export interface FoldedTimelineRow {
-  kind: 'turn' | 'step' | 'tool'
+  kind: 'turn' | 'step' | 'tool' | 'approval'
   /** Human-readable label for assertions. */
   label: string
+  /** Secondary line the live projection also carries, when the kind declares one. */
+  description?: string
   /** Optional turn number when known. */
   turn?: number
   /** Optional step number when known. */
@@ -101,6 +132,8 @@ export interface HydrationResult {
   messages: ChatMessage[]
   /** Timeline rows ready for TimelineStore.replace. */
   timelineItems: Array<Omit<TimelineItem, 'id' | 'sessionId'> & { id?: string }>
+  /** Bubbles whose images a caller must read back before their replace is pushed. */
+  pendingImages: HydratedMessageImages[]
   /** Folded oracle rows (tests). */
   foldedMessages: FoldedMessage[]
   /** Folded timeline oracle rows (tests). */
@@ -111,7 +144,7 @@ export interface HydrationResult {
  * Fold authoritative events once into panel + Timeline projections.
  * @param sessionId - SDK session identity for ChatMessage.sessionId.
  * @param events - cold-balanced session events (full log, no paging).
- * @returns messages + timeline items for store replace.
+ * @returns messages + timeline items for store replace, plus the images still to read.
  */
 export function hydrateFromAuthoritativeLog(
   sessionId: string,
@@ -120,12 +153,17 @@ export function hydrateFromAuthoritativeLog(
   const foldedMessages = foldMessages(events)
   const foldedTimeline = foldTimeline(events)
   const incomplete = detectIncomplete(events)
+  const pendingImages: HydratedMessageImages[] = []
   const rows: Array<{ seq: number; message: ChatMessage }> = foldedMessages.map((bar, index) => {
     const isLast = index === foldedMessages.length - 1
+    const id = bar.id ?? randomUUID()
+    if (bar.images !== undefined && bar.images.length > 0) {
+      pendingImages.push({ messageId: id, images: bar.images })
+    }
     return {
       seq: bar.seq,
       message: {
-        id: bar.id ?? randomUUID(),
+        id,
         sessionId,
         role: bar.role,
         kind: 'text' as const,
@@ -182,11 +220,13 @@ export function hydrateFromAuthoritativeLog(
         ? { description: 'diff ready' }
         : row.kind === 'tool'
           ? { description: row.label.endsWith(' result') ? 'result' : 'call' }
-          : {},
+          : row.description === undefined
+            ? {}
+            : { description: row.description },
     }
     return base
   })
-  return { messages, timelineItems, foldedMessages, foldedTimeline }
+  return { messages, timelineItems, pendingImages, foldedMessages, foldedTimeline }
 }
 
 /**
@@ -286,7 +326,7 @@ export function foldActivities(
  * Fold user/assistant message bars from a full event log (one-shot, no paging).
  * Honors surfaceOp replace by dropping prior bars with the same message id.
  * @param events - authoritative session events (raw or cold-balanced).
- * @returns ordered message bars with roles and seq.
+ * @returns ordered message bars with roles, seq, and any image references they sent.
  */
 export function foldMessages(events: readonly HydratorSessionEvent[]): FoldedMessage[] {
   const bars: FoldedMessage[] = []
@@ -301,13 +341,20 @@ export function foldMessages(events: readonly HydratorSessionEvent[]): FoldedMes
     if (role === undefined) continue
     const id = typeof message.id === 'string' ? message.id : undefined
     const text = textFromContent(message.content)
+    const images = imageRefsFromContent(message.content)
     const surfaceOp = event.surfaceOp
     if (isReplaceSurfaceOp(surfaceOp) && id !== undefined) {
       for (let i = bars.length - 1; i >= 0; i -= 1) {
         if (bars[i]?.id === id) bars.splice(i, 1)
       }
     }
-    bars.push({ id, role, text, seq: Number(event.seq ?? 0) })
+    bars.push({
+      id,
+      role,
+      text,
+      seq: Number(event.seq ?? 0),
+      ...images.length === 0 ? {} : { images },
+    })
   }
   return bars
 }
@@ -617,6 +664,21 @@ export function foldTimeline(events: readonly HydratorSessionEvent[]): FoldedTim
         })
         break
       }
+      case 'approval/asked': {
+        const toolName = typeof data.toolName === 'string' && data.toolName !== '' ? data.toolName : 'tool'
+        const reason = typeof data.reason === 'string' && data.reason !== '' ? data.reason : undefined
+        rows.push({
+          kind: 'approval',
+          label: `approval ${toolName}`,
+          description: reason === undefined ? 'asked' : `asked · ${reason}`,
+        })
+        break
+      }
+      case 'approval/decided': {
+        const outcome = typeof data.outcome === 'string' && data.outcome !== '' ? data.outcome : 'unavailable'
+        rows.push({ kind: 'approval', label: `approval ${outcome}`, description: 'decided' })
+        break
+      }
       case 'tool/call': {
         const turn = asNumber(data.turn)
         const step = asNumber(data.step)
@@ -722,6 +784,59 @@ function textFromContent(content: unknown): string {
     }
   }
   return parts.join('')
+}
+
+/**
+ * Collect the durable image references of one content-block list.
+ * @param content - `content` payload of a logged message.
+ * @returns references in block order; blocks without a complete reference are dropped.
+ */
+function imageRefsFromContent(content: unknown): FoldedImageRef[] {
+  if (!Array.isArray(content)) return []
+  const refs: FoldedImageRef[] = []
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue
+    const record = block as { type?: unknown; attachment?: unknown }
+    if (record.type !== 'image') continue
+    const ref = imageRefFromAttachment(record.attachment)
+    if (ref !== undefined) refs.push(ref)
+  }
+  return refs
+}
+
+/**
+ * Narrow one logged `{ type:'image' }` payload to the reference fields an
+ * `attachment/read` accepts. A durable log is a validation boundary: an entry
+ * whose recorded dimensions or length are unusable is dropped here instead of
+ * producing a read the attachment store can only refuse.
+ * @param attachment - `attachment` field of the image block.
+ * @returns the reference, or undefined when a required field is missing.
+ */
+function imageRefFromAttachment(attachment: unknown): FoldedImageRef | undefined {
+  const record = asRecord(attachment)
+  if (record === undefined) return undefined
+  const attachmentId = record.attachmentId
+  const mediaType = record.mediaType
+  if (typeof attachmentId !== 'string' || attachmentId === '') return undefined
+  if (typeof mediaType !== 'string' || mediaType === '') return undefined
+  const width = pixelOrByteCount(record.width)
+  const height = pixelOrByteCount(record.height)
+  const bytes = pixelOrByteCount(record.bytes)
+  if (width === undefined || height === undefined || bytes === undefined) return undefined
+  const name = record.name
+  return {
+    attachmentId,
+    mediaType,
+    width,
+    height,
+    bytes,
+    ...typeof name === 'string' && name !== '' ? { name } : {},
+  }
+}
+
+/** Narrow one recorded image dimension or length to a non-negative whole count. */
+function pixelOrByteCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

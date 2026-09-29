@@ -6,8 +6,9 @@
  * @module @deepseek-ai/dsh-vscode-dsh/chat-panel/protocol
  */
 
-import type { ChatMessage, CompactionMarker, WorkflowMarker } from '../message-store.ts'
+import type { ChatMessage, CompactionMarker, MessageImage, WorkflowMarker } from '../message-store.ts'
 import type { FileReferenceCandidate } from '@deepseek-ai/dsh-file-reference/types'
+import type { BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
 
 /**
  * One `@` completion candidate pushed to the composer. This is the record the Host's
@@ -128,6 +129,18 @@ export type HostToWebviewMessage =
     /** Parent→child lineage chrome (back / pin / deleted banners). */
     breadcrumb?: PanelBreadcrumb
     /**
+     * Subagent address the composer may write to for this projection. Present
+     * only when the projected child is continuable, not running, and its parent
+     * Tab is live; a send then travels to the child through `subagent/prompt`
+     * instead of this Tab's own prompt path.
+     */
+    subagentPrompt?: {
+      parentSessionId: string
+      childSessionId: string
+      /** Durable child label the runtime recorded, when it has one. */
+      label?: string
+    }
+    /**
      * Optional Host decision-mirror probe seats (AD-CUX-1).
      * Webview applies via probes.mirrorHostDecisions — must not invent locally.
      * Presentation probes (streaming / followState) stay Webview-owned.
@@ -159,6 +172,8 @@ export type HostToWebviewMessage =
     appendText?: string
     /** Append to existing reasoning text. */
     appendReasoning?: string
+    /** Attach the images a replayed bubble carried; replaces the existing list. */
+    images?: MessageImage[]
     incomplete?: boolean
     streaming?: boolean
     /** Activity status transition for kind:activity bubbles. */
@@ -224,6 +239,15 @@ export type HostToWebviewMessage =
     results: ReadonlyArray<{ changeId: string; ok: boolean; reason?: string }>
   }
   | {
+    /**
+     * Workspace SpecDev status behind the status card (AD-CU-12). `null` when no
+     * workflow is active; the Webview renders the card only when one is.
+     */
+    type: 'specdev/status'
+    sessionId: string
+    snapshot: BridgeSpecdevSnapshot | null
+  }
+  | {
     /** Optional theme class broadcast (AC-8a); native `--vscode-*` remains primary. */
     type: 'ui/theme'
     themeKind: string
@@ -237,10 +261,13 @@ export type HostToWebviewMessage =
       sessionId: string
       title: string
       mtime: number
-      matchTiers: Array<1 | 2>
+      /** Which index matched: 1 title/preview, 2 path, 3 runtime content. */
+      matchTiers: Array<1 | 2 | 3>
       matchField?: 'title' | 'firstUserPreview'
       firstUserPreview?: string
       matchedPath?: string
+      /** Runtime excerpt around the content match (tier 3). */
+      snippet?: string
     }>
   }
   | {
@@ -303,6 +330,12 @@ export type HostToWebviewMessage =
     totalTokens: number
     cacheReadTokens?: number
     reasoningTokens?: number
+    /**
+     * Runtime-estimated prompt size of the next request, from the
+     * `contextPressure` projection; react to compaction earlier than
+     * {@link totalTokens}. Absent until a provider reports usage.
+     */
+    projectedTokens?: number
     contextWindow: number
     thresholdRatio: number
   }
@@ -315,6 +348,15 @@ export type HostToWebviewMessage =
       content: string
       status: 'pending' | 'in_progress' | 'completed'
     }>
+  }
+  | {
+    /** Route one session actually requested with, from its `request/context` event. */
+    type: 'session/route'
+    sessionId: string
+    /** Provider route the last request used. */
+    provider: string
+    /** Provider-owned model the last request used. */
+    model: string
   }
   | {
     /** Settings document projection for the in-panel settings page (feature: settings-page).
@@ -389,15 +431,15 @@ export type WebviewToHostMessage =
   | { type: 'ui/history-open' }
   | { type: 'ui/history-close' }
   | { type: 'ui/history-select'; sessionId: string }
-  | { type: 'ui/search-open' }
   /** Webview modal confirmed delete (AD-ECP-6); Host must skip native confirm. */
   | { type: 'ui/delete-request'; sessionId: string }
-  /** Open Timeline view (AD-ECP-7 weaken; overflow entry). */
-  | { type: 'ui/open-timeline' }
-  | { type: 'action/delete' }
+  /**
+   * Webview asked to rename one session. The Host collects the text and writes it
+   * through the runtime, which owns the title in the session log.
+   */
+  | { type: 'ui/rename-request'; sessionId: string }
   | { type: 'action/continue' }
   | { type: 'action/stop' }
-  | { type: 'action/new-conversation' }
   | { type: 'action/restore-more'; all?: boolean }
   | { type: 'action/retry-connect' }
   | { type: 'action/open-settings' }
@@ -435,6 +477,17 @@ export type WebviewToHostMessage =
   | { type: 'nav/back' }
   /** Promote the in-panel child context into its own pinned Tab (phase-4). */
   | { type: 'action/pin-subagent'; childSessionId: string }
+  /**
+   * Abort one subagent card's active turn. The card carries the durable address
+   * it renders, so the Host interrupts under the parent the card belongs to.
+   */
+  | { type: 'action/interrupt-subagent'; parentSessionId: string; childSessionId: string }
+  /**
+   * Decide the SpecDev Human Gate the status card reported as pending. The Host
+   * asks for the decision and applies it through the runtime, which owns gate
+   * order, so the card itself never picks a decision.
+   */
+  | { type: 'action/specdev-gate'; sessionId: string; gate: string }
   | {
     /** User selected a different model (feature: model-selector). */
     type: 'action/select-model'
@@ -484,11 +537,13 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'ui/tab-new') return { type: 'ui/tab-new' }
   if (type === 'ui/history-open') return { type: 'ui/history-open' }
   if (type === 'ui/history-close') return { type: 'ui/history-close' }
-  if (type === 'ui/search-open') return { type: 'ui/search-open' }
-  if (type === 'ui/open-timeline') return { type: 'ui/open-timeline' }
   if (type === 'ui/delete-request') {
     if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
     return { type: 'ui/delete-request', sessionId: record.sessionId }
+  }
+  if (type === 'ui/rename-request') {
+    if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
+    return { type: 'ui/rename-request', sessionId: record.sessionId }
   }
   if (type === 'ui/tab-select') {
     if (typeof record.tabId !== 'string' || record.tabId === '') return undefined
@@ -502,10 +557,8 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
     if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
     return { type: 'ui/history-select', sessionId: record.sessionId }
   }
-  if (type === 'action/delete') return { type: 'action/delete' }
   if (type === 'action/continue') return { type: 'action/continue' }
   if (type === 'action/stop') return { type: 'action/stop' }
-  if (type === 'action/new-conversation') return { type: 'action/new-conversation' }
   if (type === 'action/retry-connect') return { type: 'action/retry-connect' }
   if (type === 'action/open-settings') return { type: 'action/open-settings' }
   if (type === 'action/toggle-activity') {
@@ -617,6 +670,20 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
     // Fail-closed: a child context id must be a non-empty string, or the frame is dropped.
     if (typeof record.childSessionId !== 'string' || record.childSessionId === '') return undefined
     return { type, childSessionId: record.childSessionId }
+  }
+  if (type === 'action/interrupt-subagent') {
+    if (typeof record.parentSessionId !== 'string' || record.parentSessionId === '') return undefined
+    if (typeof record.childSessionId !== 'string' || record.childSessionId === '') return undefined
+    return {
+      type: 'action/interrupt-subagent',
+      parentSessionId: record.parentSessionId,
+      childSessionId: record.childSessionId,
+    }
+  }
+  if (type === 'action/specdev-gate') {
+    if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
+    if (typeof record.gate !== 'string' || record.gate === '') return undefined
+    return { type: 'action/specdev-gate', sessionId: record.sessionId, gate: record.gate }
   }
   if (type === 'nav/back') return { type: 'nav/back' }
   if (type === 'probe/render-state') {

@@ -45,8 +45,21 @@ export const SDK_SESSION_DELETE_SERVICE = 'sdkSessionDelete'
 /** Cordis service key for permission presets (consumed via `ctx.get`). */
 export const PERMISSION_PRESETS_SERVICE = 'permissionPresets'
 
+/**
+ * Cordis service key for the approval service (`ctx.approval`).
+ * Backs Host `approval/policy` reads and `approval/policy/set` switches.
+ */
+export const APPROVAL_SERVICE = 'approval'
+
 /** Cordis service key for the session store (consumed via `ctx.get`). */
 export const SESSIONS_SERVICE = 'sessions'
+
+/**
+ * Cordis service key for session titles (`ctx.sessionTitle`).
+ * Backs Host `session/rename`, the only authority that writes a user title
+ * back to the session log.
+ */
+export const SESSION_TITLE_SERVICE = 'sessionTitle'
 
 /**
  * Cordis service key for the session corpus listing (`ctx.sessionQuery`).
@@ -59,6 +72,18 @@ export const SESSION_QUERY_SERVICE = 'sessionQuery'
  * Used by Host `session/list` for titles, so listing never replays a log per row.
  */
 export const SESSION_PROJECTION_CACHE_SERVICE = 'sessionProjectionCache'
+
+/**
+ * Cordis service key for the attachment store (`ctx.attachments`).
+ * Backs Host `attachment/read`, the only read of stored image bytes.
+ */
+export const ATTACHMENT_SERVICE = 'attachments'
+
+/**
+ * Cordis service key for the projection registry (`ctx.sessionProjections`).
+ * Backs Host `projection/read` for live sessions.
+ */
+export const SESSION_PROJECTION_REGISTRY_SERVICE = 'sessionProjections'
 
 /**
  * Cordis service key for durable session persistence (`ctx.sessionPersistence`).
@@ -97,6 +122,18 @@ export const AGENT_PRESETS_SERVICE = 'agentPresets'
  */
 export const SKILLS_SERVICE = 'skills'
 
+/**
+ * Cordis service key for the subagent runtime (`ctx.subagents`).
+ * Backs Host `subagent/list`, `subagent/prompt`, and `subagent/interrupt`.
+ */
+export const SUBAGENT_SERVICE = 'subagents'
+
+/**
+ * Cordis service key for the SpecDev domain runtime (`ctx.specdev`).
+ * Backs Host `specdev/snapshot` and `specdev/confirm-gate`.
+ */
+export const SPECDEV_SERVICE = 'specdev'
+
 /** Duck-typed persistence open/read surface for cold log reads. */
 export interface SessionPersistenceReadCapability {
   /**
@@ -111,6 +148,37 @@ export interface SessionPersistenceReadCapability {
     read(from: number): Promise<readonly unknown[]>
     close(): Promise<void>
   }>
+}
+
+/**
+ * Duck-typed session-projection registry surface backing `projection/read`.
+ * Values are the units' client-visible views, so the bridge forwards what the
+ * runtime already validates rather than re-deriving a fold in the IDE.
+ */
+export interface SessionProjectionRegistryCapability {
+  /**
+   * Read one consistent cut over the registered client-visible units.
+   * @param session - live session whose projection values are read.
+   * @param keys - optional unit keys to view; every client-visible unit when omitted.
+   * @returns the cut and its log position.
+   */
+  snapshot(
+    session: object,
+    keys?: readonly string[],
+  ): { readonly asOfSeq: number; readonly values: Record<string, unknown> }
+}
+
+/** Duck-typed persistence observation surface backing `session/stat`. */
+export interface SessionPersistenceStatCapability {
+  /**
+   * Observe one stored session without reading its log.
+   * @param sessionId - stored session identity.
+   * @returns the stored snapshot, or `undefined` when nothing is stored under that id.
+   */
+  stat(sessionId: string): Promise<{
+    readonly eventCount?: number
+    readonly sizeBytes?: number
+  } | undefined>
 }
 
 /** Stored session header fields a `session/list` row reports. */
@@ -141,6 +209,197 @@ export interface BridgeSessionSummary {
   title?: string
 }
 
+/** One cross-session full-text hit of a `session/search/response`. */
+export interface BridgeSessionSearchHit extends BridgeSessionSummary {
+  /** Log position of the strongest matching event. */
+  seq: number
+  /** Plain-text excerpt selected around the match. */
+  snippet: string
+}
+
+/**
+ * One durable image reference a session log recorded. A reader that has the
+ * log but not the bytes sends this back to `attachment/read`, which resolves it
+ * against the deployment attachment store; the reference fields are the ones
+ * admission verified, so the store can re-check the bytes it returns.
+ */
+export interface BridgeAttachmentRef {
+  /** Content-addressed attachment identity (`sha256:<hex>`). */
+  attachmentId: string
+  /** Media type admission verified from the bytes. */
+  mediaType: string
+  /** Normalized pixel width. */
+  width: number
+  /** Normalized pixel height. */
+  height: number
+  /** Normalized byte size. */
+  bytes: number
+  /** Display name recorded at admission, when the upload carried one. */
+  name?: string
+}
+
+/**
+ * Duck-typed attachment store read surface (`ctx.attachments`), matching the
+ * `AttachmentStore` Service Definition without a dependency on it.
+ */
+export interface AttachmentReadCapability {
+  /**
+   * Read one stored image and verify its bytes against the reference.
+   * @param ref - durable reference a session log recorded.
+   * @returns the verified bytes.
+   */
+  readImage(ref: BridgeAttachmentRef): Promise<{ data: Uint8Array }>
+}
+
+/**
+ * One row of a `subagent/list/response`. Child rows carry the classified
+ * facts the runtime's projection fold served; a diagnostic row names why a
+ * candidate could not be classified, so the Host can show damage instead of
+ * hiding the child.
+ */
+export type BridgeSubagentEntry =
+  | {
+    kind: 'child'
+    /** Durable child session identity. */
+    sessionId: string
+    /** Whether the child is a terminal one-shot or a resumable conversation. */
+    mode: 'one-shot' | 'continuable'
+    /** Durable creation label; absent when a one-shot child recorded none. */
+    label?: string
+    /** Whether the child's own driver was running when the runtime sampled it. */
+    activity: 'running' | 'inactive'
+    /** Whether the child itself has durable subagent children. */
+    hasChildren: boolean
+    /** Durable direct parent; present only in a descendant listing. */
+    parentSessionId?: string
+    /** Edge distance from the listing root; present only in a descendant listing. */
+    depth?: number
+  }
+  | {
+    kind: 'diagnostic'
+    sessionId: string
+    /** Why the candidate has no child row. */
+    reason: 'corrupt' | 'unsupported' | 'unavailable'
+    /** Durable direct parent; present only in a descendant listing. */
+    parentSessionId?: string
+    /** Edge distance from the listing root; present only in a descendant listing. */
+    depth?: number
+  }
+
+/** Every gate a SpecDev workflow can wait at. */
+export type BridgeSpecdevGateId = 'hg1' | 'hg2' | 'hg3' | 'phase-entry'
+
+/** One workflow step's state as the runtime reports it. */
+export type BridgeSpecdevStepState = 'pending' | 'in_progress' | 'completed' | 'failed'
+
+/**
+ * The SpecDev status view `ctx.specdev` serves: durable
+ * `.specdev/specs/<slug>/current-status.json` scalars with the projection's
+ * pending gate folded in. The IDE shows this instead of reading workspace
+ * files, so a gate decision it renders matches the runtime's own order rules.
+ */
+export interface BridgeSpecdevSnapshot {
+  /** Snapshot schema version the runtime emitted. */
+  schemaVersion: number
+  /** Workflow slug naming `.specdev/specs/<slug>/`. */
+  slug: string
+  /** Workflow stage key. */
+  stage: string
+  /** Current phase id, or null before any phase exists. */
+  phase: string | null
+  /** Human gate states. */
+  gates: {
+    hg1: 'pending' | 'passed'
+    hg2: 'pending' | 'passed'
+    hg3: 'pending' | 'passed'
+  }
+  /** Per-phase implementer/reviewer/verifier states, keyed by phase id. */
+  steps: Record<string, {
+    implementer: BridgeSpecdevStepState
+    reviewer: BridgeSpecdevStepState
+    verifier: BridgeSpecdevStepState
+  }>
+  /** Gate the workflow is waiting at, or null when none is pending. */
+  pendingGate: BridgeSpecdevGateId | null
+  /** Implementer MUST-FIX loop count for the current phase. */
+  loopCount: number
+  /** Next action the durable status records, when it records one. */
+  nextAction?: string
+  /** Open tech-debt counts, when a registry is present. */
+  techDebtSummary?: { blocking: number; total: number }
+  /** Initiating slash command (`feature` | `bugfix` | …), schema v2 and later. */
+  initiatingCommand?: string
+  /** Durable pipeline mode key, schema v2 and later. */
+  pipelineMode?: string
+}
+
+/**
+ * Live session handle the SpecDev frames pass through. `snapshot` resolves the
+ * workspace root from the header's `cwd`, and `confirmGate` appends the durable
+ * `specdev/gate-decided` event to this session's log.
+ */
+export interface SpecdevSessionHandle {
+  readonly header: { readonly cwd?: string }
+  append(type: string, data: unknown): unknown
+}
+
+/** Runtime answer to one `confirmGate` call. */
+export interface SpecdevConfirmGateResult {
+  /** Whether the decision was written and logged. */
+  readonly ok: boolean
+  /** Refusal code, present on a refusal. */
+  readonly code?: string
+  /** Refusal message, present on a refusal. */
+  readonly message?: string
+  /** Post-change snapshot, present when the runtime returns one. */
+  readonly snapshot?: BridgeSpecdevSnapshot | null
+}
+
+/**
+ * Duck-typed SpecDev domain surface (`ctx.specdev`) behind the SpecDev frames.
+ * The runtime owns workspace resolution, gate ordering, and the durable write,
+ * so the IDE asks for a decision's effect rather than editing status files.
+ */
+export interface SpecdevStatusCapability {
+  /**
+   * Read the active workflow's status, preferring the durable file and taking
+   * the pending gate from the session projection.
+   * @param session - session owning the log and workspace.
+   * @param options - explicit workspace resolution candidates.
+   * @returns the snapshot, or null when no workflow is active.
+   */
+  snapshot(
+    session: SpecdevSessionHandle,
+    options?: { cwd?: string; folders?: readonly string[] },
+  ): BridgeSpecdevSnapshot | null
+  /**
+   * Apply one Human Gate decision through the sole accepted write path.
+   * @param session - session whose log receives `specdev/gate-decided`.
+   * @param request - gate, decision, and optional note.
+   * @param options - explicit workspace resolution candidates.
+   * @returns acceptance with the post-change snapshot, or the refusal reason.
+   */
+  confirmGate(
+    session: SpecdevSessionHandle,
+    request: { gate: string; decision: string; note?: string },
+    options?: { cwd?: string; folders?: readonly string[] },
+  ): Promise<SpecdevConfirmGateResult>
+}
+
+/**
+ * Duck-typed session lookup for the SpecDev frames. Their handles must be the
+ * runtime's own sessions — `snapshot` reads a header and `confirmGate` appends
+ * to the log — so this is separate from {@link IdeBridgeSessions}, whose
+ * handles only need the identity permission RPC addresses.
+ */
+export interface SpecdevSessionsCapability {
+  /**
+   * Look up a live session by id.
+   * @param id - session identity (SDK / Tab sessionId).
+   */
+  get(id: string): SpecdevSessionHandle | undefined
+}
+
 /** Duck-typed session corpus enumeration for `session/list`. */
 export interface SessionQueryListCapability {
   /**
@@ -165,6 +424,138 @@ export interface SessionProjectionCacheListCapability {
     inheritedEventCount: number,
     keys?: readonly string[],
   ): { values: Record<string, unknown> } | undefined
+}
+
+/**
+ * Duck-typed full-text search surface of `ctx.sessionQuery` behind
+ * `session/search`. The runtime's derived index owns the matches and their
+ * snippets, so the IDE never reads a log body to find one.
+ */
+export interface SessionQuerySearchCapability {
+  /**
+   * Search the live-preferred corpus and group hits by session.
+   * @param request - query text and maximum sessions in this page.
+   * @returns session hits ranked by their strongest matching event.
+   */
+  searchSessions(request: {
+    /** Full-text query interpreted as data, never executable index syntax. */
+    query: string
+    /** Maximum sessions in this page. */
+    limit?: number
+  }): Promise<{
+    items: readonly {
+      /** Cloned header of the matching session. */
+      header: BridgeSessionHeader
+      /** Strongest matching event of this session. */
+      bestMatch: {
+        /** Log position of the matching event. */
+        seq: number
+        /** Plain-text excerpt selected around the match. */
+        snippet: string
+      }
+    }[]
+  }>
+}
+
+/**
+ * One durable subagent row as `ctx.subagents` classifies it: the runtime's
+ * `subagent` projection fold owns mode and label, so the bridge never parses a
+ * child descriptor itself. A candidate the fold cannot identify is a
+ * `diagnostic` whose reason names why.
+ */
+export type SubagentListRow =
+  | {
+    readonly kind: 'child'
+    /** Durable child session identity. */
+    readonly id: string
+    /** Whether the logical record was resident when the runtime listed it. */
+    readonly activity: 'running' | 'inactive'
+    /** Whether a direct descendant is itself a durable subagent. */
+    readonly hasChildren: boolean
+    /** Whether the child is a terminal one-shot or a resumable conversation. */
+    readonly mode: 'one-shot' | 'continuable'
+    /** Durable creation label; one-shot children may lack one. */
+    readonly label?: string
+  }
+  | {
+    readonly kind: 'diagnostic'
+    /** The candidate's session id. */
+    readonly id: string
+    /** Why the candidate has no child row. */
+    readonly reason: 'corrupt' | 'unsupported' | 'unavailable'
+  }
+
+/** One descendant row: the durable child facts plus its place in the tree. */
+export type SubagentDescendantRow = SubagentListRow & {
+  /** Durable direct parent of this candidate. */
+  readonly parentId: string
+  /** Edge distance from the requested root. */
+  readonly depth: number
+}
+
+/**
+ * Duck-typed durable subagent enumeration of `ctx.subagents` behind
+ * `subagent/list`. Both reads are projection-backed and resume no Agent, so a
+ * closed child is still listed.
+ */
+export interface SubagentListCapability {
+  /**
+   * Read one session's durable direct children.
+   * @param parentSessionId - session whose direct children are listed.
+   * @param signal - carrier cancellation observed around every persistence read.
+   * @returns children and per-child diagnostics, ordered by creation time.
+   */
+  listChildren(parentSessionId: string, signal?: AbortSignal): Promise<readonly SubagentListRow[]>
+  /**
+   * Read every session-backed subagent below one root, in stable pre-order.
+   * @param rootSessionId - session whose descendant tree is listed.
+   * @param signal - carrier cancellation observed around every persistence read.
+   * @returns interpreted subagents with their durable direct parent and depth.
+   */
+  listDescendants(
+    rootSessionId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly SubagentDescendantRow[]>
+}
+
+/**
+ * Duck-typed continuation delivery of `ctx.subagents` behind `subagent/prompt`.
+ * Only a continuable child accepts a human message, and only through its live
+ * direct parent.
+ */
+export interface SubagentPromptCapability {
+  /**
+   * Deliver one human message to a continuable child through its live parent.
+   * @param request - durable address, minted identity, and text content.
+   * @param signal - cancellation owning the call until inbox acceptance.
+   * @returns the accepted message's inbox identity.
+   */
+  prompt(
+    request: {
+      /** Client-minted identity persisted on the accepted message. */
+      requestId: string
+      parentSessionId: string
+      childSessionId: string
+      /** Required continuation discriminator. */
+      mode: 'continuable'
+      /** Text parts delivered as the child's user message. */
+      content: readonly { readonly type: 'text'; readonly text: string }[]
+    },
+    signal?: AbortSignal,
+  ): Promise<{ readonly messageId: string }>
+}
+
+/**
+ * Duck-typed interrupt surface of `ctx.subagents` behind `subagent/interrupt`.
+ * The claimed durable parent is the authority the runtime authorizes against.
+ */
+export interface SubagentInterruptCapability {
+  /**
+   * Abort one child's active turn under the claimed parent's authority.
+   * @param targetSessionId - durable child session id to interrupt.
+   * @param authority - user authority naming the durable direct parent.
+   */
+  interrupt(targetSessionId: string, authority: { kind: 'user'; parentSessionId: string }): void
 }
 
 /** Live connection state exposed to the runtime and tests. */
@@ -259,6 +650,12 @@ export interface IdeBridgePermissionPresets {
   /** Advertised switchable preset names. */
   readonly names: readonly string[]
   /**
+   * Render one preset (or the derived `custom` state) as a client option,
+   * carrying the display label and description the preset table declares.
+   * @param name - preset table key, or `custom`.
+   */
+  optionOf(name: string): BridgePermissionPreset
+  /**
    * Apply one preset through the sole permission authority.
    * @param session - live session object.
    * @param name - preset table key.
@@ -269,6 +666,41 @@ export interface IdeBridgePermissionPresets {
    * @param session - live session object.
    */
   current(session: IdeBridgeSessionHandle): string
+}
+
+/** Approval policy vocabulary accepted on the wire. */
+export type BridgeApprovalPolicy = 'ask' | 'never'
+
+/**
+ * Approval-policy surface used by Host `approval/policy` frames.
+ * Duck-typed against the approval Service Definition so ide-bridge stays free of
+ * a hard dependency on that package.
+ */
+export interface ApprovalPolicyCapability {
+  /** Configured policy that applies to a session with no logged override. */
+  readonly config: { readonly policy?: BridgeApprovalPolicy }
+  /**
+   * Read a session's own last logged policy override.
+   * @param session - live session object.
+   */
+  overrideOf(session: IdeBridgeSessionHandle): BridgeApprovalPolicy | undefined
+  /**
+   * Apply one policy to a live agent, which the runtime reports to the model on
+   * its next step.
+   * @param agent - live agent object.
+   * @param policy - the policy to apply.
+   */
+  setPolicy(agent: object, policy: BridgeApprovalPolicy): void
+}
+
+/** One selectable permission preset as a client renders it (`permission/list` payload). */
+export interface BridgePermissionPreset {
+  /** Stable value the client sends back on select. */
+  value: string
+  /** Display label; falls back to the table key when the table declares none. */
+  name: string
+  /** One user-facing sentence on what the preset means, when the table declares one. */
+  description?: string
 }
 
 /**
@@ -303,6 +735,23 @@ export interface IdeBridgeSessions {
   get(id: string): IdeBridgeSessionHandle | undefined
 }
 
+/**
+ * Session-title write surface used by Host `session/rename`.
+ * Duck-typed against `SessionTitleService` so ide-bridge stays free of a hard
+ * dependency on that package.
+ */
+export interface IdeBridgeSessionTitles {
+  /**
+   * Accept an explicit user title, which the service commits as a
+   * `session/title` event and pins against automatic generation.
+   * @param session - exact live session to rename.
+   * @param title - raw user input; the service normalizes it.
+   * @returns the accepted title snapshot.
+   * @throws when the title normalizes to empty or the session is not live.
+   */
+  rename(session: IdeBridgeSessionHandle, title: string): { title: string }
+}
+
 /** Duck-typed live-agent registry (`ctx.agents`) behind the command and skill frames. */
 export interface IdeBridgeAgents {
   /**
@@ -320,6 +769,8 @@ export interface IdeBridgeAgents {
 export interface IdeBridgeLiveAgent {
   /** The agent's session, read for the cwd that scopes a skill listing. */
   readonly session: { readonly header: { readonly cwd?: string } }
+  /** Driver status; `subagent/list` re-samples it so a row reports live work, not residency. */
+  readonly status?: string
 }
 
 /** Duck-typed human-command registry (`ctx.commands`). */
@@ -523,6 +974,21 @@ export type BridgeFrame =
   | { kind: 'session/cancel/response'; id: string; ok: true }
   | { kind: 'session/cancel/response'; id: string; ok: false; error: string }
   | {
+    /** Accept an explicit user title for one live session. */
+    kind: 'session/rename'
+    id: string
+    sessionId: string
+    title: string
+  }
+  | {
+    kind: 'session/rename/response'
+    id: string
+    ok: true
+    /** The normalized title the runtime committed to the session log. */
+    title: string
+  }
+  | { kind: 'session/rename/response'; id: string; ok: false; error: string }
+  | {
     kind: 'session/fork'
     id: string
     parentSessionId: string
@@ -534,25 +1000,146 @@ export type BridgeFrame =
   }
   | { kind: 'session/fork/response'; id: string; ok: true; childSessionId: string }
   | { kind: 'session/fork/response'; id: string; ok: false; error: string }
-  | { kind: 'session/continue-capability'; id: string; sessionId: string }
-  | {
-    kind: 'session/continue-capability/response'
-    id: string
-    ok: true
-    capability: 'same-id' | 'derive-only' | 'unknown'
-  }
-  | {
-    kind: 'session/continue-capability/response'
-    id: string
-    ok: false
-    error: string
-  }
   | { kind: 'session/delete'; id: string; sessionId: string }
   | { kind: 'session/delete/response'; id: string; ok: true }
   | { kind: 'session/delete/response'; id: string; ok: false; error: string }
   | { kind: 'session/list'; id: string }
   | { kind: 'session/list/response'; id: string; ok: true; sessions: BridgeSessionSummary[] }
   | { kind: 'session/list/response'; id: string; ok: false; error: string }
+  | { kind: 'session/stat'; id: string; sessionId: string }
+  | {
+    kind: 'session/stat/response'
+    id: string
+    ok: true
+    /** Whether the runtime still stores a log for the asked session. */
+    found: boolean
+    /** Recorded event count; present only for a found session whose backend reports it. */
+    eventCount?: number
+    /** Stored byte size; present only for a found session whose backend reports it. */
+    sizeBytes?: number
+  }
+  | { kind: 'session/stat/response'; id: string; ok: false; error: string }
+  | { kind: 'projection/read'; id: string; sessionId: string; keys?: string[] }
+  | {
+    kind: 'projection/read/response'
+    id: string
+    ok: true
+    /** Log position every returned value reflects. */
+    asOfSeq: number
+    /** Client-visible unit views, keyed by unit key. */
+    values: Record<string, unknown>
+  }
+  | { kind: 'projection/read/response'; id: string; ok: false; error: string }
+  | {
+    kind: 'session/search'
+    id: string
+    /** Full-text query text, matched against indexed event content. */
+    query: string
+    /** Maximum sessions in one page. */
+    limit?: number
+  }
+  | {
+    kind: 'session/search/response'
+    id: string
+    ok: true
+    /** Session hits ranked by their strongest matching event. */
+    hits: BridgeSessionSearchHit[]
+  }
+  | { kind: 'session/search/response'; id: string; ok: false; error: string }
+  | {
+    kind: 'attachment/read'
+    id: string
+    /** Durable image reference one session log recorded, as the log stated it. */
+    ref: BridgeAttachmentRef
+  }
+  | {
+    kind: 'attachment/read/response'
+    id: string
+    ok: true
+    /** Media type verified when the image was admitted. */
+    mediaType: string
+    /** Canonical base64 of the stored bytes. */
+    data: string
+  }
+  | { kind: 'attachment/read/response'; id: string; ok: false; error: string }
+  | {
+    kind: 'subagent/list'
+    id: string
+    /** Session whose children (`children`) or whole subtree (`descendants`) is listed. */
+    sessionId: string
+    scope: 'children' | 'descendants'
+  }
+  | {
+    kind: 'subagent/list/response'
+    id: string
+    ok: true
+    /** Whether the runtime held a live Agent for the addressed session when it listed. */
+    sessionLive: boolean
+    entries: BridgeSubagentEntry[]
+  }
+  | { kind: 'subagent/list/response'; id: string; ok: false; error: string }
+  | {
+    kind: 'subagent/prompt'
+    id: string
+    /** Durable parent whose live Agent delivers the message. */
+    parentSessionId: string
+    /** Durable continuable child receiving the message. */
+    childSessionId: string
+    /** Message text; the bridge carries text only. */
+    text: string
+  }
+  | {
+    kind: 'subagent/prompt/response'
+    id: string
+    ok: true
+    /** Identity of the message the child's inbox accepted. */
+    messageId: string
+  }
+  | { kind: 'subagent/prompt/response'; id: string; ok: false; error: string }
+  | {
+    kind: 'subagent/interrupt'
+    id: string
+    /** Durable parent whose authority the request claims. */
+    parentSessionId: string
+    /** Durable child whose active turn is aborted. */
+    childSessionId: string
+  }
+  | { kind: 'subagent/interrupt/response'; id: string; ok: true }
+  | { kind: 'subagent/interrupt/response'; id: string; ok: false; error: string }
+  | {
+    kind: 'specdev/snapshot'
+    id: string
+    /** Session whose workspace active workflow is read. */
+    sessionId: string
+  }
+  | {
+    kind: 'specdev/snapshot/response'
+    id: string
+    ok: true
+    /** Active workflow status, or null when the workspace has none. */
+    snapshot: BridgeSpecdevSnapshot | null
+  }
+  | { kind: 'specdev/snapshot/response'; id: string; ok: false; error: string }
+  | {
+    kind: 'specdev/confirm-gate'
+    id: string
+    /** Session whose log receives the durable gate decision event. */
+    sessionId: string
+    /** Gate being decided. */
+    gate: string
+    /** Decision to apply (`pass` | `reject` | `defer` | `resolve` | `cancel`). */
+    decision: string
+    /** Optional human note recorded on the decision event. */
+    note?: string
+  }
+  | {
+    kind: 'specdev/confirm-gate/response'
+    id: string
+    ok: true
+    /** Post-change status, or null when the runtime returned none. */
+    snapshot: BridgeSpecdevSnapshot | null
+  }
+  | { kind: 'specdev/confirm-gate/response'; id: string; ok: false; error: string }
   | { kind: 'model/list'; id: string }
   | {
     kind: 'model/list/response'
@@ -583,10 +1170,17 @@ export type BridgeFrame =
     kind: 'permission/list/response'
     id: string
     ok: true
-    presets: string[]
+    /** Switchable presets in table order, plus the derived `custom` while it is current. */
+    options: BridgePermissionPreset[]
     current: string
   }
   | { kind: 'permission/list/response'; id: string; ok: false; error: string }
+  | { kind: 'approval/policy'; id: string; sessionId: string }
+  | { kind: 'approval/policy/response'; id: string; ok: true; policy: BridgeApprovalPolicy }
+  | { kind: 'approval/policy/response'; id: string; ok: false; error: string }
+  | { kind: 'approval/policy/set'; id: string; sessionId: string; policy: BridgeApprovalPolicy }
+  | { kind: 'approval/policy/set/response'; id: string; ok: true; policy: BridgeApprovalPolicy }
+  | { kind: 'approval/policy/set/response'; id: string; ok: false; error: string }
   | { kind: 'settings/describe'; id: string }
   | {
     kind: 'settings/describe/response'
@@ -636,7 +1230,6 @@ export type BridgeFrame =
   | { kind: 'skills/list'; id: string; sessionId: string }
   | { kind: 'skills/list/response'; id: string; ok: true; skills: BridgeSkillSummary[] }
   | { kind: 'skills/list/response'; id: string; ok: false; error: string }
-  | { kind: 'error'; id?: string; message: string }
 
 /** Closed approval outcomes accepted on the wire. */
 export const APPROVAL_OUTCOMES: readonly ApprovalOutcome[] = [
@@ -645,6 +1238,9 @@ export const APPROVAL_OUTCOMES: readonly ApprovalOutcome[] = [
   'cancelled',
   'unavailable',
 ]
+
+/** Closed approval policies accepted on the wire. */
+export const APPROVAL_POLICIES: readonly BridgeApprovalPolicy[] = ['ask', 'never']
 
 /** Re-export for Host consumers that only depend on the bridge types. */
 export type { ApprovalOutcome, AskUserQuestionAnswer, AskUserQuestionItem }

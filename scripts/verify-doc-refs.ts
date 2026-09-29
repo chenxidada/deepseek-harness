@@ -21,9 +21,25 @@ const isExcluded = (p: string): boolean =>
 /** Root-relative Markdown path token, excluding trailing prose. */
 const DOC_REF = /(?:\bdocs|\.agents\/notes)\/[A-Za-z0-9._/-]+\.md/g
 
+/**
+ * Generated SpecDev wiki output (`WIKI_RELATIVE_ROOT` in
+ * `packages/specdev/specdev/src/wiki.ts`): per-workspace pages a dispatch
+ * writes, so a source citation of one names an artifact that need not exist in
+ * a checkout and is not a documentation reference to resolve.
+ * @param ref - the root-relative reference a source comment cites.
+ * @returns whether the reference targets the generated wiki tree.
+ */
+const isGeneratedWiki = (ref: string): boolean => ref.startsWith('docs/wiki/')
+
 /** Find every broken root-relative documentation reference in one TypeScript file. */
 function findViolations(absPath: string): Violation[] {
-  return findReferenceViolations(root, absPath, DOC_REF, ref => ref, ref => !existsSync(resolve(root, ref)))
+  return findReferenceViolations(
+    root,
+    absPath,
+    DOC_REF,
+    ref => ref,
+    ref => !isGeneratedWiki(ref) && !existsSync(resolve(root, ref)),
+  )
 }
 
 const files = uniqueRepoFiles(root, PATTERNS, isExcluded)

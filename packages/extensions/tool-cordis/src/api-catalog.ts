@@ -1352,6 +1352,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'sdkModelSelect',
+    summary: 'Apply one model selection to later sessions and to every live SDK session.',
+    description: 'Apply one model selection to later sessions and to every live SDK session.',
+    methods: [
+      {
+        signature: 'selectModel(selection: SdkModelSelectInput): Promise<{ applied: number }>',
+        description: 'Validate one route and apply it. A rejected route throws without changing the server\'s route or any session\'s selection.',
+        parameters: [{ name: 'selection', description: 'requested provider, model, and optional reasoning effort.' }],
+        returns: 'the number of live sessions that adopted the selection.',
+      },
+    ],
+  },
+  {
     key: 'sdkSessionCancel',
     summary: 'Server-owned per-session cancel used by the ide Host bridge Stop path.',
     description: 'Server-owned per-session cancel used by the ide Host bridge Stop path. Calls `Agent.cancel({ kind:\'user\' }, { keepInbox: true })` — does not dispose.',
@@ -5003,6 +5016,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ScopeKey',
     declaration: 'export type ScopeKey = object;',
+  },
+  {
+    name: 'SdkModelSelectInput',
+    declaration: 'export interface SdkModelSelectInput {\n    provider: string;\n    model: string;\n    reasoningEffort?: string;\n}',
   },
   {
     name: 'SdkSessionForkOptions',
