@@ -18,6 +18,7 @@ English | [中文](README.zh.md)
 - [Further Exploration](#further-exploration)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
 
 -----
 
@@ -89,3 +90,13 @@ Independent of the model cache; gate bookkeeping does not rewrite conversation p
 - **Branch create/merge** — this package only denies wrong/missing branches; `ensurePhaseBranch` / HG-3 git merge is Phase 4.
 - **Artifact prechecks** — Cursor gate checked `repo-exploration.md` / `implementation.md` / `review.md`; Phase 3 AC focus is HG/stage/branch/loop; deeper artifact matrices may land with Phase 4 runtime.
 - **Bash path bypass** — write/edit of `current-status.json` is denied; bash-mediated overwrites still fail AC-28 because gate authority ignores un-evented file HG passes.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+No companion invariant is published. This package only decides deny vs allow for tool calls and role dispatch; gate order, artifact preconditions, and the durable append belong to the `specdev` runtime, and `tests/specdev-gate.spec.ts` covers each denial path.
+
+</details>

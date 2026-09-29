@@ -7,7 +7,7 @@ kind: "package-reference"
 
 [English](README.md) | 中文
 
-## 摘要
+## 概述
 
 `dsh-command-specdev` 在主机命令注册表上注册 SpecDev 斜杠命令面：`/feature`、`/bugfix`、`/brief`、`/research`、`/specify`、`/plan`、`/implement`、`/status`、`/wiki`，以及可选的 `/confirm-gate`。命令调用 `ctx.specdev.ensureLayout` / `snapshot` / `confirmGate`，不会把模糊自然语言回复当作门禁通过。
 
@@ -18,6 +18,7 @@ kind: "package-reference"
 - [进一步探索](#further-exploration)
 - [模型体验](#model-experience)
 - [已知限制与延后工作](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
 
 -----
 
@@ -92,3 +93,13 @@ kind: "package-reference"
 
 - **HG-3 git** — Orchestrator 须在 `confirmGate(hg3)` 之后调用 `ctx.specdev.completePhaseGit({ phaseId, files })`，文件列表必须显式（禁止 `git add -A`）。终态 HG-3 的 wiki 自动调度与 git helper 分离。
 - **Wiki LLM 内容** — harness 负责调度 wiki 角色并确保 `docs/wiki/` 目录；页面质量取决于模型与 `specdev-wiki` persona。
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文 — 点击展开</summary>
+
+不发布 companion invariant。处理器只注册命令并转发给 `ctx.specdev` / `ctx.commands`，而这些调用改动的布局、门禁次序与阶段调度都属于 `specdev` 与 `commands`；`tests/command-specdev.spec.ts` 覆盖注册与门禁回复的解释。
+
+</details>

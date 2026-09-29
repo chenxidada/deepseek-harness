@@ -1,6 +1,6 @@
 /** Shared repository file discovery and line-oriented reference scanning. */
 
-import { globSync, readFileSync, realpathSync } from 'node:fs'
+import { globSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { relative, resolve, sep } from 'node:path'
 
 /** One authored path plus its canonical target for symlink deduplication. */
@@ -27,6 +27,32 @@ export function isArchivedAgentNotePath(path: string): boolean {
 }
 
 /**
+ * Whether one glob candidate is a symlink to something other than a directory.
+ * Expanding `**` descends into such a link and then fails with ENOTDIR on
+ * `<link>/<rest>`, because a link that is not a directory cannot be walked. The
+ * file it points at is still discovered through its real path whenever a
+ * pattern matches one, which is how `uniqueRepoFiles` deduplicates links anyway.
+ * @param root - absolute repository root.
+ * @param path - candidate path the glob reports, relative to `root`.
+ * @returns whether the walk must not treat the candidate as a directory.
+ */
+function isLinkedFile(root: string, path: string): boolean {
+  const abs = resolve(root, path)
+  try {
+    if (!lstatSync(abs).isSymbolicLink()) return false
+  } catch {
+    // A path that vanished between the walk and this probe is not a directory either.
+    return false
+  }
+  try {
+    return !statSync(abs).isDirectory()
+  } catch {
+    // A dangling link cannot be walked.
+    return true
+  }
+}
+
+/**
  * Expand repository-relative globs and deduplicate symlinked files.
  * @param root - absolute repository root.
  * @param patterns - repository-relative glob patterns, processed in order.
@@ -41,7 +67,10 @@ export function uniqueRepoFiles(
   const seen = new Set<string>()
   const files: RepoFile[] = []
   for (const pattern of patterns) {
-    for (const match of globSync(pattern, { cwd: root })) {
+    for (const match of globSync(pattern, {
+      cwd: root,
+      exclude: (candidate: string): boolean => isLinkedFile(root, candidate),
+    })) {
       const repoPath = match.split(sep).join('/')
       if (isExcluded(repoPath)) continue
       const abs = resolve(root, repoPath)

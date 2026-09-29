@@ -1,5 +1,7 @@
 # Chat UI chassis — L4 screenshot assist (AC-7a)
 
+English | [中文](README.zh.md)
+
 Primary evidence for B1–B3 is **L2/L3** in `phase3-chat-ui-chassis.spec.ts`
 (`test:theme-tokens`, `test:bubble-layers`, `test:composer-contrast`, `test:visual-evidence-chain`).
 

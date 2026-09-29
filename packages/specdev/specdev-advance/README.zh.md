@@ -7,7 +7,7 @@ kind: "package-reference"
 
 [English](README.md) | 中文
 
-## 摘要
+## 概述
 
 `dsh-specdev-advance` 监听 SpecDev 角色完成，并在父（Orchestrator）会话上追加整视图 `specdev/advance` 事件与下一步引导。主信号是子 Agent `agent/status` 从 `running → idle`（Phase 2 的 `dispatchSpecdevRole` 使用 `agents.create`，因此 `subagent/end` 可能永不触发）。它从不调用 `confirmGate`，也从不翻转 Human Gate 标志。
 
@@ -18,6 +18,7 @@ kind: "package-reference"
 - [进一步探索](#further-exploration)
 - [模型体验](#model-experience)
 - [已知限制与延后工作](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
 
 -----
 
@@ -90,3 +91,13 @@ session.append('specdev/advance', {
 
 - **Dispatch followup** — Phase 4 已关闭 GAP-002：`dispatchSpecdevRole` 用 `createUserMessage` + `agent.followup` 唤醒子 Agent（传 `prompt: null` 可跳过）。
 - **Fallback Agent** — 永不离开 `idle` 的轻量 `dispatchSpecdevRole` fallback 不会经 status 路径发出 advance；测试中请使用真实 agent-loop 子 Agent 或显式调用 `emitAdvanceForAgent`。
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文 — 点击展开</summary>
+
+不发布 companion invariant。本包承载调度策略与完成态投影；`SpecdevAdvanceEvent` 类型与投影折叠属于 `specdev` 运行时，`tests/specdev-advance.spec.ts` 覆盖落地点与折叠。
+
+</details>

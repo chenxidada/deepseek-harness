@@ -18,6 +18,7 @@ English | [中文](README.zh.md)
 - [Further Exploration](#further-exploration)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
 
 -----
 
@@ -90,3 +91,13 @@ Independent of the model cache; advance events do not rewrite conversation prefi
 
 - **Dispatch followup** — GAP-002 closed in Phase 4: `dispatchSpecdevRole` wakes children with `createUserMessage` + `agent.followup` (pass `prompt: null` to skip).
 - **Fallback agents** — lightweight `dispatchSpecdevRole` fallback agents that never leave `idle` will not emit advance via the status path; prefer real agent-loop children or call `emitAdvanceForAgent` explicitly in tests.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+No companion invariant is published. This package carries the dispatch policy and the completion projection; the `SpecdevAdvanceEvent` type and the projection fold belong to the `specdev` runtime, and `tests/specdev-advance.spec.ts` covers both the landing point and the fold.
+
+</details>

@@ -18,6 +18,7 @@ English | [中文](README.zh.md)
 - [Further Exploration](#further-exploration)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
 
 -----
 
@@ -92,3 +93,13 @@ Independent of the model cache; command bookkeeping does not rewrite conversatio
 
 - **HG-3 git** — Orchestrator must call `ctx.specdev.completePhaseGit({ phaseId, files })` after `confirmGate(hg3)` with an explicit file list (never `git add -A`). Wiki auto-dispatch on final HG-3 is separate from the git helper.
 - **Wiki LLM content** — harness dispatches the wiki role and ensures `docs/wiki/`; page quality depends on the model + `specdev-wiki` persona.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+No companion invariant is published. Handlers only register commands and forward to `ctx.specdev` / `ctx.commands`, and the layout, gate order, and phase dispatch those calls change belong to `specdev` and `commands`; `tests/command-specdev.spec.ts` covers registration and gate-reply interpretation.
+
+</details>

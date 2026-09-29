@@ -7,7 +7,7 @@ kind: "package-reference"
 
 [English](README.md) | 中文
 
-## 摘要
+## 概述
 
 `dsh-specdev-presets` 提供 SpecDev **方案 A** agent presets：主会话收窄工具面的 Orchestrator，以及角色 presets（`requirement-analyst`、`plan-generator`、`code-explorer`、`implementer`、`reviewer-*`、`reviewer`、`verifier`、`wiki`）。它发布 `ctx.specdevPresets.presetRoot`，供 sdk-app 将 `agent-presets` 挂到该根并以 `specdev-orchestrator` 为默认。
 
@@ -18,6 +18,7 @@ kind: "package-reference"
 - [进一步探索](#further-exploration)
 - [模型体验](#model-experience)
 - [已知限制与延后工作](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
 
 -----
 
@@ -91,3 +92,13 @@ persona 配置不变时前缀稳定；修改 `agent.cordis.yml` persona 会从�
 
 - **SDK 会话默认挂载** — sdk-app 配置 `agent-presets` 且 `default: specdev-orchestrator`。`HarnessSdkJsonRpcServer.createSession` 在存在该服务时通过 `agentPresets.mount` 加入默认 preset；若已加载 `ctx.specdev` 则附着 orchestrator 元数据。
 - **bash 深路径拒绝** — Phase 2 在宿主存在时 allow-list 含 `bash`（并排除 `write`/`edit`/`str_replace_editor`）；Phase 3 gate 可扩展路径感知的 bash 拒绝。
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文 — 点击展开</summary>
+
+不发布 companion invariant。本包声明角色 preset 与其工具策略；roster 挂载契约属于 `agent-presets`，`tests/specdev-presets.spec.ts` 覆盖 preset 装配与工具限制。
+
+</details>

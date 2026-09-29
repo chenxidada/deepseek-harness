@@ -18,6 +18,7 @@ English | [中文](README.zh.md)
 - [Further Exploration](#further-exploration)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
 
 -----
 
@@ -91,3 +92,13 @@ Prefix-stable while the persona config is unchanged; editing `agent.cordis.yml` 
 
 - **SDK session default mount** — sdk-app configures `agent-presets` with `default: specdev-orchestrator`. `HarnessSdkJsonRpcServer.createSession` joins that default via `agentPresets.mount` when the service is present, and attaches orchestrator metadata when `ctx.specdev` is loaded.
 - **Deep path deny for bash** — Phase 2 allow-lists `bash` when present on the host (with `write`/`edit`/`str_replace_editor` excluded). Phase 3 gate may extend path-aware bash denial.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+No companion invariant is published. This package declares the role presets and their tool policy; the roster mount contract belongs to `agent-presets`, and `tests/specdev-presets.spec.ts` covers preset assembly and tool restriction.
+
+</details>

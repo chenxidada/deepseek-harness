@@ -18,6 +18,7 @@ English | [中文](README.zh.md)
 - [Further Exploration](#further-exploration)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
 
 -----
 
@@ -98,3 +99,13 @@ Independent of model request tokens: SpecDev status lives in workspace files and
 - **Wiki** — `ctx.specdev.dispatchWiki` (Standalone / Pipeline) → workspace `docs/wiki/`; `/wiki` + final HG-3 auto path share this contract (Phase 5 / STUB-002 closed). No Knowledge Base sync (AC-55).
 - **Snapshot schema v2** — `SpecdevSnapshot` may include optional `pipelineMode` / `initiatingCommand` (from durable `pipeline_mode` / `initiating_command`). Fold accepts both v1 (without those fields) and v2 payloads.
 - **Phase runtime (Phase 4)** — `ensurePhaseBranch` / `completePhaseGit` / `mergePhaseReviews` / `prepareRerun` / tech-debt Entry Gate helpers; `dispatchRole` wakes children via `createUserMessage` + `followup`.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+No companion invariant is published. The service owns the `.specdev` layout, gate order, the phase runtime, and wiki dispatch, so changing any of them changes the workflow obligation itself; `tests/specdev.spec.ts` and `tests/phase-runtime.spec.ts` cover the layout, the gate transitions, and the phase runtime.
+
+</details>

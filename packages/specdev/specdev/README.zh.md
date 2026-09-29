@@ -18,6 +18,7 @@ kind: "package-reference"
 - [进一步探索](#further-exploration)
 - [模型体验](#model-experience)
 - [已知限制与延后工作](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
 
 -----
 
@@ -98,3 +99,13 @@ ctx.specdev.completePhaseGit({ phaseId, files: ['src/a.ts'] }, { cwd: workspaceR
 - **Wiki** — `ctx.specdev.dispatchWiki`（Standalone / Pipeline）→ 工作区 `docs/wiki/`；`/wiki` 与终态 HG-3 自动路径共享该契约（Phase 5 / STUB-002 已关闭）。无 Knowledge Base 同步（AC-55）。
 - **Snapshot schema v2** — `SpecdevSnapshot` 可含可选 `pipelineMode` / `initiatingCommand`（来自 durable `pipeline_mode` / `initiating_command`）。fold 同时接受无这些字段的 v1 与带字段的 v2 载荷。
 - **Phase runtime（Phase 4）** — `ensurePhaseBranch` / `completePhaseGit` / `mergePhaseReviews` / `prepareRerun` / tech-debt Entry Gate；`dispatchRole` 通过 `createUserMessage` + `followup` 唤醒子 Agent。
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文 — 点击展开</summary>
+
+不发布 companion invariant。`.specdev` 布局、门禁次序、阶段运行时与 wiki 调度都由这一个服务持有，改动其中任何一项都是改动工作流义务本身；`tests/specdev.spec.ts` 与 `tests/phase-runtime.spec.ts` 覆盖布局、门禁转移与阶段运行时。
+
+</details>

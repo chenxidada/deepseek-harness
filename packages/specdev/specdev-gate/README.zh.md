@@ -7,7 +7,7 @@ kind: "package-reference"
 
 [English](README.md) | 中文
 
-## 摘要
+## 概述
 
 `dsh-specdev-gate` 把 Cursor shell hook 的 pipeline-gate 意图落地为原生 Cordis 强制：包装 `ctx.specdev.dispatchRole`、在 `agent/pre-step` 拒绝未就绪角色，并通过 `tools/pre-execute` + `tools.guard` 拒绝对 `current-status.json` 的工具写入。Human Gate 权威来自会话投影 / `confirmGate` 事件——裸改 JSON 的 HG 翻转不算通过（AC-28）。
 
@@ -18,6 +18,7 @@ kind: "package-reference"
 - [进一步探索](#further-exploration)
 - [模型体验](#model-experience)
 - [已知限制与延后工作](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
 
 -----
 
@@ -89,3 +90,13 @@ kind: "package-reference"
 - **分支创建/合并** — 本包只拒绝错误/缺失分支；`ensurePhaseBranch` / HG-3 git 合并属于 Phase 4。
 - **产物预检** — Cursor gate 会检查 `repo-exploration.md` / `implementation.md` / `review.md`；Phase 3 AC 聚焦 HG/阶段/分支/回炉，更深产物矩阵可随 Phase 4 runtime 落地。
 - **Bash 路径绕过** — write/edit `current-status.json` 会被拒绝；即便 bash 改写文件，AC-28 仍因权威忽略未事件化的文件 HG 通过而生效。
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文 — 点击展开</summary>
+
+不发布 companion invariant。本包只对工具调用与角色调度做拒绝/放行判定；门禁次序、产物前置条件与持久追加属于 `specdev` 运行时，`tests/specdev-gate.spec.ts` 覆盖各条拒绝路径。
+
+</details>
