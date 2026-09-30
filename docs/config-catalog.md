@@ -922,7 +922,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/ide/ide-bridge/src/index.ts:87`](../packages/ide/ide-bridge/src/index.ts)
+Source: [`packages/ide/ide-bridge/src/index.ts:168`](../packages/ide/ide-bridge/src/index.ts)
 
 <a id="deepseek-aidsh-invariants"></a>
 
@@ -1038,7 +1038,7 @@ export interface DeepSeekCatalogModel {
 
 Depends on: [`ModelModality`](../packages/llm/llm/src/index.ts) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts)
 
-Source: [`packages/llm/llm-deepseek/src/index.ts:125`](../packages/llm/llm-deepseek/src/index.ts)
+Source: [`packages/llm/llm-deepseek/src/index.ts:126`](../packages/llm/llm-deepseek/src/index.ts)
 
 <a id="deepseek-aidsh-llm-pi-ai"></a>
 
@@ -1810,7 +1810,7 @@ export interface JsonRpcConfig {
 
 Depends on: `Readable` (`node:stream`) · `Writable` (`node:stream`)
 
-Source: [`packages/sdk/server/src/index.ts:78`](../packages/sdk/server/src/index.ts)
+Source: [`packages/sdk/server/src/index.ts:97`](../packages/sdk/server/src/index.ts)
 
 <a id="deepseek-aidsh-session-log-deepseek"></a>
 
@@ -2154,9 +2154,9 @@ export interface Config {
 
 Source: [`packages/skill/skill-filesystem/src/index.ts:49`](../packages/skill/skill-filesystem/src/index.ts)
 
-<a id="deepseek-aidsh-specdev-gate"></a>
+<a id="deepseek-aidsh-specdev-guard"></a>
 
-## `@deepseek-ai/dsh-specdev-gate`
+## `@deepseek-ai/dsh-specdev-guard`
 
 Requires: `specdev` · `tools` · `sessionProjections`
 
@@ -2165,13 +2165,15 @@ Requires: `specdev` · `tools` · `sessionProjections`
 export interface SpecdevGateConfig {
   /** Branch reader the implementer check reads the current branch from; defaults to {@link readGitBranch}. */
   readonly gitBranchReader?: GitBranchReader
+  /** Host account home directory scope classification uses; defaults to the account's own home. */
+  readonly home?: string
 }
 
 /** Reads `git branch --show-current` for a workspace cwd. */
 export type GitBranchReader = (cwd: string) => string | null
 ```
 
-Source: [`packages/specdev/specdev-gate/src/index.ts:64`](../packages/specdev/specdev-gate/src/index.ts)
+Source: [`packages/specdev/specdev-guard/src/index.ts:98`](../packages/specdev/specdev-guard/src/index.ts)
 
 <a id="deepseek-aidsh-spill-local"></a>
 
@@ -3422,7 +3424,6 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-command-compact` — requires `commands` · `compaction` ([`packages/compaction/command-compact/src/index.ts`](../packages/compaction/command-compact/src/index.ts))
 - `@deepseek-ai/dsh-command-feedback` — requires `commands` ([`packages/feedback/command-feedback/src/index.ts`](../packages/feedback/command-feedback/src/index.ts))
 - `@deepseek-ai/dsh-command-goal` — requires `commands` · `goals` ([`packages/goal/command-goal/src/index.ts`](../packages/goal/command-goal/src/index.ts))
-- `@deepseek-ai/dsh-command-specdev` — requires `commands` · `specdev` ([`packages/specdev/command-specdev/src/index.ts`](../packages/specdev/command-specdev/src/index.ts))
 - `@deepseek-ai/dsh-commands` ([`packages/interaction/commands/src/index.ts`](../packages/interaction/commands/src/index.ts))
 - `@deepseek-ai/dsh-cordis-client-runner` ([`packages/extensions/cordis-client-runner/src/index.ts`](../packages/extensions/cordis-client-runner/src/index.ts))
 - `@deepseek-ai/dsh-deepseek-llm-api-extensions` ([`packages/llm/deepseek-llm-api-extensions/src/index.ts`](../packages/llm/deepseek-llm-api-extensions/src/index.ts))
@@ -3443,7 +3444,6 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-session-turn-outline` — requires `sessionProjections` ([`packages/session/session-turn-outline/src/index.ts`](../packages/session/session-turn-outline/src/index.ts))
 - `@deepseek-ai/dsh-skill-badge` — requires `skills` ([`packages/skill/skill-badge/src/index.ts`](../packages/skill/skill-badge/src/index.ts))
 - `@deepseek-ai/dsh-specdev` — requires `sessionProjections` ([`packages/specdev/specdev/src/index.ts`](../packages/specdev/specdev/src/index.ts))
-- `@deepseek-ai/dsh-specdev-advance` — requires `specdev` · `agents` ([`packages/specdev/specdev-advance/src/index.ts`](../packages/specdev/specdev-advance/src/index.ts))
 - `@deepseek-ai/dsh-specdev-presets` ([`packages/specdev/specdev-presets/src/index.ts`](../packages/specdev/specdev-presets/src/index.ts))
 - `@deepseek-ai/dsh-storage` ([`packages/storage/storage/src/index.ts`](../packages/storage/storage/src/index.ts))
 - `@deepseek-ai/dsh-subagent` ([`packages/subagent/subagent/src/index.ts`](../packages/subagent/subagent/src/index.ts))
@@ -3516,6 +3516,7 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 - `@deepseek-ai/dsh-session-snapshot` ([`packages/test-support/session-snapshot/src/index.ts`](../packages/test-support/session-snapshot/src/index.ts))
 - `@deepseek-ai/dsh-session-telemetry` ([`packages/session/session-telemetry/src/index.ts`](../packages/session/session-telemetry/src/index.ts))
 - `@deepseek-ai/dsh-session-title-llm` ([`packages/session/session-title-llm/src/index.ts`](../packages/session/session-title-llm/src/index.ts))
+- `@deepseek-ai/dsh-specdev-app` ([`packages/bundle/specdev-app/src/index.ts`](../packages/bundle/specdev-app/src/index.ts))
 - `@deepseek-ai/dsh-subagent-in-process-driver` ([`packages/subagent/subagent-in-process-driver/src/index.ts`](../packages/subagent/subagent-in-process-driver/src/index.ts))
 - `@deepseek-ai/dsh-timeout` ([`packages/util/timeout/src/index.ts`](../packages/util/timeout/src/index.ts))
 - `@deepseek-ai/dsh-typert-generator` ([`packages/typert/generator/src/index.ts`](../packages/typert/generator/src/index.ts))

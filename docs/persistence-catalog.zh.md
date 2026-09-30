@@ -202,7 +202,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/interaction/user-approval/src/index.ts:32`](../packages/interaction/user-approval/src/index.ts)
+来源：[`packages/interaction/user-approval/src/index.ts:33`](../packages/interaction/user-approval/src/index.ts)
 
 ### `assistant/*`
 
@@ -708,6 +708,147 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 来源：[`packages/session/session-log-deepseek/src/types.ts:57`](../packages/session/session-log-deepseek/src/types.ts)
 
+### `specdev/*`
+
+<a id="specdevadvance--log-only"></a>
+
+#### `specdev/advance` — log-only
+
+```ts persistence-catalog
+/**
+ * A role child finished and the runtime stated what comes next:
+ * `nextAction` is the guidance handed to the Orchestrator and `snapshot`
+ * is the projection it was built from, or `null` when none was available.
+ */
+'specdev/advance': SpecdevAdvanceEvent
+```
+
+来源：[`packages/specdev/specdev/src/types.ts:369`](../packages/specdev/specdev/src/types.ts)
+
+<a id="specdevdispatch--log-only"></a>
+
+#### `specdev/dispatch` — log-only
+
+```ts persistence-catalog
+/**
+ * A role child was spawned: `role` and `slug` name the dispatch, `phaseId`
+ * the phase it serves when it serves one, `childSessionId` the session the
+ * child runs in, and `snapshot` the status at dispatch time.
+ */
+'specdev/dispatch': SpecdevDispatchEvent
+```
+
+来源：[`packages/specdev/specdev/src/types.ts:357`](../packages/specdev/specdev/src/types.ts)
+
+<a id="specdevgate-decided--log-only"></a>
+
+#### `specdev/gate-decided` — log-only
+
+```ts persistence-catalog
+/**
+ * A Human Gate decision was accepted: `gate` and `decision` are the
+ * decision as the runtime applied it, `note` is the user's own text when
+ * the panel supplied one, and `snapshot` is the status after the decision.
+ */
+'specdev/gate-decided': SpecdevGateDecidedEvent
+```
+
+来源：[`packages/specdev/specdev/src/types.ts:345`](../packages/specdev/specdev/src/types.ts)
+
+<a id="specdevgate-pending--log-only"></a>
+
+#### `specdev/gate-pending` — log-only
+
+```ts persistence-catalog
+/**
+ * A Human Gate is waiting for the user: `gate` names it and `snapshot` is
+ * the status the pending decision was derived from, so a replayed session
+ * shows the same gate the panel asked about.
+ */
+'specdev/gate-pending': SpecdevGatePendingEvent
+```
+
+来源：[`packages/specdev/specdev/src/types.ts:339`](../packages/specdev/specdev/src/types.ts)
+
+<a id="specdevphase--log-only"></a>
+
+#### `specdev/phase` — log-only
+
+```ts persistence-catalog
+/**
+ * The workflow's phase position changed: `phaseId` is the phase now in
+ * flight (`null` once none remains), `steps` its implementer / reviewer /
+ * verifier states, and `snapshot` the folded status after the change.
+ */
+'specdev/phase': SpecdevPhaseEvent
+```
+
+来源：[`packages/specdev/specdev/src/types.ts:351`](../packages/specdev/specdev/src/types.ts)
+
+<a id="specdevreview-verdict--log-only"></a>
+
+#### `specdev/review-verdict` — log-only
+
+```ts persistence-catalog
+/**
+ * The three-reviewer merge produced a verdict for a phase: `verdict` is the
+ * merged PASS / SHOULD-FIX / MUST-FIX and `snapshot` the status after the
+ * merge, which is what decides whether the phase may advance.
+ */
+'specdev/review-verdict': SpecdevReviewVerdictEvent
+```
+
+来源：[`packages/specdev/specdev/src/types.ts:363`](../packages/specdev/specdev/src/types.ts)
+
+<a id="specdevscope-decided--log-only"></a>
+
+#### `specdev/scope-decided` — log-only
+
+```ts persistence-catalog
+/**
+ * The user decided a prior `specdev/scope-requested` (same `requestId`):
+ * `decision` is how far the approval reaches — this call, the directory, the
+ * session, or a refusal — or `cancelled` when the request was abandoned and
+ * `unavailable` when no answerer was reachable; `paths` the scope now granted
+ * (empty on refusal), and `note` the user's own text when they typed one.
+ */
+'specdev/scope-decided': SpecdevScopeDecidedEvent
+```
+
+来源：[`packages/specdev/specdev-guard/src/events.ts:50`](../packages/specdev/specdev-guard/src/events.ts)
+
+<a id="specdevscope-requested--log-only"></a>
+
+#### `specdev/scope-requested` — log-only
+
+```ts persistence-catalog
+/**
+ * A tool call named paths outside the workspace and the guard stopped it to
+ * ask: `paths` are the resolved paths it could not clear, `access` whether
+ * they would be read or written, `recursive` whether a directory traversal
+ * named them, `role` the SpecDev role whose call it was, and `reason` the
+ * asker's own explanation when the call carried one.
+ */
+'specdev/scope-requested': SpecdevScopeRequestedEvent
+```
+
+来源：[`packages/specdev/specdev-guard/src/events.ts:42`](../packages/specdev/specdev-guard/src/events.ts)
+
+<a id="specdevworkflow--log-only"></a>
+
+#### `specdev/workflow` — log-only
+
+```ts persistence-catalog
+/**
+ * The workflow this session is working in, or `null` when the workspace has
+ * no active workflow: `active` names the resolved slug, layout root, and
+ * workspace root, and `snapshot` is the folded status the caller saw.
+ */
+'specdev/workflow': SpecdevWorkflowEvent
+```
+
+来源：[`packages/specdev/specdev/src/types.ts:333`](../packages/specdev/specdev/src/types.ts)
+
 ### `step/*`
 
 <a id="stepend--log-only"></a>
@@ -783,7 +924,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 类型：[TeamId](subsystems/agent-team.zh.md) · [TeamMemberSnapshot](subsystems/agent-team.zh.md)
 
-来源：[`packages/experimental/agent-team/src/types.ts:204`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:221`](../packages/experimental/agent-team/src/types.ts)
 
 <a id="teammessagedelivered--log-only"></a>
 
@@ -801,7 +942,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 类型：[TeamId](subsystems/agent-team.zh.md) · [TeamMessageId](subsystems/agent-team.zh.md)
 
-来源：[`packages/experimental/agent-team/src/types.ts:210`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:227`](../packages/experimental/agent-team/src/types.ts)
 
 <a id="teammessagequeued--log-only"></a>
 
@@ -814,7 +955,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 类型：[TeamId](subsystems/agent-team.zh.md) · [TeamMessageSnapshot](subsystems/agent-team.zh.md)
 
-来源：[`packages/experimental/agent-team/src/types.ts:208`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:225`](../packages/experimental/agent-team/src/types.ts)
 
 <a id="teamtask--log-only"></a>
 
@@ -827,7 +968,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 类型：[TeamId](subsystems/agent-team.zh.md) · [TeamTaskSnapshot](subsystems/agent-team.zh.md)
 
-来源：[`packages/experimental/agent-team/src/types.ts:206`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:223`](../packages/experimental/agent-team/src/types.ts)
 
 ### `todo/*`
 

@@ -220,6 +220,22 @@ flowchart LR
   pkg_cordis_host_runner["cordis-host-runner"]
   svc_dynamicCordisRunner["ctx.dynamicCordisRunner<br/>Dynamic Cordis package host runner"]
   svc_cordisInspect["ctx.cordisInspect<br/>Dynamic Cordis inspect registry"]
+  pkg_ide_bridge["ide-bridge"]
+  svc_ideBridge["ctx.ideBridge<br/>IDE Host bridge channel"]
+  pkg_ide["ide"]
+  pkg_sdk_jsonrpc_server["sdk-jsonrpc-server"]
+  svc_sdkSessionEnsure["ctx.sdkSessionEnsure<br/>SDK session materialization"]
+  svc_sdkSessionDispose["ctx.sdkSessionDispose<br/>SDK session teardown"]
+  svc_sdkSessionResume["ctx.sdkSessionResume<br/>SDK session resume"]
+  svc_sdkSessionCancel["ctx.sdkSessionCancel<br/>SDK session turn cancel"]
+  svc_sdkSessionFork["ctx.sdkSessionFork<br/>SDK session fork"]
+  svc_sdkSessionDelete["ctx.sdkSessionDelete<br/>SDK session durable delete"]
+  svc_sdkModelSelect["ctx.sdkModelSelect<br/>SDK model route selection"]
+  pkg_specdev["specdev"]
+  svc_specdev["ctx.specdev<br/>SpecDev workflow runtime"]
+  pkg_specdev_guard["specdev-guard"]
+  pkg_specdev_presets["specdev-presets"]
+  svc_specdevPresets["ctx.specdevPresets<br/>SpecDev preset roster root"]
   pkg_agent --> svc_agents
   pkg_agent_default_model --> svc_agentDefaultModel
   pkg_agent_loop --> svc_agentLoop
@@ -263,6 +279,7 @@ flowchart LR
   pkg_host_directory_picker_browse --> svc_directoryPicker
   pkg_host_directory_picker_native --> svc_directoryPicker
   pkg_host_webserver --> svc_webServer
+  pkg_ide_bridge --> svc_ideBridge
   pkg_inspector --> svc_inspector
   pkg_invariants --> svc_invariants
   pkg_jobs --> svc_jobs
@@ -281,6 +298,13 @@ flowchart LR
   pkg_sandbox --> svc_sandbox
   pkg_sandbox_local --> svc_sandbox
   pkg_sandbox_policy --> svc_sandboxPolicy
+  pkg_sdk_jsonrpc_server --> svc_sdkModelSelect
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionCancel
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionDelete
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionDispose
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionEnsure
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionFork
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionResume
   pkg_session --> svc_sessions
   pkg_session_log_deepseek --> svc_deepseekLlmApiExtensions
   pkg_session_persistence --> svc_sessionPersistence
@@ -302,6 +326,8 @@ flowchart LR
   pkg_skill --> svc_skills
   pkg_skill_badge --> svc_skills
   pkg_skill_filesystem --> svc_skills
+  pkg_specdev --> svc_specdev
+  pkg_specdev_presets --> svc_specdevPresets
   pkg_spill --> svc_spillStore
   pkg_spill_local --> svc_spillStore
   pkg_storage --> svc_storage
@@ -367,6 +393,7 @@ flowchart LR
   svc_e2b --> pkg_subprocess_e2b
   svc_fileReferences --> pkg_api_session_controller
   svc_fs --> pkg_tool_fs
+  svc_ideBridge --> pkg_ide
   svc_invariants --> pkg_agent
   svc_invariants --> pkg_agent_loop
   svc_invariants --> pkg_scope
@@ -383,6 +410,13 @@ flowchart LR
   svc_sandboxPolicy --> pkg_bash_sandbox
   svc_sandboxPolicy --> pkg_fs_sandbox
   svc_sandboxPolicy --> pkg_terminal_bash
+  svc_sdkModelSelect --> pkg_ide_bridge
+  svc_sdkSessionCancel --> pkg_ide_bridge
+  svc_sdkSessionDelete --> pkg_ide_bridge
+  svc_sdkSessionDispose --> pkg_ide_bridge
+  svc_sdkSessionEnsure --> pkg_ide_bridge
+  svc_sdkSessionFork --> pkg_ide_bridge
+  svc_sdkSessionResume --> pkg_ide_bridge
   svc_sessionPersistence --> pkg_agent_loop
   svc_sessionPersistence --> pkg_hooks_claude_code
   svc_sessionPersistence --> pkg_hooks_codex
@@ -417,6 +451,10 @@ flowchart LR
   svc_shellEnv --> pkg_tool_bash
   svc_shellEnv --> pkg_tool_pwsh
   svc_skills --> pkg_tool_skill
+  svc_specdev --> pkg_ide_bridge
+  svc_specdev --> pkg_sdk_jsonrpc_server
+  svc_specdev --> pkg_specdev_guard
+  svc_specdevPresets --> pkg_agent_presets
   svc_spillStore --> pkg_spill_policy
   svc_storage --> pkg_storage_domain
   svc_storageDomain --> pkg_message_feedback
@@ -536,5 +574,15 @@ flowchart LR
 | `ctx.lsp` | `seam` | [`lsp`](../packages/lsp/lsp) | [`lsp-stdio`](../packages/lsp/lsp-stdio) | [`tool-lsp`](../packages/lsp/tool-lsp) | - | 提供方注册与选择，加上恰好四种操作的标准化查询执行；该 seam 不提供协议逃生口，后端必须转换为标准化请求和结果。 |
 | `ctx.dynamicCordisRunner` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | 拥有内存定义注册表、Host 半的 vm 沙箱和 request-run 往返流程；浏览器页面通过其 Remote 命名空间在线访问同一服务。 |
 | `ctx.cordisInspect` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | 注册 Host inspect 提供方、镜像 Client 提供方 manifest，并通过动态 Cordis 传输路由 Client 查询。 |
+| `ctx.ideBridge` | `core` | [`ide-bridge`](../packages/ide/ide-bridge) | - | [`ide`](../packages/bundle/ide) | - | 在 DSH_IDE_BRIDGE_SOCK 上提供 NDJSON 帧服务，把每帧解析到其 Session 与服务，并把命令、门禁、审批与提问流量中继给拥有该帧的运行时。 |
+| `ctx.sdkSessionEnsure` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 创建首个 prompt 本会创建的 Session 记录，使尚未交互过的 Tab 发出的 Host 命令也能作用于活跃 Agent。 |
+| `ctx.sdkSessionDispose` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 在释放句柄之前先移除 Session 记录，使同一 id 的后续帧无法到达已释放的 Agent。 |
+| `ctx.sdkSessionResume` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 把恢复或冷启动的 Session 句柄重新登记进 server Session 映射，并重放其投影基线。 |
+| `ctx.sdkSessionCancel` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 取消当前回合但保留 Agent inbox，使 Session 在下一个 prompt 时仍可继续使用。 |
+| `ctx.sdkSessionFork` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 把一个 Session fork 成子记录，沿用运行时已存储的父级 lineage。 |
+| `ctx.sdkSessionDelete` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 释放活跃 Session，并通过从上下文 duck-type 得到的持久化接口删除其持久化数据。 |
+| `ctx.sdkModelSelect` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 校验 Host 请求的模型路由，对之后创建的 Session 采用该路由，并在每个活跃 Session 下一次组装 prompt 时交给它。 |
+| `ctx.specdev` | `core` | [`specdev`](../packages/specdev/specdev) | - | [`specdev-guard`](../packages/specdev/specdev-guard), [`sdk-jsonrpc-server`](../packages/sdk/server), [`ide-bridge`](../packages/ide/ide-bridge) | - | 拥有工作区 `.specdev` 布局、作为工作流权威来源的追加式工作流日志及其生成的 status 镜像、唯一的 Human Gate 写入路径、slash 命令面和 `specdev/status` 投影。 |
+| `ctx.specdevPresets` | `core` | [`specdev-presets`](../packages/specdev/specdev-presets) | - | [`agent-presets`](../packages/preset/agent-presets) | - | 发布预设目录的绝对路径，供 SpecDev 组合把 `agent-presets` 的 roots 指向它。 |
 
 维护模式：混合模式。服务从 Cordis 声明中发现；接口、实现和消费方角色在 `scripts/gen-doc-graphs.ts` 中分类，并设有完整性守卫。

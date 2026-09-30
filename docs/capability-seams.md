@@ -218,6 +218,22 @@ flowchart LR
   pkg_cordis_host_runner["cordis-host-runner"]
   svc_dynamicCordisRunner["ctx.dynamicCordisRunner<br/>Dynamic Cordis package host runner"]
   svc_cordisInspect["ctx.cordisInspect<br/>Dynamic Cordis inspect registry"]
+  pkg_ide_bridge["ide-bridge"]
+  svc_ideBridge["ctx.ideBridge<br/>IDE Host bridge channel"]
+  pkg_ide["ide"]
+  pkg_sdk_jsonrpc_server["sdk-jsonrpc-server"]
+  svc_sdkSessionEnsure["ctx.sdkSessionEnsure<br/>SDK session materialization"]
+  svc_sdkSessionDispose["ctx.sdkSessionDispose<br/>SDK session teardown"]
+  svc_sdkSessionResume["ctx.sdkSessionResume<br/>SDK session resume"]
+  svc_sdkSessionCancel["ctx.sdkSessionCancel<br/>SDK session turn cancel"]
+  svc_sdkSessionFork["ctx.sdkSessionFork<br/>SDK session fork"]
+  svc_sdkSessionDelete["ctx.sdkSessionDelete<br/>SDK session durable delete"]
+  svc_sdkModelSelect["ctx.sdkModelSelect<br/>SDK model route selection"]
+  pkg_specdev["specdev"]
+  svc_specdev["ctx.specdev<br/>SpecDev workflow runtime"]
+  pkg_specdev_guard["specdev-guard"]
+  pkg_specdev_presets["specdev-presets"]
+  svc_specdevPresets["ctx.specdevPresets<br/>SpecDev preset roster root"]
   pkg_agent --> svc_agents
   pkg_agent_default_model --> svc_agentDefaultModel
   pkg_agent_loop --> svc_agentLoop
@@ -261,6 +277,7 @@ flowchart LR
   pkg_host_directory_picker_browse --> svc_directoryPicker
   pkg_host_directory_picker_native --> svc_directoryPicker
   pkg_host_webserver --> svc_webServer
+  pkg_ide_bridge --> svc_ideBridge
   pkg_inspector --> svc_inspector
   pkg_invariants --> svc_invariants
   pkg_jobs --> svc_jobs
@@ -279,6 +296,13 @@ flowchart LR
   pkg_sandbox --> svc_sandbox
   pkg_sandbox_local --> svc_sandbox
   pkg_sandbox_policy --> svc_sandboxPolicy
+  pkg_sdk_jsonrpc_server --> svc_sdkModelSelect
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionCancel
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionDelete
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionDispose
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionEnsure
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionFork
+  pkg_sdk_jsonrpc_server --> svc_sdkSessionResume
   pkg_session --> svc_sessions
   pkg_session_log_deepseek --> svc_deepseekLlmApiExtensions
   pkg_session_persistence --> svc_sessionPersistence
@@ -300,6 +324,8 @@ flowchart LR
   pkg_skill --> svc_skills
   pkg_skill_badge --> svc_skills
   pkg_skill_filesystem --> svc_skills
+  pkg_specdev --> svc_specdev
+  pkg_specdev_presets --> svc_specdevPresets
   pkg_spill --> svc_spillStore
   pkg_spill_local --> svc_spillStore
   pkg_storage --> svc_storage
@@ -365,6 +391,7 @@ flowchart LR
   svc_e2b --> pkg_subprocess_e2b
   svc_fileReferences --> pkg_api_session_controller
   svc_fs --> pkg_tool_fs
+  svc_ideBridge --> pkg_ide
   svc_invariants --> pkg_agent
   svc_invariants --> pkg_agent_loop
   svc_invariants --> pkg_scope
@@ -381,6 +408,13 @@ flowchart LR
   svc_sandboxPolicy --> pkg_bash_sandbox
   svc_sandboxPolicy --> pkg_fs_sandbox
   svc_sandboxPolicy --> pkg_terminal_bash
+  svc_sdkModelSelect --> pkg_ide_bridge
+  svc_sdkSessionCancel --> pkg_ide_bridge
+  svc_sdkSessionDelete --> pkg_ide_bridge
+  svc_sdkSessionDispose --> pkg_ide_bridge
+  svc_sdkSessionEnsure --> pkg_ide_bridge
+  svc_sdkSessionFork --> pkg_ide_bridge
+  svc_sdkSessionResume --> pkg_ide_bridge
   svc_sessionPersistence --> pkg_agent_loop
   svc_sessionPersistence --> pkg_hooks_claude_code
   svc_sessionPersistence --> pkg_hooks_codex
@@ -415,6 +449,10 @@ flowchart LR
   svc_shellEnv --> pkg_tool_bash
   svc_shellEnv --> pkg_tool_pwsh
   svc_skills --> pkg_tool_skill
+  svc_specdev --> pkg_ide_bridge
+  svc_specdev --> pkg_sdk_jsonrpc_server
+  svc_specdev --> pkg_specdev_guard
+  svc_specdevPresets --> pkg_agent_presets
   svc_spillStore --> pkg_spill_policy
   svc_storage --> pkg_storage_domain
   svc_storageDomain --> pkg_message_feedback
@@ -534,5 +572,15 @@ flowchart LR
 | `ctx.lsp` | `seam` | [`lsp`](../packages/lsp/lsp) | [`lsp-stdio`](../packages/lsp/lsp-stdio) | [`tool-lsp`](../packages/lsp/tool-lsp) | - | Provider registration and selection plus normalized query execution over exactly four operations; the seam offers no protocol escape hatch, so a backend translates into the normalized request and result. |
 | `ctx.dynamicCordisRunner` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Owns the in-memory definition registry, the vm sandbox for host halves, and the request-run round trip; browser pages reach the same service over the wire through its remote namespace. |
 | `ctx.cordisInspect` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Registers host inspect providers, mirrors the client provider manifest, and routes client queries through the dynamic Cordis transport. |
+| `ctx.ideBridge` | `core` | [`ide-bridge`](../packages/ide/ide-bridge) | - | [`ide`](../packages/bundle/ide) | - | Serves NDJSON frames over DSH_IDE_BRIDGE_SOCK, resolves each frame to its session and service, and relays command, gate, approval, and question traffic to the runtime that owns it. |
+| `ctx.sdkSessionEnsure` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Creates the session record a first prompt would create, so a Host command issued from an untouched Tab runs against a live agent. |
+| `ctx.sdkSessionDispose` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Removes the session record before disposing its handle, so a later frame for the same id cannot reach a disposed agent. |
+| `ctx.sdkSessionResume` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Re-registers a resumed or cold session handle in the server session map and replays its projection baseline. |
+| `ctx.sdkSessionCancel` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Cancels the current turn with the agent inbox kept, so the session stays live for the next prompt. |
+| `ctx.sdkSessionFork` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Forks one session into a child record with the parent lineage the runtime already stores. |
+| `ctx.sdkSessionDelete` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Disposes the live session and removes its persisted data through the persistence surface it duck-types from the context. |
+| `ctx.sdkModelSelect` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Validates a Host-requested route, adopts it for sessions created afterwards, and hands it to every live session at its next prompt assembly. |
+| `ctx.specdev` | `core` | [`specdev`](../packages/specdev/specdev) | - | [`specdev-guard`](../packages/specdev/specdev-guard), [`sdk-jsonrpc-server`](../packages/sdk/server), [`ide-bridge`](../packages/ide/ide-bridge) | - | Owns the workspace `.specdev` layout, the appended workflow log that is the workflow source of truth with its generated status mirror, the sole Human Gate write path, the slash-command surface, and the `specdev/status` projection. |
+| `ctx.specdevPresets` | `core` | [`specdev-presets`](../packages/specdev/specdev-presets) | - | [`agent-presets`](../packages/preset/agent-presets) | - | Publishes the absolute preset directory a SpecDev composition points `agent-presets` roots at. |
 
 Maintenance mode: hybrid: services are discovered from Cordis declarations; interface/implementation/consumer roles are classified in `scripts/gen-doc-graphs.ts` with a completeness guard.

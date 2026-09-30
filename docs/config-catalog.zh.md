@@ -2156,9 +2156,9 @@ export interface Config {
 
 来源：[`packages/skill/skill-filesystem/src/index.ts:49`](../packages/skill/skill-filesystem/src/index.ts)
 
-<a id="deepseek-aidsh-specdev-gate"></a>
+<a id="deepseek-aidsh-specdev-guard"></a>
 
-## `@deepseek-ai/dsh-specdev-gate`
+## `@deepseek-ai/dsh-specdev-guard`
 
 需要：`specdev` · `tools` · `sessionProjections`
 
@@ -2167,13 +2167,15 @@ export interface Config {
 export interface SpecdevGateConfig {
   /** Branch reader the implementer check reads the current branch from; defaults to {@link readGitBranch}. */
   readonly gitBranchReader?: GitBranchReader
+  /** Host account home directory scope classification uses; defaults to the account's own home. */
+  readonly home?: string
 }
 
 /** Reads `git branch --show-current` for a workspace cwd. */
 export type GitBranchReader = (cwd: string) => string | null
 ```
 
-来源：[`packages/specdev/specdev-gate/src/index.ts:64`](../packages/specdev/specdev-gate/src/index.ts)
+来源：[`packages/specdev/specdev-guard/src/index.ts:93`](../packages/specdev/specdev-guard/src/index.ts)
 
 <a id="deepseek-aidsh-spill-local"></a>
 
@@ -3424,7 +3426,6 @@ export interface Config {
 - `@deepseek-ai/dsh-command-compact` — 需要 `commands` · `compact`（[`packages/compaction/command-compact/src/index.ts`](../packages/compaction/command-compact/src/index.ts)）
 - `@deepseek-ai/dsh-command-feedback` — 需要 `commands`（[`packages/feedback/command-feedback/src/index.ts`](../packages/feedback/command-feedback/src/index.ts)）
 - `@deepseek-ai/dsh-command-goal` — 需要 `commands` · `goals`（[`packages/goal/command-goal/src/index.ts`](../packages/goal/command-goal/src/index.ts)）
-- `@deepseek-ai/dsh-command-specdev` — 需要 `commands` · `specdev`（[`packages/specdev/command-specdev/src/index.ts`](../packages/specdev/command-specdev/src/index.ts)）
 - `@deepseek-ai/dsh-commands`（[`packages/interaction/commands/src/index.ts`](../packages/interaction/commands/src/index.ts)）
 - `@deepseek-ai/dsh-cordis-client-runner`（[`packages/extensions/cordis-client-runner/src/index.ts`](../packages/extensions/cordis-client-runner/src/index.ts)）
 - `@deepseek-ai/dsh-deepseek-llm-api-extensions`（[`packages/llm/deepseek-llm-api-extensions/src/index.ts`](../packages/llm/deepseek-llm-api-extensions/src/index.ts)）
@@ -3445,7 +3446,6 @@ export interface Config {
 - `@deepseek-ai/dsh-session-turn-outline` — 需要 `sessionProjections`（[`packages/session/session-turn-outline/src/index.ts`](../packages/session/session-turn-outline/src/index.ts)）
 - `@deepseek-ai/dsh-skill-badge` — 需要 `skills`（[`packages/skill/skill-badge/src/index.ts`](../packages/skill/skill-badge/src/index.ts)）
 - `@deepseek-ai/dsh-specdev` — 需要 `sessionProjections`（[`packages/specdev/specdev/src/index.ts`](../packages/specdev/specdev/src/index.ts)）
-- `@deepseek-ai/dsh-specdev-advance` — 需要 `specdev` · `agents`（[`packages/specdev/specdev-advance/src/index.ts`](../packages/specdev/specdev-advance/src/index.ts)）
 - `@deepseek-ai/dsh-specdev-presets`（[`packages/specdev/specdev-presets/src/index.ts`](../packages/specdev/specdev-presets/src/index.ts)）
 - `@deepseek-ai/dsh-storage`（[`packages/storage/storage/src/index.ts`](../packages/storage/storage/src/index.ts)）
 - `@deepseek-ai/dsh-subagent`（[`packages/subagent/subagent/src/index.ts`](../packages/subagent/subagent/src/index.ts)）
@@ -3517,6 +3517,7 @@ export interface Config {
 - `@deepseek-ai/dsh-session-snapshot`（[`packages/test-support/session-snapshot/src/index.ts`](../packages/test-support/session-snapshot/src/index.ts)）
 - `@deepseek-ai/dsh-session-telemetry`（[`packages/session/session-telemetry/src/index.ts`](../packages/session/session-telemetry/src/index.ts)）
 - `@deepseek-ai/dsh-session-title-llm`（[`packages/session/session-title-llm/src/index.ts`](../packages/session/session-title-llm/src/index.ts)）
+- `@deepseek-ai/dsh-specdev-app`（[`packages/bundle/specdev-app/src/index.ts`](../packages/bundle/specdev-app/src/index.ts)）
 - `@deepseek-ai/dsh-subagent-in-process-driver`（[`packages/subagent/subagent-in-process-driver/src/index.ts`](../packages/subagent/subagent-in-process-driver/src/index.ts)）
 - `@deepseek-ai/dsh-timeout`（[`packages/util/timeout/src/index.ts`](../packages/util/timeout/src/index.ts)）
 - `@deepseek-ai/dsh-typert-generator`（[`packages/typert/generator/src/index.ts`](../packages/typert/generator/src/index.ts)）

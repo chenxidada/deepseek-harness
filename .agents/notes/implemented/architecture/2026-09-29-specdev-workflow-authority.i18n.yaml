@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-29-specdev-workflow-authority.md
+2026-09-29-specdev-workflow-authority.md: 6c57cf8f564d52ac42fe5c935478402f3b1463cf
+2026-09-29-specdev-workflow-authority.zh.md: 41a12f9bd53e203d993f42a3cdad7aff78fa299a
