@@ -549,6 +549,31 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'browser',
+    summary: 'The browser automation service.',
+    description: 'The browser automation service. Registered as `ctx.browser` (one instance per context). It owns provider selection and session lifetime; the selected provider owns the browser itself.\n\nSelection semantics (resolved at execution time, never order-dependent):\n\n- A configured id that is registered and `available()` → that provider.\n- A configured id not registered → `BROWSER_PROVIDER_CONFIGURED_MISSING`.\n- A configured id registered but unavailable → `BROWSER_PROVIDER_CONFIGURED_UNAVAILABLE`.\n- No id configured, exactly one registered usable provider → that provider.\n- No id configured, multiple usable providers → `BROWSER_PROVIDER_AMBIGUOUS`.\n- No id configured, no usable provider → `BROWSER_PROVIDER_UNAVAILABLE`.',
+    methods: [
+      {
+        signature: 'registerProvider(provider: BrowserProvider): () => void',
+        description: 'Register a provider. Throws BrowserError `BROWSER_DUPLICATE_PROVIDER` if its id is already registered. Returns a disposer; disposed with the calling fiber.',
+        parameters: [{ name: 'provider', description: 'the provider; its `id` is the registry key.' }],
+        returns: 'the disposer that unregisters the provider.',
+      },
+      {
+        signature: 'async session(key: BrowserSessionKey, request: BrowserSessionRequest = {}, signal?: AbortSignal): Promise<BrowserSession>',
+        description: 'Open or reuse the session owned by one key. The request is applied only when the session is created; later calls with the same key reuse the existing session and ignore the request. A failed open forgets the key so the next call retries.',
+        parameters: [{ name: 'key', description: 'opaque conversation identity owned by the consumer.' }, { name: 'request', description: 'optional viewport/storage-state request; the provider owns the defaults, applied through `BrowserProvider.resolve`.' }, { name: 'signal', description: 'cancels only the open this call starts.' }],
+        returns: 'the live session for `key`.',
+      },
+      {
+        signature: 'async close(key: BrowserSessionKey): Promise<void>',
+        description: 'Close and forget the session owned by one key. Idempotent: an unknown key is a no-op, and an open that failed owns nothing to close.',
+        parameters: [{ name: 'key', description: 'the identity passed to {@link session}.' }],
+        returns: 'a promise that settles when teardown quiesces.',
+      },
+    ],
+  },
+  {
     key: 'clientModules',
     summary: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index injection rows.',
     description: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index injection rows. Construction runs the activation scan synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).',
@@ -3810,6 +3835,74 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'BrandedNumber',
     declaration: 'export type BrandedNumber<B extends string> = number & {\n    readonly [BRAND]: B;\n};',
+  },
+  {
+    name: 'BrowserAction',
+    declaration: 'export type BrowserAction = {\n    readonly kind: \'navigate\';\n    readonly url: string;\n    readonly snapshot: boolean;\n} | {\n    readonly kind: \'click\';\n    readonly role: string;\n    readonly name: string;\n} | {\n    readonly kind: \'type\';\n    readonly role: string;\n    readonly name: string;\n    readonly text: string;\n    readonly submit: boolean;\n} | {\n    readonly kind: \'press\';\n    readonly key: string;\n};',
+  },
+  {
+    name: 'BrowserActionResult',
+    declaration: 'export type BrowserActionResult = BrowserPageState;',
+  },
+  {
+    name: 'BrowserConsoleEntry',
+    declaration: 'export interface BrowserConsoleEntry {\n    readonly level: \'error\' | \'warning\' | \'info\' | \'debug\' | \'log\';\n    readonly text: string;\n    readonly location: string | null;\n}',
+  },
+  {
+    name: 'BrowserConsoleLevel',
+    declaration: 'export type BrowserConsoleLevel = \'all\' | \'error\' | \'warning\';',
+  },
+  {
+    name: 'BrowserNetworkEntry',
+    declaration: 'export interface BrowserNetworkEntry {\n    readonly method: string;\n    readonly url: string;\n    readonly status: number | null;\n    readonly failed: boolean;\n    readonly resourceType: string;\n}',
+  },
+  {
+    name: 'BrowserObservation',
+    declaration: 'export type BrowserObservation = {\n    readonly kind: \'snapshot\';\n    readonly maxChars?: number;\n} | {\n    readonly kind: \'screenshot\';\n    readonly fullPage: boolean;\n} | {\n    readonly kind: \'console\';\n    readonly level: BrowserConsoleLevel;\n    readonly limit: number;\n} | {\n    readonly kind: \'network\';\n    readonly failedOnly: boolean;\n    readonly limit: number;\n};',
+  },
+  {
+    name: 'BrowserObservationResult',
+    declaration: 'export type BrowserObservationResult = {\n    readonly kind: \'snapshot\';\n    readonly snapshot: BrowserSnapshot;\n} | {\n    readonly kind: \'screenshot\';\n    readonly screenshot: BrowserScreenshot;\n    readonly page: BrowserPageState;\n} | {\n    readonly kind: \'console\';\n    readonly entries: readonly BrowserConsoleEntry[];\n    readonly truncated: boolean;\n} | {\n    readonly kind: \'network\';\n    readonly entries: readonly BrowserNetworkEntry[];\n    readonly truncated: boolean;\n};',
+  },
+  {
+    name: 'BrowserPageState',
+    declaration: 'export interface BrowserPageState {\n    readonly url: string;\n    readonly title: string;\n    readonly snapshot: BrowserSnapshot | null;\n}',
+  },
+  {
+    name: 'BrowserProvider',
+    declaration: 'export interface BrowserProvider {\n    readonly id: string;\n    available(): boolean;\n    resolve(request: BrowserSessionRequest): BrowserSessionSpec;\n    open(spec: BrowserSessionSpec, signal?: AbortSignal): Promise<BrowserSession>;\n}',
+  },
+  {
+    name: 'BrowserScreenshot',
+    declaration: 'export interface BrowserScreenshot {\n    readonly mediaType: \'image/png\';\n    readonly data: Uint8Array;\n}',
+  },
+  {
+    name: 'BrowserSession',
+    declaration: 'export interface BrowserSession {\n    readonly key: BrowserSessionKey;\n    act(action: BrowserAction, signal?: AbortSignal): Promise<BrowserActionResult>;\n    observe(query: BrowserObservation, signal?: AbortSignal): Promise<BrowserObservationResult>;\n    close(): Promise<void>;\n    startTrace(): Promise<void>;\n    stopTrace(): Promise<BrowserTraceArtifact>;\n}',
+  },
+  {
+    name: 'BrowserSessionKey',
+    declaration: 'export type BrowserSessionKey = Branded<\'BrowserSessionKey\'>;',
+  },
+  {
+    name: 'BrowserSessionRequest',
+    declaration: 'export interface BrowserSessionRequest {\n    readonly viewport?: BrowserViewport;\n    readonly storageStatePath?: string;\n}',
+  },
+  {
+    name: 'BrowserSessionSpec',
+    declaration: 'export interface BrowserSessionSpec {\n    readonly allowedOrigins: readonly string[];\n    readonly navigationTimeoutMs: number;\n    readonly actionTimeoutMs: number;\n    readonly snapshotMaxChars: number;\n    readonly consoleBufferSize: number;\n    readonly networkBufferSize: number;\n    readonly viewport: BrowserViewport;\n    readonly storageStatePath?: string;\n}',
+  },
+  {
+    name: 'BrowserSnapshot',
+    declaration: 'export interface BrowserSnapshot {\n    readonly text: string;\n    readonly truncated: boolean;\n}',
+  },
+  {
+    name: 'BrowserTraceArtifact',
+    declaration: 'export interface BrowserTraceArtifact {\n    readonly path: string;\n}',
+  },
+  {
+    name: 'BrowserViewport',
+    declaration: 'export interface BrowserViewport {\n    readonly width: number;\n    readonly height: number;\n}',
   },
   {
     name: 'ChunkRow',

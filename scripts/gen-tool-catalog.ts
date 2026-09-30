@@ -64,6 +64,9 @@ import * as ToolTodo from '@deepseek-ai/dsh-tool-todo'
 import * as ToolSubagent from '@deepseek-ai/dsh-tool-subagent'
 import { registerListSubagentModels } from '../packages/subagent/tool-subagent/src/list-models.ts'
 import * as ToolWeb from '@deepseek-ai/dsh-tool-web'
+import BrowserRuntime from '@deepseek-ai/dsh-browser'
+import * as BrowserPlaywright from '@deepseek-ai/dsh-browser-playwright'
+import * as ToolBrowser from '@deepseek-ai/dsh-tool-browser'
 import VmWorkflowEngine from '@deepseek-ai/dsh-workflow-worker-thread'
 import * as ToolRalph from '@deepseek-ai/dsh-tool-ralph'
 import * as ToolWorkflow from '@deepseek-ai/dsh-tool-workflow'
@@ -589,6 +592,25 @@ const TOOL_PACKAGES: ToolPackage[] = [
     },
     note:
       'web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps.',
+  },
+  {
+    pkg: '@deepseek-ai/dsh-tool-browser',
+    dir: 'tool-browser',
+    source: 'packages/browser/tool-browser/src/index.ts',
+    requires: ['ctx.tools', 'ctx.browser', 'ctx.attachments (screenshot registration)', 'ctx.llm + an image-capable route (screenshot execution)'],
+    writes: ['tool/call', 'tool/result', 'durable attachment (browser_screenshot)', 'trace archive file (browser_trace_stop)'],
+    async mount(ctx) {
+      // Mount a launch-mode provider so every tool registers without starting a
+      // browser: opening one only happens on the first call, and the schemas do
+      // not depend on provider availability. The catalog seam marker opts into
+      // the attachments-conditional screenshot schema without attachment I/O.
+      await ctx.plugin(BrowserRuntime)
+      await ctx.plugin(BrowserPlaywright, { mode: 'launch', allowedOrigins: ['https://example.test'] })
+      await ctx.plugin(CatalogAttachmentStore)
+      await ctx.plugin(ToolBrowser)
+    },
+    note:
+      'browser_* tools keep the browser behind ctx.browser so model-visible schemas stay stable across provider swaps; browser_close releases the session the seam owns. The screenshot tool is not registered without `ctx.attachments`, and execution refuses unless the exact routed model declares image input; trace recording additionally requires the provider\'s own trace location, and without one a start refuses.',
   },
 ]
 

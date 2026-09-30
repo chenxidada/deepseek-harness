@@ -1,0 +1,16 @@
+# Test-only composition: the browser seam plus the Playwright provider, mounted
+# through the real Loader exactly as a deployment's cordis.yml mounts them. The
+# browser row pins the provider id, so opening a session through ctx.browser
+# also proves the id this package registers under. Relative plugin rows resolve
+# against this file, so the provider row names the package's own source entry.
+- id: browser
+  name: '@deepseek-ai/dsh-browser'
+  config:
+    provider: playwright
+
+- id: browser-playwright
+  name: '../../src/index.ts'
+  config:
+    mode: launch
+    allowedOrigins:
+      - https://example.com

@@ -14,6 +14,10 @@ flowchart LR
   pkg_tool_fs["tool-fs"]
   pkg_llm_pi_ai["llm-pi-ai"]
   pkg_llm_deepseek["llm-deepseek"]
+  pkg_browser["browser"]
+  svc_browser["ctx.browser<br/>Browser automation sessions"]
+  pkg_browser_playwright["browser-playwright"]
+  pkg_tool_browser["tool-browser"]
   pkg_llm["llm"]
   svc_llm["ctx.llm<br/>LLM adapter registry"]
   pkg_llm_replay["llm-replay"]
@@ -251,6 +255,8 @@ flowchart LR
   pkg_authorization --> svc_authorization
   pkg_bash_local --> svc_shell
   pkg_bash_sandbox --> svc_shell
+  pkg_browser --> svc_browser
+  pkg_browser_playwright --> svc_browser
   pkg_client_modules --> svc_clientModules
   pkg_code_runtime --> svc_codeRuntime
   pkg_code_runtime_worker_thread --> svc_codeRuntime
@@ -377,6 +383,7 @@ flowchart LR
   svc_attachments --> pkg_llm_pi_ai
   svc_attachments --> pkg_tool_fs
   svc_authorization --> pkg_llm_pi_ai
+  svc_browser --> pkg_tool_browser
   svc_clientModules --> pkg_client_hmr
   svc_codeRuntime --> pkg_tools
   svc_compaction --> pkg_compaction_basic
@@ -504,6 +511,7 @@ flowchart LR
 | ctx key | Role | Owner | Implementations | Direct consumers | Companion plugins | Note |
 | --- | --- | --- | --- | --- | --- | --- |
 | `ctx.attachments` | `seam` | [`attachment`](../packages/attachment/attachment) | [`attachment-local`](../packages/attachment/attachment-local) | [`api-session-controller`](../packages/api/session-controller), [`tool-fs`](../packages/fs/tool-fs), [`llm-pi-ai`](../packages/llm/llm-pi-ai), [`llm-deepseek`](../packages/llm/llm-deepseek) | - | The host commits accepted images before session events; provider adapters resolve authorized durable references into provider-native content. |
+| `ctx.browser` | `seam` | [`browser`](../packages/browser/browser) | [`browser-playwright`](../packages/browser/browser-playwright) | [`tool-browser`](../packages/browser/tool-browser) | - | The seam owns provider selection and per-conversation session lifetime; the provider owns the browser, its context, and the retained console/network buffers. |
 | `ctx.llm` | `seam` | [`llm`](../packages/llm/llm) | [`llm-deepseek`](../packages/llm/llm-deepseek), [`llm-pi-ai`](../packages/llm/llm-pi-ai), [`llm-replay`](../packages/test-support/llm-replay) | [`agent-loop`](../packages/core/agent-loop), [`compaction-basic`](../packages/compaction/compaction-basic) | - | Adapters register provider implementations; the loop and compaction call the provider-neutral stream service. |
 | `ctx.deepseekLlmApiExtensions` | `seam` | [`deepseek-llm-api-extensions`](../packages/llm/deepseek-llm-api-extensions) | [`session-log-deepseek`](../packages/session/session-log-deepseek), [`plugin-package-inventory-deepseek`](../packages/llm/plugin-package-inventory-deepseek) | [`llm-deepseek`](../packages/llm/llm-deepseek) | - | Plugins prepare independent top-level fields; the official adapter merges them and commits their delivery state after HTTP acceptance. |
 | `ctx.tokenMeter` | `core` | [`token-meter`](../packages/llm/token-meter) | - | [`compaction-basic`](../packages/compaction/compaction-basic) | - | Owns isolated per-session replay folds; pressure consumers share immutable revisioned measurements. |
@@ -581,6 +589,6 @@ flowchart LR
 | `ctx.sdkSessionDelete` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Disposes the live session and removes its persisted data through the persistence surface it duck-types from the context. |
 | `ctx.sdkModelSelect` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Validates a Host-requested route, adopts it for sessions created afterwards, and hands it to every live session at its next prompt assembly. |
 | `ctx.specdev` | `core` | [`specdev`](../packages/specdev/specdev) | - | [`specdev-guard`](../packages/specdev/specdev-guard), [`sdk-jsonrpc-server`](../packages/sdk/server), [`ide-bridge`](../packages/ide/ide-bridge) | - | Owns the workspace `.specdev` layout, the appended workflow log that is the workflow source of truth with its generated status mirror, the sole Human Gate write path, the slash-command surface, and the `specdev/status` projection. |
-| `ctx.specdevPresets` | `core` | [`specdev-presets`](../packages/specdev/specdev-presets) | - | [`agent-presets`](../packages/preset/agent-presets) | - | Publishes the absolute preset directory a SpecDev composition points `agent-presets` roots at. |
+| `ctx.specdevPresets` | `core` | [`specdev-presets`](../packages/specdev/specdev-presets) | - | [`agent-presets`](../packages/preset/agent-presets) | - | Publishes the absolute preset directory and the Orchestrator preset id that a SpecDev composition points `agent-presets` roots at. |
 
 Maintenance mode: hybrid: services are discovered from Cordis declarations; interface/implementation/consumer roles are classified in `scripts/gen-doc-graphs.ts` with a completeness guard.

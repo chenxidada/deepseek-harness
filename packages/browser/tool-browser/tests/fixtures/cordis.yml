@@ -1,0 +1,31 @@
+# Test-only composition: the tool registry, the browser seam, the Playwright
+# provider, and this package's tools, mounted through the real Loader exactly
+# as a deployment's cordis.yml mounts them. Every row names a published plugin
+# package, so this file also pins that the tool package resolves and loads
+# through the Loader's namespace-plugin path.
+- id: system-prompt
+  name: '@deepseek-ai/dsh-system-prompt'
+
+- id: tools
+  name: '@deepseek-ai/dsh-tools'
+
+# The screenshot tool registers only while an attachment store is mounted, so
+# the fixture mounts the local store exactly as a deployment does. Nothing here
+# commits an image, so the store's directory is never created.
+- id: attachments
+  name: '@deepseek-ai/dsh-attachment-local'
+
+- id: browser
+  name: '@deepseek-ai/dsh-browser'
+  config:
+    provider: playwright
+
+- id: browser-playwright
+  name: '@deepseek-ai/dsh-browser-playwright'
+  config:
+    mode: launch
+    allowedOrigins:
+      - https://example.test
+
+- id: tool-browser
+  name: '@deepseek-ai/dsh-tool-browser'

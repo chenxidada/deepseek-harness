@@ -40,6 +40,7 @@ This table connects model-visible tool names to the plugin package and service s
 | `@deepseek-ai/dsh-tool-todo` | `todo_write` | `ctx.tools`, `owning Agent session` | `tool/call`, `todo/write`, `tool/result` | - | todo_write is session-owned state; UIs render the latest todo/write event as a checklist. `allowParallelInProgress` is required with no default, so the catalog states its choice: `true`, whose description invites several `in_progress` items. A deployment choosing `false` receives the same tool with a description asking for exactly one active task. |
 | `@deepseek-ai/dsh-tool-workflow` | `workflow` | `ctx.tools`, `ctx.workflowEngine`, `ctx.systemPrompt`, `a calling Agent (exec.agent parents the script children)` | `tool/call`, `tool/result` | - | - |
 | `@deepseek-ai/dsh-tool-web` | `web_fetch`, `web_search` | `ctx.tools`, `ctx.web`, `ctx.systemPrompt` | `tool/call`, `tool/result` | - | web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps. |
+| `@deepseek-ai/dsh-tool-browser` | `browser_click`, `browser_close`, `browser_console`, `browser_navigate`, `browser_network`, `browser_press`, `browser_screenshot`, `browser_snapshot`, `browser_trace_start`, `browser_trace_stop`, `browser_type` | `ctx.tools`, `ctx.browser`, `ctx.attachments (screenshot registration)`, `ctx.llm + an image-capable route (screenshot execution)` | `tool/call`, `tool/result`, `durable attachment (browser_screenshot)`, `trace archive file (browser_trace_stop)` | - | browser_* tools keep the browser behind ctx.browser so model-visible schemas stay stable across provider swaps; browser_close releases the session the seam owns. The screenshot tool is not registered without `ctx.attachments`, and execution refuses unless the exact routed model declares image input; trace recording additionally requires the provider's own trace location, and without one a start refuses. |
 
 <a id="deepseek-aidsh-tool-ask-user"></a>
 
@@ -2223,3 +2224,236 @@ Search the web for current information. Provide 1–4 queries in the required qu
 Source: [`packages/web/tool-web/src/index.ts`](../packages/web/tool-web/src/index.ts)
 
 web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps.
+
+<a id="deepseek-aidsh-tool-browser"></a>
+
+## `@deepseek-ai/dsh-tool-browser`
+
+### `browser_click`
+
+Click one element identified by its ARIA role and accessible name, both exactly as the accessibility snapshot shows them. Waits for the element and answers with the page state after the click, including a fresh snapshot.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "role": {
+      "type": "string",
+      "description": "ARIA role, e.g. \"button\" or \"link\"."
+    },
+    "name": {
+      "type": "string",
+      "description": "Accessible name exactly as the snapshot shows it."
+    }
+  },
+  "required": [
+    "role",
+    "name"
+  ]
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_close`
+
+Close this conversation's browser session and release the browser it holds, normally at the end of a browsing task. The next browser tool call opens a fresh session instead of reusing this one.
+
+```json
+{
+  "type": "object",
+  "properties": {}
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_console`
+
+Read the console messages and page errors this conversation's browser recorded, most recent last. Use it after an action to see what the page logged; the browser retains the most recent messages and older ones are reported as omitted.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "level": {
+      "type": "string",
+      "description": "Severity filter: \"error\" keeps errors, \"warning\" keeps errors and warnings (default \"all\").",
+      "enum": [
+        "all",
+        "error",
+        "warning"
+      ]
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum entries to return; the deployment cap wins when larger."
+    }
+  }
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_navigate`
+
+Open an absolute http(s) URL in this conversation's browser and return the page title, its URL, and an accessibility snapshot. The snapshot lists the page's elements as role "name" pairs; pass those pairs to browser_click and browser_type. Navigation is limited to the origins this deployment allows: a denied URL fails and states the reason instead of loading.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "Absolute http(s) URL to open."
+    }
+  },
+  "required": [
+    "url"
+  ]
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_network`
+
+Read the network exchanges this conversation's browser recorded, in request order. A request counts as failed when it was aborted, could not reach a response, or received a status of 400 or above. Use it to find the request behind a broken page; older entries are reported as omitted.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "failedOnly": {
+      "type": "boolean",
+      "description": "Return only failed requests (default false)."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum entries to return; the deployment cap wins when larger."
+    }
+  }
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_press`
+
+Press one keyboard key on the focused element, for example "Enter", "Escape", or "Tab". Answers with the page state after the keystroke, including a fresh snapshot.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "key": {
+      "type": "string",
+      "description": "Key name as playwright spells it, e.g. \"Enter\"."
+    }
+  },
+  "required": [
+    "key"
+  ]
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_screenshot`
+
+Capture the current page as a PNG image and return it. Use it when the page's meaning is visual — layout, styling, a chart, or a rendered widget the accessibility snapshot cannot describe — and prefer browser_snapshot for reading structure, because an image costs far more context. The image arrives as an attachment you can inspect directly. Requires the current model to accept image input.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "fullPage": {
+      "type": "boolean",
+      "description": "Capture the whole scrollable page instead of the visible viewport (default false). A full-page capture is larger and more likely to exceed the deployment's image limits."
+    }
+  }
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_snapshot`
+
+Read the current page's accessibility snapshot again — for example after the page changed on its own. The result is the same role "name" listing browser_navigate returns, and its entries are what browser_click and browser_type address.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "maxChars": {
+      "type": "integer",
+      "description": "Character cap for this read; defaults to the deployment cap and can only lower it."
+    }
+  }
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_trace_start`
+
+Start recording a trace of this conversation's browser: every action with its DOM, accessibility, and screen state from now on. Stop it with browser_trace_stop to write one archive. The archive is for a person to replay, not for you to read, so start a trace when someone needs to inspect the session afterwards. Fails when a recording is already running or when the deployment configured no trace location.
+
+```json
+{
+  "type": "object",
+  "properties": {}
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_trace_stop`
+
+Stop the running trace recording and report the archive it wrote. The result names the file and how a person opens it; the archive itself is a zip you cannot read. Fails when no recording is running.
+
+```json
+{
+  "type": "object",
+  "properties": {}
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_type`
+
+Fill one text field identified by its ARIA role and accessible name, replacing its current content. Set submit to press Enter afterwards, which is how most forms are sent. Answers with the page state after the interaction, including a fresh snapshot.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "role": {
+      "type": "string",
+      "description": "ARIA role of the field, usually \"textbox\"."
+    },
+    "name": {
+      "type": "string",
+      "description": "Accessible name exactly as the snapshot shows it."
+    },
+    "text": {
+      "type": "string",
+      "description": "Text the field is left containing."
+    },
+    "submit": {
+      "type": "boolean",
+      "description": "Press Enter after filling (default false)."
+    }
+  },
+  "required": [
+    "role",
+    "name",
+    "text"
+  ]
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+browser_* tools keep the browser behind ctx.browser so model-visible schemas stay stable across provider swaps; browser_close releases the session the seam owns. The screenshot tool is not registered without `ctx.attachments`, and execution refuses unless the exact routed model declares image input; trace recording additionally requires the provider's own trace location, and without one a start refuses.

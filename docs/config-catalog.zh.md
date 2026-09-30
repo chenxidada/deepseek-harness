@@ -317,6 +317,87 @@ export type Config = LocalConfig
 
 来源：[`packages/shell/bash-sandbox/src/index.ts:35`](../packages/shell/bash-sandbox/src/index.ts)
 
+<a id="deepseek-aidsh-browser"></a>
+
+## `@deepseek-ai/dsh-browser`
+
+```ts config-catalog
+/**
+ * Config for the browser seam. `provider` pins which backend wins; it is
+ * optional (a single registered usable provider auto-selects). Operational
+ * overrides such as environment variables feed this same field rather than
+ * introduce a hidden priority chain.
+ */
+export interface BrowserRuntimeConfig {
+  /** Explicit provider id. Omitted = auto-select when exactly one usable. */
+  readonly provider?: string
+}
+```
+
+来源：[`packages/browser/browser/src/index.ts:69`](../packages/browser/browser/src/index.ts)
+
+<a id="deepseek-aidsh-browser-playwright"></a>
+
+## `@deepseek-ai/dsh-browser-playwright`
+
+需要：`browser`
+
+```ts config-catalog
+/** Plugin config: the browser this provider drives and the limits every session it opens inherits. */
+export interface Config {
+  /**
+   * `launch` starts a browser this provider owns; `attach` connects to one that
+   * already runs. Required: neither default is safe, because attaching to a
+   * browser nobody started fails on the first session.
+   */
+  mode: PlaywrightBrowserMode
+  /** Engine a launched browser uses; `chrome` and `msedge` name chromium channels. Defaults to `chromium`. */
+  browser?: PlaywrightBrowserName
+  /** Launch channel passed to playwright, overriding the channel the engine name implies. */
+  channel?: string
+  /** System browser executable to reuse for launches. */
+  executablePath?: string
+  /** Whether a launched browser runs without a visible window. Defaults to true. */
+  headless?: boolean
+  /** Chrome DevTools Protocol endpoint of the running browser (attach mode), e.g. `http://127.0.0.1:9222`. */
+  cdpEndpoint?: string
+  /** Playwright server endpoint of the running browser (attach mode), e.g. `ws://127.0.0.1:3000/`. */
+  endpoint?: string
+  /** Origin patterns sessions may navigate to. Defaults to an empty list, which admits nothing. */
+  allowedOrigins?: string[]
+  /** Viewport for sessions that request none. Defaults to 1280x720. */
+  viewport?: BrowserViewport
+  /** Navigation timeout in milliseconds, within Node's timer range. Defaults to 30000. */
+  navigationTimeoutMs?: number
+  /** Per-interaction timeout in milliseconds, within Node's timer range. Defaults to 10000. */
+  actionTimeoutMs?: number
+  /** Default character cap for one accessibility snapshot. Defaults to 20000. */
+  snapshotMaxChars?: number
+  /** Console entries retained per session, oldest dropped first. Defaults to 200. */
+  consoleBufferSize?: number
+  /** Network entries retained per session, oldest dropped first. Defaults to 200. */
+  networkBufferSize?: number
+  /** Storage-state file launched contexts start from. */
+  storageStatePath?: string
+  /**
+   * Directory trace archives are written to, created when it does not exist.
+   * Without it, sessions the provider opens refuse to record a trace and their
+   * trace tools stay unavailable.
+   */
+  traceDir?: string
+}
+
+/** How the provider gets its browser. */
+export type PlaywrightBrowserMode = 'launch' | 'attach'
+
+/** A browser this provider can start. `chrome` and `msedge` are chromium channels, not separate engines. */
+export type PlaywrightBrowserName = 'chromium' | 'chrome' | 'msedge' | 'firefox' | 'webkit'
+```
+
+依赖：[`BrowserViewport`](../packages/browser/browser/src/index.ts)
+
+来源：[`packages/browser/browser-playwright/src/index.ts:36`](../packages/browser/browser-playwright/src/index.ts)
+
 <a id="deepseek-aidsh-client-connection"></a>
 
 ## `@deepseek-ai/dsh-client-connection`
@@ -2696,6 +2777,42 @@ export interface Config {
 ```
 
 来源：[`packages/shell/tool-bash-persistent/src/index.ts:432`](../packages/shell/tool-bash-persistent/src/index.ts)
+
+<a id="deepseek-aidsh-tool-browser"></a>
+
+## `@deepseek-ai/dsh-tool-browser`
+
+需要：`tools` · `browser`
+
+```ts config-catalog
+/** Plugin config: which tools register and the deployment's read bounds. */
+export interface Config {
+  /**
+   * Whether the state-changing interaction tools (`browser_click`,
+   * `browser_type`, `browser_press`) register. Defaults to true; a deployment
+   * that wants read-only browsing turns them off here.
+   */
+  interact?: boolean
+  /**
+   * Whether `browser_screenshot` registers, which further requires a mounted
+   * attachment service. Defaults to true; a deployment that wants text-only
+   * browsing turns it off here.
+   */
+  screenshot?: boolean
+  /**
+   * Whether `browser_trace_start` and `browser_trace_stop` register. Defaults
+   * to true; recording additionally needs the provider's own trace location, and
+   * without one a start refuses.
+   */
+  trace?: boolean
+  /** Upper bound on console entries one `browser_console` call returns. Defaults to 50. */
+  maxConsoleEntries?: number
+  /** Upper bound on network entries one `browser_network` call returns. Defaults to 50. */
+  maxNetworkEntries?: number
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts:61`](../packages/browser/tool-browser/src/index.ts)
 
 <a id="deepseek-aidsh-tool-fs"></a>
 

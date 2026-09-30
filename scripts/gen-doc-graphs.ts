@@ -108,6 +108,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'The host commits accepted images before session events; provider adapters resolve authorized durable references into provider-native content.',
   },
   {
+    key: 'browser',
+    pkg: 'browser',
+    title: 'Browser automation sessions',
+    mode: 'seam',
+    implementations: ['browser-playwright'],
+    consumers: ['tool-browser'],
+    note: 'The seam owns provider selection and per-conversation session lifetime; the provider owns the browser, its context, and the retained console/network buffers.',
+  },
+  {
     key: 'llm',
     pkg: 'llm',
     title: 'LLM adapter registry',

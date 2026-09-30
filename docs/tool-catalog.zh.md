@@ -44,6 +44,7 @@
 | `@deepseek-ai/dsh-tool-todo` | `todo_write` | `ctx.tools`、`owning Agent session` | `tool/call`、`todo/write`、`tool/result` | - | todo_write 是会话所有的状态；UI 将最新的 todo/write 事件渲染为检查清单。`allowParallelInProgress` 是没有默认值的必填项，因此本目录明确选择 `true`，对应描述允许同时存在多个 `in_progress` 项。选择 `false` 的部署会获得同一工具，但描述会要求只能有 1 个活动任务。 |
 | `@deepseek-ai/dsh-tool-workflow` | `workflow` | `ctx.tools`、`ctx.workflowEngine`、`ctx.systemPrompt`、`a calling Agent (exec.agent parents the script children)` | `tool/call`、`tool/result` | - | - |
 | `@deepseek-ai/dsh-tool-web` | `web_fetch`、`web_search` | `ctx.tools`、`ctx.web`、`ctx.systemPrompt` | `tool/call`、`tool/result` | - | web_search 和 web_fetch 将提供方选择置于 ctx.web 之后，使模型可见 schema 在更换后端时保持稳定。 |
+| `@deepseek-ai/dsh-tool-browser` | `browser_click`、`browser_close`、`browser_console`、`browser_navigate`、`browser_network`、`browser_press`、`browser_screenshot`、`browser_snapshot`、`browser_trace_start`、`browser_trace_stop`、`browser_type` | `ctx.tools`、`ctx.browser`、`ctx.attachments (screenshot registration)`、`ctx.llm + an image-capable route (screenshot execution)` | `tool/call`、`tool/result`、`durable attachment (browser_screenshot)`、`trace archive file (browser_trace_stop)` | - | browser_* 工具把浏览器置于 ctx.browser 之后，使模型可见 schema 在更换提供方时保持稳定；browser_close 释放 seam 拥有的会话。没有 `ctx.attachments` 时截图工具不会注册，且执行时除非确切路由的模型声明图片输入，否则拒绝；trace 录制还需要提供方自己的 trace 位置，未配置位置时启动会被拒绝。 |
 
 <a id="deepseek-aidsh-tool-ask-user"></a>
 
@@ -2231,3 +2232,236 @@ todo_write 是会话所有的状态；UI 将最新的 todo/write 事件渲染为
 来源：[`packages/web/tool-web/src/index.ts`](../packages/web/tool-web/src/index.ts)
 
 web_search 和 web_fetch 将提供方选择置于 ctx.web 之后，使模型可见 schema 在更换后端时保持稳定。
+
+<a id="deepseek-aidsh-tool-browser"></a>
+
+## `@deepseek-ai/dsh-tool-browser`
+
+### `browser_click`
+
+点击由 ARIA 角色与无障碍名称共同标识的一个元素，两者都必须与无障碍快照中显示的完全一致。它会等待该元素，并返回点击之后的页面状态，其中包含一份新的快照。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "role": {
+      "type": "string",
+      "description": "ARIA role, e.g. \"button\" or \"link\"."
+    },
+    "name": {
+      "type": "string",
+      "description": "Accessible name exactly as the snapshot shows it."
+    }
+  },
+  "required": [
+    "role",
+    "name"
+  ]
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_close`
+
+关闭本对话的浏览器会话，并释放它持有的浏览器，通常在浏览任务结束时调用。之后调用浏览器工具会打开一个新会话，而不是复用这一个。
+
+```json
+{
+  "type": "object",
+  "properties": {}
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_console`
+
+读取本对话浏览器记录的控制台消息与页面错误，最近的在最后。可在某个动作之后用它查看页面记录了什么；浏览器只保留最近的消息，更早的条目会以「已省略」的形式报告。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "level": {
+      "type": "string",
+      "description": "Severity filter: \"error\" keeps errors, \"warning\" keeps errors and warnings (default \"all\").",
+      "enum": [
+        "all",
+        "error",
+        "warning"
+      ]
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum entries to return; the deployment cap wins when larger."
+    }
+  }
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_navigate`
+
+在本对话的浏览器中打开一个绝对 http(s) URL，并返回页面标题、其 URL，以及一份无障碍快照。快照以「角色 + 名称」对的形式列出页面元素；把这些对交给 browser_click 与 browser_type。导航仅限本部署允许的 origin：被拒绝的 URL 会失败并说明原因，而不会加载。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "Absolute http(s) URL to open."
+    }
+  },
+  "required": [
+    "url"
+  ]
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_network`
+
+按请求顺序读取本对话浏览器记录的网络交换。请求被中止、未能获得响应，或收到 400 及以上状态码时，即计为失败。可用它找出损坏页面背后的那个请求；更早的条目会以「已省略」的形式报告。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "failedOnly": {
+      "type": "boolean",
+      "description": "Return only failed requests (default false)."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum entries to return; the deployment cap wins when larger."
+    }
+  }
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_press`
+
+在获得焦点的元素上按下一个键盘按键，例如 "Enter"、"Escape" 或 "Tab"。它返回按键之后的页面状态，其中包含一份新的快照。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "key": {
+      "type": "string",
+      "description": "Key name as playwright spells it, e.g. \"Enter\"."
+    }
+  },
+  "required": [
+    "key"
+  ]
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_screenshot`
+
+把当前页面截取为 PNG 图像并返回。当页面的含义是视觉性的——版式、样式、图表，或无障碍快照无法描述的渲染部件——时使用它；读取结构应优先用 browser_snapshot，因为图像的上下文开销大得多。图像以可直接查看的附件形式返回。要求当前模型接受图像输入。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "fullPage": {
+      "type": "boolean",
+      "description": "Capture the whole scrollable page instead of the visible viewport (default false). A full-page capture is larger and more likely to exceed the deployment's image limits."
+    }
+  }
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_snapshot`
+
+再次读取当前页面的无障碍快照——例如页面自行发生变化之后。结果与 browser_navigate 返回的是同一份「角色 + 名称」列表，其中的条目正是 browser_click 与 browser_type 所寻址的对象。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "maxChars": {
+      "type": "integer",
+      "description": "Character cap for this read; defaults to the deployment cap and can only lower it."
+    }
+  }
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_trace_start`
+
+开始录制本对话浏览器的 trace：从现在起记录每次动作及其 DOM、无障碍与屏幕状态。用 browser_trace_stop 停止录制并写出一个归档文件。该归档供人回放，而不是供你阅读，因此应在之后有人需要检查该会话时启动 trace。录制已在进行中，或部署未配置 trace 位置时，调用失败。
+
+```json
+{
+  "type": "object",
+  "properties": {}
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_trace_stop`
+
+停止正在进行的 trace 录制，并报告它写出的归档文件。结果给出文件名以及供人打开它的方式；归档本身是一个你无法阅读的 zip。没有录制在进行中时，调用失败。
+
+```json
+{
+  "type": "object",
+  "properties": {}
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_type`
+
+填写由 ARIA 角色与无障碍名称共同标识的一个文本字段，并替换其当前内容。设置 submit 可在其后按下 Enter，多数表单就是这样提交的。它返回交互之后的页面状态，其中包含一份新的快照。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "role": {
+      "type": "string",
+      "description": "ARIA role of the field, usually \"textbox\"."
+    },
+    "name": {
+      "type": "string",
+      "description": "Accessible name exactly as the snapshot shows it."
+    },
+    "text": {
+      "type": "string",
+      "description": "Text the field is left containing."
+    },
+    "submit": {
+      "type": "boolean",
+      "description": "Press Enter after filling (default false)."
+    }
+  },
+  "required": [
+    "role",
+    "name",
+    "text"
+  ]
+}
+```
+
+来源：[`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+browser_* 工具把浏览器置于 ctx.browser 之后，使模型可见 schema 在更换提供方时保持稳定；browser_close 释放 seam 拥有的会话。没有 `ctx.attachments` 时截图工具不会注册，且执行时除非确切路由的模型声明图片输入，否则拒绝；trace 录制还需要提供方自己的 trace 位置，未配置位置时启动会被拒绝。
