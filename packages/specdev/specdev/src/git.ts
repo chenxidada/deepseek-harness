@@ -191,12 +191,23 @@ function git(cwd: string, args: readonly string[]): string {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
   } catch (error: unknown) {
-    const stderr = (error as { stderr?: string })?.stderr
-    const detail = typeof stderr === 'string' && stderr.trim().length > 0
-      ? stderr.trim()
-      : error instanceof Error ? error.message : String(error)
-    throw new SpecdevError(`git ${args.join(' ')} failed: ${detail}`, 'SPECDEV_GIT_FAILED')
+    throw new SpecdevError(
+      `git ${args.join(' ')} failed: ${failureDetail(error)}`,
+      'SPECDEV_GIT_FAILED',
+    )
   }
+}
+
+/**
+ * Detail text for one failed git invocation: its stderr when git wrote any,
+ * else the thrown error's message.
+ * @param error - the value `execFileSync` threw.
+ */
+function failureDetail(error: unknown): string {
+  const stderr = (error as { stderr?: string } | undefined)?.stderr
+  if (typeof stderr === 'string' && stderr.trim().length > 0) return stderr.trim()
+  /* v8 ignore next -- execFileSync reports failures as Error subclasses. */
+  return error instanceof Error ? error.message : String(error)
 }
 
 function assertGitRepo(cwd: string): void {

@@ -2180,8 +2180,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   },
   {
     key: 'specdev',
-    summary: 'SpecDev service (`ctx.specdev`): workspace root, status I/O, confirmGate, phase-runtime helpers, and projection registration.',
-    description: 'SpecDev service (`ctx.specdev`): workspace root, status I/O, confirmGate, phase-runtime helpers, and projection registration.',
+    summary: 'SpecDev service (`ctx.specdev`): workspace root, workflow-log authority, confirmGate, phase-runtime helpers, advance listeners, gate progression, the slash-command surface, and projection registration.',
+    description: 'SpecDev service (`ctx.specdev`): workspace root, workflow-log authority, confirmGate, phase-runtime helpers, advance listeners, gate progression, the slash-command surface, and projection registration.',
     methods: [
       {
         signature: 'resolveRoot(options: ResolveWorkspaceRootOptions = {}): string',
@@ -2199,13 +2199,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'readStatus(slug: string, options: ResolveWorkspaceRootOptions = {}): CurrentStatusJson',
         description: 'Read a durable status snapshot for a slug under the resolved layout.',
         parameters: [{ name: 'slug', description: 'workflow slug.' }, { name: 'options', description: 'workspace resolution options.' }],
-        returns: 'the durable status parsed from `.specdev/specs/<slug>/current-status.json`.',
+        returns: 'the status folded from `.specdev/specs/<slug>/workflow.jsonl`, or the legacy `current-status.json` of a workflow that has no log yet.',
       },
       {
         signature: 'async ensureLayout(opts: EnsureLayoutOptions): Promise<SpecdevActive>',
-        description: 'Ensure `.specdev` layout + initial `current-status.json` for a slug, and point `active-workflow` at it. Real mkdir + atomic write (not a shell).',
+        description: 'Ensure `.specdev` layout + the workflow log for a slug, and point `active-workflow` at it. A workflow without a log yet adopts its durable `current-status.json` (init line + one carrying state event) so legacy slugs keep their state; a brand-new slug starts from the initial template.',
         parameters: [{ name: 'opts', description: 'slug, initiating command, optional description / roots.' }],
         returns: 'the ensured slug with its workspace and layout roots.',
+      },
+      {
+        signature: 'attachOrchestratorMetadata(agent: Agent, slug: string): void',
+        description: 'Attach Orchestrator lineage metadata (`specdev.role` / `specdev.slug`) to a session\'s agent. Mounts that host sessions but do not depend on this package call it through the service so SpecDev stays an optional capability.',
+        parameters: [{ name: 'agent', description: 'Orchestrator agent to tag.' }, { name: 'slug', description: 'workflow slug the agent drives.' }],
       },
       {
         signature: 'dispatchRole( parent: Agent, request: DispatchSpecdevRoleRequest, ): Promise<DispatchSpecdevRoleResult>',
@@ -2233,7 +2238,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'mergePhaseReviews( session: Session, phaseId: string, options: ResolveWorkspaceRootOptions = {}, ): MergedReviewResult',
-        description: 'Merge three Feature-path reviewer reports → `review.md` + emit verdict event.',
+        description: 'Merge the Feature-path reviewer reports → `review.md` + emit verdict event. A phase whose plan declares `ui: true` also merges `review-visual.md`.',
         parameters: [{ name: 'session', description: 'parent session receiving `specdev/review-verdict`.' }, { name: 'phaseId', description: 'DAG phase id.' }, { name: 'options', description: 'workspace resolution.' }],
         returns: 'the merged verdict, the contributing perspectives, and the `review.md` markdown.',
       },
@@ -2269,9 +2274,15 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'snapshot(session?: Session, options: ResolveWorkspaceRootOptions = {}): SpecdevSnapshot | null',
-        description: 'Bridge snapshot for the active workflow (file SoT), optionally refreshed against the session projection when a session is provided.',
+        description: 'Bridge snapshot for the active workflow (file SoT) with its IDE views — the phase-plan rows and the artifact rows — optionally refreshed against the session projection when a session is provided.',
         parameters: [{ name: 'session', description: 'optional session whose projection should be consulted.' }, { name: 'options', description: 'workspace resolution options.' }],
         returns: 'the bridge snapshot, or null when no workflow is active.',
+      },
+      {
+        signature: 'mirrorSnapshot(options: ResolveWorkspaceRootOptions = {}): SpecdevSnapshot | null',
+        description: 'Bridge snapshot of the exported `current-status.json` mirror alone, without folding the workflow log. Gate authority compares this against the authoritative view: a hand-edited mirror is a tamper signal, never a grant.',
+        parameters: [{ name: 'options', description: 'workspace resolution options.' }],
+        returns: 'the mirror snapshot, or null when no workflow is active or the mirror is unreadable.',
       },
       {
         signature: 'async confirmGate( session: Session, req: ConfirmGateRequest, options: ResolveWorkspaceRootOptions = {}, ): Promise<ConfirmGateResult>',
@@ -2289,11 +2300,6 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       {
         signature: 'readonly presetRoot: string = SPECDEV_PRESET_ROOT',
         description: 'Absolute presets directory for `agent-presets` roots.',
-        parameters: [],
-      },
-      {
-        signature: 'readonly orchestratorPresetId: string = SPECDEV_ORCHESTRATOR_PRESET_ID',
-        description: 'Default roster preset id for SpecDev sdk sessions.',
         parameters: [],
       },
     ],
@@ -4067,7 +4073,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CurrentStatusJson',
-    declaration: 'export interface CurrentStatusJson {\n    readonly slug: string;\n    readonly description?: string;\n    readonly initiating_command?: string;\n    readonly pipeline_mode?: string;\n    readonly created: string;\n    readonly current_stage: string;\n    readonly current_phase: string | null;\n    readonly loop_count: number;\n    readonly human_gates: {\n        readonly hg1: SpecdevGateState;\n        readonly hg2: SpecdevGateState;\n        readonly hg3: SpecdevGateState;\n    };\n    readonly phases: Readonly<Record<string, {\n        readonly implementer: SpecdevStepState;\n        readonly reviewer: SpecdevStepState;\n        readonly verifier: SpecdevStepState;\n    }>>;\n    readonly last_update: string;\n}',
+    declaration: 'export interface CurrentStatusJson {\n    readonly slug: string;\n    readonly description?: string;\n    readonly initiating_command?: string;\n    readonly pipeline_mode?: string;\n    readonly created: string;\n    readonly current_stage: string;\n    readonly current_phase: string | null;\n    readonly loop_count: number;\n    readonly human_gates: {\n        readonly hg1: SpecdevGateState;\n        readonly hg1_5: SpecdevGateState;\n        readonly hg2: SpecdevGateState;\n        readonly hg3: SpecdevGateState;\n    };\n    readonly phases: Readonly<Record<string, SpecdevPhaseSteps>>;\n    readonly last_update: string;\n}',
   },
   {
     name: 'DebtBlocking',
@@ -4963,7 +4969,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ReviewPerspectiveInput',
-    declaration: 'export interface ReviewPerspectiveInput {\n    readonly name: \'correctness\' | \'design\' | \'connectivity\' | \'single\';\n    readonly verdict: ReviewVerdict;\n    readonly summary?: string;\n}',
+    declaration: 'export interface ReviewPerspectiveInput {\n    readonly name: \'correctness\' | \'design\' | \'connectivity\' | \'visual\' | \'single\';\n    readonly verdict: ReviewVerdict;\n    readonly summary?: string;\n}',
   },
   {
     name: 'ReviewVerdict',
@@ -5666,12 +5672,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SpecdevActive {\n    readonly slug: string;\n    readonly workspaceRoot: string;\n    readonly layoutRoot: string;\n}',
   },
   {
+    name: 'SpecdevArtifactRow',
+    declaration: 'export interface SpecdevArtifactRow {\n    readonly path: string;\n    readonly label: string;\n    readonly phaseId: string | null;\n    readonly status: \'ready\' | \'missing\';\n}',
+  },
+  {
     name: 'SpecdevGateDecision',
     declaration: 'export type SpecdevGateDecision = \'pass\' | \'reject\' | \'defer\' | \'resolve\' | \'cancel\';',
   },
   {
     name: 'SpecdevGateId',
-    declaration: 'export type SpecdevGateId = \'hg1\' | \'hg2\' | \'hg3\' | \'phase-entry\';',
+    declaration: 'export type SpecdevGateId = \'hg1\' | \'hg1_5\' | \'hg2\' | \'hg3\' | \'phase-entry\' | \'prototype\';',
   },
   {
     name: 'SpecdevGateState',
@@ -5682,16 +5692,28 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SpecdevGitOptions {\n    readonly cwd: string;\n}',
   },
   {
+    name: 'SpecdevPhaseSteps',
+    declaration: 'export interface SpecdevPhaseSteps {\n    readonly implementer: SpecdevStepState;\n    readonly reviewer: SpecdevStepState;\n    readonly verifier: SpecdevStepState;\n    readonly prototype: SpecdevGateState;\n}',
+  },
+  {
+    name: 'SpecdevPlanRow',
+    declaration: 'export interface SpecdevPlanRow {\n    readonly id: string;\n    readonly dependencies: readonly string[];\n    readonly status: \'done\' | \'active\' | \'todo\';\n}',
+  },
+  {
     name: 'SpecdevRole',
-    declaration: 'export type SpecdevRole = \'orchestrator\' | \'requirement-analyst\' | \'plan-generator\' | \'code-explorer\' | \'implementer\' | \'reviewer-correctness\' | \'reviewer-design\' | \'reviewer-connectivity\' | \'reviewer\' | \'verifier\' | \'wiki\';',
+    declaration: 'export type SpecdevRole = \'orchestrator\' | \'requirement-analyst\' | \'plan-generator\' | \'code-explorer\' | \'implementer\' | \'reviewer-correctness\' | \'reviewer-design\' | \'reviewer-connectivity\' | \'reviewer-visual\' | \'reviewer\' | \'verifier\' | \'wiki\';',
   },
   {
     name: 'SpecdevSnapshot',
-    declaration: 'export interface SpecdevSnapshot {\n    readonly schemaVersion: number;\n    readonly slug: string;\n    readonly stage: string;\n    readonly phase: string | null;\n    readonly gates: {\n        readonly hg1: SpecdevGateState;\n        readonly hg2: SpecdevGateState;\n        readonly hg3: SpecdevGateState;\n    };\n    readonly steps: Readonly<Record<string, {\n        readonly implementer: SpecdevStepState;\n        readonly reviewer: SpecdevStepState;\n        readonly verifier: SpecdevStepState;\n    }>>;\n    readonly pendingGate: SpecdevGateId | null;\n    readonly loopCount: number;\n    readonly nextAction?: string;\n    readonly techDebtSummary?: {\n        readonly blocking: number;\n        readonly total: number;\n    };\n    readonly initiatingCommand?: string;\n    readonly pipelineMode?: string;\n}',
+    declaration: 'export interface SpecdevSnapshot {\n    readonly schemaVersion: number;\n    readonly slug: string;\n    readonly stage: string;\n    readonly phase: string | null;\n    readonly gates: {\n        readonly hg1: SpecdevGateState;\n        readonly hg1_5: SpecdevGateState;\n        readonly hg2: SpecdevGateState;\n        readonly hg3: SpecdevGateState;\n    };\n    readonly steps: Readonly<Record<string, SpecdevPhaseSteps>>;\n    readonly pendingGate: SpecdevGateId | null;\n    readonly loopCount: number;\n    readonly ui: SpecdevUiView;\n    readonly nextAction?: string;\n    readonly techDebtSummary?: {\n        readonly blocking: number;\n        readonly total: number;\n    };\n    readonly initiatingCommand?: string;\n    readonly pipelineMode?: string;\n    readonly plan?: readonly SpecdevPlanRow[];\n    readonly artifacts?: readonly SpecdevArtifactRow[];\n}',
   },
   {
     name: 'SpecdevStepState',
     declaration: 'export type SpecdevStepState = \'pending\' | \'in_progress\' | \'completed\' | \'failed\';',
+  },
+  {
+    name: 'SpecdevUiView',
+    declaration: 'export interface SpecdevUiView {\n    readonly workflow: boolean;\n    readonly phases: Readonly<Record<string, boolean | \'unknown\'>>;\n}',
   },
   {
     name: 'SpillLocator',

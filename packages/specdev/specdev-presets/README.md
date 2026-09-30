@@ -1,5 +1,5 @@
 ---
-description: "SpecDev Orchestrator and role agent presets (model A) with narrowed orchestrator tools for the sdk SpecDev composition."
+description: "SpecDev role agent presets and the preset root a roster composition mounts for them."
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-specdev-presets` ships SpecDev **model A** agent presets: a narrowed Orchestrator for the main session plus role presets (`requirement-analyst`, `plan-generator`, `code-explorer`, `implementer`, `reviewer-*`, `reviewer`, `verifier`, `wiki`). It publishes `ctx.specdevPresets.presetRoot` so sdk-app can mount `agent-presets` with that root and default `specdev-orchestrator`.
+`dsh-specdev-presets` ships the SpecDev **role** agent presets (`requirement-analyst`, `plan-generator`, `code-explorer`, `implementer`, `reviewer-*`, `reviewer`, `verifier`, `wiki`) and publishes `ctx.specdevPresets.presetRoot` so a composition can point `agent-presets` at that root. The main session is not a SpecDev role: SpecDev is entered through its slash commands, role dispatch mounts each preset on a child session, and the deployment's general default (`standard`) stays the default agent.
 
 ## Table of Contents
 
@@ -32,15 +32,15 @@ English | [中文](README.zh.md)
   name: '@deepseek-ai/dsh-agent-presets'
   inject: [specdevPresets]
   config:
-    default: specdev-orchestrator
-    includeShippedRoot: false
+    default: standard
+    includeShippedRoot: true
     includeUserRoot: false
     roots:
       - path: !!js specdevPresets.presetRoot
         trust: system
 ```
 
-Orchestrator composition omits `tool-fs` write/edit and mounts `@deepseek-ai/dsh-specdev-presets/orchestrator-tool-policy` (`restrict({ allow })` + write `guard`, AC-22). Role presets include read/write filesystem tools for their work. Attach `specdev.role` / `specdev.slug` / `specdev.phaseId?` on spawn (AC-24).
+Role presets include read/write filesystem tools for their own work. Role dispatch attaches `specdev.role` / `specdev.slug` / `specdev.phaseId?` on spawn (AC-24).
 
 -----
 
@@ -52,8 +52,7 @@ Orchestrator composition omits `tool-fs` write/edit and mounts `@deepseek-ai/dsh
 
 | Path | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `SpecdevPresetsService` + `SPECDEV_PRESET_ROOT` |
-| [`src/orchestrator-tool-policy.ts`](src/orchestrator-tool-policy.ts) | Standing-mount tool narrow plugin |
+| [`src/index.ts`](src/index.ts) | `SpecdevPresetsService` + `SPECDEV_PRESET_ROOT` + `SPECDEV_PRESET_IDS` |
 | [`presets/*/`](presets/) | `preset.yml` + `agent.cordis.yml` assets |
 
 </details>
@@ -64,19 +63,18 @@ Orchestrator composition omits `tool-fs` write/edit and mounts `@deepseek-ai/dsh
 ## Further Exploration
 
 - [Agent presets](../../preset/agent-presets/README.md) — roster mount contract.
-- [SpecDev commands](../command-specdev/README.md) — slash surface.
-- [Tools](../../core/tools/README.md) — `restrict` / `guard`.
+- [SpecDev runtime](../specdev/README.md) — the slash-command surface these presets serve.
 
 -----
 
 <a id="model-experience"></a>
 ## Model Experience
 
-### Orchestrator / role personas
+### Role personas
 
 #### What the model sees
 
-Each preset’s `@deepseek-ai/dsh-persona` `text` becomes the agent system prompt (`complete: true` for Orchestrator and roles). Orchestrator text forbids business-source edits and fuzzy gate passes.
+Each preset’s `@deepseek-ai/dsh-persona` `text` becomes that agent system prompt (`complete: true`), so a dispatched role child starts as its role.
 
 #### Token effect
 
@@ -90,8 +88,7 @@ Prefix-stable while the persona config is unchanged; editing `agent.cordis.yml` 
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- **SDK session default mount** — sdk-app configures `agent-presets` with `default: specdev-orchestrator`. `HarnessSdkJsonRpcServer.createSession` joins that default via `agentPresets.mount` when the service is present, and attaches orchestrator metadata when `ctx.specdev` is loaded.
-- **Deep path deny for bash** — Phase 2 allow-lists `bash` when present on the host (with `write`/`edit`/`str_replace_editor` excluded). Phase 3 gate may extend path-aware bash denial.
+- **Roster owner boundary** — [`dsh-specdev-app`](../../bundle/specdev-app/README.md) adds this root to `agent-presets` and keeps the shipped root included; the deployment default stays the general `standard` agent, and `HarnessSdkJsonRpcServer.createSession` mounts that default via `agentPresets.mount` when the service is present. Only a workflow entry attaches `specdev.*` metadata.
 
 <a id="dev-note"></a>
 ### Dev Note
@@ -99,6 +96,6 @@ Prefix-stable while the persona config is unchanged; editing `agent.cordis.yml` 
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-No companion invariant is published. This package declares the role presets and their tool policy; the roster mount contract belongs to `agent-presets`, and `tests/specdev-presets.spec.ts` covers preset assembly and tool restriction.
+**Runtime invariant:** No companion is published. This package declares the role presets; the roster mount contract belongs to `agent-presets`, and `tests/specdev-presets.spec.ts` covers the shipped root, the preset directories, and the published service.
 
 </details>

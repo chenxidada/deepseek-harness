@@ -14,9 +14,15 @@ export type ReviewVerdict = 'PASS' | 'SHOULD-FIX' | 'MUST-FIX'
 
 /** One perspective input for the merge. */
 export interface ReviewPerspectiveInput {
-  readonly name: 'correctness' | 'design' | 'connectivity' | 'single'
+  readonly name: 'correctness' | 'design' | 'connectivity' | 'visual' | 'single'
   readonly verdict: ReviewVerdict
   readonly summary?: string
+}
+
+/** Options for {@link mergePhaseReviews}. */
+export interface MergePhaseReviewsOptions {
+  /** Require and merge the `visual` perspective (`review-visual.md`) — UI phases only. */
+  readonly visual?: boolean
 }
 
 /** Result of merging perspectives. */
@@ -67,11 +73,9 @@ function normalizeVerdictToken(token: string): ReviewVerdict {
   const t = token.trim().toUpperCase()
   if (t === 'MUST-FIX' || t === '必须修复') return 'MUST-FIX'
   if (t === 'SHOULD-FIX' || t === '应当修复') return 'SHOULD-FIX'
+  /* v8 ignore next -- parseReviewVerdict captures only the verdict words above. */
   if (t === 'PASS' || t === '通过') return 'PASS'
-  // Chinese already uppercased incorrectly — handle raw:
-  if (token.includes('必须')) return 'MUST-FIX'
-  if (token.includes('应当')) return 'SHOULD-FIX'
-  if (token.includes('通过')) return 'PASS'
+  /* v8 ignore next -- parseReviewVerdict captures only the verdict words above. */
   throw new SpecdevError(`unknown verdict token: ${token}`, 'SPECDEV_REVIEW_INVALID')
 }
 
@@ -79,6 +83,7 @@ function normalizeVerdictToken(token: string): ReviewVerdict {
  * Build merged `review.md` markdown body.
  * @param phaseId - DAG phase id.
  * @param perspectives - perspective inputs.
+ * @returns the verdict, the perspectives, and the markdown, which ends with one newline.
  */
 export function formatMergedReviewMarkdown(
   phaseId: string,
@@ -111,15 +116,20 @@ export function formatMergedReviewMarkdown(
 }
 
 /**
- * Read the three Feature-path perspective files, merge, and write `review.md`.
+ * Read the Feature-path perspective files, merge, and write `review.md`.
  * @param phaseDir - `phases/<phaseId>/`.
  * @param phaseId - DAG id.
+ * @param options - `visual: true` additionally requires `review-visual.md` (UI phases).
  */
-export function mergeThreePerspectiveReviews(
+export function mergePhaseReviews(
   phaseDir: string,
   phaseId: string,
+  options: MergePhaseReviewsOptions = {},
 ): MergedReviewResult {
-  const names = ['correctness', 'design', 'connectivity'] as const
+  const names: readonly Exclude<ReviewPerspectiveInput['name'], 'single'>[]
+    = options.visual === true
+      ? ['correctness', 'design', 'connectivity', 'visual']
+      : ['correctness', 'design', 'connectivity']
   const perspectives: ReviewPerspectiveInput[] = names.map((name) => {
     const path = join(phaseDir, `review-${name}.md`)
     if (!existsSync(path)) {
@@ -129,7 +139,7 @@ export function mergeThreePerspectiveReviews(
     return { name, verdict }
   })
   const merged = formatMergedReviewMarkdown(phaseId, perspectives)
-  writeFileSync(join(phaseDir, 'review.md'), merged.markdown.endsWith('\n') ? merged.markdown : `${merged.markdown}\n`, {
+  writeFileSync(join(phaseDir, 'review.md'), merged.markdown, {
     encoding: 'utf8',
     mode: 0o644,
   })

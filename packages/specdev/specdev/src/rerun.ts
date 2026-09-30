@@ -50,7 +50,7 @@ export function prepareStepRerun(
     loop_count: 0,
     phases: {
       ...status.phases,
-      [phaseId]: nextSteps,
+      [phaseId]: { ...phase, ...nextSteps, prototype: 'pending' },
     },
     last_update: new Date().toISOString(),
   }
@@ -77,6 +77,7 @@ export function setPhaseStepState(
     implementer: 'pending' as const,
     reviewer: 'pending' as const,
     verifier: 'pending' as const,
+    prototype: 'pending' as const,
   }
   return {
     ...status,

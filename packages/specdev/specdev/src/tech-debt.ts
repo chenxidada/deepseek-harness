@@ -163,9 +163,12 @@ function parseActiveTable(markdown: string): TechDebtItem[] {
     const cells = splitRow(line)
     // Expected columns: ID | 源Phase | 模块 | 文件:函数:行号 | 当前行为 | 预期行为 | 类型 | 标签 | 依赖 | 目标Phase | 阻塞 | 来源 | 注册日期
     if (cells.length < 11) continue
+    /* v8 ignore next -- the length check above bounds every column read. */
     const id = cells[0]?.trim() ?? ''
     if (!/^(STUB|GAP|DEBT|SF)-\S+$/i.test(id)) continue
+    /* v8 ignore next -- the length check above bounds every column read. */
     const rawBlocking = cells[10]?.trim() ?? ''
+    /* v8 ignore next -- the length check above bounds every column read. */
     items.push({
       id,
       sourcePhase: cells[1]?.trim() ?? '',

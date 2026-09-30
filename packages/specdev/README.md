@@ -1,5 +1,5 @@
 ---
-description: "The SpecDev group map: Spec-driven workflow runtime, commands, gate/advance enforcement, and role presets for the DeepSeek Harness sdk profile."
+description: "The SpecDev group map: Spec-driven workflow runtime, commands, guard enforcement, and role presets for the DeepSeek Harness ide profile."
 kind: "package-group"
 ---
 
@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-The SpecDev group brings Spec-driven development into the harness: a durable `.specdev` layout under the user workspace, Human Gate confirmation through `ctx.specdev.confirmGate`, session events and the `specdev/status` projection for bridges, plus (in later phases) slash commands, fail-closed pipeline gates, advance hooks, and role agent presets. The default **sdk** profile mounts the SpecDev runtime and disables native `dsh-plan-mode` so Spec `/plan` does not collide with plan-mode.
+The SpecDev group brings Spec-driven development into the harness: a durable `.specdev` layout under the user workspace, Human Gate confirmation through `ctx.specdev.confirmGate`, session events and the `specdev/status` projection for bridges, slash commands, fail-closed pipeline gates, advance guidance, and role agent presets. The **ide** profile stacks [`dsh-specdev-app`](../bundle/specdev-app/README.md), which mounts the runtime, guard, presets, and roster; the **sdk** profile mounts none of them.
 
 ## Table of Contents
 
@@ -24,10 +24,8 @@ The SpecDev group brings Spec-driven development into the harness: a durable `.s
 
 | Package | Role | ctx key |
 |---|---|---|
-| [`specdev`](specdev/README.md) | Workspace root, status I/O, `confirmGate`, events, `specdev/status` projection | `ctx.specdev` |
-| [`specdev-gate`](specdev-gate/README.md) | Fail-closed pipeline-gate (`pre-step` / `pre-execute` / `guard`) | (listeners) |
-| [`specdev-advance`](specdev-advance/README.md) | Role completion → `specdev/advance` guidance | (listeners) |
-| [`command-specdev`](command-specdev/README.md) | Slash commands `/feature`…`/wiki`, `/confirm-gate`, `/status` | (commands registry) |
+| [`specdev`](specdev/README.md) | Workspace root, workflow log authority, `confirmGate`, slash commands, events, `specdev/status` projection, role completion → `specdev/advance` guidance | `ctx.specdev` |
+| [`specdev-guard`](specdev-guard/README.md) | Fail-closed guard (`pre-step` / `pre-execute` / `guard`) for gates, role dispatch, branch, the status mirror, and workspace scope | (listeners) |
 | [`specdev-presets`](specdev-presets/README.md) | Orchestrator + role presets; publishes `presetRoot` | `ctx.specdevPresets` |
 
 Phase 4+ siblings: wiki hardening complete (STUB-002 closed). Phase-runtime git/review/debt helpers live on `ctx.specdev`.
@@ -49,6 +47,6 @@ Phase 4+ siblings: wiki hardening complete (STUB-002 closed). Phase-runtime git/
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-Phase 1 shipped `@deepseek-ai/dsh-specdev` plus the sdk-app mount. Phase 2 adds `command-specdev` and `specdev-presets` (with sdk `agent-presets` roots). Phase 3 ships `specdev-gate` and `specdev-advance`. Phase 4 closes `/implement` + git/review/debt/re-run helpers on `ctx.specdev`. Phase 5 closes `/wiki` + final HG-3 auto wiki → `docs/wiki/` (STUB-002).
+Phase 1 shipped `@deepseek-ai/dsh-specdev` plus the sdk-app mount. Phase 2 adds `specdev-presets` (with sdk `agent-presets` roots). Phase 3 ships the guard. Phase 4 closes `/implement` + git/review/debt/re-run helpers on `ctx.specdev`. Phase 5 closes `/wiki` + final HG-3 auto wiki → `docs/wiki/` (STUB-002). The rework made `workflow.jsonl` the workflow's source of truth (`current-status.json` is a generated mirror), renamed `specdev-gate` to `specdev-guard`, folded `specdev-advance` into `specdev`, and converged the command surface into `specdev` (`/feature`, `/bugfix`, `/research`, `/spec`, `/implement`, `/status`, `/wiki`).
 
 </details>

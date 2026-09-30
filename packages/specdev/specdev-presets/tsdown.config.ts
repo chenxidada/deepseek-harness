@@ -10,8 +10,7 @@ const shared = {
   clean: false,
 }
 
-/** Bundle the service root and the Orchestrator tool-policy plugin entry. */
+/** Bundle the service root entry. */
 export default defineConfig([
   { ...shared, entry: ['lib/types/index.js'] },
-  { ...shared, entry: ['lib/types/orchestrator-tool-policy.js'] },
 ])

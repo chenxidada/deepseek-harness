@@ -12,6 +12,14 @@ import { SpecdevError } from './status.ts'
 export interface PhasePlanNode {
   readonly id: string
   readonly dependencies: readonly string[]
+  /**
+   * Whether this phase changes what the user sees. A UI phase turns on the
+   * visual chain: HG-1.5 freezes the visual baseline, the implementer stops on
+   * a static prototype for the user to confirm, and a fourth reviewer checks
+   * the phase against that baseline. Absent means the plan did not say, which
+   * the gates treat as unknown rather than as "no UI".
+   */
+  readonly ui?: boolean
 }
 
 /** Parsed DAG table from \`phase-plan.md\`. */
@@ -31,6 +39,7 @@ export function extractPhasePlanDagJson(markdown: string): unknown {
   try {
     return JSON.parse(fence[1]) as unknown
   } catch (error: unknown) {
+    /* v8 ignore next -- JSON.parse reports a SyntaxError. */
     const detail = error instanceof Error ? error.message : String(error)
     throw new SpecdevError(`phase-plan.md JSON is invalid: ${detail}`, 'SPECDEV_PHASE_PLAN_INVALID')
   }
@@ -55,6 +64,7 @@ export function parsePhasePlanDag(raw: unknown): PhasePlanDag {
     }
     const id = (entry as { id?: unknown }).id
     const dependencies = (entry as { dependencies?: unknown }).dependencies
+    const ui = (entry as { ui?: unknown }).ui
     if (typeof id !== 'string' || id.trim().length === 0) {
       throw new SpecdevError(`phase-plan phases[${String(index)}].id must be a non-empty string`, 'SPECDEV_PHASE_PLAN_INVALID')
     }
@@ -64,9 +74,29 @@ export function parsePhasePlanDag(raw: unknown): PhasePlanDag {
         'SPECDEV_PHASE_PLAN_INVALID',
       )
     }
-    phases.push({ id: id.trim(), dependencies: dependencies.map(dep => dep.trim()) })
+    if (ui !== undefined && typeof ui !== 'boolean') {
+      throw new SpecdevError(
+        `phase-plan phases[${String(index)}].ui must be a boolean`,
+        'SPECDEV_PHASE_PLAN_INVALID',
+      )
+    }
+    phases.push({
+      id: id.trim(),
+      dependencies: dependencies.map(dep => dep.trim()),
+      ...ui === undefined ? {} : { ui },
+    })
   }
   return { phases }
+}
+
+/**
+ * The `ui` declaration of one phase: `true` / `false`, or `undefined` when the
+ * plan does not carry one.
+ * @param dag - parsed DAG.
+ * @param phaseId - DAG phase id.
+ */
+export function phaseUiOf(dag: PhasePlanDag, phaseId: string): boolean | undefined {
+  return dag.phases.find(phase => phase.id === phaseId.trim())?.ui
 }
 
 /**

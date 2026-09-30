@@ -2,29 +2,37 @@
 
 English | [中文](specdev.zh.md)
 
-SpecDev brings Spec-driven development into a Harness runtime: a durable `.specdev/` layout inside the user workspace, one write path for Human Gates, a durable status document with a session projection for bridges, the phase-runtime helpers that keep git, review, and tech-debt state consistent, and the shipped role presets the workflow dispatches. `ctx.specdev` is the domain service and `ctx.specdevPresets` publishes the preset roster root. The [group README](../../packages/specdev/README.md) maps the packages, and each package README owns its own contract.
+SpecDev brings Spec-driven development into a Harness runtime: a durable `.specdev/` layout inside the user workspace, an append-only workflow log as the workflow's source of truth, one write path for Human Gates, a session projection for bridges, the phase-runtime helpers that keep git, review, and tech-debt state consistent, and the shipped role presets the workflow dispatches. `ctx.specdev` is the domain service and `ctx.specdevPresets` publishes the preset roster root. The [group README](../../packages/specdev/README.md) maps the packages, and each package README owns its own contract.
 
 Source: [`packages/specdev/specdev/src/index.ts`](../../packages/specdev/specdev/src/index.ts)
 
 ## Workspace layout
 
-`.specdev/active-workflow` names the active slug and `.specdev/specs/<slug>/current-status.json` is the durable recovery authority; neither ever lives under `$DSH_HOME`. `resolveRoot` and `active` prefer a candidate folder that already contains `.specdev/`, preferring the folder equal to `cwd` when several match and the first listed otherwise, and fall back to the primary folder (or `cwd`) before a layout exists. `ensureLayout` creates the layout, the constitution and tech-debt templates, and an initial status document, then points `active-workflow` at the slug.
+`.specdev/active-workflow` names the active slug and `.specdev/specs/<slug>/workflow.jsonl` is the workflow's source of truth; neither ever lives under `$DSH_HOME`. Each log line chains to the previous line's SHA-256, so hand edits, reordering, or truncation are refused instead of trusted. `resolveRoot` and `active` prefer a candidate folder that already contains `.specdev/`, preferring the folder equal to `cwd` when several match and the first listed otherwise, and fall back to the primary folder (or `cwd`) before a layout exists. `ensureLayout` creates the layout, the constitution and tech-debt templates, the log's `workflow/init` line, and the generated `current-status.json` mirror, then points `active-workflow` at the slug. A workflow that predates the log keeps its `current-status.json` and is adopted into the log on first touch.
 
 ## Human Gates
 
-`confirmGate` is the only accepted path that may set `human_gates.* = passed`. It rejects an unknown gate id, an empty decision, and a missing active workflow with a stable reason code; it enforces gate order (HG-2 requires HG-1, HG-3 requires HG-2), writes `current-status.json` atomically, appends the whole-view `specdev/gate-decided` session event, and advances the `specdev/status` projection. A refusal leaves the durable document and the gate unchanged.
+`confirmGate` is the only accepted path that may set `human_gates.* = passed`. It rejects an unknown gate id, an empty decision, and a missing active workflow with a stable reason code; it enforces gate order (HG-2 requires HG-1, HG-3 requires HG-2) and, in a workflow whose phase plan declares a UI phase, the visual chain — HG-1.5 requires HG-1 plus a non-empty `visual-baseline.md`, and HG-2 in such a workflow also requires HG-1.5; the per-phase `prototype` gate passes only for the current phase, declared `ui: true`, whose `implementation.md` carries a `## Prototype` section. It appends the `workflow/state` line that carries the transition, re-exports `current-status.json` from the folded log, appends the whole-view `specdev/gate-decided` session event, and advances the `specdev/status` projection. A refusal leaves the log and the gate unchanged.
 
 ## Status snapshot and projection
 
-`snapshot` returns the bridge view of the active workflow, or `null` when no workflow is active: the durable status document is the source of truth for scalars and the tech-debt summary is folded in when the registry parses, while a supplied session contributes the projection's `pendingGate`, `nextAction`, and `techDebtSummary` when the projection has advanced past them. The `specdev/status` projection carries `stateVersion: 1` with a Zod state schema and a wire view schema, and unrelated events return the same state reference. `SessionEventMap` merges the `specdev/workflow`, `specdev/gate-pending`, `specdev/gate-decided`, `specdev/phase`, `specdev/dispatch`, `specdev/review-verdict`, and `specdev/advance` event types, each carrying the whole post-change view that bridges and the projection read.
+`snapshot` returns the bridge view of the active workflow, or `null` when no workflow is active: the folded workflow log is the source of truth for scalars and the tech-debt summary is folded in when the registry parses, while a supplied session contributes the projection's `nextAction` when the projection has advanced past it. The same view carries the two IDE views: `plan` (`SpecdevPlanRow`) lists the phase plan's phases in DAG order with their dependencies and their `done` / `active` / `todo` progress, omitted when `phase-plan.md` is missing or unparsable so a broken plan never fails the status read; `artifacts` (`SpecdevArtifactRow`) lists the workflow-level documents plus every phase's artifacts with workspace-relative POSIX paths and `ready` / `missing` state, its phase rows falling back to the durable status's own phase order when the plan is unreadable. `mirrorSnapshot` reads the exported `current-status.json` alone, so gate authority can report a hand-edited mirror as divergence without ever honoring it. The `specdev/status` projection carries `stateVersion: 1` with a Zod state schema and a wire view schema, and unrelated events return the same state reference. `SessionEventMap` merges the `specdev/workflow`, `specdev/gate-pending`, `specdev/gate-decided`, `specdev/phase`, `specdev/dispatch`, `specdev/review-verdict`, and `specdev/advance` event types, each carrying the whole post-change view that bridges and the projection read.
 
 ## Phase runtime and wiki
 
-The phase helpers keep the workspace git state, the durable status, and the review artifacts in step: `ensurePhaseBranch` creates or re-enters the `impl-<phaseId>` branch, `completePhaseGit` commits the explicitly listed files after HG-3 has passed, `mergePhaseReviews` merges the three perspective reviews into `review.md` and emits the verdict event, `readTechDebt` / `listPhaseEntryDebt` / `presentPhaseEntryDebt` serve the Phase Entry Gate, and `prepareRerun` / `bumpLoopCount` reset or advance the loop counter without touching git. `dispatchRole` wakes a role's child agent with the workflow metadata attached, and `dispatchWiki` writes the workflow's wiki into the workspace `docs/wiki/` in its Standalone and Pipeline modes.
+The phase helpers keep the workspace git state, the durable status, and the review artifacts in step: `ensurePhaseBranch` creates or re-enters the `impl-<phaseId>` branch, `completePhaseGit` commits the explicitly listed files after HG-3 has passed, `mergePhaseReviews` merges the three perspective reviews — plus `review-visual.md` when the phase's plan declares `ui: true` — into `review.md` and emits the verdict event, `readTechDebt` / `listPhaseEntryDebt` / `presentPhaseEntryDebt` serve the Phase Entry Gate, and `prepareRerun` / `bumpLoopCount` reset or advance the loop counter without touching git. `dispatchRole` wakes a role's child agent with the workflow metadata attached, and `dispatchWiki` writes the workflow's wiki into the workspace `docs/wiki/` in its Standalone and Pipeline modes.
+
+## Commands and mounting
+
+The runtime registers `/feature`, `/bugfix`, `/research`, and `/spec` as workflow starts, `/spec` without a description as the design step of the active workflow, and `/implement`, `/status`, and `/wiki` against an existing one; registration happens only while `ctx.commands` is composed. Human Gate decisions are applied by the panel through `confirmGate`, never by a command, and a final Feature HG-3 pass auto-dispatches the wiki role. [`dsh-specdev-app`](../../packages/bundle/specdev-app/README.md) is the bundle that inserts the runtime, the guard, the presets, and the roster; the `ide` profile is the shipped profile that stacks it.
+
+## Scope enforcement
+
+`dsh-specdev-guard` asks before a call's paths reach outside the session workspace, refuses credential paths outright, asks before a write reaches outside the calling role's write scope, and keeps approved directory or session grants in memory for the session tree that owns the call. Each request and decision is appended to that tree's session as `specdev/scope-requested` / `specdev/scope-decided`; the [guard README](../../packages/specdev/specdev-guard/README.md) owns the classification rules, the role write scopes, and the question card's options.
 
 ## Role presets
 
-`ctx.specdevPresets` publishes the shipped roster for composition: `presetRoot` is the absolute `presets/` directory an `agent-presets` composition points its roots at through `!!js` configuration, and `orchestratorPresetId` names the preset the SpecDev sdk session runs as Orchestrator. Role preset ids are `specdev-<role>`; the [presets README](../../packages/specdev/specdev-presets/README.md) lists the shipped set.
+`ctx.specdevPresets` publishes the shipped roster for composition: `presetRoot` is the absolute `presets/` directory an `agent-presets` composition points its roots at through `!!js` configuration. Role preset ids are `specdev-<role>`; the [presets README](../../packages/specdev/specdev-presets/README.md) lists the shipped set. The main session is not a role preset: SpecDev is entered through its commands, and dispatch mounts each role on the child session it creates.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -38,7 +46,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.specdev` — `SpecdevService`
 
-SpecDev service (`ctx.specdev`): workspace root, status I/O, confirmGate, phase-runtime helpers, and projection registration.
+SpecDev service (`ctx.specdev`): workspace root, workflow-log authority, confirmGate, phase-runtime helpers, advance listeners, gate progression, the slash-command surface, and projection registration.
 
 ```ts cordis-catalog
 /**
@@ -59,17 +67,29 @@ active(options: ResolveWorkspaceRootOptions = {}): SpecdevActive | null
  * Read a durable status snapshot for a slug under the resolved layout.
  * @param slug - workflow slug.
  * @param options - workspace resolution options.
- * @returns the durable status parsed from `.specdev/specs/<slug>/current-status.json`.
+ * @returns the status folded from `.specdev/specs/<slug>/workflow.jsonl`, or the
+ * legacy `current-status.json` of a workflow that has no log yet.
  */
 readStatus(slug: string, options: ResolveWorkspaceRootOptions = {}): CurrentStatusJson
 
 /**
- * Ensure `.specdev` layout + initial `current-status.json` for a slug, and
- * point `active-workflow` at it. Real mkdir + atomic write (not a shell).
+ * Ensure `.specdev` layout + the workflow log for a slug, and point
+ * `active-workflow` at it. A workflow without a log yet adopts its durable
+ * `current-status.json` (init line + one carrying state event) so legacy
+ * slugs keep their state; a brand-new slug starts from the initial template.
  * @param opts - slug, initiating command, optional description / roots.
  * @returns the ensured slug with its workspace and layout roots.
  */
 async ensureLayout(opts: EnsureLayoutOptions): Promise<SpecdevActive>
+
+/**
+ * Attach Orchestrator lineage metadata (`specdev.role` / `specdev.slug`) to a
+ * session's agent. Mounts that host sessions but do not depend on this package
+ * call it through the service so SpecDev stays an optional capability.
+ * @param agent - Orchestrator agent to tag.
+ * @param slug - workflow slug the agent drives.
+ */
+attachOrchestratorMetadata(agent: Agent, slug: string): void
 
 /**
  * Programmatic role dispatch: child agent + AC-24 metadata + `specdev/dispatch`
@@ -109,7 +129,8 @@ ensurePhaseBranch( phaseId: string, options: SpecdevGitOptions & { readonly mode
 completePhaseGit( request: { readonly phaseId: string; readonly files: readonly string[] }, options: SpecdevGitOptions, ): CompletePhaseGitResult
 
 /**
- * Merge three Feature-path reviewer reports → `review.md` + emit verdict event.
+ * Merge the Feature-path reviewer reports → `review.md` + emit verdict event.
+ * A phase whose plan declares `ui: true` also merges `review-visual.md`.
  * @param session - parent session receiving `specdev/review-verdict`.
  * @param phaseId - DAG phase id.
  * @param options - workspace resolution.
@@ -160,13 +181,23 @@ async prepareRerun( phaseId: string, step: PhaseStepName, options: ResolveWorksp
 async bumpLoopCount( options: ResolveWorkspaceRootOptions = {}, ): Promise<CurrentStatusJson>
 
 /**
- * Bridge snapshot for the active workflow (file SoT), optionally refreshed
- * against the session projection when a session is provided.
+ * Bridge snapshot for the active workflow (file SoT) with its IDE views —
+ * the phase-plan rows and the artifact rows — optionally refreshed against
+ * the session projection when a session is provided.
  * @param session - optional session whose projection should be consulted.
  * @param options - workspace resolution options.
  * @returns the bridge snapshot, or null when no workflow is active.
  */
 snapshot(session?: Session, options: ResolveWorkspaceRootOptions = {}): SpecdevSnapshot | null
+
+/**
+ * Bridge snapshot of the exported `current-status.json` mirror alone, without
+ * folding the workflow log. Gate authority compares this against the
+ * authoritative view: a hand-edited mirror is a tamper signal, never a grant.
+ * @param options - workspace resolution options.
+ * @returns the mirror snapshot, or null when no workflow is active or the mirror is unreadable.
+ */
+mirrorSnapshot(options: ResolveWorkspaceRootOptions = {}): SpecdevSnapshot | null
 
 /**
  * Sole Human Gate write API. Updates durable JSON, appends

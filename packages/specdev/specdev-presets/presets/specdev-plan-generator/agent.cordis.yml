@@ -1,4 +1,4 @@
-# SpecDev Plan Generator — SpecDev role preset (model A).
+# SpecDev Plan Generator — SpecDev role preset.
 # Metadata: set agent options specdev.role / specdev.slug / specdev.phaseId? on spawn.
 
 - id: persona

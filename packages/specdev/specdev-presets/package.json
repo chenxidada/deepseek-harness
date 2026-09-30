@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-specdev-presets",
-  "description": "SpecDev Orchestrator and role agent presets (model A) with narrowed orchestrator tools",
+  "description": "SpecDev role agent presets and the shipped preset root for roster composition",
   "version": "0.1.3-alpha.1",
   "publishConfig": {
     "access": "public"
@@ -18,33 +18,22 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./orchestrator-tool-policy": {
-      "types": "./lib/types/orchestrator-tool-policy.d.ts",
-      "default": "./lib/orchestrator-tool-policy.js"
-    },
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
-    "lib/orchestrator-tool-policy.js",
     "presets",
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "workspace:^"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-tools": "workspace:^",
-    "@deepseek-ai/dsh-scope": "workspace:^",
-    "@deepseek-ai/dsh-system-prompt": "workspace:^",
-    "@deepseek-ai/dsh-agent": "workspace:^",
-    "@deepseek-ai/dsh-session": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^"
   }
 }

@@ -7,7 +7,7 @@
  */
 
 import { existsSync, statSync } from 'node:fs'
-import { isAbsolute, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { ResolveWorkspaceRootOptions } from './types.ts'
 
 /** Whether `root` contains a `.specdev` directory (not a file). */
@@ -16,24 +16,21 @@ export function hasSpecdevLayout(root: string): boolean {
   try {
     return existsSync(layout) && statSync(layout).isDirectory()
   } catch {
+    /* v8 ignore next -- only the existsSync/statSync race reaches this arm. */
     return false
   }
 }
 
 /**
- * Normalize one absolute candidate path; reject relative or empty values.
+ * Resolve one candidate path to absolute form; reject an empty value.
  * @param value - candidate path from cwd or folder list.
- * @returns absolute resolved path.
+ * @returns the absolute path (a relative value resolves against the process cwd).
  */
 function assertAbsolute(value: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new TypeError('SpecDev workspace path must be a non-empty string')
   }
-  const absolute = resolve(value.trim())
-  if (!isAbsolute(absolute)) {
-    throw new TypeError(`SpecDev workspace path must be absolute, got "${value}"`)
-  }
-  return absolute
+  return resolve(value.trim())
 }
 
 /**
@@ -66,6 +63,7 @@ export function resolveWorkspaceRoot(options: ResolveWorkspaceRootOptions = {}):
       if (matchingCwd !== undefined) return matchingCwd
     }
     const preferred = withLayout[0]
+    /* v8 ignore next 3 -- withLayout was checked non-empty, so its first entry exists. */
     if (preferred === undefined) {
       throw new Error('SpecDev invariant: withLayout was non-empty but first entry missing')
     }
@@ -73,6 +71,7 @@ export function resolveWorkspaceRoot(options: ResolveWorkspaceRootOptions = {}):
   }
 
   const fallback = folders[0] ?? cwd
+  /* v8 ignore next 3 -- candidates was checked non-empty, so it holds a folder or cwd. */
   if (fallback === undefined) {
     throw new Error('SpecDev cannot resolve a workspace root without cwd or folders')
   }
@@ -105,6 +104,19 @@ export function currentStatusPath(layoutRoot: string, slug: string): string {
     throw new TypeError('SpecDev slug must be a non-empty string')
   }
   return join(layoutRoot, 'specs', slug.trim(), 'current-status.json')
+}
+
+/**
+ * Path to `.specdev/specs/<slug>/workflow.jsonl` — the append-only workflow
+ * log that is the workflow's source of truth.
+ * @param layoutRoot - absolute `.specdev` directory.
+ * @param slug - workflow slug.
+ */
+export function workflowLogPath(layoutRoot: string, slug: string): string {
+  if (typeof slug !== 'string' || slug.trim().length === 0) {
+    throw new TypeError('SpecDev slug must be a non-empty string')
+  }
+  return join(layoutRoot, 'specs', slug.trim(), 'workflow.jsonl')
 }
 
 /**

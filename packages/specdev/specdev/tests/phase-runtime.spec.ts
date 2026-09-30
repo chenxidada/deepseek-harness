@@ -19,7 +19,7 @@ import SpecdevService, {
   createInitialStatus,
   ensurePhaseBranch,
   mergeReviewVerdicts,
-  mergeThreePerspectiveReviews,
+  mergePhaseReviews,
   normalizeExplicitFiles,
   parseReviewVerdict,
   parseTechDebtRegistry,
@@ -157,11 +157,28 @@ describe('Phase 4 review merge (AC-43 / VP-2)', () => {
     writeFileSync(join(phaseDir, 'review-correctness.md'), '## 判决：MUST-FIX\n\nbad\n')
     writeFileSync(join(phaseDir, 'review-design.md'), '## Verdict: PASS\nok\n')
     writeFileSync(join(phaseDir, 'review-connectivity.md'), '## 判决：PASS\nok\n')
-    const merged = mergeThreePerspectiveReviews(phaseDir, 'phase-1-p0-core')
+    const merged = mergePhaseReviews(phaseDir, 'phase-1-p0-core')
     expect(merged.verdict).toBe('MUST-FIX')
     const body = readFileSync(join(phaseDir, 'review.md'), 'utf8')
     expect(body).toContain('MUST-FIX')
     expect(parseReviewVerdict(body)).toBe('MUST-FIX')
+  })
+
+  it('visual: true merges review-visual.md and demands it', () => {
+    const root = tempDir('specdev-review-visual-')
+    const phaseDir = join(root, 'phases', 'phase-1-p0-core')
+    mkdirSync(phaseDir, { recursive: true })
+    writeFileSync(join(phaseDir, 'review-correctness.md'), '## 判决：PASS\nok\n')
+    writeFileSync(join(phaseDir, 'review-design.md'), '## 判决：PASS\nok\n')
+    writeFileSync(join(phaseDir, 'review-connectivity.md'), '## 判决：PASS\nok\n')
+    expect(() => mergePhaseReviews(phaseDir, 'phase-1-p0-core', { visual: true }))
+      .toThrow(/review-visual\.md/)
+    writeFileSync(join(phaseDir, 'review-visual.md'), '## 判决：SHOULD-FIX\nhardcoded color\n')
+    const merged = mergePhaseReviews(phaseDir, 'phase-1-p0-core', { visual: true })
+    expect(merged.verdict).toBe('SHOULD-FIX')
+    const body = readFileSync(join(phaseDir, 'review.md'), 'utf8')
+    expect(body).toContain('| visual | SHOULD-FIX |')
+    expect(body).toContain('[review-visual.md](./review-visual.md)')
   })
 
   it('VP-2: MUST-FIX merge does not advance verifier step (stays pending)', () => {
@@ -173,6 +190,7 @@ describe('Phase 4 review merge (AC-43 / VP-2)', () => {
           implementer: 'completed',
           reviewer: 'completed',
           verifier: 'pending',
+          prototype: 'pending',
         },
       },
     }
@@ -234,7 +252,7 @@ describe('Phase 4 Entry Gate + debt (AC-33 / AC-34 / VP-4)', () => {
 `)
     writeStatusFixture(join(slugDir, 'current-status.json'), {
       ...createInitialStatus('wf'),
-      human_gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' },
+      human_gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'passed', hg3: 'pending' },
       current_stage: 'phase-implementation',
       current_phase: 'phase-2-commands',
       phases: {
@@ -242,11 +260,13 @@ describe('Phase 4 Entry Gate + debt (AC-33 / AC-34 / VP-4)', () => {
           implementer: 'completed',
           reviewer: 'completed',
           verifier: 'completed',
+          prototype: 'pending',
         },
         'phase-2-commands': {
           implementer: 'pending',
           reviewer: 'pending',
           verifier: 'pending',
+          prototype: 'pending',
         },
       },
     })
@@ -292,7 +312,7 @@ describe('Phase 4 Entry Gate + debt (AC-33 / AC-34 / VP-4)', () => {
     writeStatusFixture(join(slugDir, 'current-status.json'), {
       ...createInitialStatus('wf'),
       current_phase: 'phase-2-commands',
-      human_gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' },
+      human_gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'passed', hg3: 'pending' },
       current_stage: 'phase-implementation',
     })
     const { ctx, session } = await harness(workspace)
@@ -321,6 +341,7 @@ describe('Phase 4 re-run cascade + archive (AC-44 / AC-45 / VP-5)', () => {
           implementer: 'completed',
           reviewer: 'completed',
           verifier: 'completed',
+          prototype: 'pending',
         },
       },
     }
@@ -330,6 +351,7 @@ describe('Phase 4 re-run cascade + archive (AC-44 / AC-45 / VP-5)', () => {
       implementer: 'pending',
       reviewer: 'pending',
       verifier: 'pending',
+      prototype: 'pending',
     })
 
     const phaseDir = join(tempDir('specdev-archive-'), 'phase')
@@ -356,7 +378,7 @@ describe('Phase 4 HG-3 next phase + dispatch followup (AC-31 / GAP-002)', () => 
     writeFileSync(join(slugDir, 'requirements.md'), '# r\n')
     writeStatusFixture(join(slugDir, 'current-status.json'), {
       ...createInitialStatus('wf'),
-      human_gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' },
+      human_gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'passed', hg3: 'pending' },
       current_stage: 'phase-implementation',
       current_phase: 'phase-1-p0-core',
       phases: {
@@ -364,6 +386,7 @@ describe('Phase 4 HG-3 next phase + dispatch followup (AC-31 / GAP-002)', () => 
           implementer: 'completed',
           reviewer: 'completed',
           verifier: 'completed',
+          prototype: 'pending',
         },
       },
     })
@@ -431,6 +454,7 @@ describe('Phase 4 HG-3 next phase + dispatch followup (AC-31 / GAP-002)', () => 
           implementer: 'completed',
           reviewer: 'completed',
           verifier: 'completed',
+          prototype: 'pending',
         },
       },
     })

@@ -1,4 +1,4 @@
-# SpecDev Wiki — SpecDev role preset (model A).
+# SpecDev Wiki — SpecDev role preset.
 # Metadata: set agent options specdev.role / specdev.slug / specdev.phaseId? on spawn.
 # Output root: workspace docs/wiki/ (never $DSH_HOME). No Knowledge Base sync (AC-55).
 

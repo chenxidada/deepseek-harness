@@ -26,9 +26,11 @@ const stepStateSchema = zod.union([
 ])
 const gateIdSchema = zod.union([
   zod.literal('hg1'),
+  zod.literal('hg1_5'),
   zod.literal('hg2'),
   zod.literal('hg3'),
   zod.literal('phase-entry'),
+  zod.literal('prototype'),
 ])
 
 const stepsSchema: ZodType<SpecdevSnapshot['steps']> = zod.record(
@@ -37,8 +39,33 @@ const stepsSchema: ZodType<SpecdevSnapshot['steps']> = zod.record(
     implementer: stepStateSchema,
     reviewer: stepStateSchema,
     verifier: stepStateSchema,
+    prototype: gateStateSchema,
   }).strict(),
-) as ZodType<SpecdevSnapshot['steps']>
+)
+
+/** Visual chain declarations a snapshot carries (schema v3). */
+const uiViewSchema = zod.object({
+  workflow: zod.boolean(),
+  phases: zod.record(
+    zod.string().min(1),
+    zod.union([zod.boolean(), zod.literal('unknown')]),
+  ),
+}).strict()
+
+/** One ordered phase-plan row a snapshot carries (schema v4). */
+const planRowSchema = zod.object({
+  id: zod.string().min(1),
+  dependencies: zod.array(zod.string().min(1)),
+  status: zod.union([zod.literal('done'), zod.literal('active'), zod.literal('todo')]),
+}).strict()
+
+/** One artifact row a snapshot carries (schema v4). */
+const artifactRowSchema = zod.object({
+  path: zod.string().min(1),
+  label: zod.string().min(1),
+  phaseId: zod.string().min(1).nullable(),
+  status: zod.union([zod.literal('ready'), zod.literal('missing')]),
+}).strict()
 
 /** Wire / fold schema for one SpecDev snapshot. */
 export const specdevSnapshotSchema: ZodType<SpecdevSnapshot> = zod.object({
@@ -48,26 +75,31 @@ export const specdevSnapshotSchema: ZodType<SpecdevSnapshot> = zod.object({
   phase: zod.string().min(1).nullable(),
   gates: zod.object({
     hg1: gateStateSchema,
+    hg1_5: gateStateSchema,
     hg2: gateStateSchema,
     hg3: gateStateSchema,
   }).strict(),
   steps: stepsSchema,
   pendingGate: gateIdSchema.nullable(),
   loopCount: zod.number().int().nonnegative(),
+  ui: uiViewSchema,
   nextAction: zod.string().min(1).optional(),
   techDebtSummary: zod.object({
     blocking: zod.number().int().nonnegative(),
     total: zod.number().int().nonnegative(),
   }).strict().optional(),
-  // Schema v2 additive fields (optional for backward-compatible fold of v1 events).
+  // Schema v2 additive fields; optional because a workflow may not record them.
   initiatingCommand: zod.string().min(1).optional(),
   pipelineMode: zod.string().min(1).optional(),
+  // Schema v4 additive IDE views; optional because a plan may not be readable.
+  plan: zod.array(planRowSchema).optional(),
+  artifacts: zod.array(artifactRowSchema).optional(),
 }).strict() as ZodType<SpecdevSnapshot>
 
 const projectionStateSchema: ZodType<SpecdevStatusProjectionState> = zod.object({
   status: specdevSnapshotSchema.nullable(),
   failure: zod.string().min(1).nullable(),
-}).strict() as ZodType<SpecdevStatusProjectionState>
+}).strict()
 
 /** SpecDev event types that carry a whole `snapshot` field. */
 const SNAPSHOT_EVENT_TYPES = new Set([
@@ -133,7 +165,7 @@ export const specdevStatusProjectionDefinition = {
   init: (): SpecdevStatusProjectionState => ({ status: null, failure: null }),
   apply: applySpecdevProjection,
   wire: {
-    viewSchema: specdevSnapshotSchema.nullable() as ZodType<SpecdevSnapshot | null>,
+    viewSchema: specdevSnapshotSchema.nullable(),
     view: state => state.status,
   },
   stateVersion: 1,

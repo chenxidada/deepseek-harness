@@ -8,9 +8,9 @@
 
 import { randomUUID } from 'node:crypto'
 import { Context } from '@deepseek-ai/cordis'
-import { Inbox, type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
+import { Inbox, type Agent, type AgentRegistry, type AgentStatus } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId, type SessionStore } from '@deepseek-ai/dsh-session'
 import { attachSpecdevMetadata, parseSpecdevRole } from './metadata.ts'
 import type {
   SpecdevDispatchEvent,
@@ -84,10 +84,12 @@ export function defaultRolePrompt(
       return `SpecDev: review design consistency for \`${ctx.slug}\`.${phase} Write review-design.md.`
     case 'reviewer-connectivity':
       return `SpecDev: review integration connectivity for \`${ctx.slug}\`.${phase} Write review-connectivity.md.`
+    case 'reviewer-visual':
+      return `SpecDev: review visual consistency against the frozen baseline for \`${ctx.slug}\`.${phase} Write review-visual.md.`
     case 'reviewer':
       return `SpecDev: single-perspective review for \`${ctx.slug}\` (brief).${phase} Write review.md.`
     case 'verifier':
-      return `SpecDev: independently verify the phase for \`${ctx.slug}\`.${phase} Write verification.md.`
+      return `SpecDev: independently verify the phase for \`${ctx.slug}\`.${phase} Write verification.md. A UI phase verifies against visual-baseline.md and review-visual.md too.`
     case 'wiki':
       // Prefer {@link wikiRolePrompt} via dispatchWiki; this fallback is Standalone.
       return [
@@ -206,7 +208,7 @@ export async function dispatchSpecdevRole(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error)
     if (!message.includes('no agent factory')) throw error
-    agent = registerLineageFallbackAgent(ctx, parent, childSessionId, cwd, presetId)
+    agent = registerLineageFallbackAgent(sessions, agents, parent, childSessionId, cwd, presetId)
     factoryCreated = false
     mounted = false
   }
@@ -262,17 +264,13 @@ export async function dispatchSpecdevRole(
  * no agent-loop factory is loaded (command unit tests / minimal hosts).
  */
 function registerLineageFallbackAgent(
-  ctx: Context,
+  sessions: SessionStore,
+  agents: AgentRegistry,
   parent: Agent,
   childSessionId: SessionId,
   cwd: string | undefined,
   presetId: string,
 ): Agent {
-  const sessions = ctx.get('sessions')
-  const agents = ctx.get('agents')
-  if (sessions === undefined || agents === undefined) {
-    throw new Error('dispatchSpecdevRole fallback requires ctx.sessions and ctx.agents')
-  }
   const session = sessions.create(childSessionId, {
     meta: {
       ...cwd === undefined ? {} : { cwd },

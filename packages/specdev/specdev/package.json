@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-specdev",
-  "description": "SpecDev domain runtime: workspace .specdev resolution, current-status I/O, confirmGate, session events, and specdev/status projection",
+  "description": "SpecDev domain runtime: workspace .specdev resolution, workflow log authority, confirmGate, slash commands, session events, advance guidance, and specdev/status projection",
   "version": "0.1.3-alpha.1",
   "publishConfig": {
     "access": "public"
@@ -34,6 +34,7 @@
   "peerDependencies": {
     "@deepseek-ai/dsh-agent": "workspace:^",
     "@deepseek-ai/dsh-atomic-write": "workspace:^",
+    "@deepseek-ai/dsh-commands": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
     "@deepseek-ai/dsh-session": "workspace:^",
     "@deepseek-ai/dsh-session-projection": "workspace:^",
@@ -45,6 +46,7 @@
   "devDependencies": {
     "@deepseek-ai/dsh-agent": "workspace:^",
     "@deepseek-ai/dsh-atomic-write": "workspace:^",
+    "@deepseek-ai/dsh-commands": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
     "@deepseek-ai/dsh-session": "workspace:^",
     "@deepseek-ai/dsh-session-projection": "workspace:^",

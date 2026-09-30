@@ -1,0 +1,3 @@
+name: SpecDev Reviewer (Visual)
+description: Parallel review of a UI phase: tokens, layout, and states against the frozen visual baseline.
+order: 21

@@ -11,8 +11,11 @@ import {
   type CurrentStatusJson,
   type SpecdevGateId,
   type SpecdevGateState,
+  type SpecdevPhaseSteps,
   type SpecdevSnapshot,
+  type SpecdevStatePatch,
   type SpecdevStepState,
+  type SpecdevUiView,
 } from './types.ts'
 
 const STEP_STATES: ReadonlySet<string> = new Set(['pending', 'in_progress', 'completed', 'failed'])
@@ -35,11 +38,12 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>
 }
 
-/** Validate one durable step triple. */
+/** Validate one durable step triple plus its prototype state. */
 function parseStep(value: unknown, label: string): {
   implementer: SpecdevStepState
   reviewer: SpecdevStepState
   verifier: SpecdevStepState
+  prototype: SpecdevGateState
 } {
   const record = asRecord(value)
   if (record === undefined) {
@@ -54,10 +58,20 @@ function parseStep(value: unknown, label: string): {
       )
     }
   }
+  const prototype = record.prototype
+  if (prototype !== undefined && (typeof prototype !== 'string' || !GATE_STATES.has(prototype))) {
+    throw new SpecdevError(
+      `current-status phases.${label}.prototype must be pending|passed`,
+      'SPECDEV_STATUS_INVALID',
+    )
+  }
   return {
     implementer: record.implementer as SpecdevStepState,
     reviewer: record.reviewer as SpecdevStepState,
     verifier: record.verifier as SpecdevStepState,
+    // A phase written before the visual chain has no prototype state: nobody
+    // confirmed one, so it is pending.
+    prototype: (prototype as SpecdevGateState | undefined) ?? 'pending',
   }
 }
 
@@ -98,6 +112,10 @@ export function parseCurrentStatus(raw: unknown): CurrentStatusJson {
       throw new SpecdevError(`current-status.human_gates.${key} must be pending|passed`, 'SPECDEV_STATUS_INVALID')
     }
   }
+  const hg1_5 = gates.hg1_5
+  if (hg1_5 !== undefined && (typeof hg1_5 !== 'string' || !GATE_STATES.has(hg1_5))) {
+    throw new SpecdevError('current-status.human_gates.hg1_5 must be pending|passed', 'SPECDEV_STATUS_INVALID')
+  }
   const phasesRaw = asRecord(record.phases)
   if (phasesRaw === undefined) {
     throw new SpecdevError('current-status.phases must be an object', 'SPECDEV_STATUS_INVALID')
@@ -115,6 +133,9 @@ export function parseCurrentStatus(raw: unknown): CurrentStatusJson {
     loop_count: record.loop_count,
     human_gates: {
       hg1: gates.hg1 as SpecdevGateState,
+      // A status written before the visual chain carries no HG-1.5: nobody
+      // released a visual baseline, and only a UI workflow ever waits on one.
+      hg1_5: (hg1_5 as SpecdevGateState | undefined) ?? 'pending',
       hg2: gates.hg2 as SpecdevGateState,
       hg3: gates.hg3 as SpecdevGateState,
     },
@@ -171,9 +192,11 @@ export async function writeCurrentStatusFile(path: string, status: CurrentStatus
 /**
  * Infer the pending Human Gate from durable gate flags and stage.
  * @param status - durable status.
+ * @param uiWorkflow - whether the phase plan declares a UI phase, which orders HG-1.5 before HG-2.
  */
-export function inferPendingGate(status: CurrentStatusJson): SpecdevGateId | null {
+export function inferPendingGate(status: CurrentStatusJson, uiWorkflow: boolean): SpecdevGateId | null {
   if (status.human_gates.hg1 === 'pending') return 'hg1'
+  if (uiWorkflow && status.human_gates.hg1_5 === 'pending') return 'hg1_5'
   if (status.human_gates.hg2 === 'pending') return 'hg2'
   if (status.human_gates.hg3 === 'pending') return 'hg3'
   return null
@@ -182,11 +205,13 @@ export function inferPendingGate(status: CurrentStatusJson): SpecdevGateId | nul
 /**
  * Map durable status into the bridge/projection snapshot shape.
  * @param status - durable status.
+ * @param ui - visual chain declarations read from the phase plan.
  * @param pendingGate - optional override for pending gate.
  */
 export function snapshotFromStatus(
   status: CurrentStatusJson,
-  pendingGate: SpecdevGateId | null = inferPendingGate(status),
+  ui: SpecdevUiView,
+  pendingGate: SpecdevGateId | null = inferPendingGate(status, ui.workflow),
 ): SpecdevSnapshot {
   const snap: SpecdevSnapshot = {
     schemaVersion: SPECDEV_SCHEMA_VERSION,
@@ -197,6 +222,7 @@ export function snapshotFromStatus(
     steps: { ...status.phases },
     pendingGate,
     loopCount: status.loop_count,
+    ui,
   }
   if (status.initiating_command !== undefined) {
     return {
@@ -232,7 +258,7 @@ export function createInitialStatus(
     current_stage: 'requirement-analysis',
     current_phase: null,
     loop_count: 0,
-    human_gates: { hg1: 'pending', hg2: 'pending', hg3: 'pending' },
+    human_gates: { hg1: 'pending', hg1_5: 'pending', hg2: 'pending', hg3: 'pending' },
     phases: {},
     last_update: now,
   }
@@ -248,9 +274,45 @@ export function createInitialStatus(
 }
 
 /**
+ * The durable step record of one phase, defaulting every field for a phase the
+ * status does not carry yet.
+ * @param status - durable status.
+ * @param phaseId - DAG phase id.
+ */
+export function phaseStepsOf(
+  status: CurrentStatusJson,
+  phaseId: string,
+): SpecdevPhaseSteps {
+  return status.phases[phaseId]
+    ?? { implementer: 'pending', reviewer: 'pending', verifier: 'pending', prototype: 'pending' }
+}
+
+/**
  * Ensure parent directories exist for a status path.
  * @param dir - directory to create recursively.
  */
 export function ensureDirectory(dir: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o755 })
+}
+
+/** State fields a workflow-log patch compares. */
+const STATE_PATCH_FIELDS = ['current_stage', 'current_phase', 'loop_count', 'phases', 'human_gates'] as const
+
+/**
+ * Diff two durable statuses into the log patch that reproduces the change.
+ *
+ * Locked to the fields a transition may move: the workflow identity lives in
+ * the log's init line, and `last_update` follows the appended event timestamp,
+ * so a diff that only moved `last_update` yields an empty patch.
+ *
+ * @param before - status before the change.
+ * @param after - status after the change.
+ * @returns the patch to append; empty when only `last_update` moved.
+ */
+export function statusStatePatch(before: CurrentStatusJson, after: CurrentStatusJson): SpecdevStatePatch {
+  const patch: Record<string, unknown> = {}
+  for (const field of STATE_PATCH_FIELDS) {
+    if (JSON.stringify(before[field]) !== JSON.stringify(after[field])) patch[field] = after[field]
+  }
+  return patch
 }
