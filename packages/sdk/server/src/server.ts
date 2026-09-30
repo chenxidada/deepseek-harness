@@ -25,7 +25,6 @@ import {
 import type SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import type { SubagentRunEndInfo } from '@deepseek-ai/dsh-subagent'
 import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek'
-import { attachOrchestratorMetadata } from '@deepseek-ai/dsh-specdev'
 import type {
   InitializeParams,
   InitializeResult,
@@ -407,9 +406,8 @@ export class HarnessSdkJsonRpcServer {
   }
 
   private async createSession(sessionId: string): Promise<SessionRecord> {
-    // SpecDev model A (sdk-app): when agent-presets is present, join the
-    // configured default (specdev-orchestrator) so persona + tool policy apply.
-    // Rosterless deployments keep host-plane composition (no setup mount).
+    // Join the deployment's default agent preset when a roster is composed;
+    // rosterless deployments keep host-plane composition (no setup mount).
     const presets = this.ctx.get('agentPresets') as {
       readonly defaultId: string
       mount(agentCtx: Context, id?: string): Promise<unknown>
@@ -433,14 +431,6 @@ export class HarnessSdkJsonRpcServer {
         await presets?.mount(agentCtx)
       },
     })
-
-    const specdev = this.ctx.get('specdev') as {
-      active?: (options?: { cwd?: string }) => { slug: string } | null
-    } | undefined
-    if (typeof specdev?.active === 'function') {
-      const active = specdev.active({ cwd: this.cwd })
-      attachOrchestratorMetadata(handle.agent, active?.slug ?? `sdk-${sessionId}`)
-    }
 
     const rec: SessionRecord = { handle, selection }
     this.sessions.set(sessionId, rec)

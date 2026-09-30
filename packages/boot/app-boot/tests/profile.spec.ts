@@ -201,7 +201,7 @@ describe('loadProfile', () => {
       patchReload: 'startup',
     })
     expect(PROFILE_TEMPLATES.ide).toEqual({
-      bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-sdk-app', '@deepseek-ai/dsh-ide'],
+      bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-sdk-app', '@deepseek-ai/dsh-ide', '@deepseek-ai/dsh-specdev-app'],
       patchReload: 'startup',
     })
     expect(PROFILE_TEMPLATES['sdk-minimal']).toEqual({

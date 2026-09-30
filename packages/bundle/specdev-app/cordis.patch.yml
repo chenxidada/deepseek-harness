@@ -1,0 +1,39 @@
+# The SpecDev application over dsh-sdk-app: workflow runtime, gate/scope guard,
+# and the role preset root its dispatch mounts. Referenced by the ide profile
+# only — the sdk profile stays rosterless and SpecDev-free.
+
+- insert:
+    # Host-owned opt-in the shipped `standard` preset samples: its delegation
+    # tools set `modelSelectionSettings`, and `dsh-tool-subagent` refuses to
+    # mount without this row in the Host scope. The default above makes this
+    # deployment run that preset, so the row belongs to the same layer that
+    # composes the roster — a deployment without one stays rosterless.
+    - id: subagent-model-selection-settings
+      name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
+
+    - id: specdev
+      name: '@deepseek-ai/dsh-specdev'
+
+    - id: specdev-guard
+      name: '@deepseek-ai/dsh-specdev-guard'
+      inject: [specdev, tools, sessionProjections]
+
+    - id: specdev-presets
+      name: '@deepseek-ai/dsh-specdev-presets'
+
+    # The IDE's default agent stays the general `standard` preset: SpecDev is
+    # entered through its commands, so the main session keeps a general agent's
+    # capabilities instead of a workflow role's. This layer adds the SpecDev
+    # preset root for the role children dispatch mounts; it must not replace the
+    # deployment default with a workflow role, and the user root stays out so
+    # the product never mounts a locally authored composition.
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      inject: [specdevPresets]
+      config:
+        default: standard
+        includeShippedRoot: true
+        includeUserRoot: false
+        roots:
+          - path: !!js specdevPresets.presetRoot
+            trust: system

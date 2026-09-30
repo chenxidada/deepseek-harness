@@ -129,6 +129,7 @@ const SENTENCE_MODEL_EXPERIENCE: Readonly<Record<string, SentenceContract>> = {
   'packages/host/plugin-inventory': { kind: 'none', reason: 'Host-side read-only Loader projection; registers nothing model-facing.' },
   'packages/bundle/base': { kind: 'indirect', reason: 'The bundle is a patch-list carrier; each inserted row\'s package owns its model-facing behavior.' },
   'packages/bundle/ide': { kind: 'none', reason: 'The ide layer only inserts the Host bridge and renames the sdk-app profile; model-facing persona and tools remain owned by dsh-sdk-app and dsh-base.' },
+  'packages/bundle/specdev-app': { kind: 'none', reason: 'The bundle only inserts SpecDev rows; the model-facing persona, preset roster, and tool policy belong to dsh-agent-presets and dsh-specdev-presets.' },
   'packages/bundle/headless': { kind: 'none', reason: 'The one-shot runner submits the task as an ordinary user message; prompts and tools belong to the composed base and headless bundles.' },
   'packages/ide/ide-bridge': { kind: 'none', reason: 'The bridge only relays Host interaction outcomes and registers no prompt, schema, or result text.' },
   'packages/llm/llm': { kind: 'none', reason: 'The adapter registry forwards already-assembled requests unchanged.' },

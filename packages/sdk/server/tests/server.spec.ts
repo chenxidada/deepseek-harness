@@ -500,7 +500,7 @@ describe('HarnessSdkJsonRpcServer', () => {
   })
 
   it('inherits the parent agentPreset when forking a live parent', async () => {
-    const composedPreset = vi.fn(() => 'specdev-orchestrator')
+    const composedPreset = vi.fn(() => 'specdev-implementer')
     const composeFrom = vi.fn()
     const childCtx = { on: vi.fn(() => () => undefined) } as unknown as Context
     const create = vi.fn(async (options: {
@@ -541,7 +541,7 @@ describe('HarnessSdkJsonRpcServer', () => {
         cwd: '/tmp',
         parentSession: 'parent',
         isSeeded: true,
-        agentPreset: 'specdev-orchestrator',
+        agentPreset: 'specdev-implementer',
       },
     })
     await server.shutdown()
@@ -1278,8 +1278,9 @@ describe('HarnessSdkJsonRpcServer', () => {
     await server.shutdown()
   })
 
-  it('mounts default agent preset and attaches orchestrator metadata when agentPresets+specdev exist', async () => {
-    const mount = vi.fn(async () => ({ id: 'specdev-orchestrator' }))
+  it('mounts the deployment default preset and leaves SpecDev metadata to workflow entry', async () => {
+    const mount = vi.fn(async () => ({ id: 'standard' }))
+    const attach = vi.fn()
     const create = vi.fn(async (options: {
       sessionId: string
       meta?: { agentPreset?: string }
@@ -1303,10 +1304,10 @@ describe('HarnessSdkJsonRpcServer', () => {
       agents: { create, get: () => undefined },
       get(name: string) {
         if (name === 'agentPresets') {
-          return { defaultId: 'specdev-orchestrator', mount }
+          return { defaultId: 'standard', mount }
         }
         if (name === 'specdev') {
-          return { active: () => ({ slug: 'demo-workflow' }) }
+          return { active: () => ({ slug: 'demo-workflow' }), attachOrchestratorMetadata: attach }
         }
         return undefined
       },
@@ -1318,14 +1319,16 @@ describe('HarnessSdkJsonRpcServer', () => {
       cwd: string
     }
     internal.cwd = '/tmp'
-    const rec = await internal.createSession('orch-main')
+    const rec = await internal.createSession('main')
     expect(create).toHaveBeenCalledOnce()
     expect(create.mock.calls[0]?.[0]).toMatchObject({
-      meta: { cwd: '/tmp', agentPreset: 'specdev-orchestrator' },
+      meta: { cwd: '/tmp', agentPreset: 'standard' },
     })
     expect(mount).toHaveBeenCalledOnce()
-    expect(rec.handle.agent.options['specdev.role']).toBe('orchestrator')
-    expect(rec.handle.agent.options['specdev.slug']).toBe('demo-workflow')
+    // Only a workflow entry attaches specdev.* metadata; a fresh session is not
+    // an Orchestrator.
+    expect(attach).not.toHaveBeenCalled()
+    expect(rec.handle.agent.options['specdev.role']).toBeUndefined()
   })
 
   it('settles every teardown and aggregates multiple failures', async () => {

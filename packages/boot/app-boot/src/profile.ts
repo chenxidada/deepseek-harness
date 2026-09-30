@@ -152,7 +152,12 @@ export const PROFILE_TEMPLATES: Record<string, ProfileTemplate> = {
     patchReload: 'startup',
   },
   ide: {
-    bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-sdk-app', '@deepseek-ai/dsh-ide'],
+    bundles: [
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-sdk-app',
+      '@deepseek-ai/dsh-ide',
+      '@deepseek-ai/dsh-specdev-app',
+    ],
     patchReload: 'startup',
   },
   'sdk-minimal': {
