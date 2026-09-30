@@ -29,6 +29,7 @@ import {
   type PromptImage,
   type RejectSendReason,
   type SlashCandidate,
+  type SpecdevGateDecision,
   type WebviewToHostMessage,
 } from './protocol.ts'
 
@@ -187,13 +188,20 @@ export interface ChatPanelHostDeps {
    */
   requestInterruptSubagent?: (parentSessionId: string, childSessionId: string) => Promise<void>
   /**
-   * Decide one pending SpecDev Human Gate from its status card. The Extension
-   * owns the decision presenter and the runtime write, which is the only
-   * accepted path for a gate decision.
+   * Decide one pending SpecDev Human Gate from its status card. The card carries
+   * the decision and its optional note, and the Extension owns the runtime write,
+   * which is the only accepted path for a gate decision.
    * @param sessionId - session owning the workflow log.
    * @param gate - gate the card reported as pending.
+   * @param decision - decision the human picked on the card.
+   * @param note - optional note recorded with the decision; a rejection requires one.
    */
-  requestSpecdevGate?: (sessionId: string, gate: string) => Promise<void>
+  requestSpecdevGate?: (
+    sessionId: string,
+    gate: string,
+    decision: SpecdevGateDecision,
+    note?: string,
+  ) => Promise<void>
   /**
    * Read the `/` menu catalogs for one session: commands, agent presets, skills.
    * The Extension assembles them from the runtime and orders them by group.
@@ -445,8 +453,9 @@ export interface ChatPanelHostDeps {
   /**
    * Open a reference card path using extension-local selection meta (AC-4).
    * @param path - workspace-relative path from the card.
+   * @param line - 1-based line the reference names, when it names one.
    */
-  requestOpenReference?: (path: string) => Promise<void>
+  requestOpenReference?: (path: string, line?: number) => Promise<void>
   /**
    * Switch active Tab from in-panel chrome (AC-11).
    * @param tabId - Tab to activate.
@@ -866,9 +875,14 @@ export class ChatPanelHost {
    * Push one session's SpecDev status (or its absence) to the Webview.
    * @param sessionId - session whose workspace workflow this status describes.
    * @param snapshot - status the runtime served, or null when no workflow is active.
+   * @param lastScope - latest grant the session recorded, when it recorded one.
    */
-  pushSpecdevStatus(sessionId: string, snapshot: BridgeSpecdevSnapshot | null): void {
-    this.post({ type: 'specdev/status', sessionId, snapshot })
+  pushSpecdevStatus(
+    sessionId: string,
+    snapshot: BridgeSpecdevSnapshot | null,
+    lastScope?: { decision: 'once' | 'directory' | 'session'; paths: string[] },
+  ): void {
+    this.post({ type: 'specdev/status', sessionId, snapshot, ...lastScope === undefined ? {} : { lastScope } })
   }
 
   /**
@@ -1248,11 +1262,20 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/specdev-gate') {
       try {
-        await this.deps.requestSpecdevGate?.(message.sessionId, message.gate)
+        await this.deps.requestSpecdevGate?.(
+          message.sessionId,
+          message.gate,
+          message.decision,
+          message.note,
+        )
       } catch (error) {
         // A refused decision carries the runtime's own gate-order or artifact reason.
         this.pushBanner(error instanceof Error ? error.message : String(error), 'specdev-gate')
       }
+      return
+    }
+    if (message.type === 'action/prefill-composer') {
+      this.prefillComposer(message.text)
       return
     }
     if (message.type === 'action/restore-more') {
@@ -1442,7 +1465,7 @@ export class ChatPanelHost {
       return
     }
     if (message.type === 'action/open-reference') {
-      await this.deps.requestOpenReference?.(message.path)
+      await this.deps.requestOpenReference?.(message.path, message.line)
       return
     }
     if (message.type === 'interaction/approve') {

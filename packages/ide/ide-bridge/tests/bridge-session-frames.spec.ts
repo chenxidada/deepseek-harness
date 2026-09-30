@@ -878,6 +878,50 @@ describe('ide-bridge approval/policy frames', () => {
       expect(await roundTrip(harness, { kind: 'approval/policy', id: 'ap-override', sessionId: 'sess-policy' }))
         .toEqual({ kind: 'approval/policy/response', id: 'ap-override', ok: true, policy: 'never' })
     })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: (id: string) => id === session.id ? session : undefined })
+      ctx.provide(APPROVAL_SERVICE, {
+        config: {},
+        overrideOf: () => undefined,
+        setPolicy: () => {},
+      })
+    }, async (harness) => {
+      // With neither a logged override nor a configured policy the runtime's own default answers.
+      expect(await roundTrip(harness, { kind: 'approval/policy', id: 'ap-fallback', sessionId: 'sess-policy' }))
+        .toEqual({ kind: 'approval/policy/response', id: 'ap-fallback', ok: true, policy: 'ask' })
+    })
+
+    const errorSession = { id: 'sess-policy-error' }
+    const textSession = { id: 'sess-policy-text' }
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, {
+        get: (id: string) => id === errorSession.id ? errorSession : id === textSession.id ? textSession : undefined,
+      })
+      ctx.provide(APPROVAL_SERVICE, {
+        config: {},
+        overrideOf: (target: { id: string }) => {
+          if (target.id === errorSession.id) throw new Error('policy store is not foldable')
+          throw 'policy store is unreachable'
+        },
+        setPolicy: () => {},
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'approval/policy', id: 'ap-error', sessionId: 'sess-policy-error' }))
+        .toEqual({
+          kind: 'approval/policy/response',
+          id: 'ap-error',
+          ok: false,
+          error: 'policy store is not foldable',
+        })
+      expect(await roundTrip(harness, { kind: 'approval/policy', id: 'ap-text', sessionId: 'sess-policy-text' }))
+        .toEqual({
+          kind: 'approval/policy/response',
+          id: 'ap-text',
+          ok: false,
+          error: 'policy store is unreachable',
+        })
+    })
   })
 
   it('switches the policy of a live agent and reports a session without one', async () => {
@@ -2384,6 +2428,188 @@ describe('ide-bridge Host frame service-failure paths', () => {
       await ctx.fiber.dispose()
     }
   })
+
+  it('reports a non-Error failure from an asynchronous handler by its string form', async () => {
+    const ref = {
+      attachmentId: 'sha256:0000000000000000000000000000000000000000000000000000000000000001',
+      mediaType: 'image/png',
+      width: 1,
+      height: 1,
+      bytes: 1,
+    }
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_PERSISTENCE_SERVICE, {
+        stat: async () => {
+          throw 'log store is offline'
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/stat', id: 'st-text', sessionId: 'sess-text' }))
+        .toEqual({ kind: 'session/stat/response', id: 'st-text', ok: false, error: 'log store is offline' })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => ({ id: 'sess-text' }) })
+      ctx.provide(SESSION_PROJECTION_REGISTRY_SERVICE, {
+        snapshot: () => {
+          throw 'unit registry is folded elsewhere'
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'projection/read', id: 'pr-text', sessionId: 'sess-text' }))
+        .toEqual({
+          kind: 'projection/read/response',
+          id: 'pr-text',
+          ok: false,
+          error: 'unit registry is folded elsewhere',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_QUERY_SERVICE, {
+        searchSessions: async () => {
+          throw 'search index is unreachable'
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/search', id: 'sq-text', query: 'needle' }))
+        .toEqual({ kind: 'session/search/response', id: 'sq-text', ok: false, error: 'search index is unreachable' })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(ATTACHMENT_SERVICE, {
+        readImage: async () => {
+          throw 'attachment object is gone'
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'attachment/read', id: 'ar-text', ref }))
+        .toEqual({ kind: 'attachment/read/response', id: 'ar-text', ok: false, error: 'attachment object is gone' })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SUBAGENT_SERVICE, {
+        listChildren: async () => {
+          throw 'projection fold is unavailable'
+        },
+        listDescendants: async () => [],
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/list',
+        id: 'sa-text',
+        sessionId: 'sess-parent',
+        scope: 'children',
+      })).toEqual({
+        kind: 'subagent/list/response',
+        id: 'sa-text',
+        ok: false,
+        error: 'projection fold is unavailable',
+      })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SUBAGENT_SERVICE, {
+        prompt: async () => {
+          throw 'child inbox is closed'
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/prompt',
+        id: 'sp-text',
+        parentSessionId: 'sess-parent',
+        childSessionId: 'sess-child',
+        text: 'keep going',
+      })).toEqual({
+        kind: 'subagent/prompt/response',
+        id: 'sp-text',
+        ok: false,
+        error: 'child inbox is closed',
+      })
+    })
+  })
+
+  it('reports a non-Error failure from a synchronous handler by its string form', async () => {
+    const session = { id: 'sess-text' }
+    await withBridge((ctx) => {
+      ctx.provide(SUBAGENT_SERVICE, {
+        interrupt: () => {
+          throw 'child does not belong to this parent'
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'subagent/interrupt',
+        id: 'si-text',
+        parentSessionId: 'sess-parent',
+        childSessionId: 'sess-child',
+      })).toEqual({
+        kind: 'subagent/interrupt/response',
+        id: 'si-text',
+        ok: false,
+        error: 'child does not belong to this parent',
+      })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SPECDEV_SERVICE, {
+        snapshot: () => {
+          throw 'current-status.json is unreadable'
+        },
+        confirmGate: async () => ({ ok: true }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'specdev/snapshot', id: 'sd-text', sessionId: 'sess-text' }))
+        .toEqual({
+          kind: 'specdev/snapshot/response',
+          id: 'sd-text',
+          ok: false,
+          error: 'current-status.json is unreadable',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SESSION_TITLE_SERVICE, {
+        rename: () => {
+          throw 'session title must contain visible characters'
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/rename', id: 'rn-text', sessionId: 'sess-text', title: '   ' }))
+        .toEqual({
+          kind: 'session/rename/response',
+          id: 'rn-text',
+          ok: false,
+          error: 'session title must contain visible characters',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(APPROVAL_SERVICE, {
+        config: {},
+        overrideOf: () => undefined,
+        setPolicy: () => {
+          throw 'policy switch refused outside a live turn'
+        },
+      })
+      ctx.provide(AGENTS_SERVICE, { get: () => ({ session: { id: session.id } }) })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'approval/policy/set',
+        id: 'aps-text',
+        sessionId: 'sess-text',
+        policy: 'never',
+      })).toEqual({
+        kind: 'approval/policy/set/response',
+        id: 'aps-text',
+        ok: false,
+        error: 'policy switch refused outside a live turn',
+      })
+    })
+  })
 })
 
 describe('ide-bridge interaction answerer failure paths', () => {
@@ -3073,14 +3299,16 @@ describe('ide-bridge subagent control frames', () => {
       })).toEqual({ kind: 'subagent/prompt/response', id: 'sp-ok', ok: true, messageId: 'msg-accepted' })
     })
     expect(asked).toHaveLength(1)
-    expect(asked[0]).toEqual({
-      requestId: expect.any(String),
+    const request = asked[0] ?? {}
+    const { requestId, ...forwarded } = request
+    expect(typeof requestId).toBe('string')
+    expect(requestId).not.toBe('')
+    expect(forwarded).toEqual({
       parentSessionId: 'sess-parent',
       childSessionId: 'sess-child',
       mode: 'continuable',
       content: [{ type: 'text', text: 'keep going' }],
     })
-    expect(asked[0]!.requestId as string).not.toBe('')
 
     await withBridge((ctx) => {
       ctx.provide(SUBAGENT_SERVICE, {
@@ -3183,14 +3411,28 @@ describe('ide-bridge subagent control frames', () => {
 })
 
 describe('ide-bridge specdev frames', () => {
-  /** One complete v2 snapshot, the value both SpecDev responses carry. */
+  /** One complete v4 snapshot, the value both SpecDev responses carry. */
   const snapshot = {
-    schemaVersion: 2,
+    schemaVersion: 4,
     slug: 'add-tag-filter',
     stage: 'implementation',
     phase: 'phase-1',
-    gates: { hg1: 'passed', hg2: 'pending', hg3: 'pending' },
-    steps: { 'phase-1': { implementer: 'completed', reviewer: 'in_progress', verifier: 'pending' } },
+    gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'pending', hg3: 'pending' },
+    steps: { 'phase-1': { implementer: 'completed', reviewer: 'in_progress', verifier: 'pending', prototype: 'pending' } },
+    ui: { workflow: true, phases: { 'phase-1': true } },
+    plan: [
+      { id: 'phase-1', dependencies: [], status: 'active' },
+      { id: 'phase-2', dependencies: ['phase-1'], status: 'todo' },
+    ],
+    artifacts: [
+      { path: '.specdev/specs/add-tag-filter/design.md', label: 'design.md', phaseId: null, status: 'ready' },
+      {
+        path: '.specdev/specs/add-tag-filter/phases/phase-1/implementation.md',
+        label: 'implementation.md',
+        phaseId: 'phase-1',
+        status: 'missing',
+      },
+    ],
     pendingGate: 'hg2',
     loopCount: 1,
     nextAction: 'confirm HG-2',
@@ -3213,15 +3455,76 @@ describe('ide-bridge specdev frames', () => {
       .toEqual({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: false, error: 'no runtime' })
     expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...snapshot, loopCount: -1 } }))
       .toBeUndefined()
-    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...snapshot, gates: { hg1: 'passed', hg2: 'done', hg3: 'pending' } } }))
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...snapshot, gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'done', hg3: 'pending' } } }))
       .toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'specdev/snapshot/response',
+      id: 'sd-1',
+      ok: true,
+      snapshot: { ...snapshot, gates: { hg1: 'passed', hg2: 'pending', hg3: 'pending' } },
+    })).toBeUndefined()
     expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...snapshot, pendingGate: 'hg4' } }))
       .toBeUndefined()
     expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...snapshot, steps: { 'phase-1': { implementer: 'completed' } } } }))
       .toBeUndefined()
-    // Schema v1 payloads carry none of the v2 fields and must stay legal; the
-    // three omitted names are exactly those fields.
-    const { initiatingCommand: _initiatingCommand, pipelineMode: _pipelineMode, techDebtSummary: _techDebtSummary, ...v1 } = snapshot
+    expect(validateBridgeFrame({
+      kind: 'specdev/snapshot/response',
+      id: 'sd-1',
+      ok: true,
+      snapshot: { ...snapshot, steps: { 'phase-1': { implementer: 'completed', reviewer: 'in_progress', verifier: 'pending' } } },
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'specdev/snapshot/response',
+      id: 'sd-1',
+      ok: true,
+      snapshot: { ...snapshot, pendingGate: 'hg1_5' },
+    })).toMatchObject({ ok: true })
+    expect(validateBridgeFrame({
+      kind: 'specdev/snapshot/response',
+      id: 'sd-1',
+      ok: true,
+      snapshot: { ...snapshot, pendingGate: 'prototype' },
+    })).toMatchObject({ ok: true })
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...snapshot, ui: undefined } }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'specdev/snapshot/response',
+      id: 'sd-1',
+      ok: true,
+      snapshot: { ...snapshot, ui: { workflow: true, phases: { 'phase-1': 'maybe' } } },
+    })).toBeUndefined()
+    // A plan row without its dependencies is not a row.
+    expect(validateBridgeFrame({
+      kind: 'specdev/snapshot/response',
+      id: 'sd-1',
+      ok: true,
+      snapshot: { ...snapshot, plan: [{ id: 'phase-1', status: 'todo' }] },
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'specdev/snapshot/response',
+      id: 'sd-1',
+      ok: true,
+      snapshot: { ...snapshot, plan: [{ id: 'phase-1', dependencies: [], status: 'open' }] },
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'specdev/snapshot/response',
+      id: 'sd-1',
+      ok: true,
+      snapshot: {
+        ...snapshot,
+        artifacts: [{ path: '.specdev/specs/add-tag-filter/design.md', label: 'design.md', phaseId: null, status: 'unknown' }],
+      },
+    })).toBeUndefined()
+    // Schema v1 payloads carry none of the later additive fields and must stay
+    // legal; the omitted names are exactly those fields.
+    const {
+      initiatingCommand: _initiatingCommand,
+      pipelineMode: _pipelineMode,
+      techDebtSummary: _techDebtSummary,
+      plan: _plan,
+      artifacts: _artifacts,
+      ...v1
+    } = snapshot
     expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: true, snapshot: { ...v1, schemaVersion: 1 } }))
       .toMatchObject({ ok: true })
 
@@ -3336,7 +3639,7 @@ describe('ide-bridge specdev frames', () => {
         snapshot: () => snapshot,
         confirmGate: async (_session: unknown, request: Record<string, unknown>) => {
           asked.push(request)
-          return { ok: true, snapshot: { ...snapshot, gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' }, pendingGate: null } }
+          return { ok: true, snapshot: { ...snapshot, gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'passed', hg3: 'pending' }, pendingGate: null } }
         },
       })
     }, async (harness) => {
@@ -3351,7 +3654,7 @@ describe('ide-bridge specdev frames', () => {
         kind: 'specdev/confirm-gate/response',
         id: 'sg-ok',
         ok: true,
-        snapshot: { ...snapshot, gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' }, pendingGate: null },
+        snapshot: { ...snapshot, gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'passed', hg3: 'pending' }, pendingGate: null },
       })
     })
     expect(asked).toEqual([{ gate: 'hg2', decision: 'pass', note: 'requirements reviewed' }])
@@ -3433,5 +3736,283 @@ describe('ide-bridge specdev frames', () => {
         error: 'specdev service is not available',
       })
     })
+  })
+
+  it('reports a bare refusal and a throwing runtime from the gate decision', async () => {
+    const session = { header: { cwd: '/ws' }, append: () => undefined }
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SPECDEV_SERVICE, {
+        snapshot: () => snapshot,
+        // A refusal the runtime states without a code or message is still a refusal.
+        confirmGate: async () => ({ ok: false }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'specdev/confirm-gate',
+        id: 'sg-bare-refusal',
+        sessionId: 'sess-1',
+        gate: 'hg2',
+        decision: 'pass',
+      })).toEqual({
+        kind: 'specdev/confirm-gate/response',
+        id: 'sg-bare-refusal',
+        ok: false,
+        error: 'gate decision refused',
+      })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SPECDEV_SERVICE, {
+        snapshot: () => snapshot,
+        confirmGate: async (_session: unknown, request: { gate: string }) => {
+          if (request.gate === 'hg1') throw new Error('status file is locked')
+          throw 'gate write is disabled on this profile'
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'specdev/confirm-gate',
+        id: 'sg-throw',
+        sessionId: 'sess-1',
+        gate: 'hg1',
+        decision: 'pass',
+      })).toEqual({
+        kind: 'specdev/confirm-gate/response',
+        id: 'sg-throw',
+        ok: false,
+        error: 'status file is locked',
+      })
+      expect(await roundTrip(harness, {
+        kind: 'specdev/confirm-gate',
+        id: 'sg-throw-text',
+        sessionId: 'sess-1',
+        gate: 'hg2',
+        decision: 'pass',
+      })).toEqual({
+        kind: 'specdev/confirm-gate/response',
+        id: 'sg-throw-text',
+        ok: false,
+        error: 'gate write is disabled on this profile',
+      })
+    })
+  })
+})
+
+describe('ide-bridge frame rejection arms (AC-31)', () => {
+  it('drops model/list rows that are not provider, model, effort, or selection objects', () => {
+    const current = { provider: 'p', model: 'm' }
+    const list = (providers: unknown): unknown =>
+      ({ kind: 'model/list/response', id: 'ml-rows', ok: true, providers, current })
+    const model = (fields: Record<string, unknown>): unknown => ({ id: 'p', name: 'P', models: [fields] })
+
+    expect(validateBridgeFrame(list(['p']))).toBeUndefined()
+    expect(validateBridgeFrame(list([{ id: 'p', name: 'P', models: ['m'] }]))).toBeUndefined()
+    expect(validateBridgeFrame(list([{ id: '', name: 'P', models: [] }]))).toBeUndefined()
+    expect(validateBridgeFrame(list([{ id: 'p', name: '', models: [] }]))).toBeUndefined()
+    expect(validateBridgeFrame(list([model({ id: '', name: 'M' })]))).toBeUndefined()
+    expect(validateBridgeFrame(list([model({ id: 'm', name: '' })]))).toBeUndefined()
+    expect(validateBridgeFrame(list([model({ id: 'm', name: 'M', vision: 'yes' })]))).toBeUndefined()
+    expect(validateBridgeFrame(list([model({ id: 'm', name: 'M', contextWindow: 1.5 })]))).toBeUndefined()
+    expect(validateBridgeFrame(list([model({ id: 'm', name: 'M', reasoningEfforts: 'low' })]))).toBeUndefined()
+    expect(validateBridgeFrame(list([model({ id: 'm', name: 'M', reasoningEfforts: ['low'] })]))).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'model/list/response',
+      id: 'ml-rows',
+      ok: true,
+      providers: [],
+      current: { provider: '', model: 'm' },
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'model/list/response',
+      id: 'ml-rows',
+      ok: true,
+      providers: [],
+      current: { provider: 'p', model: '' },
+    })).toBeUndefined()
+  })
+
+  it('drops session rows and search hits that are not row objects', () => {
+    expect(validateBridgeFrame({ kind: 'session/list/response', id: 'sl-rows', ok: true, sessions: ['sess-a'] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/search/response', id: 'sq-rows', ok: true, hits: ['sess-a'] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'session/search/response',
+      id: 'sq-rows',
+      ok: true,
+      hits: [{ sessionId: '', createdAt: 1, seq: 1, snippet: 'x' }],
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'session/search/response',
+      id: 'sq-rows',
+      ok: true,
+      hits: [{ sessionId: 'sess-a', createdAt: 1.5, seq: 1, snippet: 'x' }],
+    })).toBeUndefined()
+  })
+
+  it('drops subagent entries outside the two classified kinds', () => {
+    const child = {
+      kind: 'child',
+      sessionId: 'sess-child',
+      mode: 'continuable',
+      activity: 'inactive',
+      hasChildren: true,
+    }
+    const list = (entries: unknown): unknown =>
+      ({ kind: 'subagent/list/response', id: 'sa-rows', ok: true, sessionLive: true, entries })
+
+    expect(validateBridgeFrame(list(['sess-child']))).toBeUndefined()
+    expect(validateBridgeFrame(list([{ ...child, sessionId: '' }]))).toBeUndefined()
+    expect(validateBridgeFrame(list([{ ...child, parentSessionId: 7 }]))).toBeUndefined()
+    expect(validateBridgeFrame(list([{ ...child, hasChildren: 'yes' }]))).toBeUndefined()
+    // A row the runtime classified as neither a child nor a diagnostic is not a row.
+    expect(validateBridgeFrame(list([{ ...child, kind: 'grandchild' }]))).toBeUndefined()
+    expect(validateBridgeFrame(list([{ sessionId: 'sess-child' }]))).toBeUndefined()
+  })
+
+  it('drops SpecDev snapshots whose fields fall outside the folded schema', () => {
+    /** One complete v3 snapshot, patched per rejected field. */
+    const snapshot = {
+      schemaVersion: 3,
+      slug: 'add-tag-filter',
+      stage: 'implementation',
+      phase: 'phase-1',
+      gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'pending', hg3: 'pending' },
+      steps: { 'phase-1': { implementer: 'completed', reviewer: 'in_progress', verifier: 'pending', prototype: 'pending' } },
+      ui: { workflow: true, phases: { 'phase-1': true } },
+      pendingGate: 'hg2',
+      loopCount: 1,
+      nextAction: 'confirm HG-2',
+      techDebtSummary: { blocking: 0, total: 3 },
+      initiatingCommand: 'feature',
+      pipelineMode: 'feature',
+    }
+    const rejected = (patch: Record<string, unknown>): unknown => ({
+      kind: 'specdev/snapshot/response',
+      id: 'sd-rows',
+      ok: true,
+      snapshot: { ...snapshot, ...patch },
+    })
+
+    expect(validateBridgeFrame(rejected({ schemaVersion: 0 }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ slug: '' }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ stage: '' }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ phase: '' }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ gates: null }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ steps: null }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ steps: { 'phase-1': 'completed' } }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ ui: { workflow: 'yes', phases: {} } }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ ui: { workflow: true, phases: 'all' } }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ nextAction: '' }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ techDebtSummary: 'none' }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ techDebtSummary: { blocking: -1, total: 3 } }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ techDebtSummary: { blocking: 0 } }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ initiatingCommand: '' }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ pipelineMode: 7 }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ plan: [{ id: 'phase-1', dependencies: [], status: 'done' }] })))
+      .toMatchObject({ ok: true })
+    expect(validateBridgeFrame(rejected({ plan: [] }))).toMatchObject({ ok: true })
+    expect(validateBridgeFrame(rejected({ plan: 'phase-1' }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ plan: [null] }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ plan: [{}] }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ plan: [{ id: 'phase-1', dependencies: 'phase-2', status: 'done' }] })))
+      .toBeUndefined()
+    expect(validateBridgeFrame(rejected({ plan: [{ id: 'phase-1', dependencies: [7], status: 'done' }] })))
+      .toBeUndefined()
+    expect(validateBridgeFrame(rejected({ plan: [{ id: '', dependencies: [], status: 'done' }] }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ artifacts: [] }))).toMatchObject({ ok: true })
+    expect(validateBridgeFrame(rejected({ artifacts: 'none' }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({ artifacts: [null] }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({
+      artifacts: [{ path: '.specdev/specs/add-tag-filter/design.md', label: 'design.md', status: 'ready' }],
+    }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({
+      artifacts: [{ path: '.specdev/specs/add-tag-filter/design.md', label: '', phaseId: null, status: 'ready' }],
+    }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({
+      artifacts: [{ path: '.specdev/specs/add-tag-filter/design.md', label: 'design.md', phaseId: 7, status: 'ready' }],
+    }))).toBeUndefined()
+    expect(validateBridgeFrame(rejected({
+      artifacts: [{ path: '.specdev/specs/add-tag-filter/design.md', label: 'design.md', phaseId: null, status: 'unknown' }],
+    }))).toBeUndefined()
+  })
+
+  it('drops response frames whose id or ok flag is not the declared type', () => {
+    expect(validateBridgeFrame({ kind: 'session/rename/response', id: 'rn-1', ok: 'yes' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/rename/response', ok: true, title: 'x' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/list/response', id: 'sl-1', ok: 'yes', sessions: [] })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/search/response', id: 'sq-1', ok: 'yes', hits: [] })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'attachment/read/response',
+      id: 'ar-1',
+      ok: 'yes',
+      mediaType: 'image/png',
+      data: '',
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'subagent/list/response',
+      id: 'sa-1',
+      ok: 'yes',
+      sessionLive: true,
+      entries: [],
+    })).toBeUndefined()
+    // The listing answers whether the addressed session itself is live.
+    expect(validateBridgeFrame({ kind: 'subagent/list/response', id: 'sa-1', ok: true, entries: [] })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'subagent/prompt',
+      parentSessionId: 'sess-parent',
+      childSessionId: 'sess-child',
+      text: 'keep going',
+    })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'subagent/prompt/response', id: 'sp-1', ok: 'yes', messageId: 'msg-1' }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'subagent/interrupt',
+      parentSessionId: 'sess-parent',
+      childSessionId: 'sess-child',
+    })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: 'yes', snapshot: null }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/confirm-gate/response', id: 'sg-1', ok: 'yes', snapshot: null }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/confirm-gate', id: 'sg-1', gate: 'hg2', decision: 'pass' }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'specdev/confirm-gate',
+      id: 'sg-1',
+      sessionId: 'sess-1',
+      gate: 'hg2',
+      decision: 'pass',
+      note: 7,
+    })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'session/stat/response', id: 'st-1', ok: 'yes', found: true })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'projection/read/response',
+      id: 'pr-1',
+      ok: 'yes',
+      asOfSeq: 1,
+      values: {},
+    })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'approval/policy/response', id: 'ap-1', ok: 'yes', policy: 'ask' }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'permission/list/response',
+      id: 'pl-1',
+      ok: true,
+      options: ['workspace-write'],
+      current: 'workspace-write',
+    })).toBeUndefined()
+  })
+
+  it('drops refusal frames that carry no error text', () => {
+    expect(validateBridgeFrame({ kind: 'session/search/response', id: 'sq-1', ok: false })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'subagent/list/response', id: 'sa-1', ok: false })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'subagent/prompt/response', id: 'sp-1', ok: false })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/snapshot/response', id: 'sd-1', ok: false })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'specdev/confirm-gate/response', id: 'sg-1', ok: false })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'approval/policy/response', id: 'ap-1', ok: false })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'approval/policy/set/response', id: 'ap-2', ok: false })).toBeUndefined()
   })
 })

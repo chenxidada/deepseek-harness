@@ -1138,7 +1138,7 @@ record="$(display_evidence_record_json)"
         expect(smokeScript).toContain('"${REPO_ROOT}"/packages/*/*')
         expect(smokeScript).toContain('"${REPO_ROOT}"/vendor/*')
         // The app half is the caller's own comparison, so this file has to keep it wired there too.
-        expect(smokeScript).toContain('"${APP_DIR}/lib" "${APP_DIR}/lib/extension.js" "${APP_DIR}/src"')
+        expect(smokeScript).toContain('"${APP_DIR}/lib" "${APP_DIR}/lib/extension.cjs" "${APP_DIR}/src"')
       })
 
       it('CAP-TEST-HARNESS-056 leaves no member of the tsdown workspace list outside the comparison', () => {

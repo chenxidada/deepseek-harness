@@ -66,19 +66,9 @@ DRIVER_WAIT_MS=1500000
 # Pilot selector (repo-exploration.md §12.1 / §12.2); overridable per run.
 CAPABILITY_ONLY="${LAYER_V_CAPABILITY_ONLY:-react-spa-main,editor-panel}"
 
-# Model-gated capabilities drive real model round-trips through the
-# `specdev-orchestrator` preset (AC-9). That preset's `orchestrator-tool-policy`
-# loader entry imports `@deepseek-ai/dsh-specdev-presets`, which is not resolvable
-# from the source-launch loader's module path, so the preset fails to mount and
-# `host.prompt` fails (measured as `JsonRpcResponseError: failed to import loader
-# entry orchestrator-tool-policy`). Route A — the smoke test's established pattern —
-# delivers a shadowed preset (the shipped preset minus the two
-# `orchestrator-tool-policy` rows) through the profile patch layer, so the runtime
-# can mount it without touching the repo. Generation and drift-checking live in one
-# implementation (`layer-v-shadow-preset.sh`).
-SHADOW_SCRIPT="${SCRIPT_DIR}/layer-v-shadow-preset.sh"
-SHIPPED_PRESETS_ROOT="${REPO_ROOT}/packages/specdev/specdev-presets/presets"
-AGENT_PRESET="specdev-orchestrator"
+# Model-gated capabilities drive real model round-trips through the deployment's own
+# default agent preset: the sandbox runtime reads its shipped profile configuration, so
+# no overlay restates `agent-presets`.
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
@@ -99,7 +89,6 @@ NOTES=()
 
 TMP_ROOT=""
 SANDBOX_HOME=""
-SHADOW_ROOT=""
 USER_DATA_DIR=""
 EXTENSIONS_DIR=""
 BRIDGE_SOCKET=""
@@ -268,56 +257,6 @@ finish() {
   print_report
 }
 
-# --- shadow preset (route A, mirroring run-layer-v-smoke.sh) --------------------------
-
-# Write the profile patch layer that mounts the shadowed `specdev-orchestrator`
-# preset first, then the shipped preset root. A patch REPLACES the whole `config`
-# block, so every key of the shipped baseline must be restated (see
-# run-layer-v-smoke.sh's write_overlay for the full contract and why each key is
-# load-bearing). Root order is load-bearing: the shadow root must win the
-# `agent-presets` id, and every other shipped preset must still resolve.
-write_preset_overlay() {
-  cat >"${SANDBOX_HOME}/.dsh/profiles/ide/cordis.patch.yml" <<EOF
-- id: agent-presets
-  config:
-    default: ${AGENT_PRESET}
-    includeShippedRoot: false
-    includeUserRoot: false
-    roots:
-      - path: ${SHADOW_ROOT}
-        trust: user
-      - path: ${SHIPPED_PRESETS_ROOT}
-        trust: system
-EOF
-}
-
-# Derive the shadow preset into SHADOW_ROOT and assert the overlay contract. The
-# generator already asserts the shipped preset layout and that the result is exactly
-# a two-row deletion, so a drifted shipped preset fails loud here rather than at the
-# runtime's preset mount.
-prepare_shadow_preset() {
-  # shellcheck source=layer-v-shadow-preset.sh
-  source "${SHADOW_SCRIPT}" || fail_harness "shadow-preset" "could not source ${SHADOW_SCRIPT}"
-  layer_v_write_shadow_preset "${SHADOW_ROOT}" || {
-    fail_harness "shadow-preset" "layer_v_write_shadow_preset failed for ${SHADOW_ROOT}"
-  }
-  write_preset_overlay
-  local overlay="${SANDBOX_HOME}/.dsh/profiles/ide/cordis.patch.yml"
-  if [ ! -f "${overlay}" ]; then
-    fail_harness "shadow-preset" "the profile patch layer was not written (${overlay})"
-  fi
-  local key
-  for key in default includeShippedRoot includeUserRoot roots; do
-    if ! grep -Eq "^[[:space:]]+${key}:" "${overlay}"; then
-      fail_harness "shadow-preset" "the overlay config is missing the '${key}' key"
-    fi
-  done
-  if ! grep -qF "${SHADOW_ROOT}" "${overlay}"; then
-    fail_harness "shadow-preset" "the overlay roots do not name the shadow root (${SHADOW_ROOT})"
-  fi
-  log "shadow preset in place (${AGENT_PRESET}, shadow root first)"
-}
-
 # --- main ------------------------------------------------------------------------------
 
 main() {
@@ -389,7 +328,6 @@ main() {
     "${ARTIFACT_DIR}/layer-v-capabilities-status.json" \
     "${ARTIFACT_DIR}/layer-v-capabilities-journal.jsonl" 2>/dev/null || true
   write_plan
-  prepare_shadow_preset
 
   launch_host
   assert_host_argv

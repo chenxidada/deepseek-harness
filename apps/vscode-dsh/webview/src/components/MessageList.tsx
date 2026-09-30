@@ -531,13 +531,32 @@ function SettledMarkdown({ text, bridge }: { text: string; bridge: MessageBridge
     }
   }, [html, bridge])
 
+  // `path:line` references in the body open like `@` chips; the Host resolves
+  // the path and reveals the line (spec 4.6).
+  useEffect(() => {
+    const root = ref.current
+    if (!root) return
+    const links = root.querySelectorAll('button[data-testid="file-link"]')
+    for (const link of links) {
+      const path = link.getAttribute('data-ref-path') ?? ''
+      if (path === '') continue
+      const line = Number(link.getAttribute('data-ref-line'))
+      link.addEventListener('click', () => {
+        bridge.emitIntent({
+          type: 'action/open-reference',
+          path,
+          ...Number.isSafeInteger(line) && line > 0 ? { line } : {},
+        })
+      })
+    }
+  }, [html, bridge])
+
   // Mermaid rendering: find code blocks with data-mermaid="true" and render SVG.
   useEffect(() => {
     const root = ref.current
     if (!root) return
     const mermaidBlocks = root.querySelectorAll('[data-mermaid="true"]')
     if (mermaidBlocks.length === 0) return
-
     let cancelled = false
     let counter = 0
 

@@ -88,7 +88,7 @@ import {
   type EditorChatPanelController,
   type WebviewViewLike,
 } from './chat-panel/index.ts'
-import type { SlashCandidate } from './chat-panel/protocol.ts'
+import { parseWebviewToHostMessage, type SlashCandidate, type SpecdevGateDecision } from './chat-panel/protocol.ts'
 import {
   AutoStartOrchestrator,
   type StartHostPort,
@@ -124,7 +124,12 @@ import {
   WorkspaceFileSearch,
 } from '@deepseek-ai/dsh-file-reference-local/search'
 import type { FileReferenceCandidate } from '@deepseek-ai/dsh-file-reference/types'
-import type { BridgeSessionSearchHit, BridgeSpecdevSnapshot, BridgeSubagentEntry } from '@deepseek-ai/dsh-ide-bridge'
+import type {
+  AskUserQuestionItem,
+  BridgeSessionSearchHit,
+  BridgeSpecdevSnapshot,
+  BridgeSubagentEntry,
+} from '@deepseek-ai/dsh-ide-bridge'
 import {
   gateKey,
   type RevertGate,
@@ -1506,6 +1511,83 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         return interactions.resolveApproval(id, outcome)
       }),
       /**
+       * Answer a pending user-questions card by id, without a UI round trip.
+       *
+       * The payload is validated by the Webview→Host parser, so a driver answers
+       * with the same frame the panel would have sent and the bridge cannot tell
+       * the two paths apart. Registered inside {@link shouldRegisterTestHooks}.
+       */
+      vscode.commands.registerCommand('dsh.test.answerQuestions', (id?: unknown, answer?: unknown) => {
+        if (typeof id !== 'string' || id === '') return { ok: false as const, reason: 'invalid-id' as const }
+        const frame = parseWebviewToHostMessage({ type: 'interaction/answer', id, answer })
+        if (frame === undefined || frame.type !== 'interaction/answer') {
+          return { ok: false as const, reason: 'invalid-answer' as const }
+        }
+        const interactions = host?.interactions
+        if (interactions === undefined) return { ok: false as const, reason: 'no-host' as const }
+        if (!interactions.resolveQuestions(frame.id, frame.answer)) {
+          return { ok: false as const, reason: 'unknown-id' as const }
+        }
+        return { ok: true as const, id: frame.id, answers: frame.answer.answers }
+      }),
+      /**
+       * Answer a pending approval through the panel's own Webview→Host frame.
+       *
+       * The panel presents an interaction card and the Webview answers it with
+       * `interaction/approve`; this hook posts that same frame, so a driver can
+       * exercise the panel route without UI automation. Registered inside
+       * {@link shouldRegisterTestHooks}.
+       */
+      vscode.commands.registerCommand('dsh.test.answerApprovalFromWebview', async (id?: unknown, outcome?: unknown) => {
+        if (typeof id !== 'string' || id === '') return { ok: false as const, reason: 'invalid-id' as const }
+        const frame = parseWebviewToHostMessage({ type: 'interaction/approve', id, outcome })
+        if (frame === undefined || frame.type !== 'interaction/approve') {
+          return { ok: false as const, reason: 'invalid-outcome' as const }
+        }
+        const panel = panelHost
+        /* v8 ignore next -- activate() creates the panel host before this block registers, so the command never runs without one */
+        if (panel === undefined) return { ok: false as const, reason: 'no-panel' as const }
+        // The frame handler answers the coordinator asynchronously, so the reply is
+        // only an acknowledgement: the settled decision is what the durable log shows.
+        await panel.handleWebviewMessage(frame)
+        return { ok: true as const, id: frame.id, outcome: frame.outcome }
+      }),
+      /**
+       * Create one pending user-questions card through the real coordinator, so a
+       * driver has a card whose id it chose and can answer it with
+       * `dsh.test.answerQuestions` without a runtime asking a real question.
+       *
+       * The symmetric counterpart of {@link dsh.test.injectApproval}. Registered
+       * inside {@link shouldRegisterTestHooks}.
+       */
+      vscode.commands.registerCommand('dsh.test.injectQuestions', (payload?: unknown) => {
+        const interactions = host?.interactions
+        if (interactions === undefined) return { ok: false as const, reason: 'no-host' as const }
+        if (typeof payload !== 'object' || payload === null) {
+          return { ok: false as const, reason: 'invalid-payload' as const }
+        }
+        const id = (payload as { id?: unknown }).id
+        if (typeof id !== 'string' || id === '') return { ok: false as const, reason: 'invalid-payload' as const }
+        const rawQuestions = (payload as { questions?: unknown }).questions
+        if (!Array.isArray(rawQuestions)) return { ok: false as const, reason: 'invalid-payload' as const }
+        const questions = rawQuestions.filter(
+          (item): item is AskUserQuestionItem =>
+            typeof item === 'object' && item !== null
+            && typeof (item as { id?: unknown }).id === 'string'
+            && typeof (item as { question?: unknown }).question === 'string',
+        )
+        if (questions.length !== rawQuestions.length || questions.length === 0) {
+          return { ok: false as const, reason: 'invalid-payload' as const }
+        }
+        const rawSessionId = (payload as { sessionId?: unknown }).sessionId
+        const sessionId = typeof rawSessionId === 'string'
+          ? rawSessionId
+          : conversations?.registry.getActive()?.sessionId ?? ''
+        if (sessionId === '') return { ok: false as const, reason: 'no-active-session' as const }
+        void interactions.handleQuestions({ id, sessionId, questions }).catch(() => undefined)
+        return { ok: true as const, id }
+      }),
+      /**
        * Structured Host diagnostic records (AC-13). The name is inherited from the
        * planned text surface — it is a historical label, not a description of the
        * value: this returns the `HostDiagnosticRecord[]` array and never text, so
@@ -2733,8 +2815,8 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       if (controller === undefined) throw new Error('no-host')
       await controller.interruptSubagent(parentSessionId, childSessionId)
     },
-    requestSpecdevGate: async (sessionId, gate) => {
-      await runSpecdevGateDecision(vscode, sessionId, gate)
+    requestSpecdevGate: async (sessionId, gate, decision, note) => {
+      await applySpecdevGateDecision(vscode, sessionId, gate, decision, note)
     },
     requestOpenWorkspaceDiffs: async () => {
       await vscode.commands.executeCommand?.('dsh.reviewWorkspaceDiffs')
@@ -2821,8 +2903,8 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       exists: existsSync,
     }),
     listAtPathCandidates,
-    requestOpenReference: async (path) => {
-      await openReferencePath(vscode, path)
+    requestOpenReference: async (path, line) => {
+      await openReferencePath(vscode, path, line)
     },
     requestSelectTab: async (tabId) => {
       const controller = conversations
@@ -3666,25 +3748,48 @@ async function runRenameSession(vscode: VsCodeLike, sessionId: string): Promise<
 }
 
 /**
- * Ask for one SpecDev Human Gate decision and apply it through the runtime.
- * Gate order and the durable write belong to the runtime, so a cancelled pick
- * writes nothing and a refusal surfaces as the thrown error.
+ * Apply one SpecDev Human Gate decision through the runtime. Gate order and the
+ * durable write belong to the runtime, so a refusal surfaces as the thrown
+ * error and nothing is written. A rejection without a note is refused here, the
+ * one place both presenters (panel card, palette) reach.
+ * @param vscode - duck-typed vscode module.
+ * @param sessionId - session owning the workflow log.
+ * @param gate - pending gate the caller reported.
+ * @param decision - decision the human picked.
+ * @param note - optional note recorded with the decision.
+ */
+async function applySpecdevGateDecision(
+  vscode: VsCodeLike,
+  sessionId: string,
+  gate: string,
+  decision: SpecdevGateDecision,
+  note?: string,
+): Promise<void> {
+  if (decision === 'reject' && (note === undefined || note.trim() === '')) {
+    await vscode.window.showWarningMessage?.('打回修改必须填写备注，未写入任何决定。')
+    return
+  }
+  const controller = requireConversations()
+  if (controller === undefined) {
+    throw new Error('DeepSeek Harness Host is not connected')
+  }
+  const snapshot = await controller.confirmSpecdevGate(sessionId, gate, decision, note)
+  panelHost?.pushFullState()
+  await vscode.window.showInformationMessage(
+    `${gate} 已记录为 ${decision}${snapshot === null ? '' : `：${snapshot.stage}`}`,
+  )
+}
+
+/**
+ * Palette presenter for a pending gate: ask for the decision, then apply it.
  * @param vscode - duck-typed vscode module.
  * @param sessionId - session owning the workflow log.
  * @param gate - pending gate the caller reported.
  */
 async function runSpecdevGateDecision(vscode: VsCodeLike, sessionId: string, gate: string): Promise<void> {
-  const controller = requireConversations()
-  if (controller === undefined) {
-    throw new Error('DeepSeek Harness Host is not connected')
-  }
   const choice = await pickSpecdevGateDecision(vscode.window as InteractionWindow, gate)
   if (choice === undefined) return
-  const snapshot = await controller.confirmSpecdevGate(sessionId, gate, choice.decision, choice.note)
-  panelHost?.pushFullState()
-  await vscode.window.showInformationMessage(
-    `${gate} 已记录为 ${choice.decision}${snapshot === null ? '' : `：${snapshot.stage}`}`,
-  )
+  await applySpecdevGateDecision(vscode, sessionId, gate, choice.decision, choice.note)
 }
 
 /**
@@ -3703,12 +3808,14 @@ function specdevStatusRows(snapshot: BridgeSpecdevSnapshot, tabId: string): Quic
     },
     {
       label: '门禁 (Human Gates)',
-      description: `HG-1 ${snapshot.gates.hg1} · HG-2 ${snapshot.gates.hg2} · HG-3 ${snapshot.gates.hg3}`,
+      description: `HG-1 ${snapshot.gates.hg1} · HG-1.5 ${snapshot.gates.hg1_5}`
+        + ` · HG-2 ${snapshot.gates.hg2} · HG-3 ${snapshot.gates.hg3}`,
       tabId,
     },
     ...Object.entries(snapshot.steps).map(([phaseId, steps]): QuickPickItemLike => ({
       label: `阶段 ${phaseId}`,
-      description: `实现 ${steps.implementer} · 评审 ${steps.reviewer} · 验证 ${steps.verifier}`,
+      description: `实现 ${steps.implementer} · 评审 ${steps.reviewer} · 验证 ${steps.verifier}`
+        + (snapshot.ui.phases[phaseId] === true ? ` · 原型 ${steps.prototype}` : ''),
       tabId,
     })),
     { label: '必须修复轮次 (loop_count)', description: String(snapshot.loopCount), tabId },
@@ -3884,12 +3991,13 @@ function preferredWorkspaceFolder(vscode: VsCodeLike): string | undefined {
 /**
  * Open a reference-card path using extension-local selection meta for lines (AC-4).
  * Resolves relative paths with the same multi-root scan as the send gate
- * (`resolveAtPathInWorkspace` / preferred then all folders). Does not parse
- * natural-language line ranges from message text.
+ * (`resolveAtPathInWorkspace` / preferred then all folders). A reference that
+ * names its own line (`path:line` in message text) reveals that line.
  * @param vscode - duck-typed vscode.
  * @param path - workspace-relative path from the card.
+ * @param line - 1-based line the reference named, when it named one.
  */
-async function openReferencePath(vscode: VsCodeLike, path: string): Promise<void> {
+async function openReferencePath(vscode: VsCodeLike, path: string, line?: number): Promise<void> {
   const folders = vscode.workspace.workspaceFolders ?? []
   if (folders.length === 0) {
     await vscode.window.showWarningMessage?.(`无法打开引用：无工作区（${path}）`)
@@ -3913,13 +4021,19 @@ async function openReferencePath(vscode: VsCodeLike, path: string): Promise<void
     await vscode.window.showWarningMessage?.(message)
     return
   }
+  // An explicit `path:line` reference wins over stored selection meta: the author
+  // named the line in the message, so that is the line the reader asked for.
+  const named = line === undefined || !Number.isSafeInteger(line) || line < 1
+    ? undefined
+    : { start: { line: line - 1, character: 0 }, end: { line: line - 1, character: 0 } }
+  const selection = named ?? plan.selection
   const uri = vscode.Uri?.file(plan.abs) ?? plan.abs
   try {
     if (typeof vscode.workspace.openTextDocument === 'function'
       && typeof vscode.window.showTextDocument === 'function') {
       const doc = await vscode.workspace.openTextDocument(uri)
       await vscode.window.showTextDocument(doc, {
-        ...plan.selection === undefined ? {} : { selection: plan.selection },
+        ...selection === undefined ? {} : { selection },
         preview: false,
       })
       return

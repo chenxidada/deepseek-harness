@@ -44,6 +44,9 @@ export interface SlashCandidate {
 /** Panel chrome mode pushed via panel/state. */
 export type PanelMode = 'empty' | 'waiting-host' | 'replay' | 'live' | 'readonly-live' | 'error'
 
+/** Decisions a SpecDev Human Gate card may send; the runtime accepts exactly these. */
+export type SpecdevGateDecision = 'pass' | 'reject' | 'defer'
+
 /**
  * Parent→child lineage chrome pushed via panel/state (phase-4 subagent context).
  * Decision state stays on Host; Webview mirrors the breadcrumb without deriving it.
@@ -441,6 +444,8 @@ export type WebviewToHostMessage =
   | { type: 'action/continue' }
   | { type: 'action/stop' }
   | { type: 'action/restore-more'; all?: boolean }
+  /** Put text in the composer without sending it (the status card's next action). */
+  | { type: 'action/prefill-composer'; text: string }
   | { type: 'action/retry-connect' }
   | { type: 'action/open-settings' }
   | { type: 'action/toggle-activity'; activityId: string; expanded: boolean }
@@ -450,7 +455,7 @@ export type WebviewToHostMessage =
   | { type: 'action/edit-resend'; messageId: string; text: string }
   | { type: 'action/branch'; turn: number }
   | { type: 'action/open-workspace-diffs' }
-  | { type: 'action/open-reference'; path: string }
+  | { type: 'action/open-reference'; path: string; /** 1-based line to reveal, when the reference carries one. */ line?: number }
   | { type: 'action/reveal-change-list'; sourceMessageId?: string }
   | {
     /** Tier 1/2 session search (AD-CUX-9). */
@@ -483,11 +488,11 @@ export type WebviewToHostMessage =
    */
   | { type: 'action/interrupt-subagent'; parentSessionId: string; childSessionId: string }
   /**
-   * Decide the SpecDev Human Gate the status card reported as pending. The Host
-   * asks for the decision and applies it through the runtime, which owns gate
-   * order, so the card itself never picks a decision.
+   * Decide the SpecDev Human Gate the status card reported as pending. The card
+   * carries the decision and its optional note; the Host applies both through
+   * the runtime, which owns gate order.
    */
-  | { type: 'action/specdev-gate'; sessionId: string; gate: string }
+  | { type: 'action/specdev-gate'; sessionId: string; gate: string; decision: SpecdevGateDecision; note?: string }
   | {
     /** User selected a different model (feature: model-selector). */
     type: 'action/select-model'
@@ -568,6 +573,10 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
       activityId: record.activityId,
       expanded: record.expanded === true,
     }
+  }
+  if (type === 'action/prefill-composer') {
+    if (typeof record.text !== 'string' || record.text === '') return undefined
+    return { type: 'action/prefill-composer', text: record.text }
   }
   if (type === 'action/restore-more') {
     return {
@@ -683,7 +692,14 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'action/specdev-gate') {
     if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
     if (typeof record.gate !== 'string' || record.gate === '') return undefined
-    return { type: 'action/specdev-gate', sessionId: record.sessionId, gate: record.gate }
+    if (record.decision !== 'pass' && record.decision !== 'reject' && record.decision !== 'defer') return undefined
+    return {
+      type: 'action/specdev-gate',
+      sessionId: record.sessionId,
+      gate: record.gate,
+      decision: record.decision,
+      ...typeof record.note === 'string' && record.note.trim() !== '' ? { note: record.note } : {},
+    }
   }
   if (type === 'nav/back') return { type: 'nav/back' }
   if (type === 'probe/render-state') {

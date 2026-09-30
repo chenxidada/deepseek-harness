@@ -253,7 +253,7 @@ describe('ide-bridge command frame validation', () => {
 
   it('accepts agent-presets/list/response only as complete preset rows', () => {
     const presets = [
-      { id: 'specdev-orchestrator', name: 'Specdev orchestrator', description: 'Runs the spec flow', isDefault: false },
+      { id: 'specdev-implementer', name: 'Specdev implementer', description: 'Implements one phase', isDefault: false },
       { id: 'minimal', isDefault: true, broken: 'composition is missing' },
     ]
     expect(validateBridgeFrame({ kind: 'agent-presets/list/response', id: 'ap-1', ok: true, presets }))
@@ -615,7 +615,7 @@ describe('ide-bridge agent-presets/list frames', () => {
       ctx.provide(AGENT_PRESETS_SERVICE, {
         defaultId: 'minimal',
         list: async () => [
-          { id: 'specdev-orchestrator', name: 'Specdev orchestrator', description: 'Runs the spec flow' },
+          { id: 'specdev-implementer', name: 'Specdev implementer', description: 'Implements one phase' },
           { id: 'minimal', name: 'Minimal' },
           { id: 'broken-preset', broken: 'composition is missing' },
         ],
@@ -628,10 +628,10 @@ describe('ide-bridge agent-presets/list frames', () => {
         ok: true,
         presets: [
           {
-            id: 'specdev-orchestrator',
+            id: 'specdev-implementer',
             isDefault: false,
-            name: 'Specdev orchestrator',
-            description: 'Runs the spec flow',
+            name: 'Specdev implementer',
+            description: 'Implements one phase',
           },
           { id: 'minimal', isDefault: true, name: 'Minimal' },
           { id: 'broken-preset', isDefault: false, broken: 'composition is missing' },

@@ -36,7 +36,6 @@ bash apps/vscode-dsh/test-scripts/run-layer-v-smoke.sh
 | `layer-v-log-evidence.json` | 从产品自身 session 日志中抽取的证据 |
 | `layer-v-corroboration.json` | 脚本对驱动 PASS 的独立复核 |
 | `run-summary.json` | 汇总的运行元数据、结论与退出码 |
-| `shadow-preset-check.txt` | 影子 preset 生成器的输出（diff、哈希、退出码） |
 | `step-5-target.txt` | 第 5 步里模型编辑的探针文件 |
 | `step-<n>-<slug>.png` | 五张步骤截图 |
 
@@ -51,7 +50,7 @@ bash apps/vscode-dsh/test-scripts/run-layer-v-smoke.sh
 | `step-1-host-started.png` | Host 到达 `started` 且会话已连接 |
 | `step-2-new-conversation.png` | 出现新的会话页签 |
 | `step-3-model-round-trip.png` | 携带本次运行唯一 marker 的 assistant 文本 |
-| `step-4-approval.png` | 经 `dsh.test.answerApproval` 作答的审批 |
+| `step-4-approval.png` | 先经 `dsh.test.answerQuestions` 作答 SpecDev 范围卡，再经 `dsh.test.answerApproval` 作答审批 |
 | `step-5-native-diff.png` | 由 `meta.diffs` 打开的原生 `TabInputTextDiff` |
 
 截图工具经实测而非假定选出，顺序为：`ffmpeg` 按**实测的全屏尺寸** → `ffmpeg` 按 plan 的裁剪尺寸 → `ffmpeg` 用 `x11grab` 自身默认区域 → `gnome-screenshot -f`（写明的备用手段）。某一步的截图缺失、或不是合法 PNG（magic bytes 加文件大小下限）时，该次运行以 `HARNESS_ERROR` 失败 —— 没有证据的步骤绝不会被判为成功。
@@ -104,16 +103,6 @@ LAYER_V_FAULT_ANSWER_DELAY_MS=130000 # answers past the 120s window → step-4 L
 该次运行同时是「扩展的解析链消费的是 `dsh.nodeBin` 设置」这一断言的证据。因此脚本**清除**继承的 `DSH_NODE_BIN`（仅仅不导出它并不够），断言清除后 `printenv DSH_NODE_BIN` 为空，并把该清理动作 —— 是否继承了值、脱敏后的原值、以及空值断言结果 —— 记入 `layer-v-status.json`。随后它在一次性的 `--user-data-dir` 设置中预置 `dsh.nodeBin`，值为它自行解析出的 Node 的绝对路径。
 
 清除后仍非空、或缺少该清理记录，都判 `HARNESS_ERROR`：没有这次清理，该次运行就无法证明该设置被消费。
-
-### 影子 preset 生成器
-
-```bash
-bash apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh --check-shadow-preset
-```
-
-第 5 步必须产出模型自己的 `meta.diffs`，而随包发布的 orchestrator 工具策略会屏蔽产出它们的工具。生成器把一个 `specdev-orchestrator` preset 的影子副本 —— 即随包 preset 去掉两行 `orchestrator-tool-policy`，按行号删除并在此之前断言这两行仍与设计所述一致 —— 写入调用方指定的影子根。冒烟脚本把该根放在 `HOME` 沙箱内 profile overlay 的首位，因此随包文件保持逐字节不变，真实 `~/.dsh` 永不被写入。
-
-`--check-shadow-preset` 在无 VS Code、无显示环境、无凭据、无模型的条件下自检该生成器：生成两次（两次哈希必须一致）、与随包 preset 做 diff（恰好两行删除、零行新增）、并重新计算随包文件的哈希（未改变）。退出码 `0` 表示该派生成立，`1` 表示检查失败 —— 包括随包 preset 已漂移，`2` 表示用法或环境错误。该生成器是这一派生过程的唯一实现；冒烟脚本调用它，而不是自行重新派生。
 
 ## 库
 
@@ -209,6 +198,9 @@ AutoReady 仅在 **Conversation 可见 ∧ Host ready** 时运行：
 | `dsh.test.hostCreateCount` | Host 构造计数（AC-5） |
 | `dsh.test.injectDisconnect` | 触发意外的断连（AC-6a） |
 | `dsh.test.answerApproval` | 按 id 作答一个 pending 审批（`allow-once` / …），不经 UI 往返（AD-12） |
+| `dsh.test.answerApprovalFromWebview` | 经面板自身的 `interaction/approve` 帧作答一个 pending 审批 —— 交互卡片使用的作答路径 |
+| `dsh.test.injectQuestions` | 经真实协调者创建一张 pending 用户提问卡，供驱动按 id 作答 |
+| `dsh.test.answerQuestions` | 按 id 作答一个 pending 用户提问卡，不经 UI 往返（SpecDev guard 弹出的范围卡） |
 | `dsh.test.getDiagnosticsText` | 结构化的 `HostDiagnosticRecord[]` —— 字段而非散文（AD-14） |
 
 ## 视图
@@ -229,6 +221,8 @@ History 是 **WebviewView** 而非 `TreeView`：行的字号与行菜单归本�
 在输入框键入 `@` 会为工作区根目录打开候选列表。候选来自 Host 挂在 `ctx.fileReferences` 背后的同一套搜索，因此面板、Web 客户端与模型自身的 `@` 指引在排序和排除上完全一致。`↑`/`↓` 移动高亮，`Enter` 或 `Tab` 接受，`Escape` 关闭；接受目录会让列表向下展开一级，含空格的路径以 `@"path with spaces"` 形式插入。
 
 把文件拖入输入框会把每个落下的路径转成一条 `@path` mention。Host 用发送门禁同一套工作区校验解析路径，因此工作区之外的落文件会被跳过，而不会变成本该被拒绝的 token。`dsh.insertFileReference` 无需拖拽即可插入一条 mention。
+
+消息正文里的 `path:line` 与卡片同路打开：正文中的 `src/a.ts:12` 会变成文件链接并在第 12 行打开该文件（尾随的 `:column` 会显示但无需点击），而 URL、`@` mention 与不带行号的路径保持纯文本。
 
 ## Composer `/` 命令
 
@@ -291,9 +285,13 @@ History 是 **WebviewView** 而非 `TreeView`：行的字号与行菜单归本�
 ## SpecDev 状态（AD-CU-12）
 
 - 工作区的 Spec 驱动工作流（`.specdev`）是持久状态而非日志状态，因此面板从运行时读取：只要 bridge 的 `specdev/snapshot` 回出一个工作流就有状态卡；工作区没有工作流时不渲染卡片。
-- 卡片显示 slug、stage/phase、HG-1/2/3 标记、技术债计数与待决门禁。切换页签与每个 `specdev/*` 事件都会重新读取，因此在别处推进过的工作流不会再占据卡片。
-- `dsh.specdevStatus` 以行形式展示同一状态（门禁、各阶段的实现/评审/验证、必须修复轮次、下一步），有待决门禁时首行是「确认门禁 <gate>…」。
-- 决定在 QuickPick 中选择（通过 / 驳回 / 推迟，后两者可附一句说明）并经 bridge 的 `specdev/confirm-gate` 应用；卡片上的「确认门禁…」按钮走同一条路径。门禁次序、工件前置条件与持久写入都属于运行时，因此拒绝（`SPECDEV_GATE_NOT_PENDING: …`）原样显示，而已接受的决定会替换卡片上的状态。
+- 状态条显示 slug、stage/phase、HG-1/HG-1.5/2/3 标记、计划顺序（当前阶段及其依赖）、当前阶段正在运行的角色、技术债计数、本会话最近一次放行范围、计划声明为 UI 的每个阶段的原型标记与待决门禁（按其显示名，如「等待门禁 HG-1.5」/「原型确认」）。切换页签与每个 `specdev/*` 事件都会重新读取，因此在别处推进过的工作流不会再占据卡片。
+- 产物条按存在与否列出工作流级与当前计划的产物（缺失的显示「（缺）」），点击任一行都走 `@` 引用卡同一条路径打开该文件。
+- 运行时记录了下一步时，卡片显示该动作并提供「填入输入框」，把文本放进输入框而不发送。
+- 待决门禁在卡片内渲染决定表单：运行时接受通过前会检查的依据、状态已携带的风险行（阻塞债、回炉轮次、缺失产物）、多行备注，以及「通过并推进 / 打回修改 / 延后」三个决定。打回必须填写备注——按钮保持禁用，Host 也会拒绝无备注的打回——通过与延后则可留空。
+- 决定与备注随一条 `action/specdev-gate` 意图经 bridge 的 `specdev/confirm-gate` 落盘；门禁次序、工件前置条件与持久写入都属于运行时，因此拒绝（`SPECDEV_GATE_NOT_PENDING: …`）原样显示，而已接受的决定会替换卡片上的状态。
+- `dsh.specdevStatus` 保留 QuickPick 作为命令面板路径（通过 / 驳回 / 推迟，可附说明），并经同一条路径应用。
+- `dsh-specdev-guard` 的越界访问申请复用交互卡：详情区给出工具、角色、访问类型、目标路径、整盘/递归扫描的风险行与申请方理由，选项即四档范围。
 
 ## 对话中的图片
 

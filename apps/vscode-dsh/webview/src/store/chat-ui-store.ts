@@ -34,15 +34,30 @@ export interface SpecdevStatusState {
   slug: string
   stage: string
   phase: string | null
-  gates: { hg1: 'pending' | 'passed'; hg2: 'pending' | 'passed'; hg3: 'pending' | 'passed' }
+  gates: {
+    hg1: 'pending' | 'passed'
+    /** Visual-baseline gate; a workflow without a UI phase never requires it. */
+    hg1_5: 'pending' | 'passed'
+    hg2: 'pending' | 'passed'
+    hg3: 'pending' | 'passed'
+  }
   /** Per-phase step states, in the order the runtime reported them. */
   steps: Array<{
     phaseId: string
     implementer: string
     reviewer: string
     verifier: string
+    /** Prototype confirmation of a UI phase. */
+    prototype: 'pending' | 'passed'
   }>
-  pendingGate: 'hg1' | 'hg2' | 'hg3' | 'phase-entry' | null
+  /** Visual chain declarations the phase plan carries, read from `phase-plan.md`. */
+  ui: {
+    /** True when any phase declares `ui: true`. */
+    workflow: boolean
+    /** Per-phase `ui` declaration; `'unknown'` when the plan does not carry one. */
+    phases: Record<string, boolean | 'unknown'>
+  }
+  pendingGate: 'hg1' | 'hg1_5' | 'hg2' | 'hg3' | 'phase-entry' | 'prototype' | null
   loopCount: number
   nextAction?: string
   techDebtSummary?: { blocking: number; total: number }
@@ -834,9 +849,10 @@ function parseSpecdevStatus(raw: unknown): SpecdevStatusState | undefined {
   if (typeof rec.gates !== 'object' || rec.gates === null) return undefined
   const gateRec = rec.gates as Record<string, unknown>
   const hg1 = gateState(gateRec.hg1)
+  const hg1_5 = gateState(gateRec.hg1_5)
   const hg2 = gateState(gateRec.hg2)
   const hg3 = gateState(gateRec.hg3)
-  if (hg1 === undefined || hg2 === undefined || hg3 === undefined) return undefined
+  if (hg1 === undefined || hg1_5 === undefined || hg2 === undefined || hg3 === undefined) return undefined
   const pendingGate = rec.pendingGate === null ? null : gateId(rec.pendingGate)
   if (pendingGate === undefined) return undefined
   if (typeof rec.steps !== 'object' || rec.steps === null || Array.isArray(rec.steps)) return undefined
@@ -846,17 +862,24 @@ function parseSpecdevStatus(raw: unknown): SpecdevStatusState | undefined {
     const row = value as Record<string, unknown>
     if (typeof row.implementer !== 'string' || typeof row.reviewer !== 'string') return undefined
     if (typeof row.verifier !== 'string') return undefined
-    steps.push({ phaseId, implementer: row.implementer, reviewer: row.reviewer, verifier: row.verifier })
+    const prototype = gateState(row.prototype)
+    if (prototype === undefined) return undefined
+    steps.push({ phaseId, implementer: row.implementer, reviewer: row.reviewer, verifier: row.verifier, prototype })
   }
+  const ui = parseSpecdevUi(rec.ui)
+  if (ui === undefined) return undefined
   const debt = rec.techDebtSummary
   return {
     slug: rec.slug,
     stage: rec.stage,
     phase,
-    gates: { hg1, hg2, hg3 },
+    gates: { hg1, hg1_5, hg2, hg3 },
     steps,
+    ui,
     pendingGate,
     loopCount: typeof rec.loopCount === 'number' ? rec.loopCount : 0,
+    plan: parseSpecdevPlan(rec.plan),
+    artifacts: parseSpecdevArtifacts(rec.artifacts),
     ...typeof rec.nextAction === 'string' && rec.nextAction !== '' ? { nextAction: rec.nextAction } : {},
     ...typeof debt !== 'object' || debt === null ? {} : {
       techDebtSummary: {
@@ -874,7 +897,73 @@ function gateState(raw: unknown): 'pending' | 'passed' | undefined {
 
 /** One gate id of a parsed status, or `undefined` when unrecognized. */
 function gateId(raw: unknown): SpecdevStatusState['pendingGate'] | undefined {
-  return raw === 'hg1' || raw === 'hg2' || raw === 'hg3' || raw === 'phase-entry' ? raw : undefined
+  return raw === 'hg1' || raw === 'hg1_5' || raw === 'hg2' || raw === 'hg3'
+    || raw === 'phase-entry' || raw === 'prototype' ? raw : undefined
+}
+
+/** Parse the visual chain declarations of a status, or `undefined` when malformed. */
+function parseSpecdevUi(raw: unknown): SpecdevStatusState['ui'] | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const rec = raw as Record<string, unknown>
+  if (typeof rec.workflow !== 'boolean') return undefined
+  if (typeof rec.phases !== 'object' || rec.phases === null || Array.isArray(rec.phases)) return undefined
+  const phases: Record<string, boolean | 'unknown'> = {}
+  for (const [phaseId, declared] of Object.entries(rec.phases as Record<string, unknown>)) {
+    if (typeof declared !== 'boolean' && declared !== 'unknown') return undefined
+    phases[phaseId] = declared
+  }
+  return { workflow: rec.workflow, phases }
+}
+
+/**
+ * Parse the plan rows of a status. A malformed list degrades to no plan: the
+ * card then renders without DAG position rather than dropping the whole status.
+ */
+function parseSpecdevPlan(raw: unknown): SpecdevStatusState['plan'] {
+  if (!Array.isArray(raw)) return []
+  const rows: SpecdevStatusState['plan'] = []
+  for (const value of raw) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return []
+    const row = value as Record<string, unknown>
+    if (typeof row.id !== 'string' || row.id === '') return []
+    if (!Array.isArray(row.dependencies)) return []
+    if (row.status !== 'done' && row.status !== 'active' && row.status !== 'todo') return []
+    rows.push({
+      id: row.id,
+      dependencies: row.dependencies.filter((dep): dep is string => typeof dep === 'string'),
+      status: row.status,
+    })
+  }
+  return rows
+}
+
+/**
+ * Parse the artifact rows of a status. A malformed list degrades to no list, the
+ * same way a malformed plan does.
+ */
+function parseSpecdevArtifacts(raw: unknown): SpecdevStatusState['artifacts'] {
+  if (!Array.isArray(raw)) return []
+  const rows: SpecdevStatusState['artifacts'] = []
+  for (const value of raw) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return []
+    const row = value as Record<string, unknown>
+    if (typeof row.path !== 'string' || row.path === '') return []
+    if (typeof row.label !== 'string') return []
+    if (row.phaseId !== null && typeof row.phaseId !== 'string') return []
+    if (row.status !== 'ready' && row.status !== 'missing') return []
+    rows.push({ path: row.path, label: row.label, phaseId: row.phaseId, status: row.status })
+  }
+  return rows
+}
+
+/** Parse the latest grant the status frame carries, or `undefined` when absent. */
+function parseSpecdevLastScope(raw: unknown): SpecdevStatusState['lastApprovedScope'] | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const rec = raw as Record<string, unknown>
+  const decision = rec.decision
+  if (decision !== 'once' && decision !== 'directory' && decision !== 'session') return undefined
+  if (!Array.isArray(rec.paths)) return undefined
+  return { decision, paths: rec.paths.filter((path): path is string => typeof path === 'string') }
 }
 
 /**
@@ -1446,9 +1535,13 @@ export function applyHostFrame(raw: unknown): void {
     // A background Tab's workflow must not own the card this panel shows.
     const specdevSessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''
     if (specdevSessionId !== '' && state.sessionId !== undefined && specdevSessionId !== state.sessionId) return
+    const specdev = parseSpecdevStatus(frame.snapshot)
+    const lastScope = parseSpecdevLastScope(frame.lastScope)
     state = {
       ...state,
-      specdev: parseSpecdevStatus(frame.snapshot),
+      specdev: specdev === undefined
+        ? undefined
+        : { ...specdev, ...lastScope === undefined ? {} : { lastApprovedScope: lastScope } },
     }
   } else if (type === 'scroll/reveal') {
     const sessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''

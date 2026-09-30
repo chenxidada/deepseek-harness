@@ -17,7 +17,6 @@
   "testScripts": [
     { "path": "run-layer-v-smoke.sh", "category": "entry-orchestration", "domain": "session-host" },
     { "path": "run-layer-v-capabilities.sh", "category": "entry-orchestration", "domain": "test-harness" },
-    { "path": "layer-v-shadow-preset.sh", "category": "support-resources", "domain": "session-host" },
     { "path": "layer-v-capabilities.json", "category": "capability-manifest-data", "domain": "test-harness" },
     { "path": "layer-v-driver/extension.cjs", "category": "entry-orchestration", "domain": "session-host" },
     { "path": "layer-v-driver/package.json", "category": "support-resources", "domain": "session-host" },
@@ -38,7 +37,6 @@
       "spec": "cap-session-host.spec.ts",
       "scripts": [
         "run-layer-v-smoke.sh",
-        "layer-v-shadow-preset.sh",
         "layer-v-driver/extension.cjs",
         "layer-v-driver/package.json"
       ],

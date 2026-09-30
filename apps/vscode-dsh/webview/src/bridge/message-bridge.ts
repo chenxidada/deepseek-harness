@@ -76,8 +76,10 @@ export type ChromeIntent =
   /** Abort one subagent card's active turn under the parent the card renders. */
   | { type: 'action/interrupt-subagent'; parentSessionId: string; childSessionId: string }
   /** Decide the SpecDev pending gate the status card renders (AD-CU-12). */
-  | { type: 'action/specdev-gate'; sessionId: string; gate: string }
+  | { type: 'action/specdev-gate'; sessionId: string; gate: string; decision: 'pass' | 'reject' | 'defer'; note?: string }
   | { type: 'action/restore-more'; all?: boolean }
+  /** Put text in the composer without sending it (the status card's next action). */
+  | { type: 'action/prefill-composer'; text: string }
   | { type: 'action/retry-connect' }
   | { type: 'action/open-settings' }
   | { type: 'change/reveal-source'; sourceMessageId: string }

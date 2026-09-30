@@ -3030,6 +3030,24 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         expect(answer(undefined, undefined)).toEqual({ ok: false, reason: 'invalid-id' })
       })
 
+      it('CAP-SESSION-HOST-167 the questions hooks refuse a malformed call without a Host', () => {
+        activateWith(makeVscode())
+        expect(commands.has('dsh.test.answerQuestions')).toBe(true)
+        expect(commands.has('dsh.test.injectQuestions')).toBe(true)
+        const answer = commands.get('dsh.test.answerQuestions')!
+        const inject = commands.get('dsh.test.injectQuestions')!
+        expect(answer('call-1', { answers: [{ id: 'q1', selected: ['yes'] }] }))
+          .toEqual({ ok: false, reason: 'no-host' })
+        expect(answer('', { answers: [] })).toEqual({ ok: false, reason: 'invalid-id' })
+        expect(answer(undefined, undefined)).toEqual({ ok: false, reason: 'invalid-id' })
+        // The payload is validated before the Host is consulted, so a driver that
+        // mis-serialises an answer reads why *its* call was wrong, not a Host state.
+        expect(answer('call-1', undefined)).toEqual({ ok: false, reason: 'invalid-answer' })
+        expect(answer('call-1', { answers: 'not-an-array' })).toEqual({ ok: false, reason: 'invalid-answer' })
+        expect(inject({ id: 'card-1', questions: [{ id: 'q1', question: 'proceed?' }] }))
+          .toEqual({ ok: false, reason: 'no-host' })
+      })
+
       it('CAP-SESSION-HOST-092 with the test gate closed the hook is never registered', async () => {
         // `activate` resolves `vscode` through `createRequire` when no module is
         // injected, which is the only path where the gate can be observed closed.
@@ -4037,6 +4055,81 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
 
         const sent = await commands.get('dsh.test.sendPrompt')!('hello phase2')
         expect(sent).toMatchObject({ ok: true })
+      })
+
+      it('CAP-SESSION-HOST-168 the questions hooks round-trip one card through the live coordinator', async () => {
+        mockConnectedHost()
+        const vscode = makeVscode()
+        // The extension installs its interaction UI only when the window exposes a
+        // QuickPick surface, and a card no surface can present settles itself before a
+        // driver could answer it: this window exposes one that never answers.
+        ;(vscode.window as unknown as { showQuickPick: () => Promise<undefined> }).showQuickPick
+          = () => new Promise(() => {})
+        activateWith(vscode)
+        await commands.get('dsh.test.setCredentialPresence')!(true)
+        await commands.get('dsh.test.requestStart')!('command-start')
+
+        const inject = commands.get('dsh.test.injectQuestions')!
+        const answer = commands.get('dsh.test.answerQuestions')!
+        const card = {
+          id: 'card-1',
+          questions: [{ id: 'q1', question: 'proceed?', options: [{ label: 'yes' }] }],
+        }
+        // The Host exists but owns no Tab yet, so a card has no session to belong to.
+        expect(inject(card)).toEqual({ ok: false, reason: 'no-active-session' })
+        expect(inject('not-a-payload')).toEqual({ ok: false, reason: 'invalid-payload' })
+        expect(inject({ id: '', questions: [{ id: 'q1', question: 'proceed?' }] }))
+          .toEqual({ ok: false, reason: 'invalid-payload' })
+        expect(inject({ id: 'card-1', questions: [] })).toEqual({ ok: false, reason: 'invalid-payload' })
+        expect(inject({ id: 'card-1', questions: [{ id: 'q1' }] }))
+          .toEqual({ ok: false, reason: 'invalid-payload' })
+
+        await commands.get('dsh.test.fireConversationVisibility')!(true)
+        await vi.waitFor(() => {
+          expect(getConversationSnapshot().tabs.length).toBeGreaterThanOrEqual(1)
+        })
+        expect(inject(card)).toEqual({ ok: true, id: 'card-1' })
+        const queued = await commands.get('dsh.test.interactionsDebug')!() as { queue: Array<{ id: string }> }
+        expect(queued.queue.some(entry => entry.id === 'card-1')).toBe(true)
+
+        expect(answer('card-1', { answers: [{ id: 'q1', selected: ['yes'] }] }))
+          .toEqual({ ok: true, id: 'card-1', answers: [{ id: 'q1', selected: ['yes'] }] })
+        // The card is settled: a second answer has nothing left to settle, and a card
+        // that never existed reads the same way.
+        expect(answer('card-1', { answers: [{ id: 'q1', selected: ['yes'] }] }))
+          .toEqual({ ok: false, reason: 'unknown-id' })
+        expect(answer('missing-card', { answers: [] })).toEqual({ ok: false, reason: 'unknown-id' })
+      })
+
+      it('CAP-SESSION-HOST-169 the webview-frame approval hook posts the panel frame that settles a card', async () => {
+        mockConnectedHost()
+        const vscode = makeVscode()
+        ;(vscode.window as unknown as { showQuickPick: () => Promise<undefined> }).showQuickPick
+          = () => new Promise(() => {})
+        activateWith(vscode)
+        const answer = commands.get('dsh.test.answerApprovalFromWebview')!
+        expect(await answer('', 'allowed-once')).toEqual({ ok: false, reason: 'invalid-id' })
+        // The outcome vocabulary is the Webview frame's, so a value outside it is refused
+        // before any frame is posted.
+        expect(await answer('a1', 'nonsense')).toEqual({ ok: false, reason: 'invalid-outcome' })
+
+        await commands.get('dsh.test.setCredentialPresence')!(true)
+        await commands.get('dsh.test.requestStart')!('command-start')
+        await commands.get('dsh.test.fireConversationVisibility')!(true)
+        await vi.waitFor(() => {
+          expect(getConversationSnapshot().tabs.length).toBeGreaterThanOrEqual(1)
+        })
+
+        expect(commands.get('dsh.test.injectApproval')!({ id: 'a2', toolName: 'bash' }))
+          .toEqual({ ok: true, id: 'a2' })
+        const listed = await commands.get('dsh.test.listPendingInteractions')!() as Array<{ id: string; kind: string }>
+        expect(listed.some(entry => entry.id === 'a2' && entry.kind === 'approval')).toBe(true)
+
+        // The reply is an acknowledgement, not the decision: what settles the card is the
+        // frame reaching the coordinator, which the pending list then stops listing.
+        expect(await answer('a2', 'allowed-once')).toEqual({ ok: true, id: 'a2', outcome: 'allowed-once' })
+        expect((await commands.get('dsh.test.listPendingInteractions')!() as Array<{ id: string }>)
+          .some(entry => entry.id === 'a2')).toBe(false)
       })
 
       it('CAP-SESSION-HOST-122 restore non-empty openTabSet as replay; no auto Continue; unread false', async () => {

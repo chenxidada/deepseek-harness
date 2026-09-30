@@ -36,7 +36,6 @@ Every run writes into `apps/vscode-dsh/test-artifacts/layer-v/` — an ignored d
 | `layer-v-log-evidence.json` | Evidence extracted from the product's own session log |
 | `layer-v-corroboration.json` | The script's independent re-check of the driver's PASS |
 | `run-summary.json` | Consolidated run metadata, conclusion and exit code |
-| `shadow-preset-check.txt` | Shadow preset generator output (diff, hashes, exit code) |
 | `step-5-target.txt` | The scratch file the model edits in step 5 |
 | `step-<n>-<slug>.png` | The five step screenshots |
 
@@ -51,7 +50,7 @@ Screenshots are named `step-<n>-<slug>.png`, with `n` from 1 to 5 and one fixed 
 | `step-1-host-started.png` | Host reached `started` with a connected session |
 | `step-2-new-conversation.png` | A new conversation Tab exists |
 | `step-3-model-round-trip.png` | Assistant text carrying the run's unique marker |
-| `step-4-approval.png` | Approval answered through `dsh.test.answerApproval` |
+| `step-4-approval.png` | The SpecDev scope card answered through `dsh.test.answerQuestions`, then the approval answered through `dsh.test.answerApproval` |
 | `step-5-native-diff.png` | Native `TabInputTextDiff` opened from `meta.diffs` |
 
 The capture tool is chosen by measurement rather than assumption, in this order: `ffmpeg` at the **measured full-screen geometry**, `ffmpeg` at the plan's crop, `ffmpeg` at `x11grab`'s own default, then `gnome-screenshot -f` as the stated backup. A step whose screenshot is missing or is not a valid PNG (magic bytes plus a size floor) fails as `HARNESS_ERROR` — a step is never reported ok without its evidence.
@@ -104,16 +103,6 @@ A malformed value (a non-numeric delay, a switch that is neither `0` nor `1`) is
 The run is also the evidence that the `dsh.nodeBin` setting is what the extension's resolution chain consumes. So the script **unsets** an inherited `DSH_NODE_BIN` (merely not exporting it is not enough), asserts that `printenv DSH_NODE_BIN` is empty afterwards, and records that cleanup — whether a value was inherited, its redacted original, and the empty-value assertion — in `layer-v-status.json`. It then seeds `dsh.nodeBin` in the throwaway `--user-data-dir` settings with the absolute path of the Node it resolved itself.
 
 A non-empty value after clearing, or a missing cleanup record, is a `HARNESS_ERROR`: without the cleanup the run would not prove the setting was consumed.
-
-### Shadow preset generator
-
-```bash
-bash apps/vscode-dsh/test-scripts/layer-v-shadow-preset.sh --check-shadow-preset
-```
-
-Step 5 has to produce the model's own `meta.diffs`, and the shipped orchestrator tool policy masks the tools that emit them. The generator derives a shadowed copy of the `specdev-orchestrator` preset — the shipped preset minus the two `orchestrator-tool-policy` rows, removed by line number after asserting those lines are still what the design says they are — into a caller-named shadow root. The smoke script places that root first in a profile overlay inside its `HOME` sandbox, so the shipped file stays byte-identical and the real `~/.dsh` is never written.
-
-`--check-shadow-preset` self-tests the generator with no VS Code, no display, no credentials and no model: it generates twice (both hashes must match), diffs against the shipped preset (exactly two deletions, zero insertions), and re-hashes the shipped file (unchanged). Exit `0` means the derivation holds, `1` means the check failed — including a drifted shipped preset, `2` means usage or environment error. The generator is the only implementation of that derivation; the smoke script calls it instead of re-deriving anything.
 
 ## Library
 
@@ -209,6 +198,9 @@ Registered **only** when `VSCODE_DSH_TEST=1` or when `activate` receives an inje
 | `dsh.test.hostCreateCount` | Host construct count (AC-5) |
 | `dsh.test.injectDisconnect` | Fire unexpected disconnect (AC-6a) |
 | `dsh.test.answerApproval` | Answer a pending approval by id (`allow-once` / …) without a UI round trip (AD-12) |
+| `dsh.test.answerApprovalFromWebview` | Answer a pending approval through the panel's own `interaction/approve` frame — the route an interaction card answers with |
+| `dsh.test.injectQuestions` | Create one pending user-questions card through the real coordinator, for a driver that answers by id |
+| `dsh.test.answerQuestions` | Answer a pending user-questions card by id without a UI round trip (the scope card the SpecDev guard raises) |
 | `dsh.test.getDiagnosticsText` | Structured `HostDiagnosticRecord[]` — fields, not prose (AD-14) |
 
 ## Views
@@ -229,6 +221,8 @@ History is a **WebviewView**, not a `TreeView`: the row typography and the row m
 Typing `@` in the composer opens a candidate list for the workspace root. Candidates come from the same search the Host mounts behind `ctx.fileReferences`, so the panel, the Web client, and the model's own `@` guidance rank and exclude identically. `↑`/`↓` move the highlight, `Enter` or `Tab` accepts, `Escape` closes; accepting a directory keeps the list open one level down, and a path with spaces is inserted as `@"path with spaces"`.
 
 Dropping files onto the composer turns each dropped path into an `@path` mention. The Host resolves the path through the same workspace check the send gate uses, so a drop from outside the workspace is skipped instead of becoming a token that would later be rejected. `dsh.insertFileReference` inserts one mention without a drag.
+
+Message bodies render `path:line` references the same way the cards open: a `src/a.ts:12` in a body becomes a file link that opens that file at line 12 (a trailing `:column` is shown but not needed), while URLs, `@` mentions, and paths without a line stay plain text.
 
 ## Composer `/` commands
 
@@ -291,9 +285,13 @@ The composer's 压缩上下文 button and `dsh.triggerCompact` take the same pat
 ## SpecDev status (AD-CU-12)
 
 - The workspace's Spec-driven workflow (`.specdev`) is durable state, not log state, so the panel reads it from the runtime: a status card appears whenever bridge `specdev/snapshot` answers a workflow, and no card appears when the workspace has none.
-- The card shows slug, stage/phase, the HG-1/2/3 marks, the tech-debt counts, and the pending gate. Activation and every `specdev/*` event re-read it, so a workflow that advanced elsewhere stops owning the card.
-- `dsh.specdevStatus` shows the same status as rows (gates, each phase's implementer/reviewer/verifier, loop count, next action) with「确认门禁 <gate>…」as the first row when a gate is pending.
-- A decision is chosen in a QuickPick (通过 / 驳回 / 推迟, plus an optional note for the latter two) and applied through bridge `specdev/confirm-gate`; the card's「确认门禁…」button takes the same path. Gate order, artifact preconditions, and the durable write stay the runtime's, so a refusal (`SPECDEV_GATE_NOT_PENDING: …`) is shown verbatim while an accepted decision replaces the card's status.
+- The strip shows slug, stage/phase, the HG-1/HG-1.5/2/3 marks, the plan order with the active phase and its dependencies, the role the current phase is running, the tech-debt counts, the latest out-of-workspace grant the session recorded, the prototype mark of every phase the plan declares as UI, and the pending gate under its display name (`等待门禁 HG-1.5` / `原型确认`). Activation and every `specdev/*` event re-read it, so a workflow that advanced elsewhere stops owning the card.
+- The artifact strip lists the workflow's and the current plan's artifacts by existence — a missing one reads「（缺）」— and clicking any row opens that file through the same reference route the `@` cards use.
+- When the runtime records a next action, the card shows it with「填入输入框」, which puts the text in the composer without sending it.
+- A pending gate renders an inline decision form: what the runtime checks before it accepts a pass, the risk lines the status carries (blocking debt, rework rounds, missing artifacts), a multi-line note, and the three decisions 通过并推进 / 打回修改 / 延后. A rejection needs its note — the button stays disabled, and the Host refuses a note-less rejection — while passing and deferring leave it optional.
+- The decision and the note travel in one `action/specdev-gate` intent and land through bridge `specdev/confirm-gate`; gate order, artifact preconditions, and the durable write stay the runtime's, so a refusal (`SPECDEV_GATE_NOT_PENDING: …`) is shown verbatim while an accepted decision replaces the card's status.
+- `dsh.specdevStatus` keeps the QuickPick presenter as the palette route (通过 / 驳回 / 推迟, plus a note) and applies through the same path.
+- Out-of-workspace access requests from `dsh-specdev-guard` reuse the interaction card: its detail block carries the tool, the role, the access, the requested paths, a recursive-scan risk line, and the asker's reason, and its options are the four scope choices.
 
 ## Images in the conversation
 

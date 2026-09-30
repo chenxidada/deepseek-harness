@@ -87,7 +87,7 @@ A workspace's Spec-driven workflow lives in `.specdev`, outside the session log,
 
 | Request (Host → runtime) | Purpose | Failure the Host sees |
 |---|---|---|
-| `specdev/snapshot` | Read the addressed session's workspace workflow: slug, stage, phase, gate states, per-phase step states, pending gate, loop count, next action, and tech-debt counts | `specdev service is not available`, `unknown session "<id>"`, or the status read error |
+| `specdev/snapshot` | Read the addressed session's workspace workflow: slug, stage, phase, gate states, per-phase step and prototype states, the phase plan's `ui` declarations and its ordered plan rows, pending gate, loop count, next action, tech-debt counts, and the workflow's artifacts with workspace-relative paths and ready/missing state | `specdev service is not available`, `unknown session "<id>"`, or the status read error |
 | `specdev/confirm-gate` | Apply one Human Gate decision (`pass` / `reject` / `defer` / `resolve` / `cancel`, with an optional note) through the sole accepted write path, answering the post-change status | `specdev service is not available`, `unknown session "<id>"`, or the runtime's own refusal code and message (`SPECDEV_GATE_NOT_PENDING: gate hg1 is not the current pending gate (hg2)`, `SPECDEV_NO_ACTIVE_WORKFLOW: …`) |
 
 `confirmGate` owns gate order, artifact preconditions, and the durable write, so the bridge forwards the decision rather than reimplementing any of them; a refusal keeps its code so the Extension can show the runtime's own reason. A successful decision appends `specdev/gate-decided` to the session log, which is what makes the status model-visible and replayable.
@@ -139,6 +139,6 @@ No direct model-request effect; Host decisions may change later tool outcomes wi
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-No companion invariant is published. Dual-channel purity is owned by profile composition tests and the ide profile e2e smoke. Terminal answerers claim every request on the ide profile so an absent Web Host cannot silently allow.
+**Runtime invariant:** No companion is published. Dual-channel purity is owned by profile composition tests and the ide profile e2e smoke. Terminal answerers claim every request on the ide profile so an absent Web Host cannot silently allow.
 
 </details>

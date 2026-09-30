@@ -15,6 +15,7 @@ import type {
   HostQuestionsRequest,
   InteractionUi,
 } from './interaction-coordinator.ts'
+import type { SpecdevGateDecision } from './chat-panel/protocol.ts'
 
 /** QuickPick item for duck-typed vscode.window.showQuickPick. */
 export interface InteractionQuickPickItem {
@@ -384,9 +385,9 @@ export async function confirmDeleteConversation(
 }
 
 /** Decisions the Human Gate presenter offers; the runtime validates the rest. */
-const SPECDEV_GATE_CHOICES: readonly { label: string; value: string; description: string }[] = [
+const SPECDEV_GATE_CHOICES: readonly { label: string; value: SpecdevGateDecision; description: string }[] = [
   { label: '通过 (Pass)', value: 'pass', description: '标记该门禁通过并写回 current-status.json' },
-  { label: '驳回 (Reject)', value: 'reject', description: '驳回该门禁，可附一句说明' },
+  { label: '驳回 (Reject)', value: 'reject', description: '驳回该门禁，必须附一句说明' },
   { label: '推迟 (Defer)', value: 'defer', description: '推迟该门禁，可附一句说明' },
 ]
 
@@ -401,7 +402,7 @@ const SPECDEV_GATE_CHOICES: readonly { label: string; value: string; description
 export async function pickSpecdevGateDecision(
   window: InteractionWindow,
   gate: string,
-): Promise<{ decision: string; note?: string } | undefined> {
+): Promise<{ decision: SpecdevGateDecision; note?: string } | undefined> {
   const items: InteractionQuickPickItem[] = SPECDEV_GATE_CHOICES.map(choice => ({
     label: choice.label,
     description: choice.description,
@@ -412,15 +413,21 @@ export async function pickSpecdevGateDecision(
     title: `DeepSeek Harness SpecDev · ${gate}`,
   })
   if (picked === undefined || Array.isArray(picked)) return undefined
-  if (picked.value === 'pass') return { decision: 'pass' }
+  const decision = SPECDEV_GATE_CHOICES.find(choice => choice.value === picked.value)?.value
+  if (decision === undefined) return undefined
+  if (decision === 'pass') return { decision: 'pass' }
   const note = await window.showInputBox?.({
-    prompt: `${gate} 的说明（可留空）`,
+    prompt: `${gate} 的说明（${decision === 'reject' ? '打回必填' : '可留空'}）`,
     title: `DeepSeek Harness SpecDev · ${gate}`,
     placeHolder: '说明会记录在 gate-decided 事件上',
   })
   const trimmed = note?.trim() ?? ''
+  if (decision === 'reject' && trimmed === '') {
+    await window.showWarningMessage?.('打回修改必须填写备注，未写入任何决定。')
+    return undefined
+  }
   return {
-    decision: picked.value,
+    decision,
     ...trimmed === '' ? {} : { note: trimmed },
   }
 }

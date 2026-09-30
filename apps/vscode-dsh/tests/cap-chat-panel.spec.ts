@@ -1217,6 +1217,18 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         expect(containsUnsafeHtml(result.html)).toBe(false)
       })
 
+      it('CAP-CHAT-PANEL-021b a `path:line` body reference becomes a file link and URLs stay text', () => {
+        const result = renderSafeMarkdown('见 src/a.ts:12:3 与 https://example.com/a.ts:12，还有 README.md:1')
+        expect(result.html).toContain('data-testid="file-link"')
+        expect(result.html).toContain('data-ref-path="src/a.ts"')
+        expect(result.html).toContain('data-ref-line="12"')
+        expect(result.html).toContain('>src/a.ts:12:3</button>')
+        // A URL and a bare file name stay plain text: no line reference to open.
+        expect(result.html).not.toContain('data-ref-path="example.com/a.ts"')
+        expect(result.html).not.toContain('data-ref-path="README.md"')
+        expect(containsUnsafeHtml(result.html)).toBe(false)
+      })
+
       it('CAP-CHAT-PANEL-022 escapes malicious HTML/script and never loads external resources', () => {
         const evil = [
           '<script>alert(1)</script>',
@@ -1250,6 +1262,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
           'plain only',
           '## Mid\n\n1. one\n2. two',
           '```\nunclosed fence still code',
+          '见 src/a.ts:12 与 https://example.com/a.ts:12、@src/b.ts',
         ]
         for (const f of fixtures) {
           const ts = renderSafeMarkdown(f)
@@ -2257,21 +2270,40 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
     })
 
     it('CAP-CHAT-PANEL-105 a SpecDev card decides its gate through the Host and shows a refusal', async () => {
-      const asked: Array<{ sessionId: string; gate: string }> = []
+      const asked: Array<{ sessionId: string; gate: string; decision: string; note?: string }> = []
       const panel = new ChatPanelHost(liveDeps('s-a', {
-        requestSpecdevGate: async (sessionId, gate) => {
-          asked.push({ sessionId, gate })
+        requestSpecdevGate: async (sessionId, gate, decision, note) => {
+          asked.push({ sessionId, gate, decision, ...note === undefined ? {} : { note } })
         },
       }))
       const fake = new FakeWebviewPort()
       panel.attach(fake)
       fake.receivedFromHost.length = 0
 
-      fake.emitFromWebview({ type: 'action/specdev-gate', sessionId: 's-a', gate: 'hg2' })
+      fake.emitFromWebview({
+        type: 'action/specdev-gate',
+        sessionId: 's-a',
+        gate: 'hg2',
+        decision: 'reject',
+        note: '设计需要重做',
+      })
       await waitFor(() => asked.length === 1, 1_000)
-      expect(asked).toEqual([{ sessionId: 's-a', gate: 'hg2' }])
+      // The card carries the decision and its note; the Host only forwards them.
+      expect(asked).toEqual([{
+        sessionId: 's-a',
+        gate: 'hg2',
+        decision: 'reject',
+        note: '设计需要重做',
+      }])
       // The card action is not a send: nothing is rejected into the composer.
       expect(fake.receivedFromHost.some(m => m.type === 'ui/reject-send')).toBe(false)
+
+      // A frame without a decision never reaches the runtime: it is dropped whole.
+      fake.receivedFromHost.length = 0
+      fake.emitFromWebview({ type: 'action/specdev-gate', sessionId: 's-a', gate: 'hg2' })
+      await new Promise(resolve => setTimeout(resolve, 20))
+      expect(asked).toHaveLength(1)
+      expect(fake.receivedFromHost.filter(m => m.type === 'ui/banner')).toEqual([])
 
       const refused = new ChatPanelHost(liveDeps('s-a', {
         requestSpecdevGate: async () => {
@@ -2281,7 +2313,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       const refusedFake = new FakeWebviewPort()
       refused.attach(refusedFake)
       refusedFake.receivedFromHost.length = 0
-      refusedFake.emitFromWebview({ type: 'action/specdev-gate', sessionId: 's-a', gate: 'hg1' })
+      refusedFake.emitFromWebview({ type: 'action/specdev-gate', sessionId: 's-a', gate: 'hg1', decision: 'pass' })
       await waitFor(() => refusedFake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
       // The runtime owns gate order, so its refusal is shown verbatim.
       const banner = refusedFake.receivedFromHost.find(m => m.type === 'ui/banner')

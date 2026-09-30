@@ -247,19 +247,26 @@ function fakeSubagentEntries(scope) {
 function fakeSpecdevSnapshot() {
   const stage = process.env.FAKE_SPECDEV_STAGE ?? 'implementation'
   const pendingGate = process.env.FAKE_SPECDEV_PENDING_GATE ?? 'hg2'
+  const slug = process.env.FAKE_SPECDEV_SLUG ?? 'fake-workflow'
   return {
-    schemaVersion: 2,
-    slug: process.env.FAKE_SPECDEV_SLUG ?? 'fake-workflow',
+    schemaVersion: 4,
+    slug,
     stage,
     phase: process.env.FAKE_SPECDEV_PHASE ?? 'phase-1',
-    gates: { hg1: 'passed', hg2: 'pending', hg3: 'pending' },
+    gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'pending', hg3: 'pending' },
     steps: {
-      'phase-1': { implementer: 'completed', reviewer: 'in_progress', verifier: 'pending' },
+      'phase-1': { implementer: 'completed', reviewer: 'in_progress', verifier: 'pending', prototype: 'pending' },
     },
+    ui: { workflow: false, phases: { 'phase-1': false } },
     pendingGate: pendingGate === '' ? null : pendingGate,
     loopCount: 1,
     nextAction: 'confirm HG-2',
     techDebtSummary: { blocking: 0, total: 2 },
+    plan: [{ id: 'phase-1', dependencies: [], status: 'active' }],
+    artifacts: [
+      { path: `.specdev/specs/${slug}/design.md`, label: 'design.md', phaseId: null, status: 'ready' },
+      { path: `.specdev/specs/${slug}/phase-plan.md`, label: 'phase-plan.md', phaseId: null, status: 'missing' },
+    ],
     initiatingCommand: 'feature',
     pipelineMode: 'feature',
   }
@@ -567,13 +574,14 @@ function connectBridge() {
           sendBridge({ kind: 'specdev/confirm-gate/response', id: frame.id, ok: false, error: refusal })
           continue
         }
+        const before = fakeSpecdevSnapshot()
         sendBridge({
           kind: 'specdev/confirm-gate/response',
           id: frame.id,
           ok: true,
           snapshot: {
-            ...fakeSpecdevSnapshot(),
-            gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' },
+            ...before,
+            gates: { ...before.gates, hg2: 'passed', hg3: 'pending' },
             pendingGate: null,
             stage: process.env.FAKE_SPECDEV_STAGE_AFTER ?? 'implementation',
           },

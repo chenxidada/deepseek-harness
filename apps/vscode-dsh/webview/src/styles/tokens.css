@@ -1466,13 +1466,71 @@ select:focus {
 .dsh-specdev-card {
   flex-shrink: 0;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 16px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 16px 8px;
   border-top: 1px solid var(--dsh-border);
   background: var(--dsh-surface);
   font-size: var(--dsh-text-sm);
   color: var(--dsh-status-fg);
+}
+
+.dsh-specdev-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.dsh-specdev-gate {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsh-border);
+  border-radius: var(--dsh-radius-md);
+  background: var(--dsh-surface-sunken);
+}
+
+.dsh-specdev-note {
+  width: 100%;
+  resize: vertical;
+}
+
+.dsh-specdev-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.dsh-specdev-artifacts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dsh-specdev-artifact {
+  padding: 1px 8px;
+  border: 1px solid var(--dsh-border);
+  border-radius: var(--dsh-radius-pill);
+  background: transparent;
+  color: inherit;
+  font-size: var(--dsh-text-sm);
+  cursor: pointer;
+}
+
+.dsh-specdev-artifact:hover {
+  background: var(--dsh-list-hover);
+}
+
+.dsh-specdev-artifact[data-status="missing"] {
+  opacity: 0.55;
+}
+
+.dsh-specdev-next {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .dsh-specdev-slug {

@@ -58,10 +58,10 @@ describe('AD-8 memory transport replaceability (AC-29/33)', () => {
 
     const hostFrames: BridgeFrame[] = []
     const runtimeFrames: BridgeFrame[] = []
-    host.onFrame(frame => {
+    host.onFrame((frame) => {
       hostFrames.push(frame)
     })
-    runtime.onFrame(frame => {
+    runtime.onFrame((frame) => {
       runtimeFrames.push(frame)
     })
 

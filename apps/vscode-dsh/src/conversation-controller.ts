@@ -307,6 +307,12 @@ export class ConversationController {
    * the log, and refreshed whenever the log reports a SpecDev event.
    */
   private readonly specdevBySession = new Map<string, BridgeSpecdevSnapshot | null>()
+  /**
+   * Latest out-of-workspace grant per session, folded from `specdev/scope-decided`.
+   * The grant itself lives in the runtime's session scope, so the card shows the
+   * event's own record instead of re-reading it.
+   */
+  private readonly specdevLastScope = new Map<string, { decision: 'once' | 'directory' | 'session'; paths: string[] }>()
   /** Sessions with a `specdev/snapshot` read in flight. */
   private readonly specdevRefreshes = new Set<string>()
   /** sessionId → turn awaiting assistant before settle. */
@@ -2167,7 +2173,7 @@ export class ConversationController {
     try {
       const snapshot = await this.host.readSpecdevSnapshot(sessionId)
       this.specdevBySession.set(sessionId, snapshot)
-      this.panelHost?.pushSpecdevStatus(sessionId, snapshot)
+      this.panelHost?.pushSpecdevStatus(sessionId, snapshot, this.specdevLastScope.get(sessionId))
     } catch {
       // A refusal leaves the card as it was; nothing else can act on it here.
     } finally {
@@ -2559,6 +2565,7 @@ export class ConversationController {
     this.subagentCatalog.clear()
     this.subagentCatalogRefreshes.clear()
     this.specdevBySession.clear()
+    this.specdevLastScope.clear()
     this.specdevRefreshes.clear()
     this.timeline.clear()
     this.messages.clear()
@@ -3607,6 +3614,16 @@ export class ConversationController {
     if (typeof record.type === 'string' && record.type.startsWith('specdev/')) {
       // Every SpecDev event carries a whole post-change view, so the card follows
       // the durable status; re-reading it keeps the card on the file's scalars.
+      if (record.type === 'specdev/scope-decided') {
+        const decision = data.decision
+        const paths = data.paths
+        if ((decision === 'once' || decision === 'directory' || decision === 'session') && Array.isArray(paths)) {
+          this.specdevLastScope.set(sessionId, {
+            decision,
+            paths: paths.filter((path): path is string => typeof path === 'string'),
+          })
+        }
+      }
       void this.refreshSpecdev(sessionId)
       return
     }

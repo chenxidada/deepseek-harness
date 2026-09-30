@@ -287,10 +287,32 @@ export type BridgeSubagentEntry =
   }
 
 /** Every gate a SpecDev workflow can wait at. */
-export type BridgeSpecdevGateId = 'hg1' | 'hg2' | 'hg3' | 'phase-entry'
+export type BridgeSpecdevGateId = 'hg1' | 'hg1_5' | 'hg2' | 'hg3' | 'phase-entry' | 'prototype'
 
 /** One workflow step's state as the runtime reports it. */
 export type BridgeSpecdevStepState = 'pending' | 'in_progress' | 'completed' | 'failed'
+
+/** One ordered phase-plan row of a SpecDev snapshot (schema v4). */
+export interface BridgeSpecdevPlanRow {
+  /** DAG phase id. */
+  id: string
+  /** Phase ids this phase waits on. */
+  dependencies: string[]
+  /** `done` once every step of the phase completed, `active` for the current phase, `todo` otherwise. */
+  status: 'done' | 'active' | 'todo'
+}
+
+/** One workflow artifact of a SpecDev snapshot (schema v4). */
+export interface BridgeSpecdevArtifactRow {
+  /** Workspace-relative path with POSIX separators, e.g. `.specdev/specs/<slug>/design.md`. */
+  path: string
+  /** Display label (the file basename). */
+  label: string
+  /** Phase id the artifact belongs to, or null for a workflow-level artifact. */
+  phaseId: string | null
+  /** Whether the artifact exists with non-whitespace content. */
+  status: 'ready' | 'missing'
+}
 
 /**
  * The SpecDev status view `ctx.specdev` serves: durable
@@ -310,15 +332,26 @@ export interface BridgeSpecdevSnapshot {
   /** Human gate states. */
   gates: {
     hg1: 'pending' | 'passed'
+    /** Visual-baseline gate; a workflow without a UI phase never requires it. */
+    hg1_5: 'pending' | 'passed'
     hg2: 'pending' | 'passed'
     hg3: 'pending' | 'passed'
   }
-  /** Per-phase implementer/reviewer/verifier states, keyed by phase id. */
+  /** Per-phase step states, keyed by phase id. */
   steps: Record<string, {
     implementer: BridgeSpecdevStepState
     reviewer: BridgeSpecdevStepState
     verifier: BridgeSpecdevStepState
+    /** Prototype confirmation of a UI phase. */
+    prototype: 'pending' | 'passed'
   }>
+  /** Visual chain declarations the phase plan carries, read from `phase-plan.md`. */
+  ui: {
+    /** True when any phase declares `ui: true`. */
+    workflow: boolean
+    /** Per-phase `ui` declaration; `'unknown'` when the plan does not carry one. */
+    phases: Record<string, boolean | 'unknown'>
+  }
   /** Gate the workflow is waiting at, or null when none is pending. */
   pendingGate: BridgeSpecdevGateId | null
   /** Implementer MUST-FIX loop count for the current phase. */
@@ -331,6 +364,10 @@ export interface BridgeSpecdevSnapshot {
   initiatingCommand?: string
   /** Durable pipeline mode key, schema v2 and later. */
   pipelineMode?: string
+  /** Ordered phase-plan rows for progress rendering, schema v4 and later. */
+  plan?: BridgeSpecdevPlanRow[]
+  /** Workflow artifacts with workspace-relative paths, schema v4 and later. */
+  artifacts?: BridgeSpecdevArtifactRow[]
 }
 
 /**
@@ -840,7 +877,7 @@ export interface IdeBridgeAgentPresets {
 
 /** One preset row a roster read returns; the bridge projects it onto the wire. */
 export interface IdeBridgeAgentPresetListing {
-  /** Preset id, e.g. `specdev-orchestrator`. */
+  /** Preset id, e.g. `specdev-implementer`. */
   readonly id: string
   /** Display name when the composition declares one. */
   readonly name?: string | undefined
@@ -906,7 +943,7 @@ export interface BridgeCommandOutcome {
 
 /** One agent-preset row of an `agent-presets/list/response`. */
 export interface BridgeAgentPresetSummary {
-  /** Preset id, e.g. `specdev-orchestrator`. */
+  /** Preset id, e.g. `specdev-implementer`. */
   readonly id: string
   /** Display name when the composition declares one. */
   readonly name?: string

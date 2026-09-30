@@ -2265,6 +2265,38 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expect(posts.some(p => (p as { type?: string }).type === 'action/open-reference')).toBe(true)
       })
 
+      it('CAP-WEBVIEW-093 a `path:line` in an assistant body opens the file at that line', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/replace',
+            sessionId: 's1',
+            messages: [
+              {
+                id: 'a1',
+                role: 'assistant',
+                kind: 'text',
+                sessionId: 's1',
+                text: '问题在 src/chat-panel/protocol.ts:686，另见 https://example.com/a.ts:12',
+              },
+            ],
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('file-link')).toBeTruthy()
+        })
+        // Only the workspace reference becomes a link; the URL stays plain text.
+        expect(screen.getAllByTestId('file-link')).toHaveLength(1)
+        posts.length = 0
+        fireEvent.click(screen.getByTestId('file-link'))
+        expect(posts[0]).toEqual({
+          type: 'action/open-reference',
+          path: 'src/chat-panel/protocol.ts',
+          line: 686,
+        })
+      })
+
       it('CAP-WEBVIEW-034 V-A10 Q-6: tab contextmenu → modal cancel then confirm (; independent)', async () => {
         render(<App bridge={bridge} />)
         await act(async () => {
@@ -3177,7 +3209,7 @@ describe('cap:webview — editor chat shell React rendering', () => {
   })
 
   describe('standalone component RTL tests', () => {
-    afterEach(() => cleanup())
+    afterEach(() =>{  cleanup() })
 
     it('CAP-WEBVIEW-053 TodoCard renders items with three statuses', () => {
       render(
@@ -3596,7 +3628,7 @@ describe('cap:webview — editor chat shell React rendering', () => {
         cleanup()
       })
 
-      it('CAP-WEBVIEW-092 a pending gate renders with its decision action', async () => {
+      it('CAP-WEBVIEW-092 a pending gate renders with its decision form', async () => {
         render(<App bridge={bridge} />)
         await act(async () => {
           applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's-parent', tabId: 't1' })
@@ -3608,17 +3640,37 @@ describe('cap:webview — editor chat shell React rendering', () => {
           applyHostFrame({
             type: 'specdev/status',
             sessionId: 's-parent',
+            lastScope: { decision: 'directory', paths: ['/etc/nginx'] },
             snapshot: {
-              schemaVersion: 2,
+              schemaVersion: 4,
               slug: 'add-tag-filter',
               stage: 'implementation',
               phase: 'phase-1',
-              gates: { hg1: 'passed', hg2: 'pending', hg3: 'pending' },
-              steps: { 'phase-1': { implementer: 'completed', reviewer: 'in_progress', verifier: 'pending' } },
+              gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'pending', hg3: 'pending' },
+              steps: { 'phase-1': { implementer: 'completed', reviewer: 'in_progress', verifier: 'pending', prototype: 'pending' } },
+              ui: { workflow: true, phases: { 'phase-1': true } },
               pendingGate: 'hg2',
               loopCount: 1,
               nextAction: 'confirm HG-2',
-              techDebtSummary: { blocking: 0, total: 2 },
+              techDebtSummary: { blocking: 1, total: 2 },
+              plan: [
+                { id: 'phase-1', dependencies: [], status: 'active' },
+                { id: 'phase-2', dependencies: ['phase-1'], status: 'todo' },
+              ],
+              artifacts: [
+                {
+                  path: '.specdev/specs/add-tag-filter/design.md',
+                  label: 'design.md',
+                  phaseId: null,
+                  status: 'ready',
+                },
+                {
+                  path: '.specdev/specs/add-tag-filter/phase-plan.md',
+                  label: 'phase-plan.md',
+                  phaseId: null,
+                  status: 'missing',
+                },
+              ],
             },
           })
         })
@@ -3628,31 +3680,66 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expect(screen.getByTestId('specdev-card').getAttribute('data-pending-gate')).toBe('hg2')
         expect(screen.getByTestId('specdev-stage').textContent).toContain('implementation')
         expect(screen.getByTestId('specdev-gates').textContent).toContain('HG1 ✓')
-        expect(screen.getByTestId('specdev-debt').textContent).toContain('0/2')
+        expect(screen.getByTestId('specdev-gates').textContent).toContain('HG1.5 …')
+        // The strip carries the DAG position, the running role and the last grant.
+        expect(screen.getByTestId('specdev-plan').textContent).toBe('phase-1 ▶ → phase-2 …')
+        expect(screen.getByTestId('specdev-role').textContent).toContain('评审')
+        expect(screen.getByTestId('specdev-scope').textContent).toContain('目录 /etc/nginx')
+        expect(screen.getByTestId('specdev-prototype').textContent).toBe('原型 phase-1 …')
+        expect(screen.getByTestId('specdev-pending').textContent).toContain('HG-2')
+        expect(screen.getByTestId('specdev-debt').textContent).toContain('1/2')
 
-        fireEvent.click(screen.getByTestId('specdev-decide'))
+        // The gate form names what the runtime checks and what the status flags as risk.
+        expect(screen.getByTestId('specdev-gate-form').getAttribute('data-gate')).toBe('hg2')
+        expect(screen.getByTestId('specdev-gate-basis').textContent).toContain('design.md')
+        expect(screen.getByTestId('specdev-gate-risk').textContent)
+          .toBe('风险提示：1 项阻塞技术债 · 回炉 1 轮 · 缺产物 phase-plan.md')
+
+        // A rejection needs its note: the button stays disabled until one is typed.
+        const reject = screen.getByTestId('specdev-gate-reject') as HTMLButtonElement
+        expect(reject.disabled).toBe(true)
+        fireEvent.change(screen.getByTestId('specdev-gate-note'), { target: { value: '设计需要重做' } })
+        expect(reject.disabled).toBe(false)
+        posts.length = 0
+        fireEvent.click(reject)
         await waitFor(() => {
           expect(posts.some(p => (p as { type?: string }).type === 'action/specdev-gate')).toBe(true)
         })
-        // The card names the gate; the Host asks for and applies the decision.
+        // The card carries the decision and the human's own note to the Host.
         expect(posts.find(p => (p as { type?: string }).type === 'action/specdev-gate')).toEqual({
           type: 'action/specdev-gate',
           sessionId: 's-parent',
           gate: 'hg2',
+          decision: 'reject',
+          note: '设计需要重做',
         })
 
-        // A workflow with no pending gate keeps the card but drops the action.
+        // Artifacts open through the same reference route the `@` mentions use.
+        posts.length = 0
+        fireEvent.click(screen.getByTestId('specdev-artifact-.specdev/specs/add-tag-filter/design.md'))
+        expect(posts[0]).toEqual({
+          type: 'action/open-reference',
+          path: '.specdev/specs/add-tag-filter/design.md',
+        })
+
+        // The next action goes into the composer without being sent.
+        posts.length = 0
+        fireEvent.click(screen.getByTestId('specdev-next-prefill'))
+        expect(posts[0]).toEqual({ type: 'action/prefill-composer', text: 'confirm HG-2' })
+
+        // A workflow with no pending gate keeps the strip but drops the decision form.
         await act(async () => {
           applyHostFrame({
             type: 'specdev/status',
             sessionId: 's-parent',
             snapshot: {
-              schemaVersion: 2,
+              schemaVersion: 4,
               slug: 'add-tag-filter',
               stage: 'review',
               phase: 'phase-1',
-              gates: { hg1: 'passed', hg2: 'passed', hg3: 'pending' },
-              steps: { 'phase-1': { implementer: 'completed', reviewer: 'completed', verifier: 'pending' } },
+              gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'passed', hg3: 'pending' },
+              steps: { 'phase-1': { implementer: 'completed', reviewer: 'completed', verifier: 'pending', prototype: 'pending' } },
+              ui: { workflow: false, phases: { 'phase-1': false } },
               pendingGate: null,
               loopCount: 1,
             },
@@ -3661,8 +3748,10 @@ describe('cap:webview — editor chat shell React rendering', () => {
         await waitFor(() => {
           expect(screen.getByTestId('specdev-card').getAttribute('data-pending-gate')).toBe('')
         })
-        expect(screen.queryByTestId('specdev-decide')).toBeNull()
+        expect(screen.queryByTestId('specdev-gate-form')).toBeNull()
+        expect(screen.queryByTestId('specdev-prototype')).toBeNull()
         expect(screen.queryByTestId('specdev-debt')).toBeNull()
+        expect(screen.queryByTestId('specdev-scope')).toBeNull()
 
         // A workspace without a workflow clears the card (null status).
         await act(async () => {
@@ -3681,12 +3770,13 @@ describe('cap:webview — editor chat shell React rendering', () => {
             type: 'specdev/status',
             sessionId: 's-other',
             snapshot: {
-              schemaVersion: 2,
+              schemaVersion: 3,
               slug: 'other-workflow',
               stage: 'review',
               phase: null,
-              gates: { hg1: 'pending', hg2: 'pending', hg3: 'pending' },
+              gates: { hg1_5: 'pending', hg1: 'pending', hg2: 'pending', hg3: 'pending' },
               steps: {},
+              ui: { workflow: false, phases: {} },
               pendingGate: null,
               loopCount: 0,
             },

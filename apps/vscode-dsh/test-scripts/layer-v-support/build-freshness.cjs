@@ -1,7 +1,7 @@
 /**
  * Is the built extension newer than the sources it was built from? (DEBT-014)
  *
- * The smoke script launches the Extension Development Host, which loads `lib/extension.js`
+ * The smoke script launches the Extension Development Host, which loads `lib/extension.cjs`
  * and its chunks — never `src/**`. Before this check the script asserted only that its
  * *inputs* existed (`apps/vscode-dsh`, the shadow-preset script, the driver), so a PASS
  * meant "the bundle that happened to be on disk passed", not "this source tree passed".
@@ -56,7 +56,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 /** The entry VS Code loads, relative to the artifact root's parent. */
-const DEFAULT_ENTRY = 'lib/extension.js'
+const DEFAULT_ENTRY = 'lib/extension.cjs'
 /** The artifact root of the host build (`tsc -b && tsdown`). */
 const DEFAULT_ARTIFACT_ROOT = 'lib'
 /** Where the host's own sources live. */

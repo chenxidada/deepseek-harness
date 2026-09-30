@@ -223,12 +223,13 @@ function isSubagentEntryArray(value: unknown): value is SubagentEntryRow[] {
 /** One workflow step row of a SpecDev snapshot. */
 type SpecdevStepRow = BridgeSpecdevSnapshot['steps'][string]
 
-/** One step's three role states. */
+/** One step's role states and its prototype confirmation. */
 function isSpecdevStepRow(value: unknown): value is SpecdevStepRow {
   if (!isJsonObject(value)) return false
   return isSpecdevStepState(value.implementer)
     && isSpecdevStepState(value.reviewer)
     && isSpecdevStepState(value.verifier)
+    && isSpecdevGateState(value.prototype)
 }
 
 /** Whether `value` is one legal step state. */
@@ -243,7 +244,45 @@ function isSpecdevGateState(value: unknown): boolean {
 
 /** Whether `value` is one legal gate id. */
 function isSpecdevGateId(value: unknown): value is BridgeSpecdevSnapshot['pendingGate'] {
-  return value === 'hg1' || value === 'hg2' || value === 'hg3' || value === 'phase-entry'
+  return value === 'hg1' || value === 'hg1_5' || value === 'hg2' || value === 'hg3'
+    || value === 'phase-entry' || value === 'prototype'
+}
+
+/** Whether `value` is one phase's `ui` declaration. */
+function isSpecdevUiDeclaration(value: unknown): value is boolean | 'unknown' {
+  return typeof value === 'boolean' || value === 'unknown'
+}
+
+/** One ordered phase-plan row of a SpecDev snapshot. */
+type SpecdevPlanRow = NonNullable<BridgeSpecdevSnapshot['plan']>[number]
+
+/** Whether `value` is one ordered phase-plan row. */
+function isSpecdevPlanRow(value: unknown): value is SpecdevPlanRow {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.id) || !Array.isArray(value.dependencies)) return false
+  if (!value.dependencies.every(isNonEmptyString)) return false
+  return value.status === 'done' || value.status === 'active' || value.status === 'todo'
+}
+
+/** Whether `value` is the plan-row array of a SpecDev snapshot. */
+function isSpecdevPlanRowArray(value: unknown): value is SpecdevPlanRow[] {
+  return Array.isArray(value) && value.every(isSpecdevPlanRow)
+}
+
+/** One workflow artifact row of a SpecDev snapshot. */
+type SpecdevArtifactRow = NonNullable<BridgeSpecdevSnapshot['artifacts']>[number]
+
+/** Whether `value` is one workflow artifact row. */
+function isSpecdevArtifactRow(value: unknown): value is SpecdevArtifactRow {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.path) || !isNonEmptyString(value.label)) return false
+  if (value.phaseId !== null && !isNonEmptyString(value.phaseId)) return false
+  return value.status === 'ready' || value.status === 'missing'
+}
+
+/** Whether `value` is the artifact-row array of a SpecDev snapshot. */
+function isSpecdevArtifactRowArray(value: unknown): value is SpecdevArtifactRow[] {
+  return Array.isArray(value) && value.every(isSpecdevArtifactRow)
 }
 
 /** Whether `value` is a non-negative integer count of a SpecDev snapshot. */
@@ -252,22 +291,26 @@ function isSpecdevCount(value: unknown): value is number {
 }
 
 /**
- * Whether `value` is one SpecDev status snapshot. Optional schema-v2 fields
- * stay optional so both versions the runtime folds remain legal on the wire.
+ * Whether `value` is one SpecDev status snapshot. Fields a later schema
+ * version added stay optional, so every version the runtime folds is legal.
  */
 function isSpecdevSnapshot(value: unknown): value is BridgeSpecdevSnapshot {
   if (!isJsonObject(value)) return false
   if (!isSpecdevCount(value.schemaVersion) || value.schemaVersion < 1) return false
   if (!isNonEmptyString(value.slug) || !isNonEmptyString(value.stage)) return false
   if (value.phase !== null && !isNonEmptyString(value.phase)) return false
-  const { gates, steps } = value
+  const { gates, steps, ui } = value
   if (!isJsonObject(gates)) return false
-  if (!isSpecdevGateState(gates.hg1) || !isSpecdevGateState(gates.hg2) || !isSpecdevGateState(gates.hg3)) {
-    return false
-  }
+  if (!isSpecdevGateState(gates.hg1) || !isSpecdevGateState(gates.hg1_5)) return false
+  if (!isSpecdevGateState(gates.hg2) || !isSpecdevGateState(gates.hg3)) return false
   if (!isJsonObject(steps)) return false
   for (const row of Object.values(steps)) {
     if (!isSpecdevStepRow(row)) return false
+  }
+  if (!isJsonObject(ui)) return false
+  if (typeof ui.workflow !== 'boolean' || !isJsonObject(ui.phases)) return false
+  for (const declaration of Object.values(ui.phases)) {
+    if (!isSpecdevUiDeclaration(declaration)) return false
   }
   if (value.pendingGate !== null && !isSpecdevGateId(value.pendingGate)) return false
   if (!isSpecdevCount(value.loopCount)) return false
@@ -280,6 +323,8 @@ function isSpecdevSnapshot(value: unknown): value is BridgeSpecdevSnapshot {
   for (const field of [value.initiatingCommand, value.pipelineMode]) {
     if (field !== undefined && !isNonEmptyString(field)) return false
   }
+  if (value.plan !== undefined && !isSpecdevPlanRowArray(value.plan)) return false
+  if (value.artifacts !== undefined && !isSpecdevArtifactRowArray(value.artifacts)) return false
   return true
 }
 
@@ -492,7 +537,7 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
         kind,
         id: record.id,
         sessionId: record.sessionId,
-        questions: record.questions as AskUserQuestionItem[],
+        questions: record.questions,
       }
     }
     case 'user-questions/response': {

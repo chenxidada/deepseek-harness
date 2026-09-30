@@ -19,10 +19,11 @@
  *
  * Every `dsh.*` command it calls comes from the whitelist in
  * `phases/phase-3-layer-v-smoke-loop/spec.md` (70 enumerated names + the Phase 2/3
- * additions `dsh.test.answerApproval` / `dsh.test.getDiagnosticsText`).
- * Two non-`dsh` commands are used: `workbench.action.acceptSelectedQuickOpenItem`
- * (AC-25 step4(d) requires this contrast path) and `workbench.action.quit` (clean exit
- * of the host, so the process group the shell kills is already winding down).
+ * additions `dsh.test.answerApproval` / `dsh.test.answerQuestions` /
+ * `dsh.test.answerApprovalFromWebview` / `dsh.test.injectQuestions` /
+ * `dsh.test.getDiagnosticsText`).
+ * One non-`dsh` command is used: `workbench.action.quit` (clean exit of the host, so the
+ * process group the shell kills is already winding down).
  *
  * Plain CommonJS with no npm dependencies: the app package is `"type": "module"`, so a
  * CJS entry is the only shape VS Code can `require` from the same directory tree.
@@ -77,7 +78,8 @@ const V1_RECORD_FIELDS = [
 /** Commands whose registration step 1 requires before any link assertion runs. */
 const REQUIRED_COMMANDS = [
   'dsh.test.getStartState', 'dsh.test.simulateStartupOnly', 'dsh.test.fireConversationVisibility',
-  'dsh.test.triggerAutoReady', 'dsh.test.answerApproval', 'dsh.test.getDiagnosticsText',
+  'dsh.test.triggerAutoReady', 'dsh.test.answerApproval', 'dsh.test.answerQuestions',
+  'dsh.test.getDiagnosticsText',
   'dsh.test.listPendingInteractions', 'dsh.test.diffAvailability', 'dsh.newConversation',
   'dsh.reviewWorkspaceDiffs', 'dsh.showHostDiagnostics', 'dsh.test.injectDisconnect',
 ]
@@ -229,6 +231,22 @@ function newBashAttempts(snapshot, baseline) {
  */
 const SANDBOX_DENIAL_RE = /\[sandbox: file access denied under [a-z-]+ mode\]/
 const SANDBOX_RUNNER_FAILED_RE = /\[sandbox: the sandbox runner itself failed/
+
+/**
+ * The workspace-range card `dsh-specdev-guard` raises, and the answer this driver gives it.
+ *
+ * The ide profile mounts the guard, so an out-of-workspace probe asks the human before
+ * the sandbox ever sees the command: without an answer the ask fails closed and the model
+ * never receives the sandbox's denial or its escalation hint. The card's question id is
+ * the guard's own (`SCOPE_QUESTION_ID` in `packages/specdev/specdev-guard/src/enforce.ts`),
+ * and `Allow once` is the narrowest answer it offers — the probe's call is decided, and
+ * the escalated retry is asked about again, which is what a user granting a single call
+ * meets.
+ */
+const SCOPE_QUESTION_ID = 'specdev-scope'
+const SCOPE_ANSWER_LABEL = 'Allow once'
+/** Bound on scope answers per step-4 scenario: one card per out-of-workspace call. */
+const SCOPE_ANSWER_LIMIT = 6
 
 /**
  * Does this recorded call carry the escalation opt-in as an argument *key*?
@@ -887,7 +905,7 @@ async function runStep4(ctx) {
     prompt: plan.prompts.step4Contrast,
     marker: plan.markers.step4Contrast,
     probePath: plan.probe.contrastPath,
-    answer: 'quickPick',
+    answer: 'webviewFrame',
   })
   return {
     evidence: { primary: attempt, contrast, probeCleanup: removeProbes(plan) },
@@ -922,16 +940,54 @@ async function runApprovalScenario(ctx, spec) {
   let observed = null
   let answered = null
   const seenIds = []
+  const scopeAnswers = []
   const deadline = Date.now() + timeouts.approvalMs
   for (;;) {
     const snapshot = await panelSnapshot()
     const pendingResult = unwrap(await callCommand('dsh.test.listPendingInteractions'))
     const pending = Array.isArray(pendingResult) ? pendingResult : []
     const approvals = pending.filter(entry => entry?.kind === 'approval')
+    const questions = pending.filter(entry => entry?.kind === 'questions')
     const attempts = newBashAttempts(snapshot, baseline)
     // Read at use time: the extractor refreshes this document while the scenario runs, and
     // the verdict AD-12 decision 6 asks for depends on it (see `classifyProbeResult`).
     const log = readLogEvidence()
+
+    // The workspace-range card comes first: the guard's `tools/pre-execute` listener runs
+    // before the bash tool, so an unanswered card is the state in which the sandbox never
+    // sees the command (see `SCOPE_ANSWER_LABEL`).
+    if (questions.length > 0) {
+      const entry = questions[0]
+      if (scopeAnswers.length >= SCOPE_ANSWER_LIMIT) {
+        throw linkFailure(`step-4-${spec.slug}-scope-answer-limit`, {
+          probePath: spec.probePath,
+          limit: SCOPE_ANSWER_LIMIT,
+          pending: safeJson(pending),
+          scopeAnswers: safeJson(scopeAnswers),
+          note: 'the guard asks once per out-of-workspace call; more cards than the probe and its retry means calls this scenario did not expect',
+        })
+      }
+      const card = {
+        elapsedMs: Date.now() - sentAt,
+        id: entry.id,
+        state: entry.state,
+        pendingCount: pending.length,
+        answer: SCOPE_ANSWER_LABEL,
+      }
+      const result = unwrap(await callCommand('dsh.test.answerQuestions', entry.id, {
+        answers: [{ id: SCOPE_QUESTION_ID, selected: [SCOPE_ANSWER_LABEL] }],
+      }))
+      card.answerStartedMs = Date.now() - sentAt
+      card.result = safeJson(result)
+      scopeAnswers.push(card)
+      if (result?.ok !== true) {
+        throw linkFailure(`step-4-${spec.slug}-scope-answer-not-taken`, {
+          probePath: spec.probePath,
+          answered: safeJson(card),
+          note: 'dsh.test.answerQuestions did not settle the scope card, so the command stays blocked',
+        })
+      }
+    }
 
     if (observed === null) {
       const probeAttempts = probeAttemptsFromLog(log, spec.probePath)
@@ -953,6 +1009,7 @@ async function runApprovalScenario(ctx, spec) {
           }))),
           modelReturnContent: truncate(assistantText(snapshot), 2000),
           bashAttempts: safeJson(attempts),
+          scopeAnswers: safeJson(scopeAnswers),
           pending: safeJson(pending),
           logExtractedAt: log.extractedAt ?? null,
           note: 'AD-12 decision 6: the default-permission write was not denied; no timeout was waited',
@@ -989,8 +1046,8 @@ async function runApprovalScenario(ctx, spec) {
       }
       await sleep(ctx.plan.faults?.answerApprovalDelayMs ?? 0)
       const answerStartedMs = Date.now() - sentAt
-      if (spec.answer === 'quickPick') {
-        answered = await answerViaQuickPick(spec.slug, entry, timeouts, spec.probePath)
+      if (spec.answer === 'webviewFrame') {
+        answered = await answerViaWebviewFrame(spec.slug, entry, timeouts, spec.probePath)
       } else {
         const result = await callCommand('dsh.test.answerApproval', entry.id, 'allowed-once')
         answered = {
@@ -1050,6 +1107,7 @@ async function runApprovalScenario(ctx, spec) {
           firstAttempt: denial.evidence ?? null,
           approval: safeJson(entry),
           answered,
+          scopeAnswers: safeJson(scopeAnswers),
           modelReturnContent: truncate(assistantText(snapshot), 2000),
           bashAttempts: safeJson(attempts),
           note: 'AD-12 decision 6: the approval was preceded by a default-permission write that was not denied',
@@ -1122,6 +1180,14 @@ async function runApprovalScenario(ctx, spec) {
         answered,
         distinctIdCount: seenIds.length,
         totalObservedApprovals: seenIds.length,
+        // The guard's workspace-range cards this scenario answered, and the same decisions
+        // as the session log recorded them (the shell corroborates the pair there).
+        scopeAnswers: safeJson(scopeAnswers),
+        scopeAnswered: scopeAnswers.length > 0,
+        logScope: safeJson({
+          requested: session.scope?.requested ?? null,
+          decided: session.scope?.decided ?? null,
+        }),
         bashAttempts: safeJson(attempts),
         escalatedBashDone: safeJson(escalatedAttempts[escalatedAttempts.length - 1]),
         escalatedFromLog: safeJson(escalated),
@@ -1157,6 +1223,7 @@ async function runApprovalScenario(ctx, spec) {
         probeExistsOnDisk: fs.existsSync(spec.probePath),
         observed,
         answered: safeJson(answered),
+        scopeAnswers: safeJson(scopeAnswers),
         pendingLast: safeJson(pending),
         bashAttempts: safeJson(attempts),
         escalatedDoneCount: escalatedAttempts.length,
@@ -1180,21 +1247,22 @@ async function runApprovalScenario(ctx, spec) {
 }
 
 /**
- * Answer the currently presented approval through the product's own QuickPick
+ * Answer the currently presented approval through the panel's own Webview→Host frame
  * (AC-25 step4(d) contrast probe).
  *
- * `workbench.action.acceptSelectedQuickOpenItem` accepts whatever popup is current, so
- * the accept is attempted on the first iteration — the widget is opened by the
- * coordinator's pump the moment the entry is dequeued, and an accept with no popup is a
- * no-op. Retrying then covers the reverse race (the entry is listed before the widget
- * exists).
+ * The panel-first presenter claims every approval while the conversation view is visible,
+ * so no native QuickPick is opened and the accept command this probe used to drive has
+ * nothing to accept (measured 2026-09-30: the contrast approval stayed pending through 240
+ * accept attempts). The route the panel actually uses is the `interaction/approve` frame
+ * the Webview posts from its card, which `dsh.test.answerApprovalFromWebview` posts for a
+ * driver that cannot click it.
  *
- * An empty pending list is **not** evidence of an answer. The widget can be torn down by
- * the product without a decision (`outcome: "cancelled"` is what the durable log records
- * then), and the measured 2026-09-16 failure was exactly that: a `presented` contrast
- * entry that was declared answered (`attempts: []`) and only surfaced 60s later as
- * "the escalated retry never landed". The only proof this path accepts is the product's
- * own `approval/decided` frame for the approval that gated this probe's escalated retry
+ * An empty pending list is **not** evidence of an answer. The card can be torn down by the
+ * product without a decision (`outcome: "cancelled"` is what the durable log records then),
+ * and the measured 2026-09-16 failure was exactly that: a `presented` contrast entry that
+ * was declared answered (`attempts: []`) and only surfaced 60s later as "the escalated
+ * retry never landed". The only proof this path accepts is the product's own
+ * `approval/decided` frame for the approval that gated this probe's escalated retry
  * carrying `allowed-once` — resolved through the tool call, since the driver's interaction
  * id and the log's approval id are different namespaces
  * (see {@link approvalOutcomeForProbe}).
@@ -1204,7 +1272,7 @@ async function runApprovalScenario(ctx, spec) {
  * @param {string} probePath - the `/var/tmp` probe whose approval this answers.
  * @returns {Promise<object>} contrast evidence.
  */
-async function answerViaQuickPick(slug, entry, timeouts, probePath) {
+async function answerViaWebviewFrame(slug, entry, timeouts, probePath) {
   const startedAt = Date.now()
   const attempts = []
   /**
@@ -1228,13 +1296,23 @@ async function answerViaQuickPick(slug, entry, timeouts, probePath) {
     const list = Array.isArray(pendingResult) ? pendingResult : []
     const stillListed = list.some(item => item?.kind === 'approval' && item?.id === entry.id)
     if (stillListed) {
-      const result = await callCommand('workbench.action.acceptSelectedQuickOpenItem')
+      const result = unwrap(await callCommand('dsh.test.answerApprovalFromWebview', entry.id, 'allowed-once'))
       attempts.push({ index, result: safeJson(result) })
+      // A reply that is not an acknowledgement means the frame was never posted, so no
+      // amount of waiting can settle this approval: the reply names the boundary that
+      // refused it (`no-panel` when the panel host is not attached).
+      if (result?.ok !== true) {
+        throw linkFailure(`step-4-${slug}-contrast-frame-not-posted`, {
+          approvalId: entry.id,
+          replied: safeJson(result),
+          note: 'dsh.test.answerApprovalFromWebview refused the frame, so the panel route this contrast exercises is unavailable',
+        })
+      }
     }
     let decision = decided()
     if (decision.outcome === 'allowed-once') {
       return {
-        via: 'workbench.action.acceptSelectedQuickOpenItem',
+        via: 'dsh.test.answerApprovalFromWebview',
         attempts,
         decidedOutcome: decision.outcome,
         decidedMatchedBy: decision.matchedBy,
@@ -1245,7 +1323,7 @@ async function answerViaQuickPick(slug, entry, timeouts, probePath) {
     if (!stillListed) {
       // The entry left the pending list without a grant. The log document trails the
       // decision by up to one extractor period, so the durable outcome is waited for
-      // (bounded) before it is reported: a granted accept whose frame has not landed yet
+      // (bounded) before it is reported: a granted frame whose decision has not landed yet
       // must not read as a cancellation.
       const catchUpDeadline = Date.now() + 5000
       while (decision.outcome === null && Date.now() < catchUpDeadline) {
@@ -1254,7 +1332,7 @@ async function answerViaQuickPick(slug, entry, timeouts, probePath) {
       }
       if (decision.outcome === 'allowed-once') {
         return {
-          via: 'workbench.action.acceptSelectedQuickOpenItem',
+          via: 'dsh.test.answerApprovalFromWebview',
           attempts,
           decidedOutcome: decision.outcome,
           decidedMatchedBy: decision.matchedBy,
@@ -1262,9 +1340,9 @@ async function answerViaQuickPick(slug, entry, timeouts, probePath) {
           elapsedMs: Date.now() - startedAt,
         }
       }
-      // The product closed the popup or failed the interaction closed. Reporting the
-      // durable outcome is the difference between "the contrast path silently did
-      // nothing" and "the product cancelled the popup at Ns".
+      // The product left the card unanswered or failed the interaction closed. Reporting
+      // the durable outcome is the difference between "the contrast path silently did
+      // nothing" and "the product cancelled the card at Ns".
       throw linkFailure(`step-4-${slug}-contrast-outcome-not-allowed-once`, {
         approvalId: entry.id,
         decidedOutcome: decision.outcome,
@@ -1501,7 +1579,6 @@ async function runStep5(ctx) {
       logHunk: safeJson(logHunk),
       // AD-15 evidence the shell corroborates from the session log and the sandbox.
       agentPreset: plan.agentPreset ?? null,
-      toolPolicy: plan.toolPolicy ?? null,
       toolCount: session.toolCount ?? sessionEvidence(ctx.logEvidence).toolCount ?? null,
       toolCountExpected: plan.expectedToolCount ?? null,
       tools: Array.isArray(session.tools) ? session.tools : null,
@@ -1564,6 +1641,29 @@ async function runNodeEnvironmentConstruction(ctx) {
   const configuration = vscode.workspace.getConfiguration(section)
   const original = configuration.get(key)
   const target = vscode.ConfigurationTarget?.Global ?? true
+
+  // The construction's premise is the run's FIRST start attempt: the refusal this stage
+  // exists to produce only happens on a start, and a host already connected would answer
+  // `request` with "started" instead. The window can arrive with the runtime already
+  // connected (its conversation view resolves during startup), so the precondition is
+  // established here and recorded, rather than assumed from the host state.
+  const preStart = unwrap(await callCommand('dsh.test.getStartState'))
+  const preConstructionStartState = preStart?.state ?? null
+  let stoppedBeforeConstruction = false
+  if (preConstructionStartState !== 'idle') {
+    await callCommand('dsh.stopSession')
+    await poll('construction-idle', async () => {
+      const now = unwrap(await callCommand('dsh.test.getStartState'))
+      return now?.state === 'idle' ? { ok: true, value: now } : { ok: false, state: now?.state ?? null }
+    }, {
+      timeoutMs: 20000,
+      intervalMs: 250,
+      conclusion: 'HARNESS_ERROR',
+      reason: 'construction-could-not-reach-idle',
+      extraEvidence: { preConstructionStartState },
+    })
+    stoppedBeforeConstruction = true
+  }
 
   const before = unwrap(await callCommand('dsh.test.getDiagnosticsText'))
   const recordsBefore = Array.isArray(before) ? before : null
@@ -1649,6 +1749,8 @@ async function runNodeEnvironmentConstruction(ctx) {
       evidence: {
         settingKey: full,
         construction: safeJson(construction),
+        preConstructionStartState,
+        stoppedBeforeConstruction,
         recordsBeforeCount: recordsBefore.length,
         recordsAfterCount: found.records.length,
         freshRecordCount: found.fresh.length,
@@ -1908,6 +2010,10 @@ async function runAll() {
     display: process.env.DISPLAY ?? null,
     home: process.env.HOME ?? null,
     dshNodeBinInChildEnv: process.env.DSH_NODE_BIN === undefined ? null : 'present',
+    // The tool face the plan pins; the shell's corroboration compares the observed count
+    // against it, so the pin lives in exactly one place (the plan). Named as the step
+    // evidence names it, since the shell reads both from this status file.
+    toolCountExpected: plan.expectedToolCount ?? null,
     screenshot: {
       tool: capture.tool,
       args: capture.tool === null ? null : capture.args,
@@ -2073,7 +2179,7 @@ async function runAll() {
     // The tool face is read from `request/header.header.tools` in the product session
     // log (AD-15), which the shell extracts; it is written into the two steps whose AC
     // rows name it, together with the actual tool set (the AC records the set whenever
-    // the count is not the expected 25).
+    // the count differs from the plan's pinned face).
     if (step.slug === 'model-round-trip' || step.slug === 'native-diff') {
       step.evidence = {
         ...(step.evidence ?? {}),

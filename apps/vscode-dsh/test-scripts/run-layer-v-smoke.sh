@@ -7,8 +7,8 @@
 # What it does, in order: resolve a Node that satisfies the repository's `engines.node`
 # *and* provides the APIs the product needs (AC-4 / AC-11(a) / AC-12) — by measurement,
 # never by trusting `PATH`; resolve a display (`reuse` → `xvfb` → skip); `unset` the
-# inherited `DSH_NODE_BIN` (AD-11); lay down route A (a `HOME` sandbox with the profile
-# overlay and the shadow preset, AD-15); check the step-5 target's ignore rule *before*
+# inherited `DSH_NODE_BIN` (AD-11); lay down route A (a sandbox `HOME`, so the developer's
+# real `~/.dsh` is never written, AD-15); check the step-5 target's ignore rule *before*
 # creating that file (AC-26's ordering constraint); launch one real Extension Development
 # Host through `--extensionDevelopmentPath` (AD-6); and then let the in-host driver walk
 # the five-step link while this script runs the extractor that turns the product's own
@@ -24,7 +24,7 @@
 # Artifacts live under `apps/vscode-dsh/test-artifacts/layer-v/` (ignored by a root
 # `.gitignore` rule): `layer-v-status.json` (the machine-readable run record), five
 # `step-<n>-<slug>.png` screenshots, `layer-v-journal.jsonl`, `layer-v-log-evidence.json`,
-# `layer-v-plan.json`, `shadow-preset-check.txt` and `run-summary.json`. A summary row is
+# `layer-v-plan.json` and `run-summary.json`. A summary row is
 # appended to `.specdev/specs/vscode-dsh-usable-loop/artifact-index.md` (AC-33). The five
 # frames' distinct md5 count, the display they were captured from and the action it produced
 # travel in `layer-v-report-meta.json`'s `displayEvidence` block (AC-26(e) / AC-28 R2.3).
@@ -58,7 +58,6 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="${LAYER_V_REPO_ROOT:-$(cd -- "${SCRIPT_DIR}/../../.." && pwd -P)}"
 APP_DIR="${REPO_ROOT}/apps/vscode-dsh"
 DRIVER_DIR="${SCRIPT_DIR}/layer-v-driver"
-SHADOW_SCRIPT="${SCRIPT_DIR}/layer-v-shadow-preset.sh"
 SUPPORT_DIR="${SCRIPT_DIR}/layer-v-support"
 BUILD_FRESHNESS_MODULE="${SUPPORT_DIR}/build-freshness.cjs"
 ARTIFACT_INDEX_MODULE="${SUPPORT_DIR}/artifact-index.cjs"
@@ -70,7 +69,6 @@ ARTIFACT_DIR="${APP_DIR}/test-artifacts/layer-v"
 SPEC_DIR="${REPO_ROOT}/.specdev/specs/vscode-dsh-usable-loop"
 INDEX_PATH="${SPEC_DIR}/artifact-index.md"
 GITIGNORE_PATH="${REPO_ROOT}/.gitignore"
-SHIPPED_PRESETS_ROOT="${REPO_ROOT}/packages/specdev/specdev-presets/presets"
 
 STATUS_PATH="${ARTIFACT_DIR}/layer-v-status.json"
 PLAN_PATH="${ARTIFACT_DIR}/layer-v-plan.json"
@@ -81,7 +79,6 @@ LOG_EVIDENCE_PATH="${ARTIFACT_DIR}/layer-v-log-evidence.json"
 # document has to trail the tool result by well under the approval it may be waiting for.
 LOG_EVIDENCE_INTERVAL_MS=700
 SUMMARY_PATH="${ARTIFACT_DIR}/run-summary.json"
-SHADOW_CHECK_PATH="${ARTIFACT_DIR}/shadow-preset-check.txt"
 CORROBORATION_PATH="${ARTIFACT_DIR}/layer-v-corroboration.json"
 TARGET_FILE="${ARTIFACT_DIR}/step-5-target.txt"
 
@@ -95,9 +92,11 @@ NODE_DIR_CANDIDATES=(
   "/usr/local/bin"
 )
 
-AGENT_PRESET="specdev-orchestrator"
-TOOL_POLICY_LABEL="removed-orchestrator-tool-policy"
-EXPECTED_TOOL_COUNT=25
+# The session must open on the deployment's own default preset — the general agent.
+# The tool count is the `standard` preset's own catalog as the session reports it
+# (observed on the first run this smoke reached step 3 on that preset).
+AGENT_PRESET="standard"
+EXPECTED_TOOL_COUNT=27
 SCREEN_GEOMETRY="1600x1000x24"
 SCREENSHOT_VIDEO_SIZE="1600x1000"
 DRIVER_WAIT_MS=1500000
@@ -112,7 +111,6 @@ NOTES=()
 
 TMP_ROOT=""
 SANDBOX_HOME=""
-SHADOW_ROOT=""
 USER_DATA_DIR=""
 EXTENSIONS_DIR=""
 BRIDGE_SOCKET=""
@@ -151,7 +149,6 @@ TERMINAL_SIDE_JSON="null"
 # measured to fail AC-4, handed to the driver so it can make the pre-flight refuse one start
 # on purpose — that refusal is the only producer of a `kind === 'node-environment'` record.
 UNQUALIFIED_NODE_JSON="null"
-SHADOW_EVIDENCE_JSON="{}"
 DISPLAY_VALUE=""
 DISPLAY_MODE=""
 # AC-26(e) / AC-28 R2.3 (spec.md 修订段 R2): the frames of the attempt that just ran, the action
@@ -530,99 +527,11 @@ prepare_unqualified_node() {
   log "AC-13 / AC-14 construction ready (${kind}): ${target}"
 }
 
-# --- route A sandbox and shadow preset (AD-15 / AD-16) --------------------------------
+# --- route A sandbox (AD-15 / AD-16) --------------------------------------------------
 
-
-# The overlay is delivered by the profile patch layer, so no `--patch` flag is needed
-# (spike V2). Root order is load-bearing: the shadow root must win the `agent-presets`
-# name, and every other shipped preset must still resolve (AD-15 decision 2).
-#
-# A patch REPLACES the whole `config` block, so every key of the shipped baseline
-# (`packages/bundle/sdk-app/cordis.patch.yml:49-55`) must be restated. `default` is a
-# required field: omitting it fails the loader entry and the runtime subprocess exits at
-# boot — observed as `invalid config: $.default missing required value`, surfaced by the
-# extension only as a generic start failure.
-write_overlay() {
-  cat >"${SANDBOX_HOME}/.dsh/profiles/ide/cordis.patch.yml" <<EOF
-# Layer V smoke (route A): sandbox HOME + shadow preset root, delivered by the patch layer.
-- id: agent-presets
-  config:
-    default: ${AGENT_PRESET}
-    includeShippedRoot: false
-    includeUserRoot: false
-    roots:
-      - path: ${SHADOW_ROOT}
-        trust: user
-      - path: ${SHIPPED_PRESETS_ROOT}
-        trust: system
-EOF
-}
-
-generate_shadow_preset() {
-  # AD-15 decision 4: the filtering lives in exactly one implementation. The self-check
-  # runs it in a temporary root and proves determinism, the exact 2-line diff, and that the
-  # shipped preset is untouched; the same function then writes this run's shadow root.
-  # shellcheck source=layer-v-shadow-preset.sh
-  source "${SHADOW_SCRIPT}" || fail_harness "shadow-preset" "could not source ${SHADOW_SCRIPT}"
-  local shipped
-  shipped="$(layer_v_shipped_preset)"
-
-  printf '== run %s ==\n' "${RUN_ID}" >>"${SHADOW_CHECK_PATH}"
-  bash "${SHADOW_SCRIPT}" --check-shadow-preset >>"${SHADOW_CHECK_PATH}" 2>&1
-  SHADOW_CHECK_EXIT=$?
-  if [ "${SHADOW_CHECK_EXIT}" -ne 0 ]; then
-    fail_harness "shadow-preset-check" "--check-shadow-preset exited ${SHADOW_CHECK_EXIT} (see ${SHADOW_CHECK_PATH})"
-  fi
-
-  layer_v_write_shadow_preset "${SHADOW_ROOT}"
-  SHADOW_GENERATE_EXIT=$?
-  if [ "${SHADOW_GENERATE_EXIT}" -ne 0 ]; then
-    fail_harness "shadow-preset" "layer_v_write_shadow_preset exited ${SHADOW_GENERATE_EXIT}"
-  fi
-
-  local target="${SHADOW_ROOT}/${AGENT_PRESET}/agent.cordis.yml"
-  SHADOW_TARGET="${target}"
-  SHADOW_PLACED_HASH="$(file_sha256 "${target}")"
-  SHADOW_RUN1_HASH="$(grep -m1 'run 1 sha256:' "${SHADOW_CHECK_PATH}" | awk '{print $NF}')"
-  SHADOW_RUN2_HASH="$(grep -m1 'run 2 sha256:' "${SHADOW_CHECK_PATH}" | awk '{print $NF}')"
-  SHADOW_UNCHANGED_HASH="$(grep -m1 'sha256 unchanged:' "${SHADOW_CHECK_PATH}" | awk '{print $NF}')"
-  SHADOW_SHIPPED_HASH="$(file_sha256 "${shipped}")"
-
-  if [ "${SHADOW_CHECK_EXIT}" != "0" ] || [ -z "${SHADOW_PLACED_HASH}" ]; then
-    fail_harness "shadow-preset" "the shadow preset could not be produced"
-  fi
-  if [ "${SHADOW_RUN1_HASH}" != "${SHADOW_PLACED_HASH}" ] || [ "${SHADOW_RUN2_HASH}" != "${SHADOW_PLACED_HASH}" ]; then
-    fail_harness "shadow-preset" "the placed shadow differs from both self-check generations (${SHADOW_PLACED_HASH})"
-  fi
-  if [ "${SHADOW_SHIPPED_HASH}" != "${SHADOW_UNCHANGED_HASH}" ]; then
-    fail_harness "shadow-preset" "the shipped preset hash does not match the self-check's after-hash"
-  fi
-
-  SHADOW_DIFF_TEXT="$(layer_v_print_diff "${shipped}" "${target}")"
-  layer_v_assert_shadow_matches "${shipped}" "${target}" || {
-    fail_harness "shadow-preset" "the placed shadow is not exactly the shipped preset minus two lines"
-  }
-  SHADOW_EVIDENCE_JSON="$("${NODE_TOOL}" -e '
-    const [checkExit, generateExit, run1, run2, placed, shipped, unchanged, diffText, script] = process.argv.slice(1)
-    process.stdout.write(JSON.stringify({
-      generator: script,
-      selfCheckExit: Number(checkExit),
-      generateExit: Number(generateExit),
-      run1Sha256: run1 || null,
-      run2Sha256: run2 || null,
-      placedSha256: placed || null,
-      shippedSha256: shipped || null,
-      shippedHashAfterSelfCheck: unchanged || null,
-      deterministic: run1 !== "" && run1 === run2 && run2 === placed,
-      shippedUntouched: shipped !== "" && shipped === unchanged,
-      diffMustBeTwoDeletionsZeroInsertions: true,
-      diff: diffText,
-    }))
-  ' "${SHADOW_CHECK_EXIT}" "${SHADOW_GENERATE_EXIT}" "${SHADOW_RUN1_HASH}" "${SHADOW_RUN2_HASH}" \
-    "${SHADOW_PLACED_HASH}" "${SHADOW_SHIPPED_HASH}" "${SHADOW_UNCHANGED_HASH}" "${SHADOW_DIFF_TEXT}" \
-    "${SHADOW_SCRIPT}" 2>/dev/null || printf '{}')"
-  log "shadow preset in place and self-checked (sha256=${SHADOW_PLACED_HASH})"
-}
+# Route A is the sandbox `HOME`: the developer's real `~/.dsh` is never written. The
+# runtime reads the product's own shipped profile config, so this smoke exercises the
+# deployment's own default agent (`standard`) rather than an overlay-delivered one.
 
 # A verdict may only ever be produced by artifacts the current run wrote. Nothing used to
 # clear the artifact directory, so an interrupted run inherited the previous run's
@@ -687,42 +596,6 @@ write_settings() {
   "dsh.nodeBin": ${NODE_BIN_JSON}
 }
 EOF
-}
-
-# The overlay is the whole delivery channel of route A, and a patch *replaces* the entire
-# `config` block — so a key left out is not a default, it is a missing required field that
-# makes the loader entry fail and the runtime subprocess exit at boot. The spec makes both
-# properties (all four keys; shadow root first) an explicit `HARNESS_ERROR` boundary, so
-# they are asserted here rather than trusted to the heredoc above.
-assert_overlay_contract() {
-  local overlay="${SANDBOX_HOME}/.dsh/profiles/ide/cordis.patch.yml"
-  if [ ! -f "${overlay}" ]; then
-    fail_harness "overlay" "the profile patch layer was not written (${overlay})"
-  fi
-  local key value
-  for key in default includeShippedRoot includeUserRoot roots; do
-    if ! grep -Eq "^[[:space:]]+${key}:" "${overlay}"; then
-      fail_harness "overlay" "the overlay config is missing the '${key}' key (a patch replaces the whole config block)"
-    fi
-  done
-  # `default` must name the preset whose shadow is delivered, not an arbitrary preset.
-  value="$(sed -n 's/^[[:space:]]*default:[[:space:]]*//p' "${overlay}" | head -n 1)"
-  if [ "${value}" != "${AGENT_PRESET}" ]; then
-    fail_harness "overlay" "the overlay default is '${value}', expected '${AGENT_PRESET}'"
-  fi
-  # Root order is load-bearing: the shadow must win the duplicate `agent-presets` id.
-  local shadow_line shipped_line
-  shadow_line="$(grep -n '^[[:space:]]*- path: ' "${overlay}" | head -n 1 | cut -d: -f1)"
-  shipped_line="$(grep -n '^[[:space:]]*- path: ' "${overlay}" | sed -n '2p' | cut -d: -f1)"
-  if [ -z "${shadow_line}" ] || [ -z "${shipped_line}" ]; then
-    fail_harness "overlay" "the overlay must declare exactly two preset roots (shadow, then specdev)"
-  fi
-  if ! sed -n "${shadow_line}p" "${overlay}" | grep -qF "${SHADOW_ROOT}"; then
-    fail_harness "overlay" "the first root is not the shadow root (${SHADOW_ROOT})"
-  fi
-  if ! sed -n "${shipped_line}p" "${overlay}" | grep -qF "${SHIPPED_PRESETS_ROOT}"; then
-    fail_harness "overlay" "the second root is not the specdev preset root (${SHIPPED_PRESETS_ROOT})"
-  fi
 }
 
 # AD-16: every step must start from this run's own product state. The sandbox's session
@@ -795,7 +668,7 @@ assert_build_freshness() {
   if [ "${#siblings[@]}" -gt 0 ]; then
     sibling_args=(--sibling "${siblings[@]}")
   fi
-  verdict="$("${NODE_TOOL}" "${BUILD_FRESHNESS_MODULE}" "${APP_DIR}/lib" "${APP_DIR}/lib/extension.js" "${APP_DIR}/src" ${sibling_args[@]+"${sibling_args[@]}"} 2>/dev/null || true)"
+  verdict="$("${NODE_TOOL}" "${BUILD_FRESHNESS_MODULE}" "${APP_DIR}/lib" "${APP_DIR}/lib/extension.cjs" "${APP_DIR}/src" ${sibling_args[@]+"${sibling_args[@]}"} 2>/dev/null || true)"
   if [ -z "${verdict}" ]; then
     fail_harness "build-freshness" "the build freshness check produced no verdict (${BUILD_FRESHNESS_MODULE})"
   fi
@@ -834,7 +707,6 @@ compute_json_globals() {
   NODE_BIN_JSON="$(json_string "${NODE_BIN}")"
   SANDBOX_HOME_JSON="$(json_string "${SANDBOX_HOME}")"
   AGENT_PRESET_JSON="$(json_string "${AGENT_PRESET}")"
-  TOOL_POLICY_LABEL_JSON="$(json_string "${TOOL_POLICY_LABEL}")"
   VIDEO_SIZE_JSON="$(json_string "${SCREENSHOT_VIDEO_SIZE}")"
   EXTENSION_ID_JSON="$("${NODE_TOOL}" -e '
     const manifest = require(process.argv[1])
@@ -929,12 +801,12 @@ EOF
     "$(json_string "${NODE_DIR}")" "${NODE_DEFAULT_JSON}" "${DSH_NODE_BIN_EVIDENCE_JSON}" "${TERMINAL_SIDE_JSON}")"
   # AD-15: the driver compares the *real* `~/.dsh` digest it sees against the one the shell
   # took before launch, so the before-snapshot has to travel with the plan.
-  SHELL_EVIDENCE_JSON="$(printf '{"runId":%s,"hostLaunchMs":%s,"realHome":{"path":%s,"before":%s},"display":{"mode":%s,"value":%s},"sandbox":{"home":%s,"shadowRoot":%s},"artifacts":{"directory":%s,"status":%s},"gitignoreRule":%s,"shadowPreset":%s}' \
+  SHELL_EVIDENCE_JSON="$(printf '{"runId":%s,"hostLaunchMs":%s,"realHome":{"path":%s,"before":%s},"display":{"mode":%s,"value":%s},"sandbox":{"home":%s},"artifacts":{"directory":%s,"status":%s},"gitignoreRule":%s}' \
     "${RUN_ID_JSON}" "${HOST_LAUNCH_MS}" "$(json_string "${REAL_HOME_PATH}")" "${REAL_HOME_BEFORE}" \
     "$(json_string "${DISPLAY_MODE}")" "$(json_string "${DISPLAY_VALUE}")" \
-    "${SANDBOX_HOME_JSON}" "$(json_string "${SHADOW_ROOT}")" \
+    "${SANDBOX_HOME_JSON}" \
     "$(json_string "${ARTIFACT_DIR}")" "$(json_string "${STATUS_PATH}")" \
-    "$(json_string "${GITIGNORE_RULE_LINE:-}")" "${SHADOW_EVIDENCE_JSON}")"
+    "$(json_string "${GITIGNORE_RULE_LINE:-}")")"
 
   cat >"${TMP_ROOT}/plan-input.json" <<EOF
 {
@@ -946,7 +818,6 @@ EOF
   "nodeBinSetting": { "section": "dsh", "key": "nodeBin", "full": "dsh.nodeBin" },
   "expectedToolCount": ${EXPECTED_TOOL_COUNT},
   "agentPreset": ${AGENT_PRESET_JSON},
-  "toolPolicy": ${TOOL_POLICY_LABEL_JSON},
   "homeSandbox": ${SANDBOX_HOME_JSON},
   "probe": { "deniedPath": ${PROBE_DENIED_JSON}, "contrastPath": ${PROBE_CONTRAST_JSON} },
   "screenshot": { "videoSize": ${VIDEO_SIZE_JSON} },
@@ -1523,6 +1394,8 @@ function summarize(file, mtimeMs, events, torn, error, frames) {
   const toolResults = []
   const nativeDiffs = []
   const approvals = { asked: [], decided: [] }
+  /** `dsh-specdev-guard`'s workspace-range cards: the ask and the decision it recorded. */
+  const scope = { requested: [], decided: [] }
   /** `callId → tool name`, so a result can name the tool that ran without guessing. */
   const callNames = new Map()
   let toolCount = null
@@ -1596,6 +1469,22 @@ function summarize(file, mtimeMs, events, torn, error, frames) {
       case 'approval/decided':
         approvals.decided.push({ id: data.id ?? null, outcome: data.outcome ?? null })
         break
+      case 'specdev/scope-requested':
+        scope.requested.push({
+          requestId: data.requestId ?? null,
+          toolName: data.toolName ?? null,
+          access: data.access ?? null,
+          paths: Array.isArray(data.paths) ? data.paths : [],
+          recursive: data.recursive === true,
+        })
+        break
+      case 'specdev/scope-decided':
+        scope.decided.push({
+          requestId: data.requestId ?? null,
+          decision: data.decision ?? null,
+          paths: Array.isArray(data.paths) ? data.paths : [],
+        })
+        break
       default:
         break
     }
@@ -1609,8 +1498,12 @@ function summarize(file, mtimeMs, events, torn, error, frames) {
     // Frame accounting is evidence, not trivia: "the session had one event" and "the
     // session had one *decoded frame*" are indistinguishable without it.
     frames: frames ?? null,
-    session: sessionEvent?.data ?? null,
-    agentPreset: sessionEvent?.data?.agentPreset ?? null,
+    // The version-0 physical header is a flat first record — `{type:'session', id, createdAt,
+    // cwd, delegationDepth, agentPreset?}` (`session/session-persistence-jsonl/src/format.ts`)
+    // — not an event envelope, so its fields sit on the line, not under `data`. Reading
+    // `data` here reported a null preset for every run, including the 2026-09-19 PASS.
+    session: sessionEvent ?? null,
+    agentPreset: typeof sessionEvent?.agentPreset === 'string' ? sessionEvent.agentPreset : null,
     toolCount,
     tools,
     systemHead,
@@ -1618,6 +1511,7 @@ function summarize(file, mtimeMs, events, torn, error, frames) {
     toolResults,
     nativeDiffs,
     approvals,
+    scope,
   }
 }
 
@@ -1842,16 +1736,27 @@ corroborate() {
     const problems = []
     const warnings = []
 
-    // AC-25 step4 and step5 both pin the evidence to the 25-tool face *of this run*, so a
+    // The session must open on the deployment default preset: the general
+    // `standard` agent. A workflow role here would mean the IDE handed the main session a
+    // workflow identity instead of a general agent.
+    if (chosen.agentPreset !== "standard") {
+      problems.push(`the session opened on agentPreset ${JSON.stringify(chosen.agentPreset)}, not standard`)
+    }
+
+    // AC-25 step4 and step5 both pin the evidence to the tool face *of this run*, so a
     // different count is the evidence failing its own precondition — not a remark. It is a
     // problem (a hard failure), the same way a missing count is: a smaller face can make the
     // escalation the step exists to demonstrate impossible, and a larger one means the run
-    // was not the configuration the spec pins.
+    // was not the configuration the spec pins. The pin travels in the plan; reading it here
+    // keeps one number instead of two.
+    const expectedToolCount = status.driver?.toolCountExpected ?? null
     const toolCount = chosen.toolCount
     if (typeof toolCount !== "number") {
       problems.push("toolCount was not observed in request/header.header.tools")
-    } else if (toolCount !== 25) {
-      problems.push(`toolCount was ${toolCount}, not the expected 25 (AC-25 step4/step5 pin the tool face of this run)`)
+    } else if (typeof expectedToolCount !== "number") {
+      problems.push("the plan carried no expectedToolCount to compare the observed tool face against")
+    } else if (toolCount !== expectedToolCount) {
+      problems.push(`toolCount was ${toolCount}, not the expected ${expectedToolCount} (AC-25 step4/step5 pin the tool face of this run)`)
     }
 
     const asks = Array.isArray(chosen.approvals?.asked) ? chosen.approvals.asked : []
@@ -1881,9 +1786,43 @@ corroborate() {
     if (step4?.evidence?.primary?.answered?.via !== "dsh.test.answerApproval") {
       problems.push("step 4 was not answered through dsh.test.answerApproval")
     }
+    // The contrast probe answers through the panel route the product actually uses: while
+    // the conversation view is visible the panel-first presenter claims every approval, so
+    // no native QuickPick exists for a workbench accept command to answer.
+    if (step4?.evidence?.contrast?.answered?.via !== "dsh.test.answerApprovalFromWebview") {
+      problems.push("step 4 contrast was not answered through the panel Webview frame route")
+    }
     if (typeof step4?.evidence?.primary?.transcriptMarkerMessages !== "number"
       || step4.evidence.primary.transcriptMarkerMessages !== 1) {
       problems.push("step 4 did not find the unique transcript marker exactly once")
+    }
+
+    // The ide deployment mounts `dsh-specdev-guard`, whose workspace-range check asks about
+    // an out-of-workspace call before the sandbox sees it. A step-4 probe that reached the
+    // sandbox therefore has a card the driver answered, and the guard records the matching
+    // `scope-requested` / `scope-decided` pair for that path in the session log: the two
+    // halves of one decision, from the two actors that produced them.
+    const scopeRequested = Array.isArray(chosen.scope?.requested) ? chosen.scope.requested : []
+    const scopeDecided = Array.isArray(chosen.scope?.decided) ? chosen.scope.decided : []
+    const scopeProbes = [
+      ["primary", process.argv[3], step4?.evidence?.primary],
+      ["contrast", process.argv[4], step4?.evidence?.contrast],
+    ]
+    for (const [name, probePath, scenario] of scopeProbes) {
+      if (scenario?.scopeAnswered !== true) {
+        problems.push(`step 4 ${name} recorded no answered workspace-range card`)
+      }
+      const asked = scopeRequested.find(entry => Array.isArray(entry.paths) && entry.paths.includes(probePath))
+      if (asked === undefined) {
+        problems.push(`the workspace-range guard never asked about the step 4 ${name} probe ${probePath}`)
+        continue
+      }
+      const decided = scopeDecided.find(entry => entry.requestId === asked.requestId)
+      if (decided === undefined) {
+        problems.push(`the workspace-range guard recorded no decision for the step 4 ${name} probe`)
+      } else if (decided.decision !== "once") {
+        problems.push(`the scope decision for the step 4 ${name} probe was ${String(decided.decision)}, not once`)
+      }
     }
     const step5 = (status.steps ?? []).find(step => step?.slug === "native-diff")
     if (step5?.evidence?.realDshHomeUntouched !== true) problems.push("step 5 did not record realDshHomeUntouched true")
@@ -1943,7 +1882,7 @@ corroborate() {
     }
 
     process.stdout.write(JSON.stringify({ problems, warnings, toolCount }))
-  ' "${STATUS_PATH}" "${LOG_EVIDENCE_PATH}" 2>/dev/null || true)"
+  ' "${STATUS_PATH}" "${LOG_EVIDENCE_PATH}" "${PROBE_DENIED_PATH}" "${PROBE_CONTRAST_PATH}" 2>/dev/null || true)"
   if [ -z "${verdict}" ]; then
     fail_harness "corroboration" "could not corroborate the final evidence"
   fi
@@ -1996,15 +1935,14 @@ write_report_meta() {
     LV_NODE_JSON="$(printf '{"path":%s,"version":%s,"source":%s,"directory":%s,"defaults":%s,"dshNodeBin":%s,"terminalSide":%s}' \
       "$(json_string "${NODE_BIN}")" "$(json_string "${NODE_VERSION}")" "$(json_string "${NODE_SOURCE}")" \
       "$(json_string "${NODE_DIR}")" "${NODE_DEFAULT_JSON}" "${DSH_NODE_BIN_EVIDENCE_JSON}" "${TERMINAL_SIDE_JSON}")" \
-    LV_SHADOW_JSON="${SHADOW_EVIDENCE_JSON}" \
     LV_HOME_SANDBOX="${SANDBOX_HOME}" LV_REAL_HOME="${REAL_HOME_PATH}" \
-    LV_SHADOW_ROOT="${SHADOW_ROOT}" LV_PROBES_REMOVED="${PROBES_REMOVED:-false}" \
+    LV_PROBES_REMOVED="${PROBES_REMOVED:-false}" \
     LV_REAL_HOME_BEFORE="${REAL_HOME_BEFORE}" LV_REAL_HOME_AFTER="${REAL_HOME_AFTER:-}" \
     LV_REAL_HOME_VERDICT="${REAL_HOME_VERDICT_JSON:-null}" \
     LV_GITIGNORE_RULE="${GITIGNORE_RULE_LINE:-}" LV_HOST_MODE="${HOST_MODE}" \
     LV_ARTIFACT_DIR="${ARTIFACT_DIR}" LV_STATUS_PATH="${STATUS_PATH}" LV_PLAN_PATH="${PLAN_PATH}" \
     LV_JOURNAL_PATH="${JOURNAL_PATH}" LV_LOG_EVIDENCE="${LOG_EVIDENCE_PATH}" \
-    LV_SUMMARY_PATH="${SUMMARY_PATH}" LV_SHADOW_CHECK_PATH="${SHADOW_CHECK_PATH}" \
+    LV_SUMMARY_PATH="${SUMMARY_PATH}" \
     LV_TARGET_FILE="${TARGET_FILE}" LV_INDEX_PATH="${INDEX_PATH}" LV_INDEX_TRACKED="${index_tracked}" \
     LV_STEPS_JSON="${steps_json}" LV_REPO_ROOT="${REPO_ROOT}" \
     LV_BRIDGE_SOCKET="${BRIDGE_SOCKET}" LV_HOST_CMDLINE="${HOST_CMDLINE_JSON}" \
@@ -2026,8 +1964,7 @@ write_report_meta() {
         // assumed, plus the per-attempt trail that shows the precondition was applied.
         displayEvidence: parse(env.LV_DISPLAY_EVIDENCE),
         node: parse(env.LV_NODE_JSON),
-        shadowPreset: parse(env.LV_SHADOW_JSON),
-        sandbox: { home: env.LV_HOME_SANDBOX || null, realHome: env.LV_REAL_HOME || null, shadowRoot: env.LV_SHADOW_ROOT || null },
+        sandbox: { home: env.LV_HOME_SANDBOX || null, realHome: env.LV_REAL_HOME || null },
         probesRemoved: env.LV_PROBES_REMOVED === "true",
         realHomeIntegrity: {
           before: parse(env.LV_REAL_HOME_BEFORE),
@@ -2057,7 +1994,6 @@ write_report_meta() {
           journal: env.LV_JOURNAL_PATH,
           logEvidence: env.LV_LOG_EVIDENCE,
           summary: env.LV_SUMMARY_PATH,
-          shadowCheck: env.LV_SHADOW_CHECK_PATH,
           corroboration: env.LV_ARTIFACT_DIR + "/layer-v-corroboration.json",
           step5Target: env.LV_TARGET_FILE,
         },
@@ -2272,9 +2208,6 @@ prepare_attempt() {
   # environment is settled and before the plan is written, so the driver never has to invent a
   # path; it lives in this attempt's temporary root (`prepare_unqualified_node`).
   prepare_unqualified_node
-  write_overlay
-  assert_overlay_contract
-  generate_shadow_preset
 
   # Ordering constraint (AC-26): the ignore rule was verified in `main`, before this file
   # existed, so "the rule arrived later" can never explain the hit. Per attempt because a target
@@ -2409,7 +2342,6 @@ discard_attempt() {
 main() {
   local missing=""
   if [ ! -d "${APP_DIR}" ]; then missing="${missing} apps/vscode-dsh"; fi
-  if [ ! -f "${SHADOW_SCRIPT}" ]; then missing="${missing} layer-v-shadow-preset.sh"; fi
   if [ ! -f "${BUILD_FRESHNESS_MODULE}" ]; then missing="${missing} layer-v-support/build-freshness.cjs"; fi
   if [ ! -f "${ARTIFACT_INDEX_MODULE}" ]; then missing="${missing} layer-v-support/artifact-index.cjs"; fi
   if [ ! -f "${DISPLAY_EVIDENCE_MODULE}" ]; then missing="${missing} layer-v-support/display-evidence.cjs"; fi

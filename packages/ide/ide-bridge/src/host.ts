@@ -77,7 +77,7 @@ export class IdeBridgeHostServer {
       unlinkSync(path)
     }
     return new Promise((resolve, reject) => {
-      const server = createServer(socket => this.accept(socket))
+      const server = createServer((socket) => { this.accept(socket) })
       this.server = server
       server.once('error', reject)
       server.listen(path, () => {
@@ -95,7 +95,13 @@ export class IdeBridgeHostServer {
     this.server = undefined
     if (server === undefined) return
     await new Promise<void>((resolve, reject) => {
-      server.close(error => error === undefined || error === null ? resolve() : reject(error))
+      server.close((error) => {
+        if (error === undefined) {
+          resolve()
+          return
+        }
+        reject(error)
+      })
     })
     /* v8 ignore if -- closing the listening handle makes libuv unlink the bound Unix path, and a Windows named pipe is not a file. */
     if (this.path !== undefined && process.platform !== 'win32' && existsSync(this.path)) {

@@ -87,7 +87,7 @@ settings 应答始终脱敏：每次读取都请求 `redactSecrets: true`，运�
 
 | 请求（Host → runtime） | 用途 | Host 看到的失败 |
 |---|---|---|
-| `specdev/snapshot` | 读取被寻址会话的工作区工作流：slug、stage、phase、各门禁状态、各阶段步骤状态、待决门禁、轮次计数、下一步与技术债计数 | `specdev service is not available`、`unknown session "<id>"`，或状态读取错误 |
+| `specdev/snapshot` | 读取被寻址会话的工作区工作流：slug、stage、phase、各门禁状态、各阶段步骤与原型状态、阶段计划的 `ui` 声明与有序计划行、待决门禁、轮次计数、下一步、技术债计数，以及工作流产物的工作区相对路径与 ready/missing 状态 | `specdev service is not available`、`unknown session "<id>"`，或状态读取错误 |
 | `specdev/confirm-gate` | 经唯一被接受的写路径应用一条 Human Gate 决定（`pass` / `reject` / `defer` / `resolve` / `cancel`，可带一句说明），并回以变更后的状态 | `specdev service is not available`、`unknown session "<id>"`，或运行时自身的拒绝码与消息（`SPECDEV_GATE_NOT_PENDING: gate hg1 is not the current pending gate (hg2)`、`SPECDEV_NO_ACTIVE_WORKFLOW: …`） |
 
 `confirmGate` 拥有门禁次序、工件前置条件与持久写入，因此本桥只转发决定而不重新实现其中任何一项；拒绝会保留其错误码，便于扩展展示运行时自己的原因。成功的决定会向会话日志追加 `specdev/gate-decided`，这正是状态对模型可见、可回放的原因。
@@ -139,6 +139,6 @@ None, as the bridge only relays Host requests and their outcomes without registe
 <details>
 <summary>维护者工作上下文 — 点击展开</summary>
 
-不发布 companion invariant。双通道纯度由 profile 组合测试与 ide profile e2e smoke 拥有。ide profile 上的终端应答方认领每一个请求，避免缺席的 Web Host 静默放行。
+**运行时不变式：** 不发布伴生入口。双通道纯度由 profile 组合测试与 ide profile e2e smoke 拥有。ide profile 上的终端应答方认领每一个请求，避免缺席的 Web Host 静默放行。
 
 </details>

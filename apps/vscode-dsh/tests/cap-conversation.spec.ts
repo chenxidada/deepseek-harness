@@ -573,7 +573,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           slug: 'add-tag-filter',
           stage: 'implementation',
           phase: 'phase-1',
-          gates: { hg1: 'passed', hg2: 'pending', hg3: 'pending' },
+          gates: { hg1_5: 'pending', hg1: 'passed', hg2: 'pending', hg3: 'pending' },
           pendingGate: 'hg2',
           loopCount: 1,
           nextAction: 'confirm HG-2',
@@ -643,6 +643,19 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           slug: 'fake-workflow',
           pendingGate: 'hg2',
         })
+
+        // An out-of-workspace grant the runtime logged reaches the card's scope line.
+        fake.receivedFromHost.length = 0
+        controller.applyTestSessionEvent(tab.sessionId, 'specdev/scope-decided', {
+          kind: 'specdev/scope-decided',
+          requestId: 'req-1',
+          decision: 'directory',
+          paths: ['/etc/nginx'],
+        })
+        await viWaitFor(() => fake.receivedFromHost.some(m => m.type === 'specdev/status'), 3_000)
+        const scoped = fake.receivedFromHost.filter(m => m.type === 'specdev/status').at(-1)
+        expect(scoped?.type === 'specdev/status' ? scoped.lastScope : undefined)
+          .toEqual({ decision: 'directory', paths: ['/etc/nginx'] })
 
         // Activating the Tab re-reads the workspace, so a workflow that ended
         // elsewhere stops owning the card.
@@ -3308,17 +3321,17 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         const probe = revealHistoryView()
 
         probe.send({ type: 'sidebar/open', sessionId: 'sess-row-1' })
-        await vi.waitFor(() => expect(executed).toContain('exec:dsh.openHistory'))
+        await vi.waitFor(() =>{  expect(executed).toContain('exec:dsh.openHistory') })
 
         probe.send({ type: 'sidebar/copy-id', sessionId: 'sess-row-1' })
-        await vi.waitFor(() => expect(executed).toContain('exec:dsh.copyToClipboard'))
+        await vi.waitFor(() =>{  expect(executed).toContain('exec:dsh.copyToClipboard') })
 
         probe.send({ type: 'sidebar/new-conversation' })
-        await vi.waitFor(() => expect(executed).toContain('exec:dsh.newConversation'))
+        await vi.waitFor(() =>{  expect(executed).toContain('exec:dsh.newConversation') })
 
         const show = conversationShow
         probe.send({ type: 'sidebar/open-panel' })
-        await vi.waitFor(() => expect(show).toHaveBeenCalled())
+        await vi.waitFor(() =>{  expect(show).toHaveBeenCalled() })
 
         // Continue acts on the active Tab: it opens the replay and stops when that open
         // reported nothing to continue, rather than continuing an unrelated Tab.

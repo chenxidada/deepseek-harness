@@ -859,6 +859,23 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
         }
         expect(await pickSpecdevGateDecision(blankWindow, 'hg3')).toEqual({ decision: 'defer' })
 
+        // A rejection without a note decides nothing: the write never happens.
+        const warnings: string[] = []
+        const rejectBlankWindow: InteractionWindow = {
+          async showQuickPick(items) {
+            return items.find(item => item.value === 'reject')
+          },
+          async showInputBox() {
+            return '   '
+          },
+          async showErrorMessage() {},
+          async showWarningMessage(message: string) {
+            warnings.push(message)
+          },
+        }
+        expect(await pickSpecdevGateDecision(rejectBlankWindow, 'hg2')).toBeUndefined()
+        expect(warnings).toEqual(['打回修改必须填写备注，未写入任何决定。'])
+
         // A cancelled pick decides nothing.
         const cancelWindow: InteractionWindow = {
           async showQuickPick() {

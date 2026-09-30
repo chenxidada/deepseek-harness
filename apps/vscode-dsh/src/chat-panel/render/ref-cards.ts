@@ -217,8 +217,11 @@ function wireRefCards(root) {
     btn.addEventListener('click', function() {
       var path = btn.getAttribute('data-ref-path') || '';
       if (!path) return;
+      var line = parseInt(btn.getAttribute('data-ref-line') || '', 10);
+      var payload = { type: 'action/open-reference', path: path };
+      if (isFinite(line) && line > 0) payload.line = line;
       try {
-        vscode.postMessage({ type: 'action/open-reference', path: path });
+        vscode.postMessage(payload);
       } catch (e) {}
     });
   });
