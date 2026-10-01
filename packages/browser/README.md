@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-The `browser/` group gives the harness a real browser — opening pages, reading their accessibility tree, clicking and typing through the names that tree shows, reading what the page logged and requested, capturing screenshots as image attachments, and recording replayable traces — through one provider-neutral service (`ctx.browser`) and the backend and tools that use it. A deployment mounts a backend, and the seam picks a usable provider when a session opens, so the model-facing tools stay stable while the backend changes. Three packages split the family: the `browser/` service that owns provider selection, session lifetime, and errors; `browser-playwright/`, which drives a browser it launches or attaches to; and `tool-browser/`, which exposes eleven `browser_*` tools to the model. The group owns browser automation only: page retrieval and text extraction stay with the web capability, the provider keeps its own resource caps, and the provider's origin allowlist is the boundary that decides what a session may load. A fresh installation mounts the seam and the backend but leaves the model-facing row disabled.
+The `browser/` group gives the harness a real browser: opening pages, reading their accessibility tree, acting on the elements it names, reading console and network history, capturing screenshots as image attachments, and recording replayable traces. A deployment mounts a backend, and the seam picks a usable provider when a session opens, so model-facing tools stay stable while the backend changes. The group owns browser automation only — page retrieval and text extraction stay with the web capability, and the provider's origin allowlist decides what a session may load.
 
 ## Table of Contents
 

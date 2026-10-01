@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-ide-bridge` is the Host-side answerer plugin for `dsh --profile ide`. It connects to the Extension-owned Unix domain socket (or Windows named pipe) named by `DSH_IDE_BRIDGE_SOCK`, publishes connection state, and registers terminal listeners for `approval/request` and `user-questions/request`. Legal Host outcomes map back into the waterfall; disconnect, timeout, and illegal payloads fail closed without calling `next()`. The same connection carries the Extension's session, model, settings, permission, projection, attachment-read, subagent-control, SpecDev status/gate, and composer-catalog requests, and the runtime answers each of them with a result or its failure text; permission presets keep `dsh-permission-presets` as their only authority. SDK stdout stays exclusive to JSON-RPC; bridge traffic never writes there.
+`dsh-ide-bridge` is the Host-side answerer plugin for `dsh --profile ide`. It connects to the Extension-owned Unix domain socket (or Windows named pipe) named by `DSH_IDE_BRIDGE_SOCK`, publishes connection state, and registers terminal listeners for `approval/request` and `user-questions/request`; legal Host outcomes map back into the waterfall, and disconnect, timeout, and illegal payloads fail closed without calling `next()`. The same connection carries the Extension's session, model, settings, permission, projection, attachment-read, subagent-control, SpecDev, and composer-catalog requests. SDK stdout stays exclusive to JSON-RPC.
 
 ## Table of Contents
 

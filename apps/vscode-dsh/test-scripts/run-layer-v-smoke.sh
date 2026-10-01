@@ -471,13 +471,13 @@ clear_dsh_node_bin() {
 # that genuinely exists; a stand-in is used only when this machine's default node is qualified
 # and there is therefore no real unqualified interpreter to point at.
 prepare_unqualified_node() {
-  local target="" kind="" provenance=""
+  local target="" kind="" origin=""
   if [ -n "${PATH_DEFAULT_NODE}" ] && [ "${PATH_DEFAULT_NODE#/}" != "${PATH_DEFAULT_NODE}" ] \
     && [ -x "${PATH_DEFAULT_NODE}" ] \
     && { [ "${PATH_DEFAULT_ENGINES_OK}" != "true" ] || [ "${PATH_DEFAULT_APIS_OK}" != "true" ]; }; then
     target="${PATH_DEFAULT_NODE}"
     kind="default-path-node"
-    provenance="the interpreter this shell resolves as its default node; measure_path_defaults judged it a failure against AC-4"
+    origin="the interpreter this shell resolves as its default node; measure_path_defaults judged it a failure against AC-4"
   elif [ -n "${NODE_BIN}" ]; then
     local dir="${TMP_ROOT}/unqualified-node"
     mkdir -p "${dir}" || fail_harness "node-construction" "could not create ${dir}"
@@ -489,7 +489,7 @@ prepare_unqualified_node() {
     } >"${target}" || fail_harness "node-construction" "could not write ${target}"
     chmod +x "${target}" || fail_harness "node-construction" "could not make ${target} executable"
     kind="v20-semantics-stand-in"
-    provenance="a stand-in that reports Node 20's capability set; this machine's default node satisfies AC-4, so no real unqualified interpreter exists to point at"
+    origin="a stand-in that reports Node 20's capability set; this machine's default node satisfies AC-4, so no real unqualified interpreter exists to point at"
   else
     fail_harness "node-construction" "no interpreter is available to build the AC-13 construction from"
   fi
@@ -502,7 +502,7 @@ prepare_unqualified_node() {
     version="20.16.0"
   fi
   UNQUALIFIED_NODE_JSON="$("${NODE_TOOL}" -e '
-    const [path_, version, enginesOk, apisOk, kind, provenance, expectedOutcome] = process.argv.slice(1)
+    const [path_, version, enginesOk, apisOk, kind, origin, expectedOutcome] = process.argv.slice(1)
     const engines = enginesOk === "true"
     const apis = apisOk === "true"
     const missing = []
@@ -515,10 +515,10 @@ prepare_unqualified_node() {
       enginesOk: engines,
       apisOk: apis,
       missing,
-      provenance,
+      origin,
       expectedOutcome,
     }))
-  ' "${target}" "${version}" "${engines_ok}" "${apis_ok}" "${kind}" "${provenance}" \
+  ' "${target}" "${version}" "${engines_ok}" "${apis_ok}" "${kind}" "${origin}" \
     "one host diagnostic record with kind \u0027node-environment\u0027 and resolvedExecutable equal to this path, from a start the pre-flight refuses" \
     2>/dev/null || printf 'null')"
   if [ "${UNQUALIFIED_NODE_JSON}" = "null" ]; then

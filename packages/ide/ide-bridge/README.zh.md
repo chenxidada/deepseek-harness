@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-ide-bridge` 是 `dsh --profile ide` 的 Host 侧应答插件。它连接到由扩展持有、由 `DSH_IDE_BRIDGE_SOCK` 命名的 Unix domain socket（或 Windows named pipe），发布连接状态，并注册 `approval/request` 与 `user-questions/request` 的终端监听器。合法 Host 结局回传到瀑布；断连、超时与非法载荷 fail-closed，且不调用 `next()`。同一连接还承载扩展的 session、model、settings、permission、投影、附件读取、子代理控制、SpecDev 状态/门禁与 composer 目录请求，运行时逐条以结果或失败文本应答；permission 档位仍只由 `dsh-permission-presets` 应用。SDK stdout 仍专属于 JSON-RPC；bridge 流量绝不写入 stdout。
+`dsh-ide-bridge` 是 `dsh --profile ide` 的 Host 侧应答插件。它连接到由扩展持有、由 `DSH_IDE_BRIDGE_SOCK` 命名的 Unix domain socket（或 Windows named pipe），发布连接状态，并注册 `approval/request` 与 `user-questions/request` 的终端监听器；合法 Host 结局回传到瀑布，断连、超时与非法载荷 fail-closed，且不调用 `next()`。同一连接还承载扩展的 session、model、settings、permission、投影、附件读取、子代理控制、SpecDev 与 composer 目录请求。SDK stdout 仍专属于 JSON-RPC。
 
 ## 目录
 

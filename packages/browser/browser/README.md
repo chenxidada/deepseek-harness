@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Any plugin or tool can open a page, act on it, read its state, capture it as an image, and record a replayable trace through `dsh-browser` (`ctx.browser`) without binding to one browser implementation. Backends register as providers, and the service resolves one usable provider when a session opens, so callers never track which engine runs behind a session. Choose it when building browser tooling or another backend; the shipped model-facing tools (`dsh-tool-browser`) mount it automatically. The service itself starts no browser and registers no model-facing tool: a provider must be mounted before a session can open. Session reuse, provider selection, teardown, and the error vocabulary have a single owner, so "which browser this harness drives, and for how long" is answered in one place.
+Any plugin or tool can open a page, act on it, read its state, capture it as an image, and record a replayable trace through `dsh-browser` (`ctx.browser`) without binding to one browser implementation. Backends register as providers, and the service resolves one usable provider when a session opens, so callers never track which engine runs behind a session. Choose it when building browser tooling or another backend; the shipped model-facing tools (`dsh-tool-browser`) mount it automatically. The service starts no browser and registers no tool: a provider must be mounted before a session can open.
 
 ## Table of Contents
 

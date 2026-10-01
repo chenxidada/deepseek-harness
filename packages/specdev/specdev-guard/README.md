@@ -9,11 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-specdev-guard` replaces Cursor shell-hook pipeline-gate intent with native Cordis enforcement. It wraps `ctx.specdev.dispatchRole`, rejects gated roles on `agent/pre-step`, and denies tool writes to the exported `current-status.json` mirror via `tools/pre-execute` + `tools.guard`. Human Gate authority comes from the workflow log: `confirmGate` appends the state event, the projection folds it, and a hand-edited mirror is reported as divergence rather than honored as a pass (AC-28).
-
-The same `tools/pre-execute` listener is the workspace range check. It reads the paths a call names — tool arguments and shell command lines — and asks the user about the ones outside the session workspace through `ctx.userQuestions`, whose card carries the paths, the role and tool, a recursion warning, and the free-text note. A request offers `Allow once`, `Allow this directory`, `Allow for this session`, and `Refuse`; an approved directory or session grant covers later calls in the same session tree for as long as the runtime holds it. Credential paths (the `~/.ssh`, `~/.aws`, and `~/.config/gh` directories and `.env` files) are refused without asking. Every request and decision is appended to the session that owns the call tree as `specdev/scope-requested` / `specdev/scope-decided`.
-
-Inside the workspace, writes are checked against the calling role's write scope: the implementer writes the workspace and its phase artifacts, the analysis, exploration, review, and verification roles write only their own workflow directory and any `test-scripts/` directory, and the wiki role writes `docs/wiki/` and `.wiki-work/`. A write outside that scope raises the same question, whose card names the role and the locations it may write. The orchestrator is not checked here: its preset already narrows its tools (AC-22).
+`dsh-specdev-guard` enforces SpecDev gates natively in Cordis: it wraps `ctx.specdev.dispatchRole`, denies gated roles on `agent/pre-step`, rejects writes to the generated `current-status.json` mirror, and reads Human Gate authority from the workflow log, so a hand-edited mirror is reported as divergence rather than honored as a pass. A second `tools/pre-execute` check asks the user, through `ctx.userQuestions`, about calls whose paths reach outside the session workspace or the calling role's write scope; credential paths are refused without asking. Requests and decisions are appended to the owning session as `specdev/scope-requested` / `specdev/scope-decided`.
 
 ## Table of Contents
 

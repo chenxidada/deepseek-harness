@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-With `dsh-browser-playwright`, the harness drives a real browser through the browser service (`ctx.browser`): the provider either launches a browser process it owns end to end or attaches to one that already runs. Choose it when a composition needs page navigation, accessibility snapshots, ARIA-role interactions, rendered PNG captures, replayable trace archives, and console and network history through Playwright. Every session inherits one origin allowlist, viewport, navigation and interaction timeouts, and bounded console and network buffers, and the provider asserts its whole configuration at plugin load, so a misconfigured backend fails the boot instead of failing the first session. The Playwright library loads on the first open, which keeps plugin loading and configuration tooling free of that dependency. The model-facing tools live in `dsh-tool-browser`.
+With `dsh-browser-playwright`, the harness drives a real browser through the browser service (`ctx.browser`): the provider either launches a browser process it owns end to end or attaches to one that already runs. Choose it when a composition needs navigation, accessibility snapshots, ARIA-role interactions, rendered PNG captures, replayable traces, and console and network history through Playwright. Every session inherits one origin allowlist, viewport, timeouts, and bounded console and network buffers; the whole configuration is asserted at plugin load, so a misconfigured backend fails the boot instead of the first session.
 
 ## Table of Contents
 

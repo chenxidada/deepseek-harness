@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-With `dsh-tool-browser`, the model can open pages, read their accessibility tree, act on the elements that tree names, inspect what a page logged and requested, capture the page as an image, and record a trace a person replays, all through the browser service (`ctx.browser`). Choose it when the model should drive a real browser; the three interaction tools, the screenshot tool, and the two trace controls register independently, so a deployment turns each group off with one config field. Every browser belongs to the conversation that opened it: one session per conversation key, reused by later calls and released by `browser_close` or by the seam's own teardown. Navigation is limited to the origins the deployment allows, and a denied URL fails with a stated reason instead of loading. The shipped base bundle mounts this row disabled.
+With `dsh-tool-browser`, the model can open pages, read their accessibility tree, act on the elements that tree names, inspect what a page logged and requested, capture the page as an image, and record a trace, all through the browser service (`ctx.browser`). Choose it when the model should drive a real browser; the interaction, screenshot, and trace tools register independently, so a deployment turns each group off with one config field. Every browser belongs to the conversation that opened it, reused by later calls and released by `browser_close` or the seam's teardown; navigation is limited to the origins the deployment allows.
 
 ## Table of Contents
 

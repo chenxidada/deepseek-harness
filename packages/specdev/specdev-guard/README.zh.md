@@ -9,11 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-specdev-guard` 把 Cursor shell hook 的 pipeline-gate 意图落地为原生 Cordis 强制：包装 `ctx.specdev.dispatchRole`、在 `agent/pre-step` 拒绝未就绪角色，并通过 `tools/pre-execute` + `tools.guard` 拒绝对导出的 `current-status.json` 镜像的工具写入。Human Gate 权威来自工作流日志：`confirmGate` 追加状态事件、投影折叠出状态，手改镜像只会被报为偏离，绝不被当作通过（AC-28）。
-
-同一个 `tools/pre-execute` 监听器也是工作区范围检查。它读取一次调用涉及的所有路径——工具参数与 shell 命令行——对落在会话工作区之外的路径通过 `ctx.userQuestions` 向用户提问，卡片包含路径、角色与工具、递归扫描提示以及自由文本备注位。申请提供 `Allow once`、`Allow this directory`、`Allow for this session` 与 `Refuse` 四个选项；获批的目录或会话范围在运行时持有期间覆盖同一会话树中的后续调用。凭据类路径（`~/.ssh`、`~/.aws`、`~/.config/gh` 目录与 `.env` 文件）直接拒绝，不提供申请。每次申请与决定都以 `specdev/scope-requested` / `specdev/scope-decided` 追加到拥有该调用树的会话。
-
-工作区内的写入按调用角色的写入范围判定：implementer 可写整个工作区与其阶段产物，需求分析、代码探索、审查与验证角色只能写自己工作流目录与任意 `test-scripts/` 目录，wiki 角色可写 `docs/wiki/` 与 `.wiki-work/`。写出该范围时同样提问，卡片上写明角色与其可写位置。Orchestrator 不在此判定：它的 preset 已经收窄了工具（AC-22）。
+`dsh-specdev-guard` 在 Cordis 内原生强制 SpecDev 门禁：包装 `ctx.specdev.dispatchRole`、在 `agent/pre-step` 拒绝未就绪角色、拒绝写入由工作流日志生成的 `current-status.json` 镜像，并以工作流日志为 Human Gate 权威，因此手改镜像只会被报为偏离，绝不被当作通过。第二个 `tools/pre-execute` 检查会通过 `ctx.userQuestions`，就路径超出会话工作区或调用角色写入范围的调用向用户提问；凭据类路径直接拒绝，不提供申请。每次申请与决定都以 `specdev/scope-requested` / `specdev/scope-decided` 追加到拥有该调用树的会话。
 
 ## 目录
 

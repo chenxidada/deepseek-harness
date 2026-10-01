@@ -48,9 +48,11 @@ worktrees/
 .typert-*/
 native/system/test/bin/
 
-# Spec-driven workflow local state (do not commit)
-.specdev/kb-pending/
-.specdev/active-workflow
+# Spec-driven workflow local state and personal working dirs (do not commit)
+.specdev/
+.explore/
+.wiki-work/
+.cursor/
 
 # Layer-V smoke run outputs (screenshots, status JSON, the step-5 edit probe).
 # The probe lives here so the model can edit it without touching application

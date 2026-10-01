@@ -389,7 +389,7 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
         expect(fake.receivedFromHost.some(m => m.type === 'scroll/reveal-change-list')).toBe(false)
       })
 
-      it('CAP-CHANGE-LIST-011 provenance isolation across turns + data-turn in HTML', async () => {
+      it('CAP-CHANGE-LIST-011 source isolation across turns + data-turn in HTML', async () => {
         const host = fakeHost()
         const controller = new ConversationController(host.host)
         const tab = controller.newConversation('live')
