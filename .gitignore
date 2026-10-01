@@ -38,6 +38,7 @@ python/**/.pytest_cache/
 packages/**/__pycache__/
 apps/web/dist/
 apps/vscode-dsh/webview/dist/
+apps/vscode-dsh/*.vsix
 .artifacts/
 .dsh-build/
 .playwright-mcp/
@@ -53,6 +54,10 @@ native/system/test/bin/
 .explore/
 .wiki-work/
 .cursor/
+.cursorrules
+.mcp.json
+knowledge-base-mcp.sh
+opencode.jsonc
 
 # Layer-V smoke run outputs (screenshots, status JSON, the step-5 edit probe).
 # The probe lives here so the model can edit it without touching application
