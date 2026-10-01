@@ -1,6 +1,46 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/specdev/specdev-presets/README.md
-README.md: 233c85ac4530bfe943ab70931c2f269231ad1c04
-README.zh.md: 22861c97904c8c55556ee778e936f695e338fcbd
+/:
+  en: 910aba02479dc635
+  zh: 834e61162d3ed7b5
+/deepseek-ai-dsh-specdev-presets:
+  en: 05c459d8e45ee0ff
+  zh: b874e12ae816c13a
+/deepseek-ai-dsh-specdev-presets/summary:
+  en: 4a52ef6f22421167
+  zh: 72bef8687055545c
+/deepseek-ai-dsh-specdev-presets/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 725b47765ee8f30b
+/deepseek-ai-dsh-specdev-presets/use-this-package:
+  en: 9125796919648f60
+  zh: 67fdf88dc21506b3
+/deepseek-ai-dsh-specdev-presets/understand-the-implementation:
+  en: a0aa162a3805bd5b
+  zh: 1ad2eb5fffc73ee3
+/deepseek-ai-dsh-specdev-presets/further-exploration:
+  en: b4f641fcf59f91fa
+  zh: 1b2cbb74fe5aa2f8
+/deepseek-ai-dsh-specdev-presets/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-specdev-presets/model-experience/role-personas:
+  en: 0677fd88b5c458e5
+  zh: da610590969276f4
+/deepseek-ai-dsh-specdev-presets/model-experience/role-personas/what-the-model-sees:
+  en: d3b34a3352b08ca4
+  zh: 0d9d9c35858f23f5
+/deepseek-ai-dsh-specdev-presets/model-experience/role-personas/token-effect:
+  en: 5600f0a0bec84635
+  zh: 772830d10a88bffd
+/deepseek-ai-dsh-specdev-presets/model-experience/role-personas/kv-cache-effect:
+  en: 2c1d975099b6d199
+  zh: 569fe201cf42b5e5
+/deepseek-ai-dsh-specdev-presets/known-limitations-and-deferred-work:
+  en: d564cc47508e740c
+  zh: 3d2629129abd97f6
+/deepseek-ai-dsh-specdev-presets/known-limitations-and-deferred-work/dev-note:
+  en: f96e247010aa2cc0
+  zh: 9ec7f25ee65d17d4

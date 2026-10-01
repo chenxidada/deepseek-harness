@@ -1,6 +1,25 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-28-ide-composer-slash-catalog.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-28-ide-composer-slash-catalog.md
-2026-09-28-ide-composer-slash-catalog.md: dd6160d1b580d8778cb1f897d961a0552cae982c
-2026-09-28-ide-composer-slash-catalog.zh.md: 925d67904712b4f17609b58d59ae95fc44955866
+/agent-note-the-ide-composer-s-menu-reads-and-runs-the-runtime-catalogs:
+  en: df94d7e953b773c9
+  zh: 641ecc4bb91198eb
+/agent-note-the-ide-composer-s-menu-reads-and-runs-the-runtime-catalogs/problem:
+  en: 5a74500bf5aee4b1
+  zh: 534994f6c3cff4d5
+/agent-note-the-ide-composer-s-menu-reads-and-runs-the-runtime-catalogs/decision:
+  en: f1ed5532b96aff45
+  zh: f64427f01f4b5978
+/agent-note-the-ide-composer-s-menu-reads-and-runs-the-runtime-catalogs/alternatives-considered:
+  en: e91c2f42f73920b2
+  zh: aa15eeddec9ca40b
+/agent-note-the-ide-composer-s-menu-reads-and-runs-the-runtime-catalogs/consequences:
+  en: 9af706993b502887
+  zh: 38ea20ea5bc5f637
+/agent-note-the-ide-composer-s-menu-reads-and-runs-the-runtime-catalogs/testing:
+  en: ef37b049ac7abc2e
+  zh: 33f36d6e36b1a893
+/agent-note-the-ide-composer-s-menu-reads-and-runs-the-runtime-catalogs/related:
+  en: 7deef66c196c33ca
+  zh: c266b83889e203f4

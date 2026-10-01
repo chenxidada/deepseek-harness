@@ -207,7 +207,7 @@ export interface IdeSessionHostStartOptions {
   cwd: string
   /** Provider route (default `deepseek-official`). */
   provider?: string
-  /** Model id (default `deepseek-v4-flash`). */
+  /** Model id (default `deepseek-flash`). */
   model?: string
   /** Optional Harness home for the child. */
   dshHome?: string
@@ -605,7 +605,7 @@ export class IdeSessionHost {
       await client.initialize({
         cwd: options.cwd,
         provider: options.provider ?? 'deepseek-official',
-        model: options.model ?? 'deepseek-v4-flash',
+        model: options.model ?? 'deepseek-flash',
       })
       this.status = 'connected'
       this.diagnostics?.onStartSucceeded()

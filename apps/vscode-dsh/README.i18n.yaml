@@ -1,6 +1,91 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write apps/vscode-dsh/README.md
-README.md: a2d2e4dd721ae778c4f51e1e2f164c6eef6ff1d3
-README.zh.md: 71c2c7e339a115052da22fc9dfc36b51fc103f69
+/deepseek-ai-dsh-vscode-dsh:
+  en: 41b332bc77271a3c
+  zh: 6fcee16f32ec02c2
+/deepseek-ai-dsh-vscode-dsh/summary:
+  en: 6cdfbb3521f001d7
+  zh: e7044a93940293f7
+/deepseek-ai-dsh-vscode-dsh/layer-v-smoke-loop-real-extension-development-host:
+  en: 5f38c788bb1db0ca
+  zh: 98313719c96c08a2
+/deepseek-ai-dsh-vscode-dsh/layer-v-smoke-loop-real-extension-development-host/artifact-directory:
+  en: e6dc9d806c28bc8c
+  zh: db54590866119d41
+/deepseek-ai-dsh-vscode-dsh/layer-v-smoke-loop-real-extension-development-host/screenshot-naming:
+  en: 02433712d72ab55d
+  zh: 9db70c2082ceb17a
+/deepseek-ai-dsh-vscode-dsh/layer-v-smoke-loop-real-extension-development-host/skip-conditions:
+  en: b385086266a27dbf
+  zh: 5b164a6c72cf032d
+/deepseek-ai-dsh-vscode-dsh/layer-v-smoke-loop-real-extension-development-host/exit-codes:
+  en: aaa01a4e6e546a21
+  zh: 3576173c98ca2f53
+/deepseek-ai-dsh-vscode-dsh/layer-v-smoke-loop-real-extension-development-host/fault-injection-negative-runs-ac-27:
+  en: 660c5d606ed42132
+  zh: 7d37ca9126be8665
+/deepseek-ai-dsh-vscode-dsh/layer-v-smoke-loop-real-extension-development-host/inherited-dsh-node-bin-is-cleared-explicitly:
+  en: fc574f9c3e33bca7
+  zh: 36bb3d834b9db10c
+/deepseek-ai-dsh-vscode-dsh/library:
+  en: 6110574f0caf2e14
+  zh: a714c2eca0b10611
+/deepseek-ai-dsh-vscode-dsh/commands:
+  en: e90321af0f878125
+  zh: 5c96a96bfa6919c4
+/deepseek-ai-dsh-vscode-dsh/commands/auto-start-command-matrix-ac-1c-ac-1e:
+  en: b7dc8660739c3ee8
+  zh: e859c50530d3d17d
+/deepseek-ai-dsh-vscode-dsh/commands/auto-ready-timing-ad-cr-3-ac-3-4-6:
+  en: a62335d3ffc9d7ce
+  zh: 774a0711dc08f10f
+/deepseek-ai-dsh-vscode-dsh/commands/l2-test-hooks-scripting-extension-host-harness:
+  en: 9619cc022394d0ac
+  zh: 0e82944c3ce92781
+/deepseek-ai-dsh-vscode-dsh/views:
+  en: c299e16aa3240a4c
+  zh: 6f5ffa3279bcd60b
+/deepseek-ai-dsh-vscode-dsh/composer-path-references:
+  en: c0c90311a28469f4
+  zh: 1987f168cd477143
+/deepseek-ai-dsh-vscode-dsh/composer-commands:
+  en: 9dec41138b90c555
+  zh: e03ad7fc0d9b3b55
+/deepseek-ai-dsh-vscode-dsh/panel-vs-timeline:
+  en: 3cc644a1f0530cc1
+  zh: 227821a326e96e37
+/deepseek-ai-dsh-vscode-dsh/close-vs-delete-policy-ad-cu-3:
+  en: 7945c6169c5f3535
+  zh: 82af1458dad95f19
+/deepseek-ai-dsh-vscode-dsh/restart-restore-ad-cu-3-4-10:
+  en: 5aa45ab65efa01ab
+  zh: 8e1ca920ec7c2ad0
+/deepseek-ai-dsh-vscode-dsh/conversation-chrome-ad-cr-8:
+  en: bd489ee216b5f9d2
+  zh: 0ab46a2f4c921912
+/deepseek-ai-dsh-vscode-dsh/continue-this-session-ad-cu-8-t-0b-same-id:
+  en: 6441a5d571450fc8
+  zh: c1fe7991cc8ec30b
+/deepseek-ai-dsh-vscode-dsh/replay-diff-ad-cu-6:
+  en: b80c4a13b8c9d2c3
+  zh: 0645bc93adf5e565
+/deepseek-ai-dsh-vscode-dsh/subagent-control-ad-cu-11:
+  en: 32d1a4bb1198d25d
+  zh: 44248d50d01a9d25
+/deepseek-ai-dsh-vscode-dsh/specdev-status-ad-cu-12:
+  en: 1dbc33149c36e582
+  zh: b5d22cb56c7e6a1f
+/deepseek-ai-dsh-vscode-dsh/images-in-the-conversation:
+  en: 39c25c63c04b5fc9
+  zh: 7c6c761c9f25ae84
+/deepseek-ai-dsh-vscode-dsh/runtime-resolution:
+  en: 1ba447cebce1b5dc
+  zh: 4762a3e581b2f3ad
+/deepseek-ai-dsh-vscode-dsh/dual-channel:
+  en: c9cb5b1329c4e61b
+  zh: 0c24c599c5317ede
+/deepseek-ai-dsh-vscode-dsh/replaceability-ad-8:
+  en: 9bf9893878ce0b50
+  zh: 85842f16c92d1f75

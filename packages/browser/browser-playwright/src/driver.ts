@@ -39,9 +39,9 @@ export type PlaywrightAttachTarget =
  */
 export async function loadPlaywright(): Promise<PlaywrightModule> {
   // The library's own declarations cover APIs this provider never calls and
-  // change between releases; ./types.ts is the surface sessions execute
-  // against, and this cast is where the runtime module meets it.
-  return await import('playwright-core') as PlaywrightModule
+  // change between releases; the declared return type narrows the loaded
+  // module to the surface sessions execute against.
+  return await import('playwright-core')
 }
 
 /**

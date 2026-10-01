@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { Inbox, type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SpecdevService, {
@@ -18,6 +18,7 @@ import SpecdevService, {
   snapshotFromStatus,
   type CurrentStatusJson,
   type SpecdevSnapshot,
+  MemoryInbox,
 } from '@deepseek-ai/dsh-specdev'
 
 const tempRoots: string[] = []
@@ -36,7 +37,7 @@ function tempDir(prefix: string): string {
 }
 
 function stubAgent(session: ReturnType<Context['sessions']['create']>): Agent {
-  const inbox = new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} })
+  const inbox = new MemoryInbox()
   const status: AgentStatus = 'idle'
   return {
     id: session.id,

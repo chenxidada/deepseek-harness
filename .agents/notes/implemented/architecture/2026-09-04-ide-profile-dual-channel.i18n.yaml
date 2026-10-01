@@ -1,6 +1,19 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-04-ide-profile-dual-channel.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-04-ide-profile-dual-channel.md
-2026-09-04-ide-profile-dual-channel.md: 4ce20740ab776de32ad4c84def14635db272bfbc
-2026-09-04-ide-profile-dual-channel.zh.md: 5fe9f26f1049b44ee4f4eed2f17377b1ffca7dd3
+/agent-note-ide-profile-dual-channel-host-bridge:
+  en: b83297f3052fa098
+  zh: 981f00102473ea33
+/agent-note-ide-profile-dual-channel-host-bridge/problem:
+  en: 093768d7c9f22064
+  zh: d2798667d285fd5b
+/agent-note-ide-profile-dual-channel-host-bridge/decision:
+  en: 4c90707f3859b4aa
+  zh: 8e7625176bc8c5db
+/agent-note-ide-profile-dual-channel-host-bridge/alternatives-considered:
+  en: 21466b6c72b49ed9
+  zh: f6de665892385969
+/agent-note-ide-profile-dual-channel-host-bridge/consequences:
+  en: 3fb790184c792e40
+  zh: 35314ee85eddd1ff

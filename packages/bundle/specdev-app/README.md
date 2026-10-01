@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-The SpecDev application as a `dsh` profile bundle stacked on [`dsh-sdk-app`](../sdk-app/README.md). The patch inserts [`dsh-specdev`](../../specdev/specdev/README.md) (workflow runtime, `workflow.jsonl` authority, slash commands), [`dsh-specdev-guard`](../../specdev/specdev-guard/README.md) (fail-closed gate/role enforcement), [`dsh-specdev-presets`](../../specdev/specdev-presets/README.md) (role presets), and [`dsh-agent-presets`](../../preset/agent-presets/README.md) pointed at the SpecDev preset root while the shipped root stays included and the general `standard` agent stays the deployment default. The `ide` profile references this bundle; the `sdk` profile stays rosterless and without SpecDev.
+The SpecDev application as a `dsh` profile bundle stacked on [`dsh-sdk-app`](../sdk-app/README.md). The patch inserts [`dsh-specdev`](../../specdev/specdev/README.md) (workflow runtime, `workflow.jsonl` authority, slash commands), [`dsh-specdev-guard`](../../specdev/specdev-guard/README.md) (fail-closed gate/role enforcement), [`dsh-specdev-presets`](../../specdev/specdev-presets/README.md) (role presets), and the [`dsh-agent-preset-registry`](../../preset/agent-preset-registry/README.md) whose deployment default stays the general `standard` preset. The preset declarations follow as `presets/*.patch.yml`, one `@deepseek-ai/dsh-agent-preset` row each for the shipped `standard` preset and every SpecDev role. The `ide` profile references this bundle; the `sdk` profile stays rosterless and without SpecDev.
 
 ## Table of Contents
 
@@ -30,7 +30,7 @@ Rows arrive as inserts, so user `cordis.patch.yml` layers can still restate thei
 <a id="model-experience"></a>
 ## Model Experience
 
-None, as the bundle only inserts rows whose model-facing behavior belongs to `dsh-agent-presets` and `dsh-specdev-presets`.
+None, as the bundle only inserts rows whose model-facing behavior belongs to the declared presets and `dsh-specdev-presets`.
 
 #### KV Cache effect
 

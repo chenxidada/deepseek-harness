@@ -20,7 +20,7 @@ describe('dsh-sdk-app bundle', () => {
       readFileSync(resolve(root, manifest.dsh!.bundle!.patch!), 'utf8'),
       { schema: entryListSchema },
     ) as Array<{ id?: string; disabled?: boolean; insert?: Array<{ id?: string; inject?: string[]; name?: string }> }>
-    expect(patches.find(patch => patch.id === 'hmr')).toBeUndefined()
+    expect(patches.find(patch => patch.id === 'hmr')).toMatchObject({ disabled: true })
     expect(patches.find(patch => patch.id === 'session-title-llm')).toMatchObject({ disabled: true })
     // SpecDev rows live in @deepseek-ai/dsh-specdev-app, which the ide profile
     // stacks; the sdk profile stays rosterless.

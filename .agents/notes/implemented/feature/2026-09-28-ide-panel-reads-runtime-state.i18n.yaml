@@ -1,6 +1,25 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-28-ide-panel-reads-runtime-state.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-28-ide-panel-reads-runtime-state.md
-2026-09-28-ide-panel-reads-runtime-state.md: 39073d894786c4e2e82fa4520b5af7da397c9842
-2026-09-28-ide-panel-reads-runtime-state.zh.md: 5dd9614d14e20e3d18d461f40ace81cf0cb0bdde
+/agent-note-the-vs-code-panel-reads-session-state-from-the-runtime:
+  en: 36300df0d15e120b
+  zh: 48e20605db28d99b
+/agent-note-the-vs-code-panel-reads-session-state-from-the-runtime/problem:
+  en: 3c3bce232f5cedfd
+  zh: 3e9d0e0e35d34614
+/agent-note-the-vs-code-panel-reads-session-state-from-the-runtime/decision:
+  en: 371869dbaf9b81c2
+  zh: fb4136c54da4c4ad
+/agent-note-the-vs-code-panel-reads-session-state-from-the-runtime/alternatives-considered:
+  en: 8c1b32e3e7458efa
+  zh: 1b90a15404a39637
+/agent-note-the-vs-code-panel-reads-session-state-from-the-runtime/consequences:
+  en: 5a6216b18360de6a
+  zh: cdb94d8e2468404b
+/agent-note-the-vs-code-panel-reads-session-state-from-the-runtime/testing:
+  en: ab1155abf0fad35f
+  zh: aa3405fd668e4dd6
+/agent-note-the-vs-code-panel-reads-session-state-from-the-runtime/related:
+  en: beb1bee1a2d81517
+  zh: de8966ba24a64173

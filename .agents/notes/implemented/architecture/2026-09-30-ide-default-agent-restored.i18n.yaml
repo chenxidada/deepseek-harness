@@ -1,6 +1,34 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-30-ide-default-agent-restored.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-30-ide-default-agent-restored.md
-2026-09-30-ide-default-agent-restored.md: 482d3e63da1ec82bc2f95e99cfb204f8744bc451
-2026-09-30-ide-default-agent-restored.zh.md: 11b28d57e6ee076bc12200ac20a14ff629c0e9d2
+/agent-note-restore-the-general-default-agent-and-retire-the-specdev-orchestrator-preset:
+  en: a243bf76f971cf6e
+  zh: a090a6c07e509609
+/agent-note-restore-the-general-default-agent-and-retire-the-specdev-orchestrator-preset/problem:
+  en: de88228cc36fc901
+  zh: 4437f09cef4e1aae
+/agent-note-restore-the-general-default-agent-and-retire-the-specdev-orchestrator-preset/decision:
+  en: a15c7c13f167e5ac
+  zh: a15c7c13f167e5ac
+/agent-note-restore-the-general-default-agent-and-retire-the-specdev-orchestrator-preset/decision/the-ide-default-agent-is-the-general-standard-preset:
+  en: fb912ef8bbd10feb
+  zh: 79632d3b437e22e9
+/agent-note-restore-the-general-default-agent-and-retire-the-specdev-orchestrator-preset/decision/the-specdev-orchestrator-preset-is-deleted:
+  en: 84341eff7c28b953
+  zh: c5cd2853bcec15be
+/agent-note-restore-the-general-default-agent-and-retire-the-specdev-orchestrator-preset/decision/specdev-is-entered-through-its-commands:
+  en: 43215858d02aeb00
+  zh: 3b5404d82494bcf1
+/agent-note-restore-the-general-default-agent-and-retire-the-specdev-orchestrator-preset/decision/the-layer-v-smoke-loses-its-shadow-machinery:
+  en: e1ef44c0804b133b
+  zh: 7220209a2965cdd9
+/agent-note-restore-the-general-default-agent-and-retire-the-specdev-orchestrator-preset/alternatives-considered:
+  en: d45b64cc2389e093
+  zh: a089e58d6ccc247e
+/agent-note-restore-the-general-default-agent-and-retire-the-specdev-orchestrator-preset/consequences:
+  en: 35656c396aadf3de
+  zh: bb74071880d1ee70
+/agent-note-restore-the-general-default-agent-and-retire-the-specdev-orchestrator-preset/testing:
+  en: b0e35fe4db62ee4d
+  zh: 0fa2fd8155d81f4a

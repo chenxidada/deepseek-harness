@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-specdev-presets` ships the SpecDev **role** agent presets (`requirement-analyst`, `plan-generator`, `code-explorer`, `implementer`, `reviewer-*`, `reviewer`, `verifier`, `wiki`) and publishes `ctx.specdevPresets.presetRoot` so a composition can point `agent-presets` at that root. The main session is not a SpecDev role: SpecDev is entered through its slash commands, role dispatch mounts each preset on a child session, and the deployment's general default (`standard`) stays the default agent.
+`dsh-specdev-presets` ships the SpecDev **role** preset sources (`requirement-analyst`, `plan-generator`, `code-explorer`, `implementer`, `reviewer-*`, `reviewer`, `verifier`, `wiki`) under `presets/`, plus the shipped ids and {@link rolePresetId}. The [`dsh-specdev-app`](../../bundle/specdev-app/README.md) bundle declares each one for the agent-preset registry as an `@deepseek-ai/dsh-agent-preset` row in its `presets/*.patch.yml` files. The main session is not a SpecDev role: SpecDev is entered through its slash commands, role dispatch mounts each preset on a child session, and the deployment's general default (`standard`) stays the default agent.
 
 ## Table of Contents
 
@@ -28,16 +28,17 @@ English | [中文](README.zh.md)
 ```yaml
 - id: specdev-presets
   name: '@deepseek-ai/dsh-specdev-presets'
-- id: agent-presets
-  name: '@deepseek-ai/dsh-agent-presets'
-  inject: [specdevPresets]
+- id: agent-preset-registry
+  name: '@deepseek-ai/dsh-agent-preset-registry'
   config:
     default: standard
-    includeShippedRoot: true
-    includeUserRoot: false
-    roots:
-      - path: !!js specdevPresets.presetRoot
-        trust: system
+- id: preset-specdev-implementer
+  name: '@deepseek-ai/dsh-agent-preset'
+  config:
+    id: specdev-implementer
+    name: SpecDev Implementer
+    order: 20
+    plugins: []
 ```
 
 Role presets include read/write filesystem tools for their own work. Role dispatch attaches `specdev.role` / `specdev.slug` / `specdev.phaseId?` on spawn (AC-24).
@@ -62,7 +63,7 @@ Role presets include read/write filesystem tools for their own work. Role dispat
 <a id="further-exploration"></a>
 ## Further Exploration
 
-- [Agent presets](../../preset/agent-presets/README.md) — roster mount contract.
+- [Agent preset registry](../../preset/agent-preset-registry/README.md) — roster mount contract.
 - [SpecDev runtime](../specdev/README.md) — the slash-command surface these presets serve.
 
 -----
@@ -96,6 +97,6 @@ Prefix-stable while the persona config is unchanged; editing `agent.cordis.yml` 
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-**Runtime invariant:** No companion is published. This package declares the role presets; the roster mount contract belongs to `agent-presets`, and `tests/specdev-presets.spec.ts` covers the shipped root, the preset directories, and the published service.
+**Runtime invariant:** No companion is published. This package ships the role preset sources; the declarations belong to [`dsh-specdev-app`](../../bundle/specdev-app/README.md), and `tests/specdev-presets.spec.ts` covers the shipped root, the preset directories, and the published service.
 
 </details>

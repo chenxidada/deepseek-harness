@@ -22,9 +22,11 @@ import {
   type SessionEvent,
   type SessionId,
 } from '@deepseek-ai/dsh-session'
+import { buildForkSeed } from '@deepseek-ai/dsh-session/fork'
+import type {} from '@deepseek-ai/dsh-session-query'
 import type SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import type { SubagentRunEndInfo } from '@deepseek-ai/dsh-subagent'
-import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek'
+import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek-api-key'
 import type {
   InitializeParams,
   InitializeResult,
@@ -133,7 +135,9 @@ export class HarnessSdkJsonRpcServer {
         childSessionId: String(info.id),
         status: successStatus(info.stopReason, serverOptions),
         stopReason: info.stopReason,
-        ...(info.lastAssistantMessage === undefined ? {} : { lastAssistantMessage: info.lastAssistantMessage }),
+        ...(info.lastAssistantMessage === undefined
+          ? {}
+          : { lastAssistantMessage: [...info.lastAssistantMessage] }),
       }
       transport.notify('subagent.finished', payload)
     }))
@@ -161,7 +165,7 @@ export class HarnessSdkJsonRpcServer {
       : ReasoningEffortId(params.reasoningEffort)
     if (!this.hasAdapterFor(provider)) {
       if (provider !== 'deepseek-official') throw new Error(`no adapter registered for provider "${provider}"`)
-      this.llmFiber = await this.ctx.plugin(LlmDeepSeek, {})
+      this.llmFiber = await this.ctx.plugin(LlmDeepSeek)
     }
     // Adapter presence was read from this service above; a successful fallback mount also requires it.
     const llm = this.ctx.get('llm') as LlmRuntime
@@ -473,7 +477,7 @@ export class HarnessSdkJsonRpcServer {
     childSessionId: string,
     cut?: { emptySeed?: boolean; boundarySeq?: number },
   ): Promise<SessionRecord> {
-    const { seed, inheritedEventCount } = forkSeedFromParent(parent, cut)
+    const { seed, inheritedEventCount } = await forkSeedFromParent(this.ctx, parent, cut)
     const presets = this.ctx.get('agentPresets') as {
       composeFrom(agentCtx: Context, parentCtx: Context): string | undefined
       composedPreset(agentCtx: Context): string | undefined
@@ -531,7 +535,7 @@ export class HarnessSdkJsonRpcServer {
    */
   async selectModel(selection: SdkModelSelectInput): Promise<{ applied: number }> {
     if (this.shuttingDown) throw new Error('SDK server is shutting down')
-    const llm = this.ctx.get('llm') as LlmRuntime | undefined
+    const llm = this.ctx.get('llm')
     if (llm === undefined) throw new Error('llm service is not available')
     const resolved = await llm.resolveCallConfig({
       provider: selection.provider,
@@ -559,18 +563,29 @@ export class HarnessSdkJsonRpcServer {
 
 /**
  * Build a fork seed matching {@link SessionStore.fork} / `_forkSeed` rules.
+ * The parent prefix comes from the asynchronous session observation because
+ * synchronous Session history reads are deprecated.
+ * @param ctx - context carrying the session and session-query services.
  * @param parent - live parent session.
  * @param cut - `emptySeed` → []; else inclusive seq (omit = last event / tip).
+ * @returns the exact child seed and its copied-prefix length.
  */
-function forkSeedFromParent(
+async function forkSeedFromParent(
+  ctx: Context,
   parent: Session,
   cut?: { emptySeed?: boolean; boundarySeq?: number },
-): { seed: readonly SessionEvent[]; inheritedEventCount: ReturnType<typeof SessionLogOffset> } {
+): Promise<{ seed: readonly SessionEvent[]; inheritedEventCount: ReturnType<typeof SessionLogOffset> }> {
   if (cut?.emptySeed === true) {
     return { seed: [], inheritedEventCount: SessionLogOffset(0) }
   }
+  const sessionQuery = ctx.get('sessionQuery')
+  if (sessionQuery === undefined) {
+    throw new Error('forking a session prefix requires the sessionQuery service')
+  }
+  using observed = await sessionQuery.observeSession(parent.id)
+  const events = observed.events
   const requestedBoundary = cut?.boundarySeq
-  const lastEvent = parent.snapshotEvents().at(-1)
+  const lastEvent = events.at(-1)
   let boundary: number
   if (requestedBoundary !== undefined) {
     boundary = requestedBoundary
@@ -586,30 +601,31 @@ function forkSeedFromParent(
       'INVALID_BOUNDARY',
     )
   }
-  if (boundary >= parent.seq) {
+  const lastSeq = lastEvent?.seq
+  if (lastSeq === undefined || boundary > lastSeq) {
     throw new SessionForkError(
-      `fork boundary ${boundary} does not exist in session "${parent.id}" (last seq: ${lastEvent?.seq ?? 'none'})`,
+      `fork boundary ${boundary} does not exist in session "${parent.id}" (last seq: ${lastSeq ?? 'none'})`,
       'INVALID_BOUNDARY',
     )
   }
-  const boundaryEvent = parent.eventAt(SessionSeq(boundary))
+  const boundaryEvent = events[boundary]
   if (boundaryEvent === undefined || boundaryEvent.seq !== boundary) {
     throw new SessionForkError(
       `fork boundary ${boundary} does not match a contiguous event seq in session "${parent.id}"`,
       'INVALID_BOUNDARY',
     )
   }
-  const events = parent.snapshotEvents(SessionLogOffset(0), SessionLogOffset(boundary + 1))
   const lastTurnBoundary = events
+    .slice(0, boundary + 1)
     .findLast(event => event.type === 'turn/start' || event.type === 'turn/end')
   if (lastTurnBoundary?.type === 'turn/start') {
     throw new SessionForkError(
       `fork boundary ${boundary} in session "${parent.id}" ends inside open turn ${lastTurnBoundary.data.turn}`,
-      'OPEN_TURN',
+      'INVALID_BOUNDARY',
     )
   }
   return {
-    seed: events,
-    inheritedEventCount: SessionLogOffset(events.length),
+    seed: buildForkSeed(events, SessionSeq(boundary)),
+    inheritedEventCount: SessionLogOffset(boundary + 1),
   }
 }

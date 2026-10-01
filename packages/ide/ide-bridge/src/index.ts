@@ -432,7 +432,7 @@ async function raceInteraction<T>(
         try {
           resolve(options.onTimeout())
         } catch (error) {
-          reject(error)
+          reject(asError(error))
         }
       }, options.timeoutMs)
 
@@ -441,7 +441,7 @@ async function raceInteraction<T>(
           try {
             resolve(options.onAbort())
           } catch (error) {
-            reject(error)
+            reject(asError(error))
           }
         }
         /* v8 ignore if -- both callers test this signal synchronously before the call; no await separates the checks. */
@@ -462,6 +462,12 @@ async function raceInteraction<T>(
     }
     options.onCleanup()
   }
+}
+
+/** Coerce an unknown thrown value to an `Error`. */
+function asError(value: unknown): Error {
+  /* v8 ignore next -- provider timeouts and aborts throw Errors; the branch guards a non-Error throw. */
+  return value instanceof Error ? value : new Error(String(value))
 }
 
 /**
@@ -1684,7 +1690,7 @@ async function handleModelList(
       }
       providers.push({ id: p.id, name: p.name, models })
     }
-    const current = defaultModel?.currentSelection() ?? { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+    const current = defaultModel?.currentSelection() ?? { provider: 'deepseek-official', model: 'deepseek-flash' }
     client.send({ kind: 'model/list/response', id: frame.id, ok: true, providers, current })
   } catch (error) {
     client.send({ kind: 'model/list/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })

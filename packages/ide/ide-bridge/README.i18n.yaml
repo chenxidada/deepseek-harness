@@ -1,6 +1,52 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/ide/ide-bridge/README.md
-README.md: 841277aa45b74aac4473bc3feba9c1d5df98836d
-README.zh.md: 43612dab98b69fbb2ad7e23623c73ada1411fd53
+/:
+  en: 35e43216f4d25175
+  zh: 912aee6c29de41fb
+/deepseek-ai-dsh-ide-bridge:
+  en: beb589877fa830d1
+  zh: c0f7049f1e1a41d4
+/deepseek-ai-dsh-ide-bridge/summary:
+  en: 469c6f9868d9e4bf
+  zh: 49a766a322e7a462
+/deepseek-ai-dsh-ide-bridge/table-of-contents:
+  en: 751e4d607f736cbc
+  zh: 0b4197f5efd3270b
+/deepseek-ai-dsh-ide-bridge/use-this-package:
+  en: e5bdaea0460aba1a
+  zh: 917ab87dc55af77d
+/deepseek-ai-dsh-ide-bridge/use-this-package/session-model-and-settings-rpc:
+  en: 42df48b5ce18bcc6
+  zh: af1b618760ffdb26
+/deepseek-ai-dsh-ide-bridge/use-this-package/composer-catalogs-and-command-execution:
+  en: 37c87f24a4a58bc9
+  zh: 411066e855d76919
+/deepseek-ai-dsh-ide-bridge/use-this-package/subagent-control:
+  en: 2b205049352ce9bc
+  zh: d66364e3f34b29fe
+/deepseek-ai-dsh-ide-bridge/use-this-package/specdev-status-and-gates:
+  en: 6a47282002e37156
+  zh: 5984b898a745a44f
+/deepseek-ai-dsh-ide-bridge/replaceability-contract-ad-8:
+  en: ed4a1a33e3b2408b
+  zh: d4a8dd0d11a41cd0
+/deepseek-ai-dsh-ide-bridge/replaceability-contract-ad-8/dual-channel-invariants:
+  en: d0646bb2e33c2254
+  zh: 4b076482d4bbe234
+/deepseek-ai-dsh-ide-bridge/replaceability-contract-ad-8/replaceable-faces:
+  en: e076bb1e66dac3a5
+  zh: 15ceb2e4ab9c3e7f
+/deepseek-ai-dsh-ide-bridge/model-experience:
+  en: 2f9b3db2a773db3a
+  zh: abeaf661041e27cb
+/deepseek-ai-dsh-ide-bridge/model-experience/kv-cache-effect:
+  en: 8a809d134a6cbd21
+  zh: 2737e29b8fe1d861
+/deepseek-ai-dsh-ide-bridge/known-limitations-and-deferred-work:
+  en: e9b13ce8e92f4b12
+  zh: 9a966f2a582aeffa
+/deepseek-ai-dsh-ide-bridge/known-limitations-and-deferred-work/dev-note:
+  en: 58fc1c8d15a2f770
+  zh: 66cbce4418ac1968

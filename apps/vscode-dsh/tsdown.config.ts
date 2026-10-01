@@ -67,7 +67,8 @@ export { UserQuestionError, restoreUserQuestionError };
       if (id === '\0shim:cordis') {
         return `
 class Service { static [Symbol.hasInstance]() { return false; } }
-export { Service };
+class Context { static [Symbol.hasInstance]() { return false; } }
+export { Context, Service };
 export default Service;
 `
       }

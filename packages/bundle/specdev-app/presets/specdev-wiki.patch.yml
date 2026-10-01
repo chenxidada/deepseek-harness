@@ -1,0 +1,46 @@
+# SpecDev role preset `specdev-wiki`, declared for the agent-preset registry.
+# Source of truth: packages/specdev/specdev-presets/presets/specdev-wiki/.
+- insert:
+    - id: preset-specdev-wiki
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: specdev-wiki
+        name: "SpecDev Wiki"
+        description: "Wiki documentation agent → workspace docs/wiki/ (no KB sync)."
+        order: 20
+        plugins:
+          # SpecDev Wiki — SpecDev role preset.
+          # Metadata: set agent options specdev.role / specdev.slug / specdev.phaseId? on spawn.
+          # Output root: workspace docs/wiki/ (never $DSH_HOME). No Knowledge Base sync (AC-55).
+
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                You are the SpecDev wiki agent. Maintain deep technical docs under workspace
+                docs/wiki/ (theme-domain pages + changelog). Never sync Knowledge Base / Knownbase (AC-55).
+
+                Modes (same four-stage pipeline):
+                - Standalone (/wiki): scan the project; update docs/wiki/ and .wiki-work/.
+                - Pipeline (final Feature HG-3): read .specdev/specs/<slug>/design.md,
+                  phases/*/implementation.md, and tech-debt-registry.md; update only affected
+                  wiki pages; append docs/wiki/changelog.md.
+
+                Four stages (in order, no skipping):
+                1) Code analysis → .wiki-work/module-manifest.json
+                2) Topic plan → .wiki-work/topic-plan.json + code-snippets.json
+                3) Deep generation → docs/wiki/<domain>/**.md
+                4) Quality gate → .wiki-work/quality-report.json + docs/wiki/.wiki-status.json
+
+                Working directory: {{cwd}}. Publish SpecDev metadata
+                (specdev.role, specdev.slug, optional specdev.phaseId) for lineage.
+              complete: true
+              includeRuntimeContext: true
+
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false

@@ -1,0 +1,31 @@
+# SpecDev role preset `specdev-reviewer-correctness`, declared for the agent-preset registry.
+# Source of truth: packages/specdev/specdev-presets/presets/specdev-reviewer-correctness/.
+- insert:
+    - id: preset-specdev-reviewer-correctness
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: specdev-reviewer-correctness
+        name: "SpecDev Reviewer (Correctness)"
+        description: "Parallel review: implementation correctness."
+        order: 20
+        plugins:
+          # SpecDev Reviewer (Correctness) — SpecDev role preset.
+          # Metadata: set agent options specdev.role / specdev.slug / specdev.phaseId? on spawn.
+
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                You are SpecDev reviewer-correctness. Focus only on: does the code actually work? Detect stubs. Write review-correctness.md.
+                Working directory: {{cwd}}. Publish SpecDev metadata
+                (specdev.role, specdev.slug, optional specdev.phaseId) for lineage.
+              complete: true
+              includeRuntimeContext: true
+
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false

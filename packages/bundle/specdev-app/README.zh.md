@@ -9,7 +9,7 @@ kind: "package-bundle"
 
 ## 概述
 
-SpecDev 应用作为 `dsh` profile 组合包，叠加在 [`dsh-sdk-app`](../sdk-app/README.zh.md) 之上。patch 插入 [`dsh-specdev`](../../specdev/specdev/README.zh.md)（工作流运行时、`workflow.jsonl` 权威、斜杠命令）、[`dsh-specdev-guard`](../../specdev/specdev-guard/README.zh.md)（失败关闭式门禁与角色强制）、[`dsh-specdev-presets`](../../specdev/specdev-presets/README.zh.md)（角色预设），以及指向 SpecDev 预设根、保留随附根并以通用 `standard` agent 为部署默认的 [`dsh-agent-presets`](../../preset/agent-presets/README.zh.md)。`ide` profile 引用本包；`sdk` profile 保持无名册且不含 SpecDev。
+SpecDev 应用作为 `dsh` profile 组合包，叠加在 [`dsh-sdk-app`](../sdk-app/README.zh.md) 之上。patch 插入 [`dsh-specdev`](../../specdev/specdev/README.zh.md)（工作流运行时、`workflow.jsonl` 权威、斜杠命令）、[`dsh-specdev-guard`](../../specdev/specdev-guard/README.zh.md)（失败关闭式门禁与角色强制）、[`dsh-specdev-presets`](../../specdev/specdev-presets/README.zh.md)（角色预设），以及部署默认保持通用 `standard` preset 的 [`dsh-agent-preset-registry`](../../preset/agent-preset-registry/README.zh.md)。preset 声明随后以 `presets/*.patch.yml` 给出：随附 `standard` preset 与每个 SpecDev 角色各一行 `@deepseek-ai/dsh-agent-preset`。`ide` profile 引用本包；`sdk` profile 保持无名册且不含 SpecDev。
 
 ## 目录
 
@@ -30,7 +30,7 @@ SpecDev 应用作为 `dsh` profile 组合包，叠加在 [`dsh-sdk-app`](../sdk-
 <a id="model-experience"></a>
 ## 模型体验
 
-None, as the bundle only inserts rows whose model-facing behavior belongs to `dsh-agent-presets` and `dsh-specdev-presets`.
+None, as the bundle only inserts rows whose model-facing behavior belongs to the declared presets and `dsh-specdev-presets`.
 
 #### KV 缓存效果
 

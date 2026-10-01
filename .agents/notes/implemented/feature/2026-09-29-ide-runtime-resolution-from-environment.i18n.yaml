@@ -1,6 +1,22 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-29-ide-runtime-resolution-from-environment.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-29-ide-runtime-resolution-from-environment.md
-2026-09-29-ide-runtime-resolution-from-environment.md: 2803bc0ede1bbdcf74050c11d2a2392323e0a8f9
-2026-09-29-ide-runtime-resolution-from-environment.zh.md: 07e5fea959abce5dcbbb7d1cf5b8a50afa427c34
+/agent-note-the-ide-extension-resolves-its-dsh-runtime-from-the-environment:
+  en: 7b82aee92a5609b3
+  zh: c649130e60c8fd46
+/agent-note-the-ide-extension-resolves-its-dsh-runtime-from-the-environment/problem:
+  en: 39233b0374908ae3
+  zh: c93e4326ffa246f9
+/agent-note-the-ide-extension-resolves-its-dsh-runtime-from-the-environment/decision:
+  en: 5367a2fad0b83786
+  zh: fc278d0cc4635706
+/agent-note-the-ide-extension-resolves-its-dsh-runtime-from-the-environment/alternatives-considered:
+  en: ca14a1c02743064d
+  zh: a44ef8103491cecd
+/agent-note-the-ide-extension-resolves-its-dsh-runtime-from-the-environment/consequences:
+  en: 6389b77e9ee4f012
+  zh: 6540b3ecb4ad8b60
+/agent-note-the-ide-extension-resolves-its-dsh-runtime-from-the-environment/testing:
+  en: 912f0fe11b4a3f98
+  zh: 74b43053adb81bf2

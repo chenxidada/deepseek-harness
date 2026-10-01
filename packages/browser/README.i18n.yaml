@@ -1,6 +1,25 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/browser/README.md
-README.md: 355d922544f026826171fd31f6e8d5486aef8468
-README.zh.md: a8a4211dc75d76d266fea83ff406ab49d8f5c993
+/:
+  en: e90109c6007ffe6b
+  zh: 3096e927406163cd
+/browser-browser-automation-capability-family:
+  en: ab27244ebe5c42fb
+  zh: c7d960bb81d157b8
+/browser-browser-automation-capability-family/summary:
+  en: 9c644a449937c097
+  zh: 1c9a5badf57d88f9
+/browser-browser-automation-capability-family/table-of-contents:
+  en: 1eb35b015a6c423f
+  zh: a8a3dceee2c9e943
+/browser-browser-automation-capability-family/packages:
+  en: 7281686154d69ae6
+  zh: b104e5a72915e44f
+/browser-browser-automation-capability-family/related-documentation:
+  en: 64168a61b2fce428
+  zh: 15c3f985197f7bd2
+/browser-browser-automation-capability-family/dev-note:
+  en: 5de1d6304e00c58f
+  zh: 8d8225361cfa29e5

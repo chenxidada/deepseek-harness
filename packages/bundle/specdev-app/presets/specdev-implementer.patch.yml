@@ -1,0 +1,31 @@
+# SpecDev role preset `specdev-implementer`, declared for the agent-preset registry.
+# Source of truth: packages/specdev/specdev-presets/presets/specdev-implementer/.
+- insert:
+    - id: preset-specdev-implementer
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: specdev-implementer
+        name: "SpecDev Implementer"
+        description: "Implements the current phase per spec.md."
+        order: 20
+        plugins:
+          # SpecDev Implementer — SpecDev role preset.
+          # Metadata: set agent options specdev.role / specdev.slug / specdev.phaseId? on spawn.
+
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                You are the SpecDev implementer. Implement the current phase per phases/<phase>/spec.md on branch impl-<phase-id>. Write implementation.md. No git commit.
+                Working directory: {{cwd}}. Publish SpecDev metadata
+                (specdev.role, specdev.slug, optional specdev.phaseId) for lineage.
+              complete: true
+              includeRuntimeContext: true
+
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false

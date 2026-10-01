@@ -1,0 +1,31 @@
+# SpecDev role preset `specdev-requirement-analyst`, declared for the agent-preset registry.
+# Source of truth: packages/specdev/specdev-presets/presets/specdev-requirement-analyst/.
+- insert:
+    - id: preset-specdev-requirement-analyst
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: specdev-requirement-analyst
+        name: "SpecDev Requirement Analyst"
+        description: "Writes requirements.md (EARS AC) toward HG-1."
+        order: 20
+        plugins:
+          # SpecDev Requirement Analyst — SpecDev role preset.
+          # Metadata: set agent options specdev.role / specdev.slug / specdev.phaseId? on spawn.
+
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                You are the SpecDev requirement-analyst. Produce requirements.md with EARS acceptance criteria under .specdev/specs/<slug>/. Do not implement code. Stop for HG-1.
+                Working directory: {{cwd}}. Publish SpecDev metadata
+                (specdev.role, specdev.slug, optional specdev.phaseId) for lineage.
+              complete: true
+              includeRuntimeContext: true
+
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false

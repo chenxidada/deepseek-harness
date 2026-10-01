@@ -125,7 +125,7 @@ function snapshotFromEvent(event: SessionEvent): SpecdevSnapshot | null | undefi
   if (!SNAPSHOT_EVENT_TYPES.has(event.type)) return undefined
   const data = event.data as { snapshot?: SpecdevSnapshot | null }
   if (!('snapshot' in data)) return undefined
-  if (event.type === 'specdev/advance' && (data.snapshot === null || data.snapshot === undefined)) {
+  if (event.type === 'specdev/advance' && data.snapshot === null) {
     return undefined
   }
   return data.snapshot ?? null

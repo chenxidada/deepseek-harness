@@ -19,26 +19,78 @@
       "default": "./lib/index.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
+    "./presets/*.patch.yml": "./presets/*.patch.yml",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
     "cordis.patch.yml",
+    "presets/standard.patch.yml",
+    "presets/specdev-code-explorer.patch.yml",
+    "presets/specdev-implementer.patch.yml",
+    "presets/specdev-plan-generator.patch.yml",
+    "presets/specdev-requirement-analyst.patch.yml",
+    "presets/specdev-reviewer-connectivity.patch.yml",
+    "presets/specdev-reviewer-correctness.patch.yml",
+    "presets/specdev-reviewer-design.patch.yml",
+    "presets/specdev-reviewer-visual.patch.yml",
+    "presets/specdev-reviewer.patch.yml",
+    "presets/specdev-verifier.patch.yml",
+    "presets/specdev-wiki.patch.yml",
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",
   "dsh": {
     "bundle": {
-      "patch": "./cordis.patch.yml"
+      "patch": [
+        "./cordis.patch.yml",
+        "./presets/standard.patch.yml",
+        "./presets/specdev-code-explorer.patch.yml",
+        "./presets/specdev-implementer.patch.yml",
+        "./presets/specdev-plan-generator.patch.yml",
+        "./presets/specdev-requirement-analyst.patch.yml",
+        "./presets/specdev-reviewer-connectivity.patch.yml",
+        "./presets/specdev-reviewer-correctness.patch.yml",
+        "./presets/specdev-reviewer-design.patch.yml",
+        "./presets/specdev-reviewer-visual.patch.yml",
+        "./presets/specdev-reviewer.patch.yml",
+        "./presets/specdev-verifier.patch.yml",
+        "./presets/specdev-wiki.patch.yml"
+      ]
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-agent-presets": "workspace:^",
-    "@deepseek-ai/dsh-specdev": "workspace:^",
-    "@deepseek-ai/dsh-specdev-guard": "workspace:^",
-    "@deepseek-ai/dsh-specdev-presets": "workspace:^",
-    "@deepseek-ai/dsh-tool-subagent": "workspace:^"
+    "@deepseek-ai/dsh-agent-instructions": "workspace:*",
+    "@deepseek-ai/dsh-agent-preset": "workspace:*",
+    "@deepseek-ai/dsh-agent-preset-registry": "workspace:*",
+    "@deepseek-ai/dsh-command-compact": "workspace:*",
+    "@deepseek-ai/dsh-command-goal": "workspace:*",
+    "@deepseek-ai/dsh-compaction-basic": "workspace:*",
+    "@deepseek-ai/dsh-compaction-tool-result-pruner": "workspace:*",
+    "@deepseek-ai/dsh-persona": "workspace:*",
+    "@deepseek-ai/dsh-plan-mode": "workspace:*",
+    "@deepseek-ai/dsh-plugin-manager": "workspace:*",
+    "@deepseek-ai/dsh-skill-filesystem": "workspace:*",
+    "@deepseek-ai/dsh-specdev": "workspace:*",
+    "@deepseek-ai/dsh-specdev-guard": "workspace:*",
+    "@deepseek-ai/dsh-specdev-presets": "workspace:*",
+    "@deepseek-ai/dsh-tool-ask-user": "workspace:*",
+    "@deepseek-ai/dsh-tool-bash": "workspace:*",
+    "@deepseek-ai/dsh-tool-fs": "workspace:*",
+    "@deepseek-ai/dsh-tool-fs-search": "workspace:*",
+    "@deepseek-ai/dsh-tool-goal": "workspace:*",
+    "@deepseek-ai/dsh-tool-jobs": "workspace:*",
+    "@deepseek-ai/dsh-tool-present": "workspace:*",
+    "@deepseek-ai/dsh-tool-pwsh": "workspace:*",
+    "@deepseek-ai/dsh-tool-ralph": "workspace:*",
+    "@deepseek-ai/dsh-tool-skill": "workspace:*",
+    "@deepseek-ai/dsh-tool-subagent": "workspace:*",
+    "@deepseek-ai/dsh-tool-subagent-control": "workspace:*",
+    "@deepseek-ai/dsh-tool-todo": "workspace:*",
+    "@deepseek-ai/dsh-tool-web": "workspace:*",
+    "@deepseek-ai/dsh-tool-workflow": "workspace:*",
+    "@deepseek-ai/dsh-workflow-ptc": "workspace:*"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^"

@@ -114,6 +114,7 @@ import type {
 } from './types.ts'
 
 export type * from './types.ts'
+export { MemoryInbox } from './inbox.ts'
 import { isSpecdevGateId } from './types.ts'
 export {
   SPECDEV_META,

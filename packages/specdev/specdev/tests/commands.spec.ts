@@ -11,7 +11,7 @@ import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { Inbox } from '@deepseek-ai/dsh-agent'
+import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentStatus } from '@deepseek-ai/dsh-agent'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
@@ -26,6 +26,7 @@ import SpecdevService, {
   readWorkflowLog,
   snapshotFromStatus,
   SPECDEV_SCHEMA_VERSION,
+  MemoryInbox,
 } from '@deepseek-ai/dsh-specdev'
 import type { CurrentStatusJson, SpecdevSnapshot } from '@deepseek-ai/dsh-specdev'
 
@@ -76,7 +77,7 @@ async function seedWorkflowStatus(path: string, status: CurrentStatusJson): Prom
 
 function stubAgent(ctx: Context, id: string, cwd?: string): { agent: Agent; session: Session } {
   const session = ctx.sessions.create(SessionId(id), cwd === undefined ? {} : { meta: { cwd } })
-  const inbox = new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} })
+  const inbox = new MemoryInbox()
   let status: AgentStatus = 'idle'
   const agent: Agent = {
     id: session.id,

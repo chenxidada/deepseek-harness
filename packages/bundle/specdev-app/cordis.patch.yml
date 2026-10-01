@@ -23,17 +23,9 @@
 
     # The IDE's default agent stays the general `standard` preset: SpecDev is
     # entered through its commands, so the main session keeps a general agent's
-    # capabilities instead of a workflow role's. This layer adds the SpecDev
-    # preset root for the role children dispatch mounts; it must not replace the
-    # deployment default with a workflow role, and the user root stays out so
-    # the product never mounts a locally authored composition.
-    - id: agent-presets
-      name: '@deepseek-ai/dsh-agent-presets'
-      inject: [specdevPresets]
+    # capabilities instead of a workflow role's. The SpecDev role presets are
+    # declared by this bundle's `presets/*.patch.yml` files.
+    - id: agent-preset-registry
+      name: '@deepseek-ai/dsh-agent-preset-registry'
       config:
         default: standard
-        includeShippedRoot: true
-        includeUserRoot: false
-        roots:
-          - path: !!js specdevPresets.presetRoot
-            trust: system

@@ -52,4 +52,4 @@ composer 的「压缩上下文」按钮与 `dsh.triggerCompact` 先走命令路�
 
 ## Related
 
-Web 自己的命令业务面及其组装见 [web-command-surfaces Agent Note](../architecture/2026-07-25-web-command-surfaces-and-assembly.zh.md)；prompt 路径保留的技能手势见[用户显式技能调用](2026-08-08-user-explicit-skill-invocation.zh.md)，Web 目录如何跟随 preset 切换见[斜杠目录 Agent Note](../bug-fix/2026-08-10-slash-catalog-follows-preset-switch.zh.md)。承载这些帧的通道与帧族见[IDE Host bridge 子系统](../../../../docs/subsystems/ide-bridge.zh.md)。
+Web 自己的命令业务面及其组装见 [web-command-surfaces Agent Note](../../archived/architecture/2026-07-25-web-command-surfaces-and-assembly.md)；prompt 路径保留的技能手势见[用户显式技能调用](../../archived/feature/2026-08-08-user-explicit-skill-invocation.md)，Web 目录如何跟随 preset 切换见[斜杠目录 Agent Note](../../archived/bug-fix/2026-08-10-slash-catalog-follows-preset-switch.md)。承载这些帧的通道与帧族见[IDE Host bridge 子系统](../../../../docs/subsystems/ide-bridge.zh.md)。

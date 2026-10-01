@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { Inbox, agentEvents, type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { agentEvents, type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId, type Session } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
@@ -18,6 +18,7 @@ import SpecdevService, {
   emitAdvanceForAgent,
   parseCurrentStatus,
   type CurrentStatusJson,
+  MemoryInbox,
 } from '@deepseek-ai/dsh-specdev'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry, { type ToolDefinition } from '@deepseek-ai/dsh-tools'
@@ -72,7 +73,7 @@ function seedWorkflow(workspace: string, status: CurrentStatusJson): void {
 }
 
 function stubAgent(session: Session): Agent {
-  const inbox = new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} })
+  const inbox = new MemoryInbox()
   let status: AgentStatus = 'idle'
   return {
     id: session.id,

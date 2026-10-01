@@ -11,14 +11,13 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, {
-  Inbox,
   type Agent,
   type AgentFactory,
   type AgentHandle,
   type AgentStatus,
 } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SpecdevService, {
   attachOrchestratorMetadata,
@@ -28,6 +27,7 @@ import SpecdevService, {
   rolePresetId,
   SPECDEV_ROLES,
   type SpecdevRole,
+  MemoryInbox,
 } from '@deepseek-ai/dsh-specdev'
 
 const tempRoots: string[] = []
@@ -46,7 +46,7 @@ function tempDir(prefix: string): string {
 }
 
 function stubAgent(session: Session, ctx = new Context()): Agent {
-  const inbox = new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} })
+  const inbox = new MemoryInbox()
   let status: AgentStatus = 'idle'
   return {
     id: session.id,
@@ -68,7 +68,7 @@ function stubAgent(session: Session, ctx = new Context()): Agent {
 /** Detached session for compositions that load no session store. */
 function detachedSession(id: string, cwd?: string): Session {
   return Session.create(SessionId(id), undefined, {
-    version: 0,
+    version: SESSION_FORMAT_VERSION,
     id: SessionId(id),
     createdAt: 0,
     isSeeded: false,
@@ -194,9 +194,9 @@ describe('dispatchSpecdevRole over the agent factory', () => {
           options.meta === undefined ? {} : { meta: options.meta },
         )
         const agent = stubAgent(child, ownerCtx)
-        await options.setup?.(ctx.extend({ agent }))
+        await options.setup?.(ctx.extend({ agent }), agent)
         const unregister = ctx.agents.register(agent)
-        return { agent, dispose: () => { unregister(); return Promise.resolve() } }
+        return { agent, dispose: () => unregister() }
       },
       resume() { return Promise.reject(new Error('resume unused')) },
     }
@@ -282,7 +282,7 @@ describe('dispatchSpecdevRole without an agent factory', () => {
 
     // Driving the inbox reaches the notifications this agent registers.
     child.inject(promptMessage('queued'))
-    expect(child.inbox.claim('next-step', 1)).toHaveLength(1)
+    expect(child.inbox.nextStep).toHaveLength(1)
     const pending = promptMessage('to replace')
     child.inject(pending)
     expect(child.inbox.replace(pending.id, promptMessage('replacement'))).toBe(true)

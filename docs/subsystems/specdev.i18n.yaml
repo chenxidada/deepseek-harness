@@ -1,6 +1,28 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for specdev.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/subsystems/specdev.md
-specdev.md: 2d72e78826a8526dfb15d98988b2e8e8d6edeaa2
-specdev.zh.md: 615f8fd98f5b764930854b4ba88ae495eb756a0f
+/specdev:
+  en: 48e7a039bdd2c5bb
+  zh: 753db3106223cb21
+/specdev/workspace-layout:
+  en: 7d3365526a68b8d8
+  zh: a14e08d5cc82b993
+/specdev/human-gates:
+  en: 9b279c727f73f164
+  zh: d67a0507b4f451a6
+/specdev/status-snapshot-and-projection:
+  en: c54a933d1f2fc796
+  zh: 83f30faf7e150ef6
+/specdev/phase-runtime-and-wiki:
+  en: 0d82e39e78ac33f5
+  zh: 178f3ed5acc5007b
+/specdev/commands-and-mounting:
+  en: adc57b09b304cd6d
+  zh: 8366c4d7ade5f238
+/specdev/scope-enforcement:
+  en: f96a24974dd0d95f
+  zh: d00c5ea592918ceb
+/specdev/role-presets:
+  en: a0f19ffeb16f79f9
+  zh: e41814dbfcc6e249

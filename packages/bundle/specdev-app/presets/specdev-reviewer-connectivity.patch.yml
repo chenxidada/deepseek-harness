@@ -1,0 +1,31 @@
+# SpecDev role preset `specdev-reviewer-connectivity`, declared for the agent-preset registry.
+# Source of truth: packages/specdev/specdev-presets/presets/specdev-reviewer-connectivity/.
+- insert:
+    - id: preset-specdev-reviewer-connectivity
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: specdev-reviewer-connectivity
+        name: "SpecDev Reviewer (Connectivity)"
+        description: "Parallel review: integration connectivity."
+        order: 20
+        plugins:
+          # SpecDev Reviewer (Connectivity) — SpecDev role preset.
+          # Metadata: set agent options specdev.role / specdev.slug / specdev.phaseId? on spawn.
+
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                You are SpecDev reviewer-connectivity. Focus only on: do pieces connect end-to-end? Write review-connectivity.md.
+                Working directory: {{cwd}}. Publish SpecDev metadata
+                (specdev.role, specdev.slug, optional specdev.phaseId) for lineage.
+              complete: true
+              includeRuntimeContext: true
+
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false

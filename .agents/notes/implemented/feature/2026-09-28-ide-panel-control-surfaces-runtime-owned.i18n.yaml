@@ -1,6 +1,25 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-28-ide-panel-control-surfaces-runtime-owned.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-28-ide-panel-control-surfaces-runtime-owned.md
-2026-09-28-ide-panel-control-surfaces-runtime-owned.md: d9e7bd229a5067691a931ad555919b53a1f55914
-2026-09-28-ide-panel-control-surfaces-runtime-owned.zh.md: d65c6754ebd78fc074f48c2c33b2e44d9a59ee6c
+/agent-note-ide-panel-control-surfaces-call-the-runtime-service-that-owns-them:
+  en: b26a690f25423af3
+  zh: 4e391fc19cf861e6
+/agent-note-ide-panel-control-surfaces-call-the-runtime-service-that-owns-them/problem:
+  en: caca3fb2bd9683e0
+  zh: c045015a44f42990
+/agent-note-ide-panel-control-surfaces-call-the-runtime-service-that-owns-them/decision:
+  en: d09ff1b77c9db852
+  zh: fa9535223990f30f
+/agent-note-ide-panel-control-surfaces-call-the-runtime-service-that-owns-them/alternatives-considered:
+  en: a47e1f6cafaada86
+  zh: 8f246ea534f66019
+/agent-note-ide-panel-control-surfaces-call-the-runtime-service-that-owns-them/consequences:
+  en: 6c79af7f3db602e2
+  zh: 587ffc154142d889
+/agent-note-ide-panel-control-surfaces-call-the-runtime-service-that-owns-them/testing:
+  en: 3b3b6947dd74c0a2
+  zh: 5df86da7ede5c30f
+/agent-note-ide-panel-control-surfaces-call-the-runtime-service-that-owns-them/related:
+  en: fd72362dbdd16aaa
+  zh: a84e1284e5268522

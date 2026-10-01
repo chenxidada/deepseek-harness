@@ -1,6 +1,49 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/specdev/specdev/README.md
-README.md: 32284d90f6620464a27a274e659a1a1b8f450a3b
-README.zh.md: 0b502567ac4de820c5cf286bc398d5f47f1ac51d
+/:
+  en: 87f5b4ae64e6f121
+  zh: 2f352ab7ee6bda23
+/deepseek-ai-dsh-specdev:
+  en: 3f24f42cef9c36e3
+  zh: 4113dda219048c9d
+/deepseek-ai-dsh-specdev/summary:
+  en: 0f84ee7b3e043d61
+  zh: 0cff6dd1253d2d48
+/deepseek-ai-dsh-specdev/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 725b47765ee8f30b
+/deepseek-ai-dsh-specdev/use-this-package:
+  en: 45a6be243c4348f8
+  zh: 1df8013ead723c45
+/deepseek-ai-dsh-specdev/use-this-package/workspace-root-q-1:
+  en: ec63c7b43fa264a2
+  zh: eb579d76fb421011
+/deepseek-ai-dsh-specdev/use-this-package/human-gates:
+  en: fafb4f988049fc18
+  zh: 12d9c66859ec7034
+/deepseek-ai-dsh-specdev/use-this-package/snapshot-views:
+  en: 6dd144e3e445cce3
+  zh: c6791a9581743e29
+/deepseek-ai-dsh-specdev/use-this-package/metadata:
+  en: dddc1e3669ad08b7
+  zh: faeb061f2dbaf642
+/deepseek-ai-dsh-specdev/understand-the-implementation:
+  en: 44b760d31c0f4e75
+  zh: 5baa2135954e792c
+/deepseek-ai-dsh-specdev/further-exploration:
+  en: 1c52e516f8d5373d
+  zh: fcc095dddcc6ac1c
+/deepseek-ai-dsh-specdev/model-experience:
+  en: b5e4d3f550f70e09
+  zh: e13ec8204fd5c639
+/deepseek-ai-dsh-specdev/model-experience/kv-cache-effect:
+  en: 27db350bd03aff32
+  zh: 825d88f34f6f1d79
+/deepseek-ai-dsh-specdev/known-limitations-and-deferred-work:
+  en: 05508da09c579d7d
+  zh: 86ed2ebd677860f6
+/deepseek-ai-dsh-specdev/known-limitations-and-deferred-work/dev-note:
+  en: 466deca3fa3c3b89
+  zh: 67efa92c5498a9fb

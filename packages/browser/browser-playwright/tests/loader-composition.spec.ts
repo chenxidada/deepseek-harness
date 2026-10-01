@@ -73,6 +73,9 @@ async function boot(configPath: string): Promise<Context> {
   } as unknown as NonNullable<typeof ctx.loader.internal>
   await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
   await ctx.loader.await()
+  // `loader.await()` only settles the row tree; each entry's own fiber carries
+  // its import/apply outcome, so a broken row surfaces only when awaited.
+  for (const entry of ctx.loader.entries()) await entry.fiber?.await()
   return ctx
 }
 

@@ -863,10 +863,19 @@ record="$(display_evidence_record_json)"
     )
     /** The build's own declaration of what it publishes, read rather than restated. */
     const tsdownConfig = readFileSync(join(repositoryRoot, 'tsdown.config.ts'), 'utf8')
+    /** The root host build script that publishes every member's `lib/`, read rather than restated. */
+    const rootBuildScript = (JSON.parse(
+      readFileSync(join(repositoryRoot, 'package.json'), 'utf8'),
+    ) as { scripts: Record<string, string> }).scripts['build:lib:host']!
     /** The globs `assert_build_freshness` expands into `--sibling` roots. */
     const COMPARED_GLOBS = ['vendor/*', 'packages/*/*']
-    /** Members of the tsdown list that are not compared through those globs: the app half, and `apps/cli`. */
-    const OUTSIDE_THE_GLOBS = ['apps/vscode-dsh', 'apps/cli']
+    /**
+     * Members of the tsdown lists that are not compared through those globs: `apps/cli` and
+     * `apps/desktop-host` are the exclusions the tsdown config itself documents, and the app half
+     * publishes its `lib` through the root host build's own `build:host` step instead of the
+     * concurrent workspace pass.
+     */
+    const OUTSIDE_THE_GLOBS = ['apps/cli', 'apps/desktop-host']
 
     const dirs: string[] = []
     /** A fixed instant; the fixtures place both sides of the comparison relative to it. */
@@ -875,13 +884,18 @@ record="$(display_evidence_record_json)"
     const HOUR_MS = 3_600_000
 
     /**
- * Walk the tsdown `workspace` list: the members `build:lib:host` publishes `<root>/lib` for.
- * @returns the member paths, repository-relative, as the config spells them.
- */
+     * Walk the tsdown `workspace` selection: the members `build:lib:host` publishes `<root>/lib` for.
+     * The selection is one array (a single build face) or two (the client/host ternary), so every
+     * array between `workspace:` and the next `entry:` belongs to the set.
+     * @returns the member paths, repository-relative, as the config spells them.
+     */
     function tsdownWorkspaceMembers(): string[] {
-      const list = /workspace:\s*\[([^\]]*)\]/.exec(tsdownConfig)
-      if (list === null) throw new Error('tsdown.config.ts no longer declares a `workspace` array; this probe must be updated')
-      return [...list[1]!.matchAll(/['"]([^'"]+)['"]/g)].map(match => match[1]!)
+      const selection = /workspace:([\s\S]*?)entry:/.exec(tsdownConfig)
+      if (selection === null) throw new Error('tsdown.config.ts no longer declares a `workspace` selection; this probe must be updated')
+      const members = [...selection[1]!.matchAll(/\[([^\]]*)\]/g)].flatMap(
+        list => [...list[1]!.matchAll(/['"]([^'"]+)['"]/g)].map(match => match[1]!),
+      )
+      return [...new Set(members)]
     }
 
     /**
@@ -1154,12 +1168,15 @@ record="$(display_evidence_record_json)"
         expect(uncovered).toEqual([])
       })
 
-      it('CAP-TEST-HARNESS-057 records why the two members outside those globs are outside them', () => {
+      it('CAP-TEST-HARNESS-057 records why the members outside those globs are outside them', () => {
         const members = tsdownWorkspaceMembers()
         for (const member of OUTSIDE_THE_GLOBS) expect(members).toContain(member)
-        // The app is compared by the caller (asserted above); `apps/cli` is a deliberate exclusion and
-        // is documented where the set is built, so a reader does not have to infer it from silence.
+        // `apps/cli` is a deliberate exclusion and is documented where the set is built, so a reader
+        // does not have to infer it from silence. The app half left the concurrent pass for the reason
+        // `apps/desktop` never joined it: its bundle inlines other members' `lib/` output, so the root
+        // host build runs its own `build:host` after that pass instead.
         expect(smokeScript).toContain('apps/cli')
+        expect(rootBuildScript).toContain('dsh-vscode-dsh')
       })
     })
   })
@@ -2248,7 +2265,7 @@ record="$(display_evidence_record_json)"
     ): Promise<readonly SessionEvent[]> {
       const handle = await persistence.open(id, 'read')
       try {
-        return await handle.read(0)
+        return (await handle.read(0)).events
       } finally {
         await handle.close()
       }
@@ -2280,7 +2297,11 @@ record="$(display_evidence_record_json)"
             message: freezeMessage({
               id: MessageId('a-with-diff'),
               role: 'assistant',
-              content: [{ type: 'text', text: 'edited notes' }],
+              content: [
+                { type: 'text', text: 'edited notes' },
+                // V4 requires the tool call be advertised by the assistant message.
+                { type: 'tool-call', id: ToolCallId('call-edit'), name: 'edit', arguments: JSON.stringify({ path: 'notes.txt' }) },
+              ],
               source: { kind: 'model', provider: 'mock', model: 'mock' },
             }),
           },
@@ -2352,7 +2373,11 @@ record="$(display_evidence_record_json)"
             message: freezeMessage({
               id: MessageId('a-no-diff'),
               role: 'assistant',
-              content: [{ type: 'text', text: 'hi' }],
+              content: [
+                { type: 'text', text: 'hi' },
+                // V4 requires the tool call be advertised by the assistant message.
+                { type: 'tool-call', id: ToolCallId('call-bash'), name: 'bash', arguments: JSON.stringify({ command: 'echo hi' }) },
+              ],
               source: { kind: 'model', provider: 'mock', model: 'mock' },
             }),
           },
@@ -2481,7 +2506,7 @@ record="$(display_evidence_record_json)"
     async function readRaw(ctx: Context, id: SessionId): Promise<readonly SessionEvent[]> {
       const handle = await ctx.sessionPersistence.open(id, 'read')
       try {
-        return await handle.read(0)
+        return (await handle.read(0)).events
       } finally {
         await handle.close()
       }

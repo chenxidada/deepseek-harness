@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { Inbox, agentEvents, type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { agentEvents, type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
 import SessionStore, { SessionId, type Session } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { SubagentRunEndInfo, SubagentRunId } from '@deepseek-ai/dsh-subagent'
@@ -19,6 +19,7 @@ import SpecdevService, {
   guidanceForRole,
   parseCurrentStatus,
   type CurrentStatusJson,
+  MemoryInbox,
 } from '@deepseek-ai/dsh-specdev'
 
 const tempRoots: string[] = []
@@ -56,7 +57,7 @@ function subagentEnd(id: SessionId): SubagentRunEndInfo {
 }
 
 function stubAgent(session: Session): Agent {
-  const inbox = new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} })
+  const inbox = new MemoryInbox()
   let status: AgentStatus = 'idle'
   return {
     id: session.id,

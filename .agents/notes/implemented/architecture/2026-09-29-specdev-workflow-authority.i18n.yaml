@@ -1,6 +1,37 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-29-specdev-workflow-authority.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-29-specdev-workflow-authority.md
-2026-09-29-specdev-workflow-authority.md: 6c57cf8f564d52ac42fe5c935478402f3b1463cf
-2026-09-29-specdev-workflow-authority.zh.md: 41a12f9bd53e203d993f42a3cdad7aff78fa299a
+/agent-note-specdev-workflow-authority-command-surface-and-ide-only-mounting:
+  en: 97bef7ac94c1046a
+  zh: eb8906047246d791
+/agent-note-specdev-workflow-authority-command-surface-and-ide-only-mounting/problem:
+  en: 98cf7266b19042ce
+  zh: f3d82be575e55952
+/agent-note-specdev-workflow-authority-command-surface-and-ide-only-mounting/decision:
+  en: a15c7c13f167e5ac
+  zh: 63bcc2ef60c2f344
+/agent-note-specdev-workflow-authority-command-surface-and-ide-only-mounting/decision/the-workflow-log-is-the-authority:
+  en: 3b3e5678d67ae195
+  zh: ed67465a13b8d405
+/agent-note-specdev-workflow-authority-command-surface-and-ide-only-mounting/decision/role-guidance-and-gate-progression-live-in-the-runtime:
+  en: e9e9b54778ae7cc7
+  zh: 0cf4a30dfe01a84e
+/agent-note-specdev-workflow-authority-command-surface-and-ide-only-mounting/decision/the-command-surface-is-seven-commands:
+  en: bf548064f7fa7cb8
+  zh: 25b233613215ba87
+/agent-note-specdev-workflow-authority-command-surface-and-ide-only-mounting/decision/specdev-is-an-ide-profile-bundle:
+  en: dfde2f125fcb6676
+  zh: 2e53e205d371ad46
+/agent-note-specdev-workflow-authority-command-surface-and-ide-only-mounting/alternatives-considered:
+  en: b8e3c052222c225f
+  zh: b445e67044ea430d
+/agent-note-specdev-workflow-authority-command-surface-and-ide-only-mounting/consequences:
+  en: 556f9c60dd807f87
+  zh: c3652e7c688153c0
+/agent-note-specdev-workflow-authority-command-surface-and-ide-only-mounting/testing:
+  en: e1bb945ec8350e62
+  zh: 7a2ee6ca1c9d3fa8
+/agent-note-specdev-workflow-authority-command-surface-and-ide-only-mounting/related:
+  en: da801b598cef15bb
+  zh: 732a57b962ad6004

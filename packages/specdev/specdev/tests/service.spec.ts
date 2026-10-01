@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { Inbox, type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
 import SessionStore, { SessionId, type Session } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SpecdevService, {
@@ -22,6 +22,7 @@ import SpecdevService, {
   readSpecdevMetadata,
   type CurrentStatusJson,
   type SpecdevGateId,
+  MemoryInbox,
 } from '@deepseek-ai/dsh-specdev'
 
 const tempRoots: string[] = []
@@ -61,7 +62,7 @@ async function withoutRepoLayout<T>(body: () => T | Promise<T>): Promise<T> {
 }
 
 function stubAgent(session: Session): Agent {
-  const inbox = new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} })
+  const inbox = new MemoryInbox()
   const status: AgentStatus = 'idle'
   return {
     id: session.id,

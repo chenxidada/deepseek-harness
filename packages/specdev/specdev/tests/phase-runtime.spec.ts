@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { Inbox, type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SpecdevService, {
@@ -26,6 +26,7 @@ import SpecdevService, {
   prepareStepRerun,
   readCurrentBranch,
   listBlockingInheritedDebt,
+  MemoryInbox,
 } from '@deepseek-ai/dsh-specdev'
 import type { CurrentStatusJson } from '@deepseek-ai/dsh-specdev'
 
@@ -411,7 +412,7 @@ describe('Phase 4 HG-3 next phase + dispatch followup (AC-31 / GAP-002)', () => 
     await ctx.plugin(SpecdevService)
 
     const parentSession = ctx.sessions.create(SessionId('orch'), { meta: { cwd: workspace } })
-    const inbox = new Inbox(parentSession, { inserted: () => {}, discarded: () => {}, claimed: () => {} })
+    const inbox = new MemoryInbox()
     let status: AgentStatus = 'idle'
     const parent: Agent = {
       id: parentSession.id,

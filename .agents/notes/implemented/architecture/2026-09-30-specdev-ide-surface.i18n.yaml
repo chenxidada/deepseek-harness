@@ -1,6 +1,37 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-30-specdev-ide-surface.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-30-specdev-ide-surface.md
-2026-09-30-specdev-ide-surface.md: 3623b434a7463c5cbccf1619275c7421583290c4
-2026-09-30-specdev-ide-surface.zh.md: 96afccbb282dde817b4f29beacedd86beabe9920
+/agent-note-specdev-ide-surface-snapshot-v4-views-the-gate-decision-form-and-reference-links:
+  en: 9d2239f58b82209b
+  zh: 9f717d5d73f76db6
+/agent-note-specdev-ide-surface-snapshot-v4-views-the-gate-decision-form-and-reference-links/problem:
+  en: 7a843975a4f99652
+  zh: 21f4eea7f1449661
+/agent-note-specdev-ide-surface-snapshot-v4-views-the-gate-decision-form-and-reference-links/decision:
+  en: a15c7c13f167e5ac
+  zh: a15c7c13f167e5ac
+/agent-note-specdev-ide-surface-snapshot-v4-views-the-gate-decision-form-and-reference-links/decision/the-runtime-serves-the-plan-and-the-artifact-list-snapshot-v4:
+  en: df9d1615381f2df2
+  zh: 241cb464778e9212
+/agent-note-specdev-ide-surface-snapshot-v4-views-the-gate-decision-form-and-reference-links/decision/the-card-carries-the-decision-and-the-note:
+  en: 07f8c45c5aa49505
+  zh: 8b3972c401c7d68a
+/agent-note-specdev-ide-surface-snapshot-v4-views-the-gate-decision-form-and-reference-links/decision/references-open-through-one-route:
+  en: 38a670615c273182
+  zh: 5d829aceccc44aa5
+/agent-note-specdev-ide-surface-snapshot-v4-views-the-gate-decision-form-and-reference-links/decision/the-strip-answers-the-rest:
+  en: 8808f2f86df93984
+  zh: e49fb59cb9ae54ea
+/agent-note-specdev-ide-surface-snapshot-v4-views-the-gate-decision-form-and-reference-links/alternatives-considered:
+  en: bb27f977ba842e8d
+  zh: 5076509841446a51
+/agent-note-specdev-ide-surface-snapshot-v4-views-the-gate-decision-form-and-reference-links/consequences:
+  en: 4e60a1e49d85b3fd
+  zh: 1f4f7a0439d5a612
+/agent-note-specdev-ide-surface-snapshot-v4-views-the-gate-decision-form-and-reference-links/testing:
+  en: cdece345d5e87dab
+  zh: 9c0e0946daf9aa15
+/agent-note-specdev-ide-surface-snapshot-v4-views-the-gate-decision-form-and-reference-links/related:
+  en: 06004c369951cdee
+  zh: 9e8be74dcebd046f

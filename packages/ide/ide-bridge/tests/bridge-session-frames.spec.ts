@@ -1575,7 +1575,7 @@ describe('ide-bridge model/list frames', () => {
           name: 'Pi',
           models: [{ id: 'broken', name: 'Broken' }, { id: 'no-efforts', name: 'No Efforts' }],
         }],
-        current: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+        current: { provider: 'deepseek-official', model: 'deepseek-flash' },
       })
     })
   })

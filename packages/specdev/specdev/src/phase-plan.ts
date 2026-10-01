@@ -27,6 +27,11 @@ export interface PhasePlanDag {
   readonly phases: readonly PhasePlanNode[]
 }
 
+/** Whether a parsed value is an array of strings. */
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(entry => typeof entry === 'string')
+}
+
 /**
  * Extract the first fenced \`\`\`json block that contains a \`phases\` array.
  * @param markdown - phase-plan.md contents.
@@ -68,7 +73,7 @@ export function parsePhasePlanDag(raw: unknown): PhasePlanDag {
     if (typeof id !== 'string' || id.trim().length === 0) {
       throw new SpecdevError(`phase-plan phases[${String(index)}].id must be a non-empty string`, 'SPECDEV_PHASE_PLAN_INVALID')
     }
-    if (!Array.isArray(dependencies) || dependencies.some(dep => typeof dep !== 'string')) {
+    if (!isStringArray(dependencies)) {
       throw new SpecdevError(
         `phase-plan phases[${String(index)}].dependencies must be a string array`,
         'SPECDEV_PHASE_PLAN_INVALID',

@@ -1,6 +1,40 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-30-specdev-visual-chain.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-30-specdev-visual-chain.md
-2026-09-30-specdev-visual-chain.md: 6e42e69040387f9be58e4287b76a6d2bccf17338
-2026-09-30-specdev-visual-chain.zh.md: afb8993a76f538df04e02abb0640e539101038fa
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer:
+  en: a07c625007385d68
+  zh: 1c374866ec136135
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer/problem:
+  en: d206b3085ae0a371
+  zh: ef258bd9280aef63
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer/decision:
+  en: a15c7c13f167e5ac
+  zh: ff261e3705c47ff0
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer/decision/the-phase-plan-declares-ui-work:
+  en: 357a223c23b93d40
+  zh: 0746a52eec70e56a
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer/decision/hg-1-5-freezes-the-visual-baseline:
+  en: ea5a9b6275f4e7fb
+  zh: 7a19808c3e968044
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer/decision/the-prototype-gate-confirms-a-ui-phase-s-static-prototype:
+  en: ab3fb1f309bf575d
+  zh: 03721196ea326d97
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer/decision/the-guard-refuses-dispatch-on-the-visual-chain:
+  en: 5ced83a7674ff6fd
+  zh: 29ebbb42c8484262
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer/decision/the-visual-reviewer-is-a-role-and-the-merge-knows-about-it:
+  en: ae761eb3550760e5
+  zh: 304f1133e3d10eae
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer/alternatives-considered:
+  en: b859ce656d6bc2f0
+  zh: 0deedb8cad2e5841
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer/consequences:
+  en: 5562da290809cd13
+  zh: db2978204f3cd797
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer/testing:
+  en: 94b65721635f42c2
+  zh: 0f646c1a67f9f8e9
+/agent-note-specdev-visual-chain-ui-declarations-hg-1-5-the-prototype-gate-and-the-visual-reviewer/related:
+  en: 43d6bb36722d5dfe
+  zh: 9bc07f9830f99669

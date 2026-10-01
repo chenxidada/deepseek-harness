@@ -220,7 +220,11 @@ export interface SpecdevStatusProjectionState {
 /** Sole Human Gate write request — orchestrator and future bridges share this. */
 export interface ConfirmGateRequest {
   readonly gate: SpecdevGateId
-  readonly decision: SpecdevGateDecision | string
+  /**
+   * Gate decision. The runtime accepts {@link SpecdevGateDecision} values and
+   * fails any other non-empty string with `SPECDEV_INVALID_DECISION`.
+   */
+  readonly decision: string
   readonly note?: string
   /**
    * Fallback defer target when `phaseEntry[].deferredTargetPhase` is omitted.

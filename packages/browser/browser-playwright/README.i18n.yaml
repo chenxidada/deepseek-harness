@@ -1,6 +1,100 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/browser/browser-playwright/README.md
-README.md: 39aad19f9e2ca965011ba28265db05756afc6dad
-README.zh.md: 1f199c47bf08200ed55f3cd4b9e5431f8ec0108d
+/:
+  en: 02ad24ddc032e72d
+  zh: 03acd94cb5218de2
+/deepseek-ai-dsh-browser-playwright:
+  en: e55fa7f24a3e7fca
+  zh: 8abe7be8b1ff1b27
+/deepseek-ai-dsh-browser-playwright/summary:
+  en: 107160fda08ef254
+  zh: 788cc1ee0475aad1
+/deepseek-ai-dsh-browser-playwright/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-browser-playwright/use-this-package:
+  en: f5afaa03af09f810
+  zh: eb31e32acb81c63a
+/deepseek-ai-dsh-browser-playwright/use-this-package/when-to-choose-it:
+  en: 7d5911aeec49aebb
+  zh: e9ed58c9a6d6f648
+/deepseek-ai-dsh-browser-playwright/use-this-package/minimal-configuration:
+  en: 2b06e465a4de000c
+  zh: a82e7036f18ed926
+/deepseek-ai-dsh-browser-playwright/use-this-package/origin-allowlist:
+  en: 8687b67349da94dd
+  zh: 6bb5329455f0beb6
+/deepseek-ai-dsh-browser-playwright/use-this-package/observations:
+  en: 4f284f06a58c555d
+  zh: bdac5857a195f64d
+/deepseek-ai-dsh-browser-playwright/use-this-package/screenshots:
+  en: b4980daa1ff4ea8e
+  zh: ba439e4a19c5af5f
+/deepseek-ai-dsh-browser-playwright/use-this-package/traces:
+  en: 075bbbc52a0b8e34
+  zh: 5569d106903742ab
+/deepseek-ai-dsh-browser-playwright/use-this-package/failures-and-recovery:
+  en: a13ca0baf6a5fa5d
+  zh: 3ca2c6e81b664018
+/deepseek-ai-dsh-browser-playwright/understand-the-implementation:
+  en: 9842c69ad3636bb3
+  zh: 3cdc3f816cbdd0cb
+/deepseek-ai-dsh-browser-playwright/understand-the-implementation/design-philosophy:
+  en: ed83dddae1ffba57
+  zh: 41e3200b311775cb
+/deepseek-ai-dsh-browser-playwright/understand-the-implementation/source-map:
+  en: a8414e1633978284
+  zh: 48b542edce734554
+/deepseek-ai-dsh-browser-playwright/understand-the-implementation/open-and-teardown-ownership:
+  en: dcf3c88cd5c01f23
+  zh: ee9d7a1e4a23aedc
+/deepseek-ai-dsh-browser-playwright/further-exploration:
+  en: b4d533e65ab2faec
+  zh: fffec7185e880914
+/deepseek-ai-dsh-browser-playwright/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-browser-playwright/model-experience/snapshot-text:
+  en: 2670c72a6dccb9c6
+  zh: 563a43f1a2fb3eb5
+/deepseek-ai-dsh-browser-playwright/model-experience/snapshot-text/what-the-model-sees:
+  en: 710dcdc7716086b9
+  zh: 0a7782ea4b23c4cb
+/deepseek-ai-dsh-browser-playwright/model-experience/snapshot-text/token-effect:
+  en: 21cedb843f4f56b1
+  zh: c255c0cee460d94b
+/deepseek-ai-dsh-browser-playwright/model-experience/snapshot-text/kv-cache-effect:
+  en: fa5b806d0c0bfb80
+  zh: 0a0723e6a98517fd
+/deepseek-ai-dsh-browser-playwright/model-experience/console-and-network-reads:
+  en: 7369b77c5f2db74f
+  zh: 7da42946b2d2a1c7
+/deepseek-ai-dsh-browser-playwright/model-experience/console-and-network-reads/what-the-model-sees:
+  en: 9c6cddfdc8d490f7
+  zh: b9829a43ea981e49
+/deepseek-ai-dsh-browser-playwright/model-experience/console-and-network-reads/token-effect:
+  en: b9640f27231a328b
+  zh: 6eca11312c7cd0d1
+/deepseek-ai-dsh-browser-playwright/model-experience/console-and-network-reads/kv-cache-effect:
+  en: 618867b008b96479
+  zh: e1e73b329bc3037d
+/deepseek-ai-dsh-browser-playwright/model-experience/screenshot-and-trace-payloads:
+  en: e3085ad74e86819b
+  zh: 7da2529b22585188
+/deepseek-ai-dsh-browser-playwright/model-experience/screenshot-and-trace-payloads/what-the-model-sees:
+  en: 05f8d1c52efabed3
+  zh: d0647caa0c43dabe
+/deepseek-ai-dsh-browser-playwright/model-experience/screenshot-and-trace-payloads/token-effect:
+  en: 2da6074c2c37a7a6
+  zh: 02fb5cc1ca91f674
+/deepseek-ai-dsh-browser-playwright/model-experience/screenshot-and-trace-payloads/kv-cache-effect:
+  en: bb999d4d57baad6b
+  zh: 131839b9689f76f3
+/deepseek-ai-dsh-browser-playwright/known-limitations-and-deferred-work:
+  en: 9a3c960b1106a3ac
+  zh: 376746e5bb7ffb7e
+/deepseek-ai-dsh-browser-playwright/known-limitations-and-deferred-work/dev-note:
+  en: 500519bb6e39732d
+  zh: 7edf0adf918beff1

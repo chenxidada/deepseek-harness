@@ -1,6 +1,40 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-30-browser-capability-seam.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-30-browser-capability-seam.md
-2026-09-30-browser-capability-seam.md: cddc3cf8c40820593b2ac50c7ccc84224a148229
-2026-09-30-browser-capability-seam.zh.md: 2c87ffa2e96f61a3110ba23ede5842500ced5f52
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools:
+  en: 8e4a4e0e35df5672
+  zh: 11b0a7cd4b4918bd
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools/problem:
+  en: e61e3d401820eb7d
+  zh: 8ff5ca3b928d43ff
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools/decision:
+  en: a15c7c13f167e5ac
+  zh: a15c7c13f167e5ac
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools/decision/three-roles-one-seam-ctx-browser:
+  en: 2a1816fadd670db6
+  zh: 392cdb083cf8f5d8
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools/decision/sessions-are-per-conversation-and-owned-by-the-seam:
+  en: 3f39d7ac6775bc47
+  zh: da67c3a835478a3c
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools/decision/the-provider-is-lazy-and-policy-bearing:
+  en: 11d5f83f1ea73868
+  zh: a8e75ec8ae84a179
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools/decision/tools-compose-seam-calls-inside-one-model-round-trip:
+  en: 5e76c2d55327ff06
+  zh: 294d6dad28428685
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools/decision/captures-commit-through-attachments-traces-stay-files:
+  en: a6a7715294cf9282
+  zh: 905ac0a063d9588b
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools/decision/deployment-is-opt-in:
+  en: c3c90fd2b3583277
+  zh: 13e608c879edb79c
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools/alternatives-considered:
+  en: 69de90b3ddfb404e
+  zh: 417471165c5da9a1
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools/consequences:
+  en: 15e2777a7980847c
+  zh: 4e1493ac341c278b
+/agent-note-add-a-browser-capability-seam-with-a-playwright-provider-and-model-facing-tools/testing:
+  en: 6fd7e933d9371a4e
+  zh: 3e1d22c5bc78a419

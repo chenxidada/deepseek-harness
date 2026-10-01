@@ -8,8 +8,9 @@
 
 import { randomUUID } from 'node:crypto'
 import { Context } from '@deepseek-ai/cordis'
-import { Inbox, type Agent, type AgentRegistry, type AgentStatus } from '@deepseek-ai/dsh-agent'
+import { type Agent, type AgentRegistry, type AgentStatus } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { MemoryInbox } from './inbox.ts'
 import { SessionId, type SessionStore } from '@deepseek-ai/dsh-session'
 import { attachSpecdevMetadata, parseSpecdevRole } from './metadata.ts'
 import type {
@@ -99,7 +100,7 @@ export function defaultRolePrompt(
     case 'orchestrator':
       return `SpecDev: orchestrate workflow \`${ctx.slug}\`.${phase}`
     default:
-      return `SpecDev role \`${role}\` for workflow \`${ctx.slug}\`.${phase}`
+      return `SpecDev role \`${String(role)}\` for workflow \`${ctx.slug}\`.${phase}`
   }
 }
 
@@ -279,7 +280,7 @@ function registerLineageFallbackAgent(
       agentPreset: presetId,
     },
   })
-  const inbox = new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} })
+  const inbox = new MemoryInbox()
   let status: AgentStatus = 'idle'
   const agent: Agent = {
     id: session.id,

@@ -1,0 +1,34 @@
+# SpecDev role preset `specdev-reviewer-visual`, declared for the agent-preset registry.
+# Source of truth: packages/specdev/specdev-presets/presets/specdev-reviewer-visual/.
+- insert:
+    - id: preset-specdev-reviewer-visual
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: specdev-reviewer-visual
+        name: "SpecDev Reviewer (Visual)"
+        description: "Parallel review of a UI phase: tokens, layout, and states against the frozen visual baseline."
+        order: 21
+        plugins:
+          # SpecDev Reviewer (Visual) — SpecDev role preset, UI phases only.
+          # Metadata: set agent options specdev.role / specdev.slug / specdev.phaseId? on spawn.
+
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                You are SpecDev reviewer-visual. Review only how the phase looks against the frozen
+                visual baseline: a color, spacing, or font value that is not a baseline token is a
+                MUST-FIX, and so is a layout, state, or breakpoint the UI spec requires and the
+                implementation lacks. Write review-visual.md with the verdict line and the token
+                table you compared against. Working directory: {{cwd}}. Publish SpecDev metadata
+                (specdev.role, specdev.slug, optional specdev.phaseId) for lineage.
+              complete: true
+              includeRuntimeContext: true
+
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false

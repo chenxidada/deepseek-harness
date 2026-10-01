@@ -1,6 +1,28 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for ide-bridge.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/subsystems/ide-bridge.md
-ide-bridge.md: 64cc8e241263875498e9d9166850f4361e0dc4ec
-ide-bridge.zh.md: 455d42e9eef71db394b8da1546abb424f6f7ecbb
+/ide-host-bridge:
+  en: f10504f4581d2c96
+  zh: 483a2032161f3eb7
+/ide-host-bridge/channels:
+  en: 1d536b9437722237
+  zh: 887f4a0bfb7ce307
+/ide-host-bridge/frames:
+  en: e0603d678176afb1
+  zh: a6e05568ef0afe15
+/ide-host-bridge/session-control:
+  en: 283fff623e20c7d5
+  zh: 81733d67d357b49b
+/ide-host-bridge/subagents:
+  en: eaf53b237555291b
+  zh: ea04d8957b716347
+/ide-host-bridge/specdev:
+  en: 6ec2405ecd9d660f
+  zh: 8ca54cced1d34b67
+/ide-host-bridge/projections:
+  en: e861eff4f3c1f6fc
+  zh: 6fd0e929534deccb
+/ide-host-bridge/composer-catalogs:
+  en: c1087545009c85da
+  zh: 3b351379d0471ca1

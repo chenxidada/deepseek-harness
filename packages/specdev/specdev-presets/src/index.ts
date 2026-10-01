@@ -1,8 +1,9 @@
 /**
- * SpecDev preset root and shipped role-preset ids.
+ * SpecDev preset sources and shipped role-preset ids.
  *
- * Mounts as `ctx.specdevPresets` so the SpecDev bundle can point
- * `agent-presets.roots` at {@link SpecdevPresetsService.presetRoot} via `!!js`.
+ * The `dsh-specdev-app` bundle declares these presets for the agent-preset
+ * registry (one `@deepseek-ai/dsh-agent-preset` row per directory in
+ * `presets/`), so role dispatch selects them by {@link rolePresetId}.
  *
  * @module @deepseek-ai/dsh-specdev-presets
  */

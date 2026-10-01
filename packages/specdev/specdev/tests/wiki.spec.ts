@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { Inbox, type Agent, type AgentFactory, type AgentHandle, type AgentStatus } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { type Agent, type AgentFactory, type AgentHandle, type AgentStatus } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import {
@@ -18,6 +18,7 @@ import {
   readSpecdevMetadata,
   WIKI_RELATIVE_ROOT,
   wikiRolePrompt,
+  MemoryInbox,
 } from '@deepseek-ai/dsh-specdev'
 
 const tempRoots: string[] = []
@@ -36,7 +37,7 @@ function tempDir(prefix: string): string {
 }
 
 function stubAgent(session: Session): Agent {
-  const inbox = new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} })
+  const inbox = new MemoryInbox()
   let status: AgentStatus = 'idle'
   return {
     id: session.id,
@@ -76,9 +77,9 @@ async function wikiHarness(prefix: string, cwd?: string) {
       agent.followup = (message: UserMessage) => {
         prompts.push(message.content.map(block => block.type === 'text' ? block.text : '').join(''))
       }
-      await options.setup?.(ownerCtx.extend({ agent }))
+      await options.setup?.(ownerCtx.extend({ agent }), agent)
       const unregister = ctx.agents.register(agent)
-      return { agent, dispose: () => { unregister(); return Promise.resolve() } }
+      return { agent, dispose: () => unregister() }
     },
     resume() { return Promise.reject(new Error('resume unused')) },
   }

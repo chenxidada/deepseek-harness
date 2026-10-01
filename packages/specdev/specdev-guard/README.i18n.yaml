@@ -1,6 +1,58 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/specdev/specdev-guard/README.md
-README.md: b6ad2a329ed8441f5662f0da4cbf6a9b1f9579ae
-README.zh.md: 267eb98eeb17b30c0b38decb8c96d00b6388b4f3
+/:
+  en: 3e420bc453cc67e7
+  zh: 5554dcb981f8b132
+/deepseek-ai-dsh-specdev-guard:
+  en: 8ee623fca8df867d
+  zh: 27aff22ed9d97d62
+/deepseek-ai-dsh-specdev-guard/summary:
+  en: 54f2b933548313e0
+  zh: 117b3cce039a6c43
+/deepseek-ai-dsh-specdev-guard/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 725b47765ee8f30b
+/deepseek-ai-dsh-specdev-guard/use-this-package:
+  en: 367d9d9ae4a7fab3
+  zh: bb7cb03af8b9ef99
+/deepseek-ai-dsh-specdev-guard/understand-the-implementation:
+  en: 24b6fe6cd9cdb12d
+  zh: c274523899cf2da8
+/deepseek-ai-dsh-specdev-guard/further-exploration:
+  en: 92cb7c60ae60eb51
+  zh: e5a02b0bdeeeb7af
+/deepseek-ai-dsh-specdev-guard/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-specdev-guard/model-experience/gate-denials:
+  en: 742521ff4d6e252f
+  zh: b293c20790d499d3
+/deepseek-ai-dsh-specdev-guard/model-experience/gate-denials/what-the-model-sees:
+  en: a3c5449321f4c3d3
+  zh: 158724f42ab18ce5
+/deepseek-ai-dsh-specdev-guard/model-experience/gate-denials/token-effect:
+  en: e3d0fef16f295a2a
+  zh: 47f5b65aaa6d2ec5
+/deepseek-ai-dsh-specdev-guard/model-experience/gate-denials/kv-cache-effect:
+  en: 3d7ae4a59fc67335
+  zh: f14a556c086f8268
+/deepseek-ai-dsh-specdev-guard/model-experience/scope-questions-and-refusals:
+  en: 8ef4faa74632bedd
+  zh: d0cd15e3315f931e
+/deepseek-ai-dsh-specdev-guard/model-experience/scope-questions-and-refusals/what-the-model-sees:
+  en: 4172dd94ec88cfe3
+  zh: 28bdf8871637edf8
+/deepseek-ai-dsh-specdev-guard/model-experience/scope-questions-and-refusals/token-effect:
+  en: 779bde9acf879fd0
+  zh: 3cae49124ef01052
+/deepseek-ai-dsh-specdev-guard/model-experience/scope-questions-and-refusals/kv-cache-effect:
+  en: 302aa8e34d0512aa
+  zh: b5d9adc658a7e59e
+/deepseek-ai-dsh-specdev-guard/known-limitations-and-deferred-work:
+  en: ed4282f350cfe605
+  zh: d5fe1bbcf0b89d1a
+/deepseek-ai-dsh-specdev-guard/known-limitations-and-deferred-work/dev-note:
+  en: c37a0da96d82ff7e
+  zh: 8dbc2d67d7d3b8f1
