@@ -2654,6 +2654,12 @@ export interface Config {
 export interface JsonRpcConfig {
   /** Report max-token turn/subagent termination as a successful SDK result. */
   maxTokensAsSuccess?: boolean
+  /**
+   * Let the mounted `agentDefaultModel` service decide the route of sessions
+   * created after initialization, instead of the initialize handshake. The ide
+   * profile enables this so its model picker governs new sessions.
+   */
+  adoptConfiguredDefaultModel?: boolean
   /** Transport input override; production uses `process.stdin`. */
   input?: Readable
   /** Transport output override; production uses `process.stdout`. */

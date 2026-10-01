@@ -110,18 +110,15 @@ probePromise()
   it('attributes the vscode app test sources to the project that names them', async () => {
     const suffix = randomUUID()
     const configPath = await writeContractConfig(suffix)
-    // A scratch probe cannot carry this contract the way the cases above do: the vscode app test
-    // project lists the specs it owns by name, and `**/oxlint-contract-*` is ignored on purpose, so
-    // a probe written into that directory resolves to `<none>` whatever its content. The files the
-    // project actually names are the ones whose attribution is load-bearing in `pnpm run lint`:
-    // with no owning project, every Node builtin and `process` access in them becomes `error`-typed
-    // and the type-aware `no-unsafe-*` rules fire — the repository-wide baseline kept, by design,
-    // for the directory's other specs (`apps/vscode-dsh/tests/tsconfig.json`).
+    // A scratch probe cannot carry this contract the way the cases above do: the app's test
+    // directory owns one private program (`apps/vscode-dsh/tests/tsconfig.json`, a directory glob),
+    // and without it every Node builtin and `process` access in these specs resolves to an
+    // `error`-typed value, which is what the type-aware `no-unsafe-*` rules then flag. The specs
+    // the program admits are the ones whose attribution is load-bearing in `pnpm run lint`.
     const owned = [
-      'apps/vscode-dsh/tests/display-evidence.spec.ts',
-      'apps/vscode-dsh/tests/display-evidence-shell.spec.ts',
+      'apps/vscode-dsh/tests/cap-change-list.spec.ts',
+      'apps/vscode-dsh/tests/cap-chat-panel.spec.ts',
     ]
-    const notOwned = 'apps/vscode-dsh/tests/chat-ux-session-search.spec.ts'
     try {
       const result = runOxlint([
         '--config',
@@ -129,7 +126,6 @@ probePromise()
         '--format',
         'unix',
         ...owned,
-        notOwned,
       ], { OXC_LOG: 'debug' })
       const output = normalizedOutput(result)
       const tsconfig = join(repositoryRoot, 'apps/vscode-dsh/tests/tsconfig.json').replaceAll('\\', '/')
@@ -140,14 +136,6 @@ probePromise()
           `Got tsconfig for file ${join(repositoryRoot, path).replaceAll('\\', '/')}: ${tsconfig}`,
         )
       }
-      // The boundary is asserted rather than assumed: the directory's other specs are outside this
-      // program, which lists the specs whose `no-unsafe-*` this phase cleared by name rather than
-      // the whole directory (a phase file can be outside it: `interaction-approval-resolution.spec.ts`
-      // is). A later change that widens the program — or a rename that quietly breaks its
-      // attribution — has to fail here.
-      expect(output, notOwned).toContain(
-        `Got tsconfig for file ${join(repositoryRoot, notOwned).replaceAll('\\', '/')}: <none>`,
-      )
     } finally {
       await rm(configPath, { force: true })
     }

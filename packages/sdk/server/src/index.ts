@@ -97,6 +97,12 @@ export const inject = ['agents']
 export interface JsonRpcConfig {
   /** Report max-token turn/subagent termination as a successful SDK result. */
   maxTokensAsSuccess?: boolean
+  /**
+   * Let the mounted `agentDefaultModel` service decide the route of sessions
+   * created after initialization, instead of the initialize handshake. The ide
+   * profile enables this so its model picker governs new sessions.
+   */
+  adoptConfiguredDefaultModel?: boolean
   /** Transport input override; production uses `process.stdin`. */
   input?: Readable
   /** Transport output override; production uses `process.stdout`. */
@@ -107,6 +113,7 @@ export interface JsonRpcConfig {
 
 export const Config: Schema<JsonRpcConfig> = Schema.object({
   maxTokensAsSuccess: Schema.boolean().default(false),
+  adoptConfiguredDefaultModel: Schema.boolean().default(false),
 })
 
 /**
@@ -117,7 +124,10 @@ export const Config: Schema<JsonRpcConfig> = Schema.object({
  */
 export function apply(ctx: Context, config: JsonRpcConfig): void {
   // Cordis applies the schema default before invoking the plugin.
-  const resolvedConfig = config as JsonRpcConfig & { maxTokensAsSuccess: boolean }
+  const resolvedConfig = config as JsonRpcConfig & {
+    maxTokensAsSuccess: boolean
+    adoptConfiguredDefaultModel: boolean
+  }
   // Protocol shutdown owns the complete runtime process, so it must await the
   // root lifecycle (including persistence) before exiting.
   const rootFiber = ctx.root.fiber
@@ -131,6 +141,7 @@ export function apply(ctx: Context, config: JsonRpcConfig): void {
   const transport = new JsonRpcLineTransport(input, output)
   const server = new HarnessSdkJsonRpcServer(ctx, transport, {
     maxTokensAsSuccess: resolvedConfig.maxTokensAsSuccess,
+    adoptConfiguredDefaultModel: resolvedConfig.adoptConfiguredDefaultModel,
   })
   const sessionDispose: SdkSessionDispose = {
     disposeSession: sessionId => server.disposeSession(sessionId),

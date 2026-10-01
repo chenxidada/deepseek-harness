@@ -1405,7 +1405,11 @@ describe('HarnessSdkJsonRpcServer', () => {
         return undefined
       },
     } as unknown as Context
-    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
+    const server = new HarnessSdkJsonRpcServer(
+      ctx,
+      new FakeTransport(),
+      { adoptConfiguredDefaultModel: true },
+    ) as unknown as {
       initialize(params: { cwd: string; provider: string; model: string }): Promise<unknown>
       getOrCreateSession(sessionId: string): Promise<unknown>
       shutdown(): Promise<Record<string, never>>
@@ -1420,6 +1424,97 @@ describe('HarnessSdkJsonRpcServer', () => {
     }))
     // Prompt assembly and request routing both read the installed selection.
     expect(installed).toEqual(['system-prompt/assemble', 'agent/request', 'agent/pre-step'])
+    await server.shutdown()
+  })
+
+  it('keeps an explicitly named initialize effort on the configured default route', async () => {
+    const agentCtx = {
+      on: vi.fn(() => () => undefined),
+    } as unknown as Context
+    const create = vi.fn(async (options: { setup?: (agentCtx: Context) => void }) => {
+      options.setup?.(agentCtx)
+      return { agent: {} as Agent, dispose: () => Promise.resolve() }
+    })
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, get: () => undefined },
+      get: (name: string) => {
+        if (name === 'agentDefaultModel') {
+          return { currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4-pro' }) }
+        }
+        if (name === 'llm') {
+          return {
+            listProviders: () => [{ id: 'deepseek-official', name: 'DeepSeek' }],
+            resolveCallConfig: vi.fn(async (config: Record<string, unknown>) => config),
+          }
+        }
+        return undefined
+      },
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(
+      ctx,
+      new FakeTransport(),
+      { adoptConfiguredDefaultModel: true },
+    ) as unknown as {
+      initialize(params: { cwd: string; provider: string; model: string; reasoningEffort?: string }): Promise<unknown>
+      getOrCreateSession(sessionId: string): Promise<unknown>
+      shutdown(): Promise<Record<string, never>>
+    }
+
+    await server.initialize({
+      cwd: process.cwd(),
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-pro',
+      reasoningEffort: 'max',
+    })
+    await server.getOrCreateSession('explicit-effort')
+
+    // The configured default names no effort of its own, so the effort named for
+    // this same route survives it.
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'max' },
+    }))
+    await server.shutdown()
+  })
+
+  it('keeps the initialize handshake route unless the deployment adopts the default model', async () => {
+    const agentCtx = {
+      on: vi.fn(() => () => undefined),
+    } as unknown as Context
+    const create = vi.fn(async (options: { setup?: (agentCtx: Context) => void }) => {
+      options.setup?.(agentCtx)
+      return { agent: {} as Agent, dispose: () => Promise.resolve() }
+    })
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, get: () => undefined },
+      get: (name: string) => {
+        if (name === 'agentDefaultModel') {
+          return { currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'max' }) }
+        }
+        if (name === 'llm') {
+          return {
+            listProviders: () => [{ id: 'deepseek-official', name: 'DeepSeek' }],
+            resolveCallConfig: vi.fn(async (config: Record<string, unknown>) => config),
+          }
+        }
+        return undefined
+      },
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
+      initialize(params: { cwd: string; provider: string; model: string }): Promise<unknown>
+      getOrCreateSession(sessionId: string): Promise<unknown>
+      shutdown(): Promise<Record<string, never>>
+    }
+
+    await server.initialize({ cwd: process.cwd(), provider: 'deepseek-official', model: 'deepseek-v4-flash' })
+    await server.getOrCreateSession('handshake-route')
+
+    // Without the opt-in the SDK client's validated handshake route is what runs,
+    // even though the profile mounts a different default model.
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+    }))
     await server.shutdown()
   })
 

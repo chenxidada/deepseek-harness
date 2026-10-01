@@ -7,6 +7,13 @@
   config:
     profile: ide
 
+# The IDE model picker writes agentDefaultModel; sessions this runtime creates
+# after a picker change adopt that selection instead of the process-start
+# initialize handshake.
+- id: sdk-jsonrpc-server
+  config:
+    adoptConfiguredDefaultModel: true
+
 # Full-text session search: the base row keeps `openAt: never`, so the IDE
 # search box could only match local metadata. This restatement opens the
 # runtime's own derived index on the first search (deferring the node:sqlite

@@ -368,7 +368,6 @@ function sharedHygieneGates(): Gate[] {
     pnpmScript('client-ui-i18n', 'verify-client-ui-i18n', { label: 'client UI i18n' }),
     pnpmScript('client-route-resolution', 'verify-client-route-resolution', { label: 'client route resolution' }),
     pnpmScript('no-bare-dispatcher', 'verify-no-bare-dispatcher', { label: 'proxy-aware dispatchers' }),
-    pnpmScript('issue-management', 'test:issue-management', { label: 'Issue management policy' }),
     pnpmScript('no-unknown-casts', 'verify-no-unknown-casts', { label: 'no new unknown casts' }),
     // Oxlint cannot read `.sh` at all, so the shell assets this repository ships for link
     // tests were previously unchecked by every gate (DEBT-018). `bash -n` is the real

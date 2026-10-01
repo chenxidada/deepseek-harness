@@ -5135,7 +5135,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ConfirmGateRequest',
-    declaration: 'export interface ConfirmGateRequest {\n    readonly gate: SpecdevGateId;\n    readonly decision: SpecdevGateDecision | string;\n    readonly note?: string;\n    readonly deferredTargetPhase?: string;\n    readonly phaseEntry?: readonly {\n        readonly itemIds: readonly string[];\n        readonly disposition: \'resolve\' | \'defer\' | \'cancel\';\n        readonly deferredTargetPhase?: string;\n    }[];\n}',
+    declaration: 'export interface ConfirmGateRequest {\n    readonly gate: SpecdevGateId;\n    readonly decision: string;\n    readonly note?: string;\n    readonly deferredTargetPhase?: string;\n    readonly phaseEntry?: readonly {\n        readonly itemIds: readonly string[];\n        readonly disposition: \'resolve\' | \'defer\' | \'cancel\';\n        readonly deferredTargetPhase?: string;\n    }[];\n}',
   },
   {
     name: 'ConfirmGateResult',
@@ -7520,10 +7520,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SpecdevArtifactRow',
     declaration: 'export interface SpecdevArtifactRow {\n    readonly path: string;\n    readonly label: string;\n    readonly phaseId: string | null;\n    readonly status: \'ready\' | \'missing\';\n}',
-  },
-  {
-    name: 'SpecdevGateDecision',
-    declaration: 'export type SpecdevGateDecision = \'pass\' | \'reject\' | \'defer\' | \'resolve\' | \'cancel\';',
   },
   {
     name: 'SpecdevGateId',

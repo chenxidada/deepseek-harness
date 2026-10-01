@@ -74,6 +74,13 @@ function subagentParentOf(carrier: Scoped<SubagentRuntime>): Agent {
 export interface HarnessSdkJsonRpcServerOptions {
   /** Report max-token termination as an accepted result instead of an infrastructure error. */
   maxTokensAsSuccess?: boolean
+  /**
+   * Let the mounted `agentDefaultModel` service decide the route of sessions
+   * created after initialization instead of the initialize handshake. The ide
+   * profile enables this so its model picker governs new sessions; a generic
+   * SDK client keeps the handshake route it validated.
+   */
+  adoptConfiguredDefaultModel?: boolean
 }
 
 function successStatus(reason: string, options: HarnessSdkJsonRpcServerOptions): 'ok' | 'error' {
@@ -512,13 +519,22 @@ export class HarnessSdkJsonRpcServer {
   }
 
   /**
-   * Route a session created now adopts: the configured default when a
-   * default-model service is mounted, otherwise the initialized route.
+   * Route a session created now adopts. With `adoptConfiguredDefaultModel` the
+   * mounted default-model selection wins over the initialize handshake, and an
+   * effort the handshake named for that same provider and model survives when
+   * the configured selection names none of its own; otherwise the handshake
+   * route applies unchanged.
    * @returns the provider, model, and optional reasoning effort.
    */
   private route(): ModelSelection {
-    const configured = this.ctx.get('agentDefaultModel')?.currentSelection()
-    if (configured !== undefined) return configured
+    const configured = this.options.adoptConfiguredDefaultModel === true
+      ? this.ctx.get('agentDefaultModel')?.currentSelection()
+      : undefined
+    if (configured !== undefined) {
+      if (configured.reasoningEffort !== undefined || this.reasoningEffort === undefined) return configured
+      if (configured.provider !== this.provider || configured.model !== this.model) return configured
+      return { ...configured, reasoningEffort: this.reasoningEffort }
+    }
     return {
       provider: this.provider,
       model: this.model,
