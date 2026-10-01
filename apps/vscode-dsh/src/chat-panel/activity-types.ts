@@ -49,7 +49,9 @@ export function activityStatusFromToolResult(data: Record<string, unknown>): Act
 
   const message = asRecord(data.message)
   const content0 = Array.isArray(message?.content) ? message.content[0] : undefined
-  const contentError = asRecord(content0)?.isError === true
+  // Current logs carry `isError` on the tool-role message; older logs wrapped
+  // the blocks in one tool-result block that carried it instead.
+  const contentError = message?.isError === true || asRecord(content0)?.isError === true
   if (data.isError === true || contentError) return 'failed'
   return 'done'
 }
@@ -76,8 +78,7 @@ export function activityMessageId(
  */
 export function toolResultText(data: Record<string, unknown>): string | undefined {
   const message = asRecord(data.message)
-  const first = Array.isArray(message?.content) ? asRecord(message.content[0]) : undefined
-  const blocks = Array.isArray(first?.content) ? first.content : []
+  const blocks = toolResultBlocks(message)
   const parts: string[] = []
   for (const raw of blocks) {
     const entry = asRecord(raw)
@@ -87,6 +88,18 @@ export function toolResultText(data: Record<string, unknown>): string | undefine
   }
   const joined = parts.join('\n').trim()
   return joined === '' ? undefined : joined
+}
+
+/**
+ * Tool-result content blocks of one `tool/result` message. Current logs attach
+ * the blocks directly to the tool-role message; older logs wrapped them in one
+ * `tool-result` block.
+ */
+function toolResultBlocks(message: Record<string, unknown> | undefined): readonly unknown[] {
+  const content = Array.isArray(message?.content) ? message.content : []
+  const first = asRecord(content[0])
+  if (first !== undefined && Array.isArray(first.content)) return first.content
+  return content
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

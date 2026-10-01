@@ -1,6 +1,6 @@
 /**
  * Named wire types for the DeepSeek Harness SDK runtime protocol: the three
- * request/result pairs and the four server-to-client notification payloads
+ * request/result pairs and the server-to-client notification payloads
  * exchanged over the newline-delimited JSON-RPC stdio transport. The server
  * plugin (`@deepseek-ai/dsh-sdk-jsonrpc-server`) and SDK clients share these shapes;
  * `serverInfo.name` stays the wire-stable `deepseek-harness-sdk-runtime`.
@@ -8,6 +8,7 @@
  * @module @deepseek-ai/dsh-sdk-protocol/types
  */
 
+import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SubagentStopReason } from '@deepseek-ai/dsh-subagent'
@@ -77,6 +78,19 @@ export interface SessionStatusNotification {
   status: 'idle' | 'running'
 }
 
+/**
+ * `session.assistant-stream` payload: one process-local live assistant
+ * streaming frame, published between the durable events of a model attempt so
+ * a client can render text and reasoning incrementally instead of waiting for
+ * the settlement event.
+ */
+export interface SessionAssistantStreamNotification {
+  /** Session whose agent published the frame. */
+  sessionId: string
+  /** Attempt start, one raw stream chunk, or terminal settlement of the attempt. */
+  frame: AssistantStreamFrame
+}
+
 /** `subagent.started` payload: an in-runtime child session was created. */
 export interface SubagentStartedNotification {
   /** The delegating session. */
@@ -107,6 +121,7 @@ export interface SubagentFinishedNotification {
 export interface HarnessSdkNotificationMap {
   'session.event': SessionEventNotification
   'session.status': SessionStatusNotification
+  'session.assistant-stream': SessionAssistantStreamNotification
   'subagent.started': SubagentStartedNotification
   'subagent.finished': SubagentFinishedNotification
 }

@@ -38,6 +38,7 @@ Three packages play the browser roles; the subsystem reference owns the exhausti
 Start with the subsystem reference for the shared vocabulary, then the backend and the tools mounted over it.
 
 - [Browser subsystem](../../docs/subsystems/browser.md) — the session request and spec, the closed action and observation unions, provider availability, and the `BrowserError` code taxonomy.
+- [Browser use](../../docs/subsystems/browser-use.md) — the alternative browser integration: a registration-only service whose experimental providers own their tool names.
 - [dsh-browser-playwright](browser-playwright/README.md) — the shipped backend, its launch and attach modes, and the origin allowlist.
 - [dsh-tool-browser](tool-browser/README.md) — enablement, the eleven tools, and what the model sees.
 

@@ -12,7 +12,9 @@ One DSH process serves the window (AD-1). Multiple conversation Tabs each bind a
 
 The **Conversation** Webview is the live reading and input surface. **Decision state** (mode / sessionId / send gate / Continue) follows Host `panel/state` / `messages/*` / `status/set` — the Webview never owns those decisions. Illegal sends are rejected by the Host via `ui/reject-send`. Under revised AD-CU-1 / AD-CUX-1, the Webview **may** hold **presentation state** (follow-state, streaming chrome, expand seats) when exposed via DOM / `__dshProbes` contracts. The **Timeline** TreeView keeps short turn/step/tool/status/subagent labels and Diff entry points — it does **not** show assistant long text (that belongs in the Conversation panel).
 
-SDK `session.event` / `session.status` / subagent notifications are projected into Timeline and MessageStore. Write/edit tool results that carry `meta.diffs` expose a **post-hoc** Diff entry (`vscode.diff`); mid-run per-file confirmation is not the default (AD-7).
+SDK `session.event` / `session.status` / `session.assistant-stream` / subagent notifications are projected into Timeline and MessageStore. Write/edit tool results that carry `meta.diffs` expose a **post-hoc** Diff entry (`vscode.diff`); mid-run per-file confirmation is not the default (AD-7).
+
+Installation, the profile layout, and troubleshooting live in the [VS Code extension guide](../../docs/user/guide/vscode-extension.md).
 
 ## Layer V smoke loop (real Extension Development Host)
 
@@ -321,7 +323,7 @@ Fix: install @deepseek-ai/dsh in the workspace so its "dsh" bin is found automat
 
 ## Dual channel
 
-- **SDK stdout** — JSON-RPC only (`initialize` / `session/prompt` / `shutdown`) plus server notifications (`session.event`, `session.status`, `subagent.*`). No `session/close` / `session/resume` on stdout.
+- **SDK stdout** — JSON-RPC only (`initialize` / `session/prompt` / `shutdown`) plus server notifications (`session.event`, `session.status`, `session.assistant-stream`, `subagent.*`). No `session/close` / `session/resume` on stdout.
 - **Host bridge** — UDS/named-pipe NDJSON for `session/dispose`, `session/read-log`, `session/resume`, approval/questions, and permission RPC. Bridge traffic never shares stdout with the SDK.
 
 The Extension does **not** reimplement agent-loop, tool execution, or session persistence (AC-15). Fail-closed approvals / questions live in `InteractionCoordinator` + `ide-bridge` terminal answerers — not in `packages/core/agent-loop`.

@@ -171,7 +171,7 @@ const SENTENCE_MODEL_EXPERIENCE: Readonly<Record<string, SentenceContract>> = {
   'packages/host/open-in-app': { kind: 'none', reason: 'Host routes opening desktop applications for a human; registers nothing model-facing.' },
   'packages/client/ui-open-in-app': { kind: 'none', reason: 'Browser-side split button opening the workspace directory for a human; registers nothing model-facing.' },
   'packages/bundle/base': { kind: 'indirect', reason: 'The bundle is a patch-list carrier; each inserted row\'s package owns its model-facing behavior.' },
-  'packages/bundle/ide': { kind: 'none', reason: 'The ide layer only inserts the Host bridge and renames the sdk-app profile; model-facing persona and tools remain owned by dsh-sdk-app and dsh-base.' },
+  'packages/bundle/ide': { kind: 'indirect', reason: 'The bundle is a patch-list carrier: it inserts Host-bridge rows and enables the loopback-scoped browser rows, and each row\'s package owns its model-facing behavior.' },
   'packages/bundle/specdev-app': { kind: 'none', reason: 'The bundle only inserts SpecDev rows; the model-facing persona, preset roster, and tool policy belong to the declared presets and dsh-specdev-presets.' },
   'packages/bundle/headless': { kind: 'none', reason: 'The one-shot runner submits the task as an ordinary user message; prompts and tools belong to the composed base and headless bundles.' },
   'packages/ide/ide-bridge': { kind: 'none', reason: 'The bridge only relays Host interaction outcomes and registers no prompt, schema, or result text.' },

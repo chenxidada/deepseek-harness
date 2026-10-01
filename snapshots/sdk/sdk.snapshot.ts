@@ -374,12 +374,19 @@ function normalizeNotifications(notifications: readonly HarnessNotification[], c
   const normalizedEvents = events.length === 0
     ? []
     : scrubModelRequestBulk(normalizeSessionLog(
-      normalizeSessionFormatMetadata(typedLog),
+      // The runtime writes the current generation, so its delivery watermark
+      // carries the current format version; tokenize it here so a refreshed
+      // golden matches the comparison, which tokenizes against the fixture's
+      // own (possibly older) generation.
+      normalizeSessionFormatMetadata(typedLog, SESSION_FORMAT_VERSION),
       ctx,
       typedFeedback ? { identityMode: 'preserve' } : {},
     )).trimEnd().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
   let eventIndex = 0
   const records = notifications.map((notification) => {
+    if (notification.method === 'session.assistant-stream') {
+      return normalizeAssistantStreamNotification(notification)
+    }
     if (notification.method !== 'session.event') return { method: notification.method, params: notification.params }
     const event = normalizedEvents[eventIndex++]
     return { method: notification.method, params: { ...notification.params, event } }
@@ -389,6 +396,24 @@ function normalizeNotifications(notifications: readonly HarnessNotification[], c
     for (const [index, id] of ctx.sessionIds.entries()) output = output.replaceAll(id, '{{session:' + (index + 1) + '}}')
   }
   return normalizeStdout(output, ctx, typedFeedback ? { identityMode: 'preserve' } : {})
+}
+
+/**
+ * Zero one live stream frame's wall-clock `time` the way session-log event
+ * times are zeroed, so the golden stays stable across replays.
+ */
+function normalizeAssistantStreamNotification(
+  notification: HarnessNotification,
+): { method: string; params: Record<string, unknown> } {
+  const frame = notification.params.frame
+  if (typeof frame !== 'object' || frame === null) {
+    return { method: notification.method, params: notification.params }
+  }
+  const record = frame as Record<string, unknown>
+  if (typeof record.time !== 'number') {
+    return { method: notification.method, params: notification.params }
+  }
+  return { method: notification.method, params: { ...notification.params, frame: { ...record, time: 0 } } }
 }
 
 /** Normalize the owned-run projection. */

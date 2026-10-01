@@ -175,6 +175,8 @@ export type HostToWebviewMessage =
     appendText?: string
     /** Append to existing reasoning text. */
     appendReasoning?: string
+    /** Replace the full reasoning text (durable message settling a streamed bubble). */
+    reasoning?: string
     /** Attach the images a replayed bubble carried; replaces the existing list. */
     images?: MessageImage[]
     incomplete?: boolean

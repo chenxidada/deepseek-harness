@@ -12,7 +12,9 @@
 
 **Conversation** Webview 是实时的阅读与输入界面。**决策状态**（mode / sessionId / send gate / Continue）跟随 Host 的 `panel/state` / `messages/*` / `status/set` —— Webview 永不拥有这些决策。非法发送由 Host 经 `ui/reject-send` 拒绝。按修订后的 AD-CU-1 / AD-CUX-1，Webview **可以**持有**呈现状态**（follow-state、流式 chrome、展开座位），前提是经 DOM / `__dshProbes` 约定暴露。**Timeline** TreeView 保留简短的轮次/步骤/工具/状态/subagent 标签与 Diff 入口 —— 它**不**展示 assistant 长文本（那属于 Conversation 面板）。
 
-SDK 的 `session.event` / `session.status` / subagent 通知被投影到 Timeline 与 MessageStore。携带 `meta.diffs` 的 write/edit 工具结果暴露一个**事后** Diff 入口（`vscode.diff`）；运行中的逐文件确认不是默认行为（AD-7）。
+SDK 的 `session.event` / `session.status` / `session.assistant-stream` / subagent 通知被投影到 Timeline 与 MessageStore。携带 `meta.diffs` 的 write/edit 工具结果暴露一个**事后** Diff 入口（`vscode.diff`）；运行中的逐文件确认不是默认行为（AD-7）。
+
+安装、profile 布局与故障排查见 [VS Code 扩展指南](../../docs/user/guide/vscode-extension.zh.md)。
 
 ## Layer V 冒烟测试链路（真实 Extension Development Host）
 
@@ -321,7 +323,7 @@ Fix: install @deepseek-ai/dsh in the workspace so its "dsh" bin is found automat
 
 ## 双通道
 
-- **SDK stdout** —— 仅 JSON-RPC（`initialize` / `session/prompt` / `shutdown`）加上服务端通知（`session.event`、`session.status`、`subagent.*`）。stdout 上没有 `session/close` / `session/resume`。
+- **SDK stdout** —— 仅 JSON-RPC（`initialize` / `session/prompt` / `shutdown`）加上服务端通知（`session.event`、`session.status`、`session.assistant-stream`、`subagent.*`）。stdout 上没有 `session/close` / `session/resume`。
 - **Host bridge** —— UDS/named-pipe NDJSON，承载 `session/dispose`、`session/read-log`、`session/resume`、审批/提问，以及 permission RPC。bridge 流量绝不与 SDK 共用 stdout。
 
 扩展**不**重新实现 agent-loop、工具执行或会话持久化（AC-15）。fail-closed 的审批 / 提问位于 `InteractionCoordinator` + `ide-bridge` 的终端应答方 —— 不在 `packages/core/agent-loop`。

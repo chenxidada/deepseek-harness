@@ -1328,6 +1328,9 @@ export function applyHostFrame(raw: unknown): void {
           let reasoning = m.reasoning
           if (typeof frame.appendReasoning === 'string') {
             reasoning = (reasoning ?? '') + frame.appendReasoning
+          } else if (typeof frame.reasoning === 'string') {
+            // Durable settlement replaces the streamed prefix with the logged text.
+            reasoning = frame.reasoning
           }
           let activity = m.activity
           if (activity) {

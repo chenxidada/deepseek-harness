@@ -11,6 +11,8 @@ English | [中文](README.zh.md)
 
 The IDE application as a `dsh` profile bundle stacked on [`dsh-base`](../base/README.md) and [`dsh-sdk-app`](../sdk-app/README.md). The patch sets the SDK startup `profile` to `ide` and inserts [`dsh-ide-bridge`](../../ide/ide-bridge/README.md). Stdout remains exclusive to SDK JSON-RPC; Host approval and user-questions traffic uses `DSH_IDE_BRIDGE_SOCK`. The bundle must not mount `ui-approval` or `ui-user-questions`.
 
+The patch also enables the model-facing browser row over a loopback-only origin allowlist, so an IDE deployment can drive a local dev server without another overlay. A deployment that needs other origins, a visible window, or trace archives restates the `browser-playwright` row in its own layer.
+
 ## Table of Contents
 
 - [Use this package](#use-this-package)
@@ -30,11 +32,11 @@ The patch also restates the `session-query-sqlite` row with `openAt: first-searc
 <a id="model-experience"></a>
 ## Model Experience
 
-None, as the ide layer only inserts the Host bridge and renames the sdk-app profile; model-facing persona and tools remain owned by `dsh-sdk-app` and `dsh-base`.
+Indirectly, through the rows the patch enables and inserts, whose packages own their model-facing behavior.
 
 #### KV Cache effect
 
-No additional model-request effect beyond the stacked sdk-app and base layers.
+The bundle itself adds no request prefix; each enabled or inserted row's package owns any cache effect.
 
 ## Known Limitations and Deferred Work
 

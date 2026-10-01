@@ -38,6 +38,7 @@ kind: "package-group"
 先从子系统参考文档了解共享词汇，再看后端与挂载在其上的工具。
 
 - [browser 子系统](../../docs/subsystems/browser.zh.md)——会话请求与 spec、闭集的动作与观测联合类型、提供方可用性，以及 `BrowserError` 错误码分类体系。
+- [Browser use](../../docs/subsystems/browser-use.zh.md)——另一套浏览器集成：只做注册的服务，其实验性提供方各自拥有自己的工具名。
 - [dsh-browser-playwright](browser-playwright/README.zh.md)——随包交付的后端、其 launch 与 attach 模式，以及 origin 白名单。
 - [dsh-tool-browser](tool-browser/README.zh.md)——启用方式、十一个工具，以及模型看到的内容。
 

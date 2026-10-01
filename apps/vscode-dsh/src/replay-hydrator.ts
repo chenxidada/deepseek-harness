@@ -73,6 +73,14 @@ export interface FoldedMessage {
    * so a caller reads them back before the bubble can render them.
    */
   images?: FoldedImageRef[]
+  /** Concatenated reasoning blocks of an assistant message, when it carried any. */
+  reasoning?: string
+  /**
+   * Set when a user-role message came from a producer other than the human
+   * (`source.kind !== 'user'`): the row renders as injected context, not a
+   * user bubble.
+   */
+  producer?: string
 }
 
 /** One hydrated bubble whose images still need reading back from the attachment store. */
@@ -160,6 +168,18 @@ export function hydrateFromAuthoritativeLog(
     if (bar.images !== undefined && bar.images.length > 0) {
       pendingImages.push({ messageId: id, images: bar.images })
     }
+    if (bar.producer !== undefined) {
+      return {
+        seq: bar.seq,
+        message: {
+          id,
+          sessionId,
+          role: 'notice',
+          kind: 'notice',
+          text: `上下文注入（${bar.producer}）：${summarizeInjectedText(bar.text)}`,
+        },
+      }
+    }
     return {
       seq: bar.seq,
       message: {
@@ -168,10 +188,12 @@ export function hydrateFromAuthoritativeLog(
         role: bar.role,
         kind: 'text' as const,
         text: bar.text,
+        ...bar.reasoning === undefined ? {} : { reasoning: bar.reasoning },
         ...incomplete && isLast ? { incomplete: true as const } : {},
       },
     }
   })
+  for (const row of foldDeveloperMessages(sessionId, events)) rows.push(row)
   for (const marker of foldCompactionMarkers(sessionId, events)) {
     rows.push({ seq: marker.seq, message: marker.message })
   }
@@ -342,6 +364,8 @@ export function foldMessages(events: readonly HydratorSessionEvent[]): FoldedMes
     const id = typeof message.id === 'string' ? message.id : undefined
     const text = textFromContent(message.content)
     const images = imageRefsFromContent(message.content)
+    const reasoning = role === 'assistant' ? reasoningFromContent(message.content) : ''
+    const producer = role === 'user' ? nonUserProducer(message.source) : undefined
     const surfaceOp = event.surfaceOp
     if (isReplaceSurfaceOp(surfaceOp) && id !== undefined) {
       for (let i = bars.length - 1; i >= 0; i -= 1) {
@@ -354,9 +378,46 @@ export function foldMessages(events: readonly HydratorSessionEvent[]): FoldedMes
       text,
       seq: Number(event.seq ?? 0),
       ...images.length === 0 ? {} : { images },
+      ...reasoning === '' ? {} : { reasoning },
+      ...producer === undefined ? {} : { producer },
     })
   }
   return bars
+}
+
+/**
+ * Fold `developer/message` tool-registry changes into notice rows. The Web chat
+ * client presents these as context-injection rows; a notice is this panel's
+ * equivalent, so a replayed session shows the same tool additions and removals
+ * the live panel showed.
+ * @param sessionId - SDK session identity for ChatMessage.sessionId.
+ * @param events - authoritative session events (raw or cold-balanced).
+ * @returns notice rows in log order, each carrying its event seq.
+ */
+export function foldDeveloperMessages(
+  sessionId: string,
+  events: readonly HydratorSessionEvent[],
+): Array<{ seq: number; message: ChatMessage }> {
+  const rows: Array<{ seq: number; message: ChatMessage }> = []
+  for (const event of events) {
+    if (event.type !== 'developer/message') continue
+    const data = asRecord(event.data)
+    const label = toolRegistryChangeLabel(data?.message)
+    if (label === undefined) continue
+    const turn = asNumber(data?.turn)
+    rows.push({
+      seq: Number(event.seq ?? 0),
+      message: {
+        id: randomUUID(),
+        sessionId,
+        role: 'notice',
+        kind: 'notice',
+        text: label,
+        ...turn === undefined ? {} : { turn },
+      },
+    })
+  }
+  return rows
 }
 
 /**
@@ -774,7 +835,12 @@ export function detectIncomplete(events: readonly HydratorSessionEvent[]): boole
   return openTurns > 0 || incompleteEnd
 }
 
-function textFromContent(content: unknown): string {
+/**
+ * Concatenated text blocks of one logged message content list.
+ * @param content - `content` payload of a logged message.
+ * @returns joined text, or '' when no text block exists.
+ */
+export function textFromContent(content: unknown): string {
   if (!Array.isArray(content)) return ''
   const parts: string[] = []
   for (const block of content) {
@@ -784,6 +850,59 @@ function textFromContent(content: unknown): string {
     }
   }
   return parts.join('')
+}
+
+/**
+ * Concatenated reasoning blocks of one logged message content list.
+ * @param content - `content` payload of a logged message.
+ * @returns joined reasoning, or '' when no reasoning block exists.
+ */
+export function reasoningFromContent(content: unknown): string {
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const block of content) {
+    if (block !== null && typeof block === 'object' && (block as { type?: unknown }).type === 'reasoning') {
+      const text = (block as { text?: unknown }).text
+      if (typeof text === 'string') parts.push(text)
+    }
+  }
+  return parts.join('\n')
+}
+
+/**
+ * Producer label of a user-role message whose `source.kind` is not `user`.
+ * @param source - `source` payload of a logged user message.
+ * @returns the kind, or undefined when the row is an ordinary user prompt.
+ */
+export function nonUserProducer(source: unknown): string | undefined {
+  const record = asRecord(source)
+  const kind = record?.kind
+  return typeof kind === 'string' && kind !== '' && kind !== 'user' ? kind : undefined
+}
+
+/** One-line bounded rendering of injected context, so long payloads cannot flood the panel. */
+export function summarizeInjectedText(text: string): string {
+  const joined = text.replace(/\s+/g, ' ').trim()
+  return joined.length <= 160 ? joined : `${joined.slice(0, 159)}…`
+}
+
+/** `+added -removed` label of one `developer/message` tool-registry change. */
+export function toolRegistryChangeLabel(message: unknown): string | undefined {
+  const record = asRecord(message)
+  const content = record?.content
+  if (!Array.isArray(content)) return undefined
+  const added: string[] = []
+  const removed: string[] = []
+  for (const block of content) {
+    const entry = asRecord(block)
+    if (entry?.type === 'tool-addition' && typeof entry.toolName === 'string') added.push(entry.toolName)
+    else if (entry?.type === 'tool-removal' && typeof entry.toolName === 'string') removed.push(entry.toolName)
+  }
+  if (added.length === 0 && removed.length === 0) return undefined
+  const parts: string[] = []
+  if (added.length > 0) parts.push(`+${added.join(', ')}`)
+  if (removed.length > 0) parts.push(`-${removed.join(', ')}`)
+  return `工具已更新：${parts.join(' ')}`
 }
 
 /**

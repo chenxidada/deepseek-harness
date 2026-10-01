@@ -1,5 +1,5 @@
 import { MESSAGES_RESPONSE } from './messages-response.ts'
-import { createUserMessage, LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, LlmAdapter, LlmAttemptId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
@@ -400,6 +400,74 @@ describe('HarnessSdkJsonRpcServer', () => {
       .toEqual([
         { method: 'session.status', params: { sessionId: 'message-outcome', status: 'running' } },
         { method: 'session.status', params: { sessionId: 'message-outcome', status: 'idle' } },
+      ])
+    await server.shutdown()
+    await ctx.fiber.dispose()
+  })
+
+  it('forwards live assistant stream frames for the owning session', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    const transport = new FakeTransport()
+    const server = new HarnessSdkJsonRpcServer(ctx, transport)
+    const session = ctx.sessions.create(SessionId('live-stream'))
+    const agent = ({
+      id: SessionId('live-stream'),
+      session,
+    } satisfies Pick<Agent, 'id' | 'session'>) as Agent
+
+    const attemptId = LlmAttemptId('live-stream:1')
+    ctx.emit('agent/assistant-stream', {
+      agent,
+      frame: { type: 'start', attemptId, revision: 1, turn: 1, step: 1 },
+    })
+    ctx.emit('agent/assistant-stream', {
+      agent,
+      frame: {
+        type: 'chunk',
+        attemptId,
+        revision: 2,
+        index: 0,
+        time: 1_700_000_000_000,
+        chunk: { type: 'text-delta', index: 0, text: 'streamed' },
+      },
+    })
+    ctx.emit('agent/assistant-stream', {
+      agent,
+      frame: { type: 'end', attemptId, revision: 3, index: 1, outcome: { kind: 'abandoned' } },
+    })
+
+    expect(transport.notifications.filter(notification => notification.method === 'session.assistant-stream'))
+      .toEqual([
+        {
+          method: 'session.assistant-stream',
+          params: {
+            sessionId: 'live-stream',
+            frame: { type: 'start', attemptId: 'live-stream:1', revision: 1, turn: 1, step: 1 },
+          },
+        },
+        {
+          method: 'session.assistant-stream',
+          params: {
+            sessionId: 'live-stream',
+            frame: {
+              type: 'chunk',
+              attemptId: 'live-stream:1',
+              revision: 2,
+              index: 0,
+              time: 1_700_000_000_000,
+              chunk: { type: 'text-delta', index: 0, text: 'streamed' },
+            },
+          },
+        },
+        {
+          method: 'session.assistant-stream',
+          params: {
+            sessionId: 'live-stream',
+            frame: { type: 'end', attemptId: 'live-stream:1', revision: 3, index: 1, outcome: { kind: 'abandoned' } },
+          },
+        },
       ])
     await server.shutdown()
     await ctx.fiber.dispose()
@@ -1374,7 +1442,7 @@ describe('HarnessSdkJsonRpcServer', () => {
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
 
     await expect(server.shutdown()).rejects.toBe(listenerFailure)
-    expect(on).toHaveBeenCalledTimes(4)
+    expect(on).toHaveBeenCalledTimes(5)
   })
 
   it('adopts the configured default model for sessions created now', async () => {

@@ -42,6 +42,10 @@ import {
   compactionMarkerMessage,
   compactionSummaryText,
   hydrateFromAuthoritativeLog,
+  reasoningFromContent,
+  summarizeInjectedText,
+  textFromContent,
+  toolRegistryChangeLabel,
   withWorkflowMember,
   workflowMarkerMessage,
   workflowMemberFrom,
@@ -321,6 +325,8 @@ export class ConversationController {
   private settleChain = new Map<string, Promise<void>>()
   /** Live streaming assistant bubble id per session (stable across chunks). */
   private streamingAssistant = new Map<string, { messageId: string; turn?: number }>()
+  /** Turn of each in-flight live stream attempt, so chunk frames tag their bubble. */
+  private readonly streamAttemptTurns = new Map<string, number>()
   /** Duck-typed workspace write surface for revert (AD-CCD-10); set by extension / L2. */
   private revertWorkspace: RevertWorkspace | undefined
   /** Session-scoped latest `todo/write` snapshot (feature: todo-panel). */
@@ -1265,7 +1271,7 @@ export class ConversationController {
   injectAssistantMessage(sessionId: string, text: string): void {
     const tab = this.registry.getBySessionId(sessionId)
     if (tab === undefined) throw new Error(`unknown session: ${sessionId}`)
-    this.projectAssistantMessage(sessionId, text)
+    this.projectAssistantMessage(sessionId, text, undefined)
     const active = this.registry.getActive()
     if (active === undefined || active.sessionId !== sessionId) {
       this.registry.setUnread(tab.tabId, true)
@@ -2541,6 +2547,19 @@ export class ConversationController {
     })
   }
 
+  /**
+   * Apply one synthetic `session.assistant-stream` frame through the same
+   * projection path as a live notification (test hooks only).
+   * @param sessionId - owning session.
+   * @param frame - start, chunk, or end frame.
+   */
+  applyTestStreamFrame(sessionId: string, frame: Record<string, unknown>): void {
+    this.onSdkNotification({
+      method: 'session.assistant-stream',
+      params: { sessionId, frame },
+    })
+  }
+
   /** Clear local Tabs on window shutdown (process teardown owns remote sessions). */
   clearLocal(): void {
     this.stopNotifications?.()
@@ -2807,7 +2826,7 @@ export class ConversationController {
     this.panelHost?.pushAppend(message)
   }
 
-  private projectAssistantMessage(sessionId: string, text: string, turn?: number): void {
+  private projectAssistantMessage(sessionId: string, text: string, reasoning: string | undefined, turn?: number): void {
     if (text === '') return
     const streaming = this.streamingAssistant.get(sessionId)
     if (streaming !== undefined) {
@@ -2816,6 +2835,7 @@ export class ConversationController {
         text,
         streaming: false,
         incomplete: false,
+        ...reasoning === undefined ? {} : { reasoning },
       })
       this.streamingAssistant.delete(sessionId)
       const active = this.registry.getActive()
@@ -2824,6 +2844,7 @@ export class ConversationController {
           text,
           streaming: false,
           incomplete: false,
+          ...reasoning === undefined ? {} : { reasoning },
         })
       } else {
         const tab = this.registry.getBySessionId(sessionId)
@@ -2842,6 +2863,7 @@ export class ConversationController {
       role: 'assistant',
       kind: 'text',
       text,
+      ...reasoning === undefined ? {} : { reasoning },
       ...turn === undefined ? {} : { turn },
     }
     this.messages.append(sessionId, message)
@@ -2874,6 +2896,36 @@ export class ConversationController {
     if (this.isProjectedSession(this.registry.getActive(), sessionId)) {
       this.panelHost?.pushPatch(sessionId, streaming.messageId, patch)
     }
+  }
+
+  /**
+   * Project one live `session.assistant-stream` frame. The runtime publishes raw
+   * stream chunks between the durable events of an attempt, so text and
+   * reasoning render incrementally instead of waiting for `assistant/message`;
+   * the durable message then converges the same bubble.
+   * @param sessionId - session whose agent published the frame.
+   * @param frame - start, chunk, or end frame off the wire.
+   */
+  private applyAssistantStreamFrame(sessionId: string, frame: Record<string, unknown>): void {
+    const attemptId = typeof frame.attemptId === 'string' ? frame.attemptId : undefined
+    if (frame.type === 'start') {
+      if (attemptId !== undefined && typeof frame.turn === 'number') {
+        this.streamAttemptTurns.set(attemptId, frame.turn)
+      }
+      return
+    }
+    if (frame.type === 'chunk') {
+      const chunk = asActivityRecord(frame.chunk)
+      if (chunk === undefined) return
+      const turn = attemptId === undefined ? undefined : this.streamAttemptTurns.get(attemptId)
+      this.projectAssistantChunk(sessionId, chunk, turn)
+      return
+    }
+    if (frame.type !== 'end') return
+    if (attemptId !== undefined) this.streamAttemptTurns.delete(attemptId)
+    // A committed settlement already arrived as `assistant/message` and closed
+    // its bubble; abandonment has no durable event, so close it here.
+    if (asActivityRecord(frame.outcome)?.kind === 'abandoned') this.closeStreamingAssistant(sessionId)
   }
 
   /**
@@ -3038,6 +3090,54 @@ export class ConversationController {
     const tab = this.registry.getBySessionId(sessionId)
     if (tab !== undefined) this.registry.setStatus(tab.tabId, 'idle')
     this.panelHost?.pushStatus()
+  }
+
+  /**
+   * Append one turn-scoped notice bubble (stop reason, retry, injected context).
+   * Notices are deduplicated by exact text so a repeated wire frame cannot stack
+   * duplicates.
+   * @param sessionId - session whose panel shows the notice.
+   * @param text - complete notice text.
+   * @param turn - owning turn when the fact is turn-scoped.
+   */
+  private appendTurnNotice(sessionId: string, text: string, turn?: number): void {
+    const already = this.messages.get(sessionId).some(m =>
+      m.role === 'notice' && m.text === text && (turn === undefined || m.turn === turn),
+    )
+    if (already) return
+    const notice: ChatMessage = {
+      id: randomUUID(),
+      sessionId,
+      role: 'notice',
+      kind: 'notice',
+      text,
+      ...turn === undefined ? {} : { turn },
+    }
+    this.messages.append(sessionId, notice)
+    if (this.isProjectedSession(this.registry.getActive(), sessionId)) {
+      this.panelHost?.pushAppend(notice)
+    } else {
+      const tab = this.registry.getBySessionId(sessionId)
+      if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
+    }
+  }
+
+  /**
+   * Show one user-role message the model saw as context injection. A
+   * `source.kind === 'user'` message already has a local optimistic bubble and is
+   * skipped; every other producer (agent instructions, goal rounds, schedules,
+   * question replies) appears as a notice instead of a user bubble.
+   * @param sessionId - session that received the message.
+   * @param data - `user/message` payload.
+   * @param turn - owning turn when known.
+   */
+  private projectInjectedUserMessage(sessionId: string, data: Record<string, unknown>, turn?: number): void {
+    const source = asActivityRecord(data.source)
+    const kind = typeof source?.kind === 'string' ? source.kind : undefined
+    if (kind === undefined || kind === 'user') return
+    const text = textFromContent(data.content)
+    if (text === '') return
+    this.appendTurnNotice(sessionId, `上下文注入（${kind}）：${summarizeInjectedText(text)}`, turn)
   }
 
   /**
@@ -3529,6 +3629,14 @@ export class ConversationController {
       void this.onSubagentFinished(parentSessionId, childSessionId)
       return
     }
+    if (notification.method === 'session.assistant-stream') {
+      const streamSessionId = notification.params.sessionId
+      const frame = notification.params.frame
+      if (typeof streamSessionId !== 'string') return
+      if (typeof frame !== 'object' || frame === null) return
+      this.applyAssistantStreamFrame(streamSessionId, frame as Record<string, unknown>)
+      return
+    }
     if (notification.method !== 'session.event') return
     const sessionId = notification.params.sessionId
     const event = notification.params.event
@@ -3604,6 +3712,34 @@ export class ConversationController {
       }
       return
     }
+    if (record.type === 'user/message') {
+      this.projectInjectedUserMessage(sessionId, data, turn)
+      return
+    }
+    if (record.type === 'developer/message') {
+      const label = toolRegistryChangeLabel(data.message)
+      if (label !== undefined) this.appendTurnNotice(sessionId, label, turn)
+      return
+    }
+    if (record.type === 'llm/retry') {
+      const failure = asActivityRecord(data.failure)
+      const code = typeof failure?.code === 'string' && failure.code !== '' ? `（${failure.code}）` : ''
+      const delay = typeof data.delayMs === 'number' && data.delayMs > 0
+        ? `，${(data.delayMs / 1000).toFixed(1)}s 后重试`
+        : '，即将重试'
+      const attempt = typeof data.retry === 'number' && data.retry >= 1 ? `（第 ${data.retry} 次）` : ''
+      this.appendTurnNotice(sessionId, `模型调用失败${code}${delay}${attempt}`, turn)
+      return
+    }
+    // Presented-by-design as non-messages, matching the Web chat client: the
+    // system prompt stays hidden, `assistant/attempt` settles attempts that
+    // produced no visible message, `workspace/changes` carries only a turn marker
+    // (the file list lives on the Host), and `image/offload` only affects later
+    // model requests.
+    if (record.type === 'system/message'
+      || record.type === 'assistant/attempt'
+      || record.type === 'workspace/changes'
+      || record.type === 'image/offload') return
     if (record.type === 'session/title') {
       // The log is the title's source of truth: an explicit rename and an
       // automatic title both reach the panel as this one event.
@@ -3646,6 +3782,10 @@ export class ConversationController {
       const reasonKind = typeof reason?.kind === 'string' ? reason.kind : undefined
       if (reasonKind === 'aborted' || reasonKind === 'interrupted') {
         this.markTurnIncomplete(sessionId, turn)
+      } else if (reasonKind === 'error') {
+        this.appendTurnNotice(sessionId, `模型调用失败：${failureLabel(reason?.error)}`, turn)
+      } else if (reasonKind === 'max-tokens') {
+        this.appendTurnNotice(sessionId, '达到输出上限', turn)
       }
       if (turn === undefined) return
       const assistantId = this.attributor.getLastAssistantId(sessionId)
@@ -3684,15 +3824,15 @@ export class ConversationController {
       this.refreshContextPressure(sessionId)
     }
     const message = data.message as Record<string, unknown> | undefined
-    const text = firstAssistantText(message)
+    const parts = assistantMessageParts(message)
     // AC-6: never invent assistant body when the event has no text. The step still ends
     // here, so close its bubble: a surviving handle would anchor every later step's
     // reasoning and text to this step's position, above that step's tool rows.
-    if (text === undefined) {
+    if (parts.text === undefined) {
       this.closeStreamingAssistant(sessionId)
       return
     }
-    this.projectAssistantMessage(sessionId, text, turn)
+    this.projectAssistantMessage(sessionId, parts.text, parts.reasoning, turn)
     const pending = this.pendingSettleTurn.get(sessionId)
     if (pending !== undefined && turn === pending) {
       this.pendingSettleTurn.delete(sessionId)
@@ -3722,16 +3862,32 @@ function contextPressureOf(value: unknown): Partial<TokenStatusPayload> | undefi
   }
 }
 
-function firstAssistantText(message: Record<string, unknown> | undefined): string | undefined {
-  if (message === undefined) return undefined
+/**
+ * Visible text and reasoning of one durable assistant message. The log keeps
+ * reasoning blocks next to text blocks, so both a settled live bubble and a
+ * replayed one recover reasoning from the durable message alone.
+ */
+function assistantMessageParts(
+  message: Record<string, unknown> | undefined,
+): { text?: string; reasoning?: string } {
+  if (message === undefined) return {}
   const content = message.content
-  if (!Array.isArray(content)) return undefined
-  for (const block of content) {
-    if (typeof block !== 'object' || block === null) continue
-    const record = block as Record<string, unknown>
-    if (record.type === 'text' && typeof record.text === 'string') return record.text
+  if (!Array.isArray(content)) return {}
+  const text = textFromContent(content)
+  const reasoning = reasoningFromContent(content)
+  return {
+    ...text === '' ? {} : { text },
+    ...reasoning === '' ? {} : { reasoning },
   }
-  return undefined
+}
+
+/** `code: message` label of one `turn/end` failure reason, bounded for the panel. */
+function failureLabel(error: unknown): string {
+  const record = asActivityRecord(error)
+  const code = typeof record?.code === 'string' && record.code !== '' ? record.code : 'UNKNOWN'
+  const message = typeof record?.message === 'string' ? record.message.replace(/\s+/g, ' ').trim() : ''
+  if (message === '') return code
+  return `${code}: ${message.length <= 200 ? message : `${message.slice(0, 199)}…`}`
 }
 
 function asActivityRecord(value: unknown): Record<string, unknown> | undefined {

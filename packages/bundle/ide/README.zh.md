@@ -11,6 +11,8 @@ kind: "package-bundle"
 
 以 [`dsh-base`](../base/README.zh.md) 与 [`dsh-sdk-app`](../sdk-app/README.zh.md) 为栈的 IDE 应用 `dsh` profile 组合包。其 patch 将 SDK 启动 `profile` 设为 `ide`，并插入 [`dsh-ide-bridge`](../../ide/ide-bridge/README.zh.md)。stdout 仍专属于 SDK JSON-RPC；Host 审批与用户提问流量使用 `DSH_IDE_BRIDGE_SOCK`。本组合包不得挂载 `ui-approval` 或 `ui-user-questions`。
 
+该 patch 还会开启面向模型的浏览器行，白名单只放行本机回环地址，因此 IDE 部署无需额外覆盖层即可驱动本地 dev server。需要其它 origin、可见窗口或 trace 归档的部署，在自己的层里重述 `browser-playwright` 行。
+
 ## 目录
 
 - [使用本包](#use-this-package)
@@ -30,11 +32,11 @@ kind: "package-bundle"
 <a id="model-experience"></a>
 ## 模型体验
 
-None, as the ide layer only inserts the Host bridge and renames the sdk-app profile; model-facing persona and tools remain owned by `dsh-sdk-app` and `dsh-base`.
+通过该 patch 启用与插入的行所属的包间接产生影响，由各包负责其行的模型可见行为。
 
 #### KV Cache 影响
 
-除已叠加的 sdk-app 与 base 层外，无额外模型请求影响。
+组合包本身不添加任何请求前缀；每条启用或插入行所属的包负责各自的缓存影响。
 
 ## 已知限制与延期工作
 

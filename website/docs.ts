@@ -170,6 +170,14 @@ const homeAndGuide = pairedPages([
     section: { root: '集成', en: 'Integrations' },
     order: 1,
   },
+  {
+    source: 'docs/user/guide/vscode-extension.md',
+    route: 'guide/vscode-extension.md',
+    label: { root: 'VS Code 扩展', en: 'VS Code extension' },
+    sidebar: { root: 'zh-guide', en: 'en-guide' },
+    section: { root: '集成', en: 'Integrations' },
+    order: 2,
+  },
 ])
 
 const develop = pairedPages([

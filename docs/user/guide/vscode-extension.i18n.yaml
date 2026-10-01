@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for vscode-extension.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/user/guide/vscode-extension.md
+/vs-code-extension:
+  en: 43b570c2e685263a
+  zh: 024ef91b0418424a
+/vs-code-extension/summary:
+  en: 3bb4457aecda70eb
+  zh: cee13defaa0f25d6
+/vs-code-extension/table-of-contents:
+  en: a1a776ad7a2e053f
+  zh: 4258c9cba2af1d6a
+/vs-code-extension/prerequisites:
+  en: 5f7fac440745422f
+  zh: fd2043665db9f9f5
+/vs-code-extension/load-the-extension:
+  en: 628f1ccd5d624e42
+  zh: b0011fb90a7aa5db
+/vs-code-extension/load-the-extension/development-host:
+  en: df978e2310f80a4c
+  zh: 572cf3a39f1939e1
+/vs-code-extension/load-the-extension/vsix:
+  en: f2afc17d5780cbfe
+  zh: d593816b02874c17
+/vs-code-extension/starting-and-stopping:
+  en: 655c1c687167227e
+  zh: acbf2da38c2a8e81
+/vs-code-extension/runtime-resolution:
+  en: aa048ddb1d0cd537
+  zh: 6aa870f34e369a0f
+/vs-code-extension/profiles:
+  en: daff344580d213d2
+  zh: df893cf7a18930e7
+/vs-code-extension/first-run-on-a-new-machine:
+  en: 55f0af22925546a4
+  zh: eb1d98fa1a4d4062
+/vs-code-extension/browser-tools:
+  en: f5de941688600a30
+  zh: 3c04b0d48c1eca8c
+/vs-code-extension/troubleshooting:
+  en: c7d28bc0e0357286
+  zh: dd85608807e9bfd6
+/vs-code-extension/further-exploration:
+  en: c8a0f62e1277610a
+  zh: 95370e3f40aaff69

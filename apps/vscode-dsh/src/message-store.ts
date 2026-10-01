@@ -124,6 +124,8 @@ export interface MessagePatch {
   appendText?: string
   /** Append to existing reasoning text. */
   appendReasoning?: string
+  /** Replace the full reasoning text (durable message settling a streamed bubble). */
+  reasoning?: string
   /** Attach the images a replayed bubble carried; replaces the existing list. */
   images?: MessageImage[]
   /** Incomplete / aborted marker. */
@@ -195,6 +197,7 @@ export class MessageStore {
     if (update.appendReasoning !== undefined) {
       next.reasoning = `${current.reasoning ?? ''}${update.appendReasoning}`
     }
+    if (update.reasoning !== undefined) next.reasoning = update.reasoning
     if (update.incomplete !== undefined) next.incomplete = update.incomplete
     if (update.streaming !== undefined) {
       if (update.streaming) next.streaming = true

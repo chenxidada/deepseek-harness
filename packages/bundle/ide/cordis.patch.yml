@@ -25,6 +25,24 @@
     path: !!js dshHomePath('session-search.sqlite')
     openAt: first-search
 
+# Local front-end work: enable the model-facing browser row and admit loopback
+# origins only. The seam and its Playwright provider stay as dsh-base mounts
+# them. A deployment that needs other origins, a visible window, or trace
+# archives restates these rows in its own layer, where an id-targeted patch
+# replaces the whole config.
+- id: browser-playwright
+  config:
+    mode: launch
+    allowedOrigins:
+      - 'http://localhost:*'
+      - 'http://127.0.0.1:*'
+      - 'https://localhost:*'
+      - 'https://127.0.0.1:*'
+      - 'http://0.0.0.0:*'
+
+- id: tool-browser
+  disabled: false
+
 - insert:
     - id: ide-bridge
       name: '@deepseek-ai/dsh-ide-bridge'

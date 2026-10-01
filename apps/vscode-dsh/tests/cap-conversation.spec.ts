@@ -37,6 +37,27 @@ function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
   })
 }
 
+type TestNotificationListener = (notification: { method: string; params: Record<string, unknown> }) => void
+
+/**
+ * Broadcast one `session.event` wire frame to a stub host's notification
+ * listeners, mirroring what the SDK transport delivers to the Host.
+ * @param listeners - notification listeners registered on the stub host.
+ * @param sessionId - session the event belongs to.
+ * @param type - session event type.
+ * @param data - event payload.
+ */
+function emitSessionEvent(
+  listeners: Set<TestNotificationListener>,
+  sessionId: string,
+  type: string,
+  data: Record<string, unknown>,
+): void {
+  for (const listener of listeners) {
+    listener({ method: 'session.event', params: { sessionId, event: { type, data } } })
+  }
+}
+
 describe('cap:conversation — conversation registry, multi-tab, panel lifecycle, and subagent', () => {
   describe('conversation-registry.spec.ts', () => {
     describe('ConversationRegistry', () => {
@@ -2391,20 +2412,15 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         } as unknown as IdeSessionHost
         const controller = new ConversationController(host)
         const sessionId = controller.newConversation('steps').sessionId
-        const emit = (type: string, data: Record<string, unknown>): void => {
-          for (const listener of listeners) {
-            listener({ method: 'session.event', params: { sessionId, event: { type, data } } })
-          }
-        }
 
-        emit('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: 'think one' } })
-        emit('assistant/message', {
+        emitSessionEvent(listeners, sessionId, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: 'think one' } })
+        emitSessionEvent(listeners, sessionId, 'assistant/message', {
           turn: 1,
           step: 1,
           message: { role: 'assistant', content: [{ type: 'tool-call', name: 'bash', arguments: '{}' }] },
         })
-        emit('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'bash', arguments: '{}' })
-        emit('assistant/chunk', { turn: 1, step: 2, chunk: { type: 'reasoning-delta', text: 'think two' } })
+        emitSessionEvent(listeners, sessionId, 'tool/call', { turn: 1, step: 1, callId: 'c1', name: 'bash', arguments: '{}' })
+        emitSessionEvent(listeners, sessionId, 'assistant/chunk', { turn: 1, step: 2, chunk: { type: 'reasoning-delta', text: 'think two' } })
 
         const messages = controller.messages.get(sessionId)
         const labels = messages.map(message => message.activity !== undefined
@@ -4345,6 +4361,281 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       const bubble = controller.messages.get(tab.sessionId)[0]
       expect(bubble?.text).toBe('看这张')
       expect(bubble?.images).toEqual([{ mimeType: 'image/png', data: 'AA==' }])
+    })
+
+    it('CAP-CONVERSATION-104 assistant stream frames stream text and reasoning onto one bubble', () => {
+      const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
+      const host = {
+        status: 'connected',
+        interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
+        setConversationRegistry() {},
+        onNotification(listener: (notification: { method: string; params: Record<string, unknown> }) => void) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+        onStatusChange: () => () => {},
+        prompt: async () => 'msg',
+        disposeSession: async () => {},
+      } as unknown as IdeSessionHost
+      const controller = new ConversationController(host)
+      const sessionId = controller.newConversation('stream').sessionId
+      const frame = (payload: Record<string, unknown>): void => {
+        for (const listener of listeners) {
+          listener({ method: 'session.assistant-stream', params: { sessionId, frame: payload } })
+        }
+      }
+
+      frame({ type: 'start', attemptId: 'a1', revision: 1, turn: 3, step: 1 })
+      frame({
+        type: 'chunk',
+        attemptId: 'a1',
+        revision: 2,
+        index: 0,
+        time: 1,
+        chunk: { type: 'reasoning-delta', index: 0, text: '想' },
+      })
+      frame({
+        type: 'chunk',
+        attemptId: 'a1',
+        revision: 3,
+        index: 1,
+        time: 2,
+        chunk: { type: 'text-delta', index: 0, text: '答' },
+      })
+
+      const streaming = controller.messages.get(sessionId)
+      expect(streaming).toHaveLength(1)
+      expect(streaming[0]?.reasoning).toBe('想')
+      expect(streaming[0]?.text).toBe('答')
+      expect(streaming[0]?.turn).toBe(3)
+      expect(streaming[0]?.streaming).toBe(true)
+
+      // The durable settlement converges the same bubble and replaces the
+      // streamed prefix with the logged text and reasoning.
+      for (const listener of listeners) {
+        listener({
+          method: 'session.event',
+          params: {
+            sessionId,
+            event: {
+              type: 'assistant/message',
+              data: {
+                turn: 3,
+                message: {
+                  role: 'assistant',
+                  content: [
+                    { type: 'reasoning', text: '想完整' },
+                    { type: 'text', text: '答完整' },
+                  ],
+                },
+              },
+            },
+          },
+        })
+      }
+      const settled = controller.messages.get(sessionId)
+      expect(settled).toHaveLength(1)
+      expect(settled[0]?.text).toBe('答完整')
+      expect(settled[0]?.reasoning).toBe('想完整')
+      expect(settled[0]?.streaming).toBeUndefined()
+    })
+
+    it('CAP-CONVERSATION-105 turn-end error and max-tokens reasons append notices', () => {
+      const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
+      const host = {
+        status: 'connected',
+        interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
+        setConversationRegistry() {},
+        onNotification(listener: (notification: { method: string; params: Record<string, unknown> }) => void) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+        onStatusChange: () => () => {},
+        prompt: async () => 'msg',
+        disposeSession: async () => {},
+      } as unknown as IdeSessionHost
+      const controller = new ConversationController(host)
+      const sessionId = controller.newConversation('reasons').sessionId
+
+      emitSessionEvent(listeners, sessionId, 'turn/end', {
+        turn: 1,
+        reason: { kind: 'error', error: { code: 'AUTH', message: 'bad key' } },
+      })
+      emitSessionEvent(listeners, sessionId, 'turn/end', { turn: 2, reason: { kind: 'max-tokens' } })
+
+      const notices = controller.messages.get(sessionId)
+        .filter(message => message.role === 'notice')
+        .map(message => message.text)
+      expect(notices).toContain('模型调用失败：AUTH: bad key')
+      expect(notices).toContain('达到输出上限')
+    })
+
+    it('CAP-CONVERSATION-106 developer tool changes and llm retries append notices', () => {
+      const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
+      const host = {
+        status: 'connected',
+        interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
+        setConversationRegistry() {},
+        onNotification(listener: (notification: { method: string; params: Record<string, unknown> }) => void) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+        onStatusChange: () => () => {},
+        prompt: async () => 'msg',
+        disposeSession: async () => {},
+      } as unknown as IdeSessionHost
+      const controller = new ConversationController(host)
+      const sessionId = controller.newConversation('changes').sessionId
+
+      emitSessionEvent(listeners, sessionId, 'developer/message', {
+        turn: 1,
+        step: 1,
+        message: {
+          content: [
+            { type: 'tool-addition', toolName: 'bash' },
+            { type: 'tool-removal', toolName: 'read' },
+          ],
+        },
+      })
+      emitSessionEvent(listeners, sessionId, 'llm/retry', {
+        turn: 1,
+        step: 1,
+        retry: 1,
+        delayMs: 2000,
+        failure: { code: 'RATE_LIMIT', message: 'slow down' },
+      })
+
+      const notices = controller.messages.get(sessionId)
+        .filter(message => message.role === 'notice')
+        .map(message => message.text)
+      expect(notices).toContain('工具已更新：+bash -read')
+      expect(notices).toContain('模型调用失败（RATE_LIMIT），2.0s 后重试（第 1 次）')
+    })
+
+    it('CAP-CONVERSATION-107 injected user messages append notices while human prompts stay optimistic', () => {
+      const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
+      const host = {
+        status: 'connected',
+        interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
+        setConversationRegistry() {},
+        onNotification(listener: (notification: { method: string; params: Record<string, unknown> }) => void) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+        onStatusChange: () => () => {},
+        prompt: async () => 'msg',
+        disposeSession: async () => {},
+      } as unknown as IdeSessionHost
+      const controller = new ConversationController(host)
+      const sessionId = controller.newConversation('inject').sessionId
+
+      emitSessionEvent(listeners, sessionId, 'user/message', {
+        id: 'u1',
+        role: 'user',
+        source: { kind: 'user' },
+        content: [{ type: 'text', text: 'hi' }],
+      })
+      emitSessionEvent(listeners, sessionId, 'user/message', {
+        id: 'u2',
+        role: 'user',
+        source: { kind: 'agent-instructions' },
+        content: [{ type: 'text', text: 'AGENTS.md 内容' }],
+      })
+
+      const messages = controller.messages.get(sessionId)
+      // The human prompt already has its optimistic bubble; the injected context
+      // appears as a notice instead of a second user bubble.
+      expect(messages).toHaveLength(1)
+      expect(messages[0]?.role).toBe('notice')
+      expect(messages[0]?.text).toBe('上下文注入（agent-instructions）：AGENTS.md 内容')
+    })
+
+    it('CAP-CONVERSATION-108 tool-role results pair by callId and render text plus failure status', () => {
+      const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
+      const host = {
+        status: 'connected',
+        interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
+        setConversationRegistry() {},
+        onNotification(listener: (notification: { method: string; params: Record<string, unknown> }) => void) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+        onStatusChange: () => () => {},
+        prompt: async () => 'msg',
+        disposeSession: async () => {},
+      } as unknown as IdeSessionHost
+      const controller = new ConversationController(host)
+      const sessionId = controller.newConversation('toolv4').sessionId
+
+      emitSessionEvent(listeners, sessionId, 'tool/call', {
+        turn: 1,
+        step: 1,
+        callId: 'c1',
+        name: 'bash',
+        arguments: '{"command":"ls"}',
+      })
+      emitSessionEvent(listeners, sessionId, 'tool/result', {
+        turn: 1,
+        step: 1,
+        message: {
+          id: 'r1',
+          role: 'tool',
+          toolCallId: 'c1',
+          source: { kind: 'tool', callId: 'c1' },
+          // Current logs attach blocks directly and carry the failure on the message.
+          content: [{ type: 'text', text: 'hello from tool' }],
+          isError: true,
+        },
+      })
+
+      const activity = controller.messages.get(sessionId)
+        .find(message => message.kind === 'activity')?.activity
+      expect(activity?.callId).toBe('c1')
+      expect(activity?.status).toBe('failed')
+      expect(activity?.resultPreview).toContain('hello from tool')
+    })
+
+    it('CAP-CONVERSATION-109 replay folds reasoning blocks, injected producers, and developer notices', () => {
+      const events = [
+        {
+          type: 'user/message',
+          seq: 1,
+          data: { id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'hi' }] },
+        },
+        {
+          type: 'user/message',
+          seq: 2,
+          data: { id: 'u2', role: 'user', source: { kind: 'goal' }, content: [{ type: 'text', text: 'goal round' }] },
+        },
+        {
+          type: 'developer/message',
+          seq: 3,
+          data: { turn: 1, message: { content: [{ type: 'tool-addition', toolName: 'bash' }] } },
+        },
+        {
+          type: 'assistant/message',
+          seq: 4,
+          data: {
+            message: {
+              id: 'a1',
+              role: 'assistant',
+              content: [
+                { type: 'reasoning', text: 'think' },
+                { type: 'text', text: 'answer' },
+              ],
+            },
+          },
+        },
+      ]
+
+      const messages = hydrateFromAuthoritativeLog('sess-v4', events).messages
+      expect(messages.map(message => `${message.role}:${message.text}`)).toEqual([
+        'user:hi',
+        'notice:上下文注入（goal）：goal round',
+        'notice:工具已更新：+bash',
+        'assistant:answer',
+      ])
+      expect(messages[3]?.reasoning).toBe('think')
     })
   })
 
