@@ -131,7 +131,10 @@ describe('ide-bridge session/read-log (T-0a / AD-CU-2)', () => {
     ctx.provide(SESSION_PERSISTENCE_SERVICE, {
       open: async () => ({
         async read() {
-          return [{ type: 'user/message', seq: 0, data: { role: 'user', content: [] } }]
+          return {
+            eventState: 'owned',
+            events: [{ type: 'user/message', seq: 0, data: { role: 'user', content: [] } }],
+          }
         },
         async close() {},
       }),

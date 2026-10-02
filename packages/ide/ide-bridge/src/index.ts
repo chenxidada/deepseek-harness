@@ -1194,7 +1194,10 @@ async function handleReadLog(
     const handle = await persistence.open(frame.sessionId, 'read')
     let events: unknown[]
     try {
-      events = [...await handle.read(0)]
+      // V4 returns the caller-owned slice beside its ownership state; the slice
+      // is what the wire frame carries, so the state stays with the handle.
+      const stored = await handle.read(0)
+      events = [...stored.events]
     } catch (error: unknown) {
       try {
         await handle.close()

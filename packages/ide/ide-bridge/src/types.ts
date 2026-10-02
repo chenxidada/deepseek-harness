@@ -145,7 +145,13 @@ export interface SessionPersistenceReadCapability {
     sessionId: string,
     mode: 'read',
   ): Promise<{
-    read(from: number): Promise<readonly unknown[]>
+    /**
+     * Read one slice of the stored log.
+     * @param offset - first logical event seq to include.
+     * @returns the slice the frame forwards; the ownership state beside it is
+     *   not part of this wire contract.
+     */
+    read(offset?: number): Promise<{ readonly events: readonly unknown[] }>
     close(): Promise<void>
   }>
 }

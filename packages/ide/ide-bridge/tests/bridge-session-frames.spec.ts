@@ -2058,6 +2058,36 @@ describe('ide-bridge Host frame service-failure paths', () => {
     })
   })
 
+  it('forwards the event slice of a V4 read result instead of the result object', async () => {
+    const offsets: number[] = []
+    await withBridge((ctx) => {
+      ctx.provide(SESSION_PERSISTENCE_SERVICE, {
+        open: async () => ({
+          // V4 returns the caller-owned slice beside its ownership state, so a
+          // consumer that iterates the result object fails here rather than
+          // shipping the stored log.
+          read: async (offset: number) => {
+            offsets.push(offset)
+            return {
+              eventState: 'shared',
+              events: [{ type: 'user/message' }, { type: 'assistant/message' }],
+            }
+          },
+          close: async () => {},
+        }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'session/read-log', id: 'read-v4', sessionId: 'sess-a' }))
+        .toEqual({
+          kind: 'session/read-log/response',
+          id: 'read-v4',
+          ok: true,
+          events: [{ type: 'user/message' }, { type: 'assistant/message' }],
+        })
+      expect(offsets).toEqual([0])
+    })
+  })
+
   it('reports a missing and a failing sdkSessionResume', async () => {
     await withBridge(() => {}, async (harness) => {
       expect(await roundTrip(harness, { kind: 'session/resume', id: 'resume-missing', sessionId: 'sess-a' }))
@@ -2956,7 +2986,7 @@ describe('ide-bridge session/read-log closer fallbacks', () => {
       await withBridge((ctx) => {
         ctx.provide(SESSION_PERSISTENCE_SERVICE, {
           open: async () => ({
-            read: async () => [{ type: 'user/message' }],
+            read: async () => ({ eventState: 'owned', events: [{ type: 'user/message' }] }),
             close: async () => {},
           }),
         })
@@ -2983,7 +3013,7 @@ describe('ide-bridge session/read-log closer fallbacks', () => {
       await withBridge((ctx) => {
         ctx.provide(SESSION_PERSISTENCE_SERVICE, {
           open: async () => ({
-            read: async () => [{ type: 'user/message' }],
+            read: async () => ({ eventState: 'owned', events: [{ type: 'user/message' }] }),
             close: async () => {},
           }),
         })
