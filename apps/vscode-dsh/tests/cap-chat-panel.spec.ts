@@ -14,7 +14,7 @@ import { detectIncomplete, hydrateFromAuthoritativeLog } from '../src/replay-hyd
 import { IdeSessionHost, type SettingsNamespaceView } from '../src/session-host.ts'
 import { TimelineStore } from '../src/timeline-store.ts'
 import { type HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createContext, runInContext } from 'node:vm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -2683,6 +2683,21 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
 
       const block = renderRich('$$\n\\sum_{i=1}^{n} i\n$$')
       expect(block.html).toContain('md-math-block')
+    })
+
+    it('CAP-CHAT-PANEL-095 the panel loads the KaTeX stylesheet that hides the duplicate MathML copy', () => {
+      const radical = renderRich(String.raw`$\{8,8\pm\sqrt6\}$`)
+      // KaTeX renders each formula as a visual tree plus an assistive copy. Only
+      // KaTeX's stylesheet hides the second copy, so both must be present for the
+      // stylesheet import below to be load-bearing.
+      expect(radical.html).toContain('katex-html')
+      expect(radical.html).toContain('katex-mathml')
+
+      const entry = readFileSync(
+        resolve(process.cwd(), 'apps/vscode-dsh/webview/src/main.tsx'),
+        'utf8',
+      )
+      expect(entry).toMatch(/import\s+'katex\/dist\/katex\.min\.css'/)
     })
 
     it('CAP-CHAT-PANEL-089 rich-markdown marks Mermaid code blocks', () => {
