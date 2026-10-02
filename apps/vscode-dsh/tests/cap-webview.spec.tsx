@@ -1059,6 +1059,39 @@ describe('cap:webview — editor chat shell React rendering', () => {
       && (p as { sessionId?: string }).sessionId === 'child-1')).toBe(true)
       })
 
+      it('CAP-WEBVIEW-099 in-panel history multi-select sends one ui/delete-many-request for the selection', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/history',
+            open: true,
+            loading: false,
+            rows: [
+              { sessionId: 's1', title: 'One', updatedAt: '', previewOrPath: '' },
+              { sessionId: 's2', title: 'Two', updatedAt: '', previewOrPath: '' },
+              { sessionId: 's3', title: 'Three', updatedAt: '', previewOrPath: '' },
+            ],
+          })
+        })
+        expect(screen.queryByTestId('history-bulk-bar')).toBeNull()
+
+        fireEvent.click(screen.getByTestId('btn-history-select'))
+        expect(screen.getAllByTestId('history-row-check')).toHaveLength(3)
+
+        // A row click toggles the selection instead of opening the replay.
+        fireEvent.click(screen.getAllByTestId('history-row')[0]!)
+        fireEvent.click(screen.getAllByTestId('history-row')[2]!)
+        expect(posts.some(p => (p as { type?: string }).type === 'ui/history-select')).toBe(false)
+        expect(screen.getByTestId('history-bulk-count').textContent).toBe('已选 2')
+        expect(screen.getByTestId('btn-history-delete-selected').textContent).toContain('删除所选 (2)')
+
+        fireEvent.click(screen.getByTestId('btn-history-delete-selected'))
+        const frame = posts.find(p => (p as { type?: string }).type === 'ui/delete-many-request') as
+          | { sessionIds?: string[] }
+          | undefined
+        expect(frame?.sessionIds).toEqual(['s1', 's3'])
+      })
+
       it('CAP-WEBVIEW-011 overflow menu: delete session', async () => {
         render(<App bridge={bridge} />)
         await act(async () => {
@@ -1539,26 +1572,6 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expect(batch.textContent).toContain('2')
         fireEvent.click(batch)
         expect(posts).toContainEqual({ type: 'change/revert-many', changeIds: ['c1', 'c2'] })
-      })
-
-      it('CAP-WEBVIEW-085 an activity row with a tool call id asks the Host to locate its turn', async () => {
-        render(<App bridge={bridge} />)
-        await act(async () => {
-          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
-          applyHostFrame({
-            type: 'messages/replace',
-            sessionId: 's1',
-            messages: [
-              { id: 'act1', role: 'assistant', text: '', kind: 'activity', activity: { id: 'act1', status: 'done', callId: 'call-7', toolName: 'Read', expanded: false } },
-              { id: 'act2', role: 'assistant', text: '', kind: 'activity', activity: { id: 'act2', status: 'done', expanded: false } },
-            ],
-          })
-        })
-        const reveals = screen.getAllByTestId('activity-reveal')
-        // Only the row that knows its call id can be located.
-        expect(reveals).toHaveLength(1)
-        fireEvent.click(reveals[0]!)
-        expect(posts).toContainEqual({ type: 'scroll/reveal', callId: 'call-7' })
       })
 
       it('CAP-WEBVIEW-086 tabs carry their replay mode and lineage hint', async () => {
@@ -3477,6 +3490,42 @@ describe('cap:webview — editor chat shell React rendering', () => {
           expect(screen.queryByTestId('sidebar-menu')).toBeNull()
         })
       })
+
+      it('CAP-WEBVIEW-098 multi-select collects rows and sends one sidebar/delete-many intent', async () => {
+        render(<SidebarApp bridge={bridge} />)
+        await pushRows([
+          { sessionId: 'sess-1', title: 'A', when: '', preview: '', continueHint: '' },
+          { sessionId: 'sess-2', title: 'B', when: '', preview: '', continueHint: '' },
+          { sessionId: 'sess-3', title: 'C', when: '', preview: '', continueHint: '' },
+        ])
+        expect(screen.queryByTestId('sidebar-bulk-bar')).toBeNull()
+
+        fireEvent.click(screen.getByTestId('btn-sidebar-select'))
+        expect(screen.getByTestId('sidebar-bulk-count').textContent).toBe('已选 0')
+        expect(screen.getAllByTestId('sidebar-row-check')).toHaveLength(3)
+
+        // While the mode is on a row click selects instead of opening the session.
+        fireEvent.click(screen.getAllByTestId('sidebar-row')[0]!)
+        expect(posts.some(entry => entry.type === 'sidebar/open')).toBe(false)
+        expect(screen.getByTestId('sidebar-bulk-count').textContent).toBe('已选 1')
+        expect(screen.getAllByTestId('sidebar-row')[0]!.getAttribute('data-selected')).toBe('true')
+
+        fireEvent.click(screen.getByTestId('btn-sidebar-select-all'))
+        expect(screen.getByTestId('sidebar-bulk-count').textContent).toBe('已选 3')
+        fireEvent.click(screen.getByTestId('btn-sidebar-select-none'))
+        expect(screen.getByTestId('sidebar-bulk-count').textContent).toBe('已选 0')
+        expect(screen.getByTestId('btn-sidebar-delete-selected').hasAttribute('disabled')).toBe(true)
+
+        fireEvent.click(screen.getAllByTestId('sidebar-row')[1]!)
+        fireEvent.click(screen.getAllByTestId('sidebar-row')[2]!)
+        fireEvent.click(screen.getByTestId('btn-sidebar-delete-selected'))
+        expect(posts).toContainEqual({ type: 'sidebar/delete-many', sessionIds: ['sess-2', 'sess-3'] })
+
+        // Leaving the mode restores the plain row click.
+        fireEvent.click(screen.getByTestId('btn-sidebar-select'))
+        fireEvent.click(screen.getAllByTestId('sidebar-row')[0]!)
+        expect(posts).toContainEqual({ type: 'sidebar/open', sessionId: 'sess-1' })
+      })
     })
   })
 
@@ -3604,6 +3653,151 @@ describe('cap:webview — editor chat shell React rendering', () => {
           expect(screen.getByTestId('subagent-card').getAttribute('data-status')).toBe('ended')
         })
         expect(screen.queryByTestId('subagent-interrupt')).toBeNull()
+      })
+    })
+
+    describe('the roster bar and injected-context rows expose their payloads', () => {
+      let bridge: ReturnType<typeof createMessageBridge>
+      const posts: unknown[] = []
+
+      beforeEach(() => {
+        cleanup()
+        resetChatUiState()
+        posts.length = 0
+        bridge = createMessageBridge({
+          postToHost: (message) => { posts.push(message) },
+          onHostMessage: () => () => {},
+        })
+      })
+
+      afterEach(() => {
+        bridge.dispose()
+        cleanup()
+      })
+
+      it('CAP-WEBVIEW-094 a running child is prominent and a finished row still enters its child', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/state',
+            mode: 'live',
+            sessionId: 's-parent',
+            tabId: 't1',
+            subagents: [
+              { childSessionId: 's-run', label: 'Researcher', status: 'running' },
+              { childSessionId: 's-done', label: 'Builder', status: 'ended' },
+            ],
+          })
+        })
+        expect(screen.getByTestId('subagent-bar').getAttribute('data-running')).toBe('1')
+        expect(screen.getByTestId('subagent-bar-head').textContent).toContain('子代理运行中 · 1')
+        const rows = screen.getAllByTestId('subagent-bar-row')
+        expect(rows).toHaveLength(2)
+        expect(rows[0]?.getAttribute('data-status')).toBe('running')
+        expect(rows[1]?.getAttribute('data-status')).toBe('ended')
+
+        fireEvent.click(rows[1]!)
+        await waitFor(() => {
+          expect(posts.some(p => (p as { type?: string }).type === 'nav/open-subagent')).toBe(true)
+        })
+        expect(posts.find(p => (p as { type?: string }).type === 'nav/open-subagent')).toEqual({
+          type: 'nav/open-subagent',
+          childSessionId: 's-done',
+        })
+      })
+
+      it('CAP-WEBVIEW-095 no children renders no bar, and a malformed roster row is dropped', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's-parent', tabId: 't1' })
+        })
+        expect(screen.queryByTestId('subagent-bar')).toBeNull()
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/state',
+            mode: 'live',
+            sessionId: 's-parent',
+            tabId: 't1',
+            subagents: [
+              { childSessionId: '', label: 'no address', status: 'running' },
+              { childSessionId: 's-ok', label: 'Ok', status: 'ended' },
+              { childSessionId: 's-bad', label: 'unknown status', status: 'paused' },
+            ],
+          })
+        })
+        const rows = screen.getAllByTestId('subagent-bar-row')
+        expect(rows).toHaveLength(1)
+        expect(rows[0]?.getAttribute('data-child-session-id')).toBe('s-ok')
+        expect(screen.getByTestId('subagent-bar').getAttribute('data-running')).toBe('0')
+      })
+
+      it('CAP-WEBVIEW-096 injected context previews collapsed and expands to the logged text', async () => {
+        render(<App bridge={bridge} />)
+        const payload = 'x'.repeat(400)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's-parent', tabId: 't1' })
+          applyHostFrame({
+            type: 'messages/replace',
+            sessionId: 's-parent',
+            messages: [{
+              id: 'inj-1',
+              role: 'notice',
+              kind: 'context-injection',
+              sessionId: 's-parent',
+              producer: 'agent-instructions',
+              text: payload,
+            }],
+          })
+        })
+        expect(screen.getByTestId('context-injection').getAttribute('data-producer')).toBe('agent-instructions')
+        expect(screen.getByTestId('context-injection-preview').textContent).toBe(`${'x'.repeat(159)}…`)
+        // The body keeps the model-visible payload in full, not the preview.
+        expect(screen.getByTestId('context-injection-body').textContent).toBe(payload)
+      })
+
+      it('CAP-WEBVIEW-097 a finished row is dismissed one at a time or all at once, and a running row offers neither', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/state',
+            mode: 'live',
+            sessionId: 's-parent',
+            tabId: 't1',
+            subagents: [
+              { childSessionId: 's-run', label: 'Researcher', status: 'running' },
+              { childSessionId: 's-done', label: 'Builder', status: 'ended' },
+              { childSessionId: 's-done-2', label: 'Tester', status: 'ended' },
+            ],
+          })
+        })
+        // Only the two finished rows carry a dismiss control.
+        const dismiss = screen.getAllByTestId('subagent-bar-dismiss')
+        expect(dismiss.map(button => button.getAttribute('data-child-session-id')))
+          .toEqual(['s-done', 's-done-2'])
+        expect(screen.getByTestId('subagent-bar').getAttribute('data-ended')).toBe('2')
+
+        fireEvent.click(dismiss[0]!)
+        expect(posts.find(p => (p as { type?: string }).type === 'action/dismiss-subagent')).toEqual({
+          type: 'action/dismiss-subagent',
+          childSessionId: 's-done',
+        })
+
+        fireEvent.click(screen.getByTestId('subagent-bar-clear-finished'))
+        expect(posts.some(p => (p as { type?: string }).type === 'action/dismiss-finished-subagents')).toBe(true)
+
+        // With nothing finished left there is nothing to clear.
+        await act(async () => {
+          applyHostFrame({
+            type: 'panel/state',
+            mode: 'live',
+            sessionId: 's-parent',
+            tabId: 't1',
+            subagents: [{ childSessionId: 's-run', label: 'Researcher', status: 'running' }],
+          })
+        })
+        expect(screen.queryByTestId('subagent-bar-clear-finished')).toBeNull()
+        expect(screen.queryByTestId('subagent-bar-dismiss')).toBeNull()
       })
     })
   })

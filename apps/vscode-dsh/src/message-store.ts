@@ -81,9 +81,15 @@ export interface ChatMessage {
   /** Speaker role. */
   role: 'user' | 'assistant' | 'notice'
   /** Content kind (text primary + activity stream). */
-  kind: 'text' | 'reasoning' | 'compaction' | 'workflow' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity'
+  kind: 'text' | 'reasoning' | 'compaction' | 'workflow' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity' | 'context-injection'
   /** Full readable text (user prompt or complete assistant turn). */
   text: string
+  /**
+   * Producer of a `kind:'context-injection'` row — the logged `source.kind` of a
+   * user-role message the human did not write. `text` carries the model-visible
+   * payload in full; the panel collapses it and expands on demand.
+   */
+  producer?: string
   /** Images the user attached to this message, in send order. */
   images?: MessageImage[]
   /** Optional turn index when known. */

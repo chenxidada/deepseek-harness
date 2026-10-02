@@ -8,6 +8,7 @@ export type SidebarIntent =
   | { type: 'sidebar/ready' }
   | { type: 'sidebar/open'; sessionId: string }
   | { type: 'sidebar/delete'; sessionId: string }
+  | { type: 'sidebar/delete-many'; sessionIds: string[] }
   | { type: 'sidebar/continue'; sessionId: string }
   | { type: 'sidebar/copy-id'; sessionId: string }
   | { type: 'sidebar/new-conversation' }

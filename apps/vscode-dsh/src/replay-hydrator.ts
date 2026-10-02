@@ -175,8 +175,9 @@ export function hydrateFromAuthoritativeLog(
           id,
           sessionId,
           role: 'notice',
-          kind: 'notice',
-          text: `上下文注入（${bar.producer}）：${summarizeInjectedText(bar.text)}`,
+          kind: 'context-injection',
+          text: bar.text,
+          producer: bar.producer,
         },
       }
     }
@@ -878,12 +879,6 @@ export function nonUserProducer(source: unknown): string | undefined {
   const record = asRecord(source)
   const kind = record?.kind
   return typeof kind === 'string' && kind !== '' && kind !== 'user' ? kind : undefined
-}
-
-/** One-line bounded rendering of injected context, so long payloads cannot flood the panel. */
-export function summarizeInjectedText(text: string): string {
-  const joined = text.replace(/\s+/g, ' ').trim()
-  return joined.length <= 160 ? joined : `${joined.slice(0, 159)}…`
 }
 
 /** `+added -removed` label of one `developer/message` tool-registry change. */

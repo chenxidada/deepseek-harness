@@ -46,6 +46,7 @@ export type SidebarIntent =
   | { type: 'sidebar/ready' }
   | { type: 'sidebar/open'; sessionId: string }
   | { type: 'sidebar/delete'; sessionId: string }
+  | { type: 'sidebar/delete-many'; sessionIds: string[] }
   | { type: 'sidebar/continue'; sessionId: string }
   | { type: 'sidebar/copy-id'; sessionId: string }
   | { type: 'sidebar/new-conversation' }
@@ -63,6 +64,14 @@ export function parseSidebarIntent(raw: unknown): SidebarIntent | undefined {
   if (type === 'sidebar/ready') return { type }
   if (type === 'sidebar/new-conversation') return { type }
   if (type === 'sidebar/open-panel') return { type }
+  if (type === 'sidebar/delete-many') {
+    if (!Array.isArray(record.sessionIds) || record.sessionIds.length === 0) return undefined
+    const sessionIds = record.sessionIds.filter((id): id is string => typeof id === 'string' && id !== '')
+    // Drop the whole frame rather than a subset: the confirmation the user saw
+    // names one selection, so a partial read must not delete a different one.
+    if (sessionIds.length !== record.sessionIds.length) return undefined
+    return { type: 'sidebar/delete-many', sessionIds: [...new Set(sessionIds)] }
+  }
   if (
     type === 'sidebar/open'
     || type === 'sidebar/delete'
@@ -86,6 +95,8 @@ export interface SidebarViewDeps {
   onOpen: (sessionId: string) => void | Promise<void>
   /** Row menu: delete the session after the user confirms. */
   onDelete: (sessionId: string) => void | Promise<void>
+  /** Selection: delete every selected session behind one confirmation. */
+  onDeleteMany?: (sessionIds: readonly string[]) => void | Promise<void>
   /** Row menu: continue the session in live mode. */
   onContinue: (sessionId: string) => void | Promise<void>
   /** Row menu: copy the session id. */
@@ -151,6 +162,9 @@ export function createSidebarView(deps: SidebarViewDeps): {
         return
       case 'sidebar/delete':
         await deps.onDelete(intent.sessionId)
+        return
+      case 'sidebar/delete-many':
+        await deps.onDeleteMany?.(intent.sessionIds)
         return
       case 'sidebar/continue':
         await deps.onContinue(intent.sessionId)

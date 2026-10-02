@@ -26,6 +26,7 @@ import {
   type PanelBreadcrumb,
   type PanelMode,
   type PanelStatus,
+  type PanelSubagent,
   type PromptImage,
   type RejectSendReason,
   type SlashCandidate,
@@ -122,6 +123,12 @@ export interface PanelProjection {
   contextSessionId?: string
   /** Parent→child lineage chrome, when a child context is open. */
   breadcrumb?: PanelBreadcrumb
+  /**
+   * Subagent roster of this Tab's root session, in projection order. Always present
+   * when the root has children, whether the panel projects the root or a child,
+   * so a running child stays visible and a finished one keeps its entry point.
+   */
+  subagents?: readonly PanelSubagent[]
   /**
    * Subagent address the composer may write to for this projection. Present
    * only when the projected child is continuable, not running, and its parent
@@ -237,16 +244,6 @@ export interface ChatPanelHostDeps {
   } | undefined
   /** Optional deferred restore count for 「查看更多」. */
   resolveDeferredRestoreCount?: () => number
-  /**
-   * Optional scroll/reveal resolver (AC-56).
-   * @param callId - optional tool call id.
-   */
-  resolveReveal?: (callId?: string) => {
-    kind: 'user' | 'assistant' | 'none'
-    messageId?: string
-    label?: string
-    sessionId: string
-  }
   /** Optional manual retry after failed / disconnected connection (AC-2 / AC-14). */
   requestRetryConnect?: () => Promise<void>
   /** Optional settings deep-link (missing credentials). */
@@ -353,6 +350,20 @@ export interface ChatPanelHostDeps {
    * @param childSessionId - child session id to pin.
    */
   requestPinSubagent?: (childSessionId: string) => Promise<unknown>
+  /**
+   * Hide one finished child from the panel's roster bar (phase-4).
+   * @param childSessionId - child session id to dismiss.
+   */
+  requestDismissSubagent?: (childSessionId: string) => Promise<unknown> | unknown
+  /**
+   * Hide every finished child from the panel's roster bar (phase-4).
+   */
+  requestDismissFinishedSubagents?: () => Promise<unknown> | unknown
+  /**
+   * Batch delete already confirmed inside the History surface.
+   * @param sessionIds - sessions the user selected.
+   */
+  requestDeleteManyConfirmed?: (sessionIds: string[]) => Promise<void>
   /**
    * Optional Timeline/Diff review path for 「本回合改了 N 个文件」(AC-30 secondary).
    * Typically `dsh.reviewWorkspaceDiffs`.
@@ -655,6 +666,7 @@ export class ChatPanelHost {
           ? {}
           : { contextSessionId: projection.contextSessionId },
         ...projection.breadcrumb === undefined ? {} : { breadcrumb: projection.breadcrumb },
+        ...projection.subagents === undefined ? {} : { subagents: projection.subagents },
         ...projection.subagentPrompt === undefined ? {} : { subagentPrompt: projection.subagentPrompt },
         ...continueChrome === undefined ? {} : { continue: continueChrome },
         ...newConversationChrome,
@@ -1223,6 +1235,13 @@ export class ChatPanelHost {
       this.pushFullState()
       return
     }
+    if (message.type === 'ui/delete-many-request') {
+      await this.deps.requestDeleteManyConfirmed?.(message.sessionIds)
+      this.historyOpen = true
+      this.pushHistoryFrame()
+      this.pushFullState()
+      return
+    }
     if (message.type === 'ui/rename-request') {
       await this.deps.requestRename?.(message.sessionId)
       return
@@ -1249,6 +1268,14 @@ export class ChatPanelHost {
     }
     if (message.type === 'action/pin-subagent') {
       await this.deps.requestPinSubagent?.(message.childSessionId)
+      return
+    }
+    if (message.type === 'action/dismiss-subagent') {
+      await this.deps.requestDismissSubagent?.(message.childSessionId)
+      return
+    }
+    if (message.type === 'action/dismiss-finished-subagents') {
+      await this.deps.requestDismissFinishedSubagents?.()
       return
     }
     if (message.type === 'action/interrupt-subagent') {
@@ -1479,25 +1506,6 @@ export class ChatPanelHost {
     if (message.type === 'interaction/dismiss') {
       this.deps.dismissQuestion?.(message.id, message.error)
       return
-    }
-    if (message.type === 'scroll/reveal') {
-      const active = this.deps.registry.getActive()
-      if (active === undefined || this.deps.resolveReveal === undefined) {
-        this.post({
-          type: 'scroll/reveal',
-          sessionId: active?.sessionId ?? '',
-          kind: 'none',
-        })
-        return
-      }
-      const target = this.deps.resolveReveal(message.callId)
-      this.post({
-        type: 'scroll/reveal',
-        sessionId: target.sessionId,
-        kind: target.kind,
-        ...target.messageId === undefined ? {} : { messageId: target.messageId },
-        ...target.label === undefined ? {} : { label: target.label },
-      })
     }
   }
 

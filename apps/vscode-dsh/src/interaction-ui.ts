@@ -384,6 +384,29 @@ export async function confirmDeleteConversation(
   return picked === action ? 'confirm' : 'cancel'
 }
 
+/**
+ * Confirm a batch delete of history sessions (one decision for the whole selection).
+ * @param window - duck-typed vscode.window.
+ * @param count - sessions the batch will delete.
+ * @param running - how many of them are running and will be stopped first.
+ * @returns `confirm` or `cancel`.
+ */
+export async function confirmDeleteConversations(
+  window: InteractionWindow,
+  count: number,
+  running: number,
+): Promise<'confirm' | 'cancel'> {
+  const action = running > 0 ? 'Stop and Delete' : 'Delete'
+  const cancel = 'Cancel'
+  const message = running > 0
+    ? `Stop and permanently delete ${count} conversations (${running} running)? This cannot be undone.`
+    : `Permanently delete ${count} conversations? This cannot be undone.`
+  const picked = window.showWarningMessage === undefined
+    ? await window.showInformationMessage?.(message, action, cancel)
+    : await window.showWarningMessage(message, action, cancel)
+  return picked === action ? 'confirm' : 'cancel'
+}
+
 /** Decisions the Human Gate presenter offers; the runtime validates the rest. */
 const SPECDEV_GATE_CHOICES: readonly { label: string; value: SpecdevGateDecision; description: string }[] = [
   { label: '通过 (Pass)', value: 'pass', description: '标记该门禁通过并写回 current-status.json' },

@@ -7,6 +7,7 @@ import { Composer } from './components/Composer.tsx'
 import { DeleteConfirmModal } from './components/DeleteConfirmModal.tsx'
 import { SettingsPanel } from './components/SettingsPanel.tsx'
 import { SpecdevCard } from './components/SpecdevCard.tsx'
+import { SubagentBar } from './components/SubagentBar.tsx'
 import {
   getChatUiState,
   setPendingContinue,
@@ -105,6 +106,13 @@ export function App({ bridge }: AppProps) {
         bridge={bridge}
       />
       <div className="dsh-msg-area">
+        {ui.subagents.length === 0 ? null : (
+          <SubagentBar
+            subagents={ui.subagents}
+            activeChildSessionId={ui.contextSessionId}
+            bridge={bridge}
+          />
+        )}
         <MessageList
           messages={ui.messages}
           loading={ui.messagesLoading}
@@ -118,7 +126,6 @@ export function App({ bridge }: AppProps) {
           followState={ui.followState}
           todoItems={ui.todoItems}
           sessionId={ui.sessionId}
-          pendingReveal={ui.pendingReveal}
           pendingChangeListReveal={ui.pendingChangeListReveal}
           pendingSourceReveal={ui.pendingSourceReveal}
           diffContents={ui.diffContents}

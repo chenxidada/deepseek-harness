@@ -37,13 +37,12 @@ import type {
   TodoStateItem,
   TokenStatusPayload,
 } from './chat-panel/chat-panel-host.ts'
-import type { PanelBreadcrumb, PanelMode, PromptImage } from './chat-panel/protocol.ts'
+import type { PanelBreadcrumb, PanelMode, PanelSubagent, PromptImage } from './chat-panel/protocol.ts'
 import {
   compactionMarkerMessage,
   compactionSummaryText,
   hydrateFromAuthoritativeLog,
   reasoningFromContent,
-  summarizeInjectedText,
   textFromContent,
   toolRegistryChangeLabel,
   withWorkflowMember,
@@ -305,6 +304,12 @@ export class ConversationController {
   private readonly subagentCatalog = new Map<string, Map<string, { mode: 'one-shot' | 'continuable'; label?: string }>>()
   /** Parents with a `subagent/list` read in flight. */
   private readonly subagentCatalogRefreshes = new Set<string>()
+  /**
+   * Children the user dismissed from the panel's roster bar, keyed by the root
+   * session that owns them. Dismissal only hides the bar row: the durable card
+   * stays in the transcript, and a restarted child re-enters the roster.
+   */
+  private readonly dismissedSubagents = new Map<string, Set<string>>()
   /**
    * SpecDev status per session. The active workflow lives in the workspace's
    * `.specdev` layout, so this is read from the runtime rather than folded from
@@ -1600,37 +1605,6 @@ export class ConversationController {
   }
 
   /**
-   * Locate a Timeline short-label target for scroll/reveal (AC-56 Should).
-   * Priority: tool-triggered user → that turn's assistant → none.
-   * @param sessionId - session to search.
-   * @param callId - optional tool call id that triggered the reveal.
-   */
-  revealTarget(
-    sessionId: string,
-    callId?: string,
-  ): { kind: 'user' | 'assistant' | 'none'; messageId?: string; label?: string } {
-    const messages = this.messages.get(sessionId)
-    if (callId !== undefined) {
-      const tools = this.timeline.itemsForSession(sessionId).filter(item => item.callId === callId)
-      if (tools.length > 0) {
-        const user = [...messages].reverse().find(m => m.role === 'user')
-        if (user !== undefined) return { kind: 'user', messageId: user.id, label: user.text.slice(0, 40) }
-        const assistant = [...messages].reverse().find(m => m.role === 'assistant')
-        if (assistant !== undefined) {
-          return { kind: 'assistant', messageId: assistant.id, label: assistant.text.slice(0, 40) }
-        }
-      }
-    }
-    const user = [...messages].reverse().find(m => m.role === 'user')
-    if (user !== undefined) return { kind: 'user', messageId: user.id, label: user.text.slice(0, 40) }
-    const assistant = [...messages].reverse().find(m => m.role === 'assistant')
-    if (assistant !== undefined) {
-      return { kind: 'assistant', messageId: assistant.id, label: assistant.text.slice(0, 40) }
-    }
-    return { kind: 'none' }
-  }
-
-  /**
    * Count write-tool Diff hunks for the session (session-wide helper).
    * @param sessionId - session to summarize.
    */
@@ -2459,6 +2433,9 @@ export class ConversationController {
     const active = this.registry.getActive()
     if (active === undefined) return undefined
     const subagentPrompt = this.resolveSubagentPromptTarget()
+    // The bar is a property of the Tab's root session, so it stays the same
+    // roster while the panel projects a child context.
+    const subagents = this.subagentRoster(active.sessionId)
 
     const contextId = active.contextSessionId
     if (contextId !== undefined) {
@@ -2470,6 +2447,7 @@ export class ConversationController {
         tabId: active.tabId,
         contextSessionId: contextId,
         breadcrumb: this.buildBreadcrumb(active.sessionId),
+        ...subagents === undefined ? {} : { subagents },
         ...subagentPrompt === undefined ? {} : { subagentPrompt },
         messages: this.messages.get(contextId),
         tabStatus: run === 'running' ? 'running' : 'idle',
@@ -2492,12 +2470,68 @@ export class ConversationController {
         : active.mode === 'replay' ? 'replay' : 'live',
       sessionId: active.sessionId,
       tabId: active.tabId,
+      ...subagents === undefined ? {} : { subagents },
       messages: this.messages.get(active.sessionId),
       tabStatus: active.status,
       ...active.title === undefined ? {} : { title: active.title },
       ...breadcrumb === undefined ? {} : { breadcrumb },
       ...subagentPrompt === undefined ? {} : { subagentPrompt },
     }
+  }
+
+  /**
+   * Subagent roster of one root session for the panel's fixed bar: every durable
+   * `kind:'subagent'` card in that session's projection, in projection order,
+   * carrying the live run state. A deleted child, and one the user dismissed from
+   * the bar, is dropped.
+   * @param sessionId - root session whose children the bar lists.
+   * @returns roster rows, or undefined when the session has no enterable child.
+   */
+  private subagentRoster(sessionId: string): PanelSubagent[] | undefined {
+    const dismissed = this.dismissedSubagents.get(sessionId)
+    const childIds: string[] = []
+    for (const message of this.messages.get(sessionId)) {
+      if (message.kind !== 'subagent' || message.subagentStatus === 'deleted') continue
+      const childSessionId = message.childSessionId
+      if (childSessionId === undefined || childSessionId === '') continue
+      if (this.index.isDeleted(childSessionId)) continue
+      if (dismissed?.has(childSessionId) === true) continue
+      childIds.push(childSessionId)
+    }
+    if (childIds.length === 0) return undefined
+    const titles = new Map(this.index.read().sessions.map(row => [row.sessionId, row.title]))
+    return childIds.map(childSessionId => ({
+      childSessionId,
+      label: this.subagentCatalog.get(sessionId)?.get(childSessionId)?.label
+        ?? titles.get(childSessionId)
+        ?? `子代理 ${childSessionId.slice(0, 8)}`,
+      status: this.childRunState.get(childSessionId) === 'running' ? 'running' : 'ended',
+    }))
+  }
+
+  /**
+   * Hide subagent rows from the panel's roster bar. The transcript card stays —
+   * dismissal is a bar affordance, not a deletion — and a running child is never
+   * dismissed, because its row is the one place its progress is visible.
+   * @param childSessionId - one child to dismiss, or omitted to dismiss every
+   *   finished child of the active Tab's root session.
+   * @returns how many rows the dismissal removed from the roster.
+   */
+  dismissSubagent(childSessionId?: string): number {
+    const active = this.registry.getActive()
+    if (active === undefined) return 0
+    const parentSessionId = active.sessionId
+    const roster = this.subagentRoster(parentSessionId) ?? []
+    const targets = childSessionId === undefined
+      ? roster.filter(row => row.status === 'ended').map(row => row.childSessionId)
+      : roster.filter(row => row.childSessionId === childSessionId && row.status === 'ended')
+        .map(row => row.childSessionId)
+    if (targets.length === 0) return 0
+    const dismissed = this.dismissedSubagents.get(parentSessionId) ?? new Set<string>()
+    for (const id of targets) dismissed.add(id)
+    this.dismissedSubagents.set(parentSessionId, dismissed)
+    this.panelHost?.pushFullState()
+    return targets.length
   }
 
   /**
@@ -2583,6 +2617,7 @@ export class ConversationController {
     this.childRunState.clear()
     this.subagentCatalog.clear()
     this.subagentCatalogRefreshes.clear()
+    this.dismissedSubagents.clear()
     this.specdevBySession.clear()
     this.specdevLastScope.clear()
     this.specdevRefreshes.clear()
@@ -2594,6 +2629,9 @@ export class ConversationController {
 
   private onSubagentStarted(parentSessionId: string, childSessionId: string): void {
     this.childRunState.set(childSessionId, 'running')
+    // A child that ran before may have been dismissed from the bar; a new run is
+    // exactly when its progress has to be visible again.
+    this.dismissedSubagents.get(parentSessionId)?.delete(childSessionId)
     this.index.upsertSession({
       sessionId: childSessionId,
       title: `Subagent ${childSessionId.slice(0, 8)}`,
@@ -3093,7 +3131,7 @@ export class ConversationController {
   }
 
   /**
-   * Append one turn-scoped notice bubble (stop reason, retry, injected context).
+   * Append one turn-scoped notice bubble (stop reason, retry, tool-registry change).
    * Notices are deduplicated by exact text so a repeated wire frame cannot stack
    * duplicates.
    * @param sessionId - session whose panel shows the notice.
@@ -3126,7 +3164,9 @@ export class ConversationController {
    * Show one user-role message the model saw as context injection. A
    * `source.kind === 'user'` message already has a local optimistic bubble and is
    * skipped; every other producer (agent instructions, goal rounds, schedules,
-   * question replies) appears as a notice instead of a user bubble.
+   * question replies) appears as its own expandable row instead of a user bubble.
+   * The row carries the payload in full — the panel bounds what it shows collapsed,
+   * so a reader can always open the exact text the model received.
    * @param sessionId - session that received the message.
    * @param data - `user/message` payload.
    * @param turn - owning turn when known.
@@ -3137,7 +3177,29 @@ export class ConversationController {
     if (kind === undefined || kind === 'user') return
     const text = textFromContent(data.content)
     if (text === '') return
-    this.appendTurnNotice(sessionId, `上下文注入（${kind}）：${summarizeInjectedText(text)}`, turn)
+    const already = this.messages.get(sessionId).some(m =>
+      m.kind === 'context-injection'
+      && m.producer === kind
+      && m.text === text
+      && (turn === undefined || m.turn === turn),
+    )
+    if (already) return
+    const injection: ChatMessage = {
+      id: randomUUID(),
+      sessionId,
+      role: 'notice',
+      kind: 'context-injection',
+      producer: kind,
+      text,
+      ...turn === undefined ? {} : { turn },
+    }
+    this.messages.append(sessionId, injection)
+    if (this.isProjectedSession(this.registry.getActive(), sessionId)) {
+      this.panelHost?.pushAppend(injection)
+    } else {
+      const tab = this.registry.getBySessionId(sessionId)
+      if (tab !== undefined) this.registry.setUnread(tab.tabId, true)
+    }
   }
 
   /**

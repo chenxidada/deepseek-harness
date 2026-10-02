@@ -36,8 +36,24 @@ export function HistoryPanel({
   bridge,
 }: HistoryPanelProps) {
   const [menuSessionId, setMenuSessionId] = useState<string | undefined>()
+  /**
+   * Batch selection. A long dev history is the normal case, so deleting one row
+   * at a time is not a workable flow: this mode collects a set and hands the
+   * whole set to one Host confirmation.
+   */
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
 
   if (!open) return null
+
+  const toggleSelected = (sessionId: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(sessionId)) next.delete(sessionId)
+      else next.add(sessionId)
+      return next
+    })
+  }
 
   const q = query.trim().toLowerCase()
   const localFiltered = q === ''
@@ -67,15 +83,65 @@ export function HistoryPanel({
     <aside data-testid="history-panel" className="dsh-panel">
       <div className="dsh-panel-head" style={{ justifyContent: 'space-between' }}>
         <span>历史会话</span>
-        <button
-          type="button"
-          data-testid="btn-history-close"
-          onClick={() => bridge.emitIntent({ type: 'ui/history-close' })}
-          className="dsh-ghost-btn"
-        >
-          关闭
-        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            type="button"
+            data-testid="btn-history-select"
+            onClick={() => {
+              setSelecting(value => !value)
+              setSelected(new Set())
+            }}
+            className="dsh-ghost-btn"
+          >
+            {selecting ? '取消多选' : '多选'}
+          </button>
+          <button
+            type="button"
+            data-testid="btn-history-close"
+            onClick={() => bridge.emitIntent({ type: 'ui/history-close' })}
+            className="dsh-ghost-btn"
+          >
+            关闭
+          </button>
+        </div>
       </div>
+      {selecting ? (
+        <div className="dsh-history-bulk" data-testid="history-bulk-bar">
+          <span data-testid="history-bulk-count">{`已选 ${selected.size}`}</span>
+          <button
+            type="button"
+            data-testid="btn-history-select-all"
+            className="dsh-ghost-btn"
+            onClick={() => setSelected(new Set(displayRows.map(row => row.sessionId)))}
+          >
+            全选
+          </button>
+          <button
+            type="button"
+            data-testid="btn-history-select-none"
+            className="dsh-ghost-btn"
+            disabled={selected.size === 0}
+            onClick={() => setSelected(new Set())}
+          >
+            清空
+          </button>
+          <button
+            type="button"
+            data-testid="btn-history-delete-selected"
+            className="dsh-secondary-btn"
+            disabled={selected.size === 0}
+            onClick={() => {
+              bridge.emitIntent({
+                type: 'ui/delete-many-request',
+                sessionIds: [...selected],
+              })
+              setSelected(new Set())
+            }}
+          >
+            {selected.size === 0 ? '删除所选' : `删除所选 (${selected.size})`}
+          </button>
+        </div>
+      ) : null}
       <div className="dsh-panel-body">
         <div style={{ padding: '0 10px 8px' }}>
           <input
@@ -144,23 +210,43 @@ export function HistoryPanel({
                 <div
                   data-testid="history-row"
                   data-session-id={row.sessionId}
+                  data-selected={selecting && selected.has(row.sessionId) ? 'true' : undefined}
                   role="button"
                   tabIndex={0}
                   className="dsh-list-row"
-                  onClick={() => bridge.emitIntent({
-                    type: 'ui/history-select',
-                    sessionId: row.sessionId,
-                  })}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      bridge.emitIntent({
-                        type: 'ui/history-select',
-                        sessionId: row.sessionId,
-                      })
+                  onClick={() => {
+                    if (selecting) {
+                      toggleSelected(row.sessionId)
+                      return
                     }
+                    bridge.emitIntent({
+                      type: 'ui/history-select',
+                      sessionId: row.sessionId,
+                    })
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return
+                    event.preventDefault()
+                    if (selecting) {
+                      toggleSelected(row.sessionId)
+                      return
+                    }
+                    bridge.emitIntent({
+                      type: 'ui/history-select',
+                      sessionId: row.sessionId,
+                    })
                   }}
                 >
+                  {selecting ? (
+                    <input
+                      type="checkbox"
+                      data-testid="history-row-check"
+                      checked={selected.has(row.sessionId)}
+                      readOnly
+                      tabIndex={-1}
+                      aria-label={`选择 ${row.title}`}
+                    />
+                  ) : null}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600 }}>{row.title}</div>
                     <div style={{ fontSize: '0.85em', color: 'var(--dsh-muted)' }}>
@@ -176,63 +262,65 @@ export function HistoryPanel({
                       </div>
                     ) : null}
                   </div>
-                  <div
-                    className="dsh-history-row-actions"
-                    onClick={event => event.stopPropagation()}
-                    onKeyDown={event => event.stopPropagation()}
-                  >
-                    <button
-                      type="button"
-                      data-testid="btn-history-more"
-                      className="dsh-history-more"
-                      aria-label="更多操作"
-                      aria-expanded={menuSessionId === row.sessionId}
-                      onClick={() => setMenuSessionId(
-                        menuSessionId === row.sessionId ? undefined : row.sessionId,
-                      )}
-                    >
-                      ⋮
-                    </button>
+                  {selecting ? null : (
                     <div
-                      className={`dsh-history-menu${menuSessionId === row.sessionId ? ' is-open' : ''}`}
-                      data-testid="history-row-menu"
-                      hidden={menuSessionId !== row.sessionId}
+                      className="dsh-history-row-actions"
+                      onClick={event => event.stopPropagation()}
+                      onKeyDown={event => event.stopPropagation()}
                     >
-                      {row.continueHint ? (
+                      <button
+                        type="button"
+                        data-testid="btn-history-more"
+                        className="dsh-history-more"
+                        aria-label="更多操作"
+                        aria-expanded={menuSessionId === row.sessionId}
+                        onClick={() => setMenuSessionId(
+                          menuSessionId === row.sessionId ? undefined : row.sessionId,
+                        )}
+                      >
+                      ⋮
+                      </button>
+                      <div
+                        className={`dsh-history-menu${menuSessionId === row.sessionId ? ' is-open' : ''}`}
+                        data-testid="history-row-menu"
+                        hidden={menuSessionId !== row.sessionId}
+                      >
+                        {row.continueHint ? (
+                          <button
+                            type="button"
+                            data-testid="btn-continue"
+                            title={row.continueHint}
+                            className="dsh-menu-item"
+                            onClick={() => {
+                              setMenuSessionId(undefined)
+                              setPendingContinue(row.sessionId)
+                              bridge.emitIntent({
+                                type: 'ui/history-select',
+                                sessionId: row.sessionId,
+                              })
+                            }}
+                          >
+                          Continue
+                          </button>
+                        ) : null}
                         <button
                           type="button"
-                          data-testid="btn-continue"
-                          title={row.continueHint}
+                          data-testid="btn-history-delete"
                           className="dsh-menu-item"
                           onClick={() => {
                             setMenuSessionId(undefined)
-                            setPendingContinue(row.sessionId)
-                            bridge.emitIntent({
-                              type: 'ui/history-select',
+                            openDeleteConfirm({
                               sessionId: row.sessionId,
+                              title: row.title,
+                              source: 'history',
                             })
                           }}
                         >
-                          Continue
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        data-testid="btn-history-delete"
-                        className="dsh-menu-item"
-                        onClick={() => {
-                          setMenuSessionId(undefined)
-                          openDeleteConfirm({
-                            sessionId: row.sessionId,
-                            title: row.title,
-                            source: 'history',
-                          })
-                        }}
-                      >
                         删除
-                      </button>
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </li>
             ))}

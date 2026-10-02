@@ -49,6 +49,7 @@ import {
 } from './host-diagnostics.ts'
 import {
   confirmDeleteConversation,
+  confirmDeleteConversations,
   confirmRevertDeleteCreated,
   confirmRevertDirty,
   confirmRevertLaterChanges,
@@ -493,6 +494,9 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       },
       onDelete: async (sessionId) => {
         await runDeleteHistoryRow(vscode, sessionId)
+      },
+      onDeleteMany: async (sessionIds) => {
+        await runDeleteHistoryRows(vscode, sessionIds)
       },
       onContinue: async (sessionId) => {
         const title = currentHistoryRows().find(row => row.sessionId === sessionId)?.title
@@ -1597,15 +1601,6 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         'dsh.test.getDiagnosticsText',
         () => hostDiagnostics?.records() ?? [],
       ),
-      vscode.commands.registerCommand('dsh.test.reveal', (callId?: unknown) => {
-        const controller = conversations
-        const active = controller?.registry.getActive()
-        if (controller === undefined || active === undefined) return { kind: 'none' as const }
-        return {
-          sessionId: active.sessionId,
-          ...controller.revealTarget(active.sessionId, typeof callId === 'string' ? callId : undefined),
-        }
-      }),
       vscode.commands.registerCommand('dsh.test.deleteHistory', deleteHistorySession),
       vscode.commands.registerCommand('dsh.test.changedFileCount', () => {
         const controller = conversations
@@ -2803,6 +2798,15 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
         await vscode.window.showErrorMessage('子会话已删除，无法钉住。')
       }
     },
+    requestDismissSubagent: (childSessionId) => {
+      conversations?.dismissSubagent(childSessionId)
+    },
+    requestDismissFinishedSubagents: () => {
+      conversations?.dismissSubagent()
+    },
+    requestDeleteManyConfirmed: async (sessionIds) => {
+      await runDeleteHistoryRows(vscode, sessionIds)
+    },
     acceptSubagentPrompt: async (target, text) => {
       const controller = requireConversations()
       if (controller === undefined) throw new Error('no-host')
@@ -2966,17 +2970,6 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     resolveContinueChrome: () => conversations?.continueChromeForTab(),
     resolveTabParentHint: sessionId => conversations?.parentLineageLabel(sessionId),
     resolveDeferredRestoreCount: () => conversations?.panelSnapshot().deferredRestoreCount ?? 0,
-    resolveReveal: (callId) => {
-      const controller = conversations
-      const active = controller?.registry.getActive()
-      if (controller === undefined || active === undefined) {
-        return { kind: 'none' as const, sessionId: '' }
-      }
-      return {
-        sessionId: active.sessionId,
-        ...controller.revealTarget(active.sessionId, callId),
-      }
-    },
     resolveApproval: (id, outcome) => {
       host?.interactions.resolveApproval(id, outcome)
     },
@@ -3960,6 +3953,70 @@ async function runDeleteHistoryRow(vscode: VsCodeLike, sessionId: string): Promi
     if (choice === 'cancel') return
   }
   await runDeleteConfirmed(vscode, sessionId)
+}
+
+/**
+ * Delete several history sessions behind one confirmation. The single-row path
+ * asks per session; a workspace with a long history needs the whole selection
+ * decided once, so this probes every id first (a probe never mutates), reports
+ * how many are still running in the confirmation, and then deletes each through
+ * the same confirmed path the single-row action uses.
+ * @param vscode - duck-typed vscode.
+ * @param sessionIds - rows the user selected.
+ */
+async function runDeleteHistoryRows(vscode: VsCodeLike, sessionIds: readonly string[]): Promise<void> {
+  const targets = [...new Set(sessionIds.filter(id => id !== ''))]
+  if (targets.length === 0) return
+  const controller = requireConversations()
+  if (controller === undefined) {
+    await vscode.window.showErrorMessage('Host 连接后可删除')
+    return
+  }
+  let running = 0
+  const deletable: string[] = []
+  for (const sessionId of targets) {
+    const pending = await controller.deleteSession(sessionId)
+    if (pending.outcome === 'missing') continue
+    if (pending.outcome === 'host-not-ready') {
+      await vscode.window.showErrorMessage('Host 连接后可删除')
+      return
+    }
+    if (pending.outcome === 'needs-confirm' && pending.running) running += 1
+    deletable.push(sessionId)
+  }
+  if (deletable.length === 0) {
+    await vscode.window.showInformationMessage('No conversation to delete.')
+    return
+  }
+  const choice = await confirmDeleteConversations(
+    vscode.window as InteractionWindow,
+    deletable.length,
+    running,
+  )
+  if (choice === 'cancel') return
+
+  let deleted = 0
+  let failed = 0
+  for (const sessionId of deletable) {
+    try {
+      const result = await controller.deleteSession(sessionId, { confirmed: true })
+      if (result.outcome === 'deleted') deleted += 1
+      else failed += 1
+    } catch {
+      // One refused id must not strand the rest of the selection; the summary
+      // below reports the shortfall instead of a dialog per failure.
+      failed += 1
+    }
+  }
+  timelineRefresh?.()
+  historyRefresh?.()
+  tabBarRefresh?.()
+  panelHost?.pushFullState()
+  await vscode.window.showInformationMessage(
+    failed === 0
+      ? `已删除 ${deleted} 个会话。`
+      : `已删除 ${deleted} 个会话，${failed} 个失败。`,
+  )
 }
 
 function tabTitle(tab: ConversationTab): string {

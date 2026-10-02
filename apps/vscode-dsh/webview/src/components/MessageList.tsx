@@ -5,7 +5,6 @@ import type { MessageBridge } from '../bridge/message-bridge.ts'
 import { extractAtPathTokens } from '../utils/at-path-tokens.ts'
 import {
   clearPendingChangeListReveal,
-  clearPendingReveal,
   clearPendingSourceReveal,
   setFollowState,
   toggleActivityExpanded,
@@ -32,7 +31,6 @@ export interface MessageListProps {
   followState: FollowState
   todoItems?: TodoItem[]
   sessionId?: string
-  pendingReveal?: ChatUiState['pendingReveal']
   pendingChangeListReveal?: ChatUiState['pendingChangeListReveal']
   pendingSourceReveal?: ChatUiState['pendingSourceReveal']
   diffContents?: ChatUiState['diffContents']
@@ -50,7 +48,6 @@ export function MessageList({
   followState,
   todoItems,
   sessionId,
-  pendingReveal,
   pendingChangeListReveal,
   pendingSourceReveal,
   diffContents,
@@ -114,15 +111,6 @@ export function MessageList({
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    if (pendingReveal) {
-      const target = pendingReveal.messageId
-        ? el.querySelector(`[data-message-id="${CSS.escape(pendingReveal.messageId)}"]`)
-        : null
-      if (target) {
-        (target as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' })
-      }
-      clearPendingReveal()
-    }
     if (pendingChangeListReveal) {
       const selector = pendingChangeListReveal.messageId
         ? `[data-message-id="${CSS.escape(pendingChangeListReveal.messageId)}"]`
@@ -142,7 +130,7 @@ export function MessageList({
       }
       clearPendingSourceReveal()
     }
-  }, [pendingReveal, pendingChangeListReveal, pendingSourceReveal])
+  }, [pendingChangeListReveal, pendingSourceReveal])
 
   if (loading) {
     return (
@@ -269,6 +257,9 @@ function MessageBubble({
 }) {
   if (msg.kind === 'subagent') {
     return <SubagentCard msg={msg} bridge={bridge} />
+  }
+  if (msg.kind === 'context-injection') {
+    return <ContextInjectionRow msg={msg} />
   }
   if (msg.kind === 'activity' || msg.activity) {
     return <ActivityRow msg={msg} bridge={bridge} />
@@ -669,17 +660,6 @@ function ActivityRow({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge })
         <span className="dsh-activity-summary">{summary}</span>
         <span className="dsh-activity-status">{status}</span>
       </button>
-      {activity?.callId === undefined ? null : (
-        <button
-          type="button"
-          data-testid="activity-reveal"
-          className="dsh-ghost-btn"
-          title="定位到触发该工具调用的消息"
-          onClick={() => bridge.emitIntent({ type: 'scroll/reveal', callId: activity.callId })}
-        >
-          定位
-        </button>
-      )}
       {expanded ? (
         <div data-testid="activity-body" className="dsh-activity-detail">
           {invocation === undefined ? null : (
@@ -697,6 +677,47 @@ function ActivityRow({ msg, bridge }: { msg: UiMessage; bridge: MessageBridge })
             : null}
         </div>
       ) : null}
+    </article>
+  )
+}
+
+/**
+ * One-line preview of a context-injection payload, so the collapsed row stays a
+ * single row however long the model-visible text is. Whitespace is collapsed for
+ * the summary only; the expanded body keeps the logged text verbatim.
+ * @param text - complete injected payload.
+ * @returns at most 160 characters of single-line text.
+ */
+function contextInjectionPreview(text: string): string {
+  const joined = text.replace(/\s+/g, ' ').trim()
+  return joined.length <= 160 ? joined : `${joined.slice(0, 159)}…`
+}
+
+/**
+ * Collapsed row for a user-role message the human did not write (agent
+ * instructions, goal rounds, schedules, question replies). The header names the
+ * logged producer; expanding shows the exact text the model received.
+ */
+function ContextInjectionRow({ msg }: { msg: UiMessage }) {
+  const producer = msg.producer === undefined || msg.producer === '' ? 'context' : msg.producer
+  return (
+    <article
+      data-testid="context-injection"
+      data-message-id={msg.id}
+      data-producer={producer}
+      className="dsh-msg dsh-msg-notice dsh-context-injection"
+    >
+      <details>
+        <summary data-testid="context-injection-summary">
+          <span className="dsh-context-injection-label">{`上下文注入 · ${producer}`}</span>
+          <span className="dsh-context-injection-preview" data-testid="context-injection-preview">
+            {contextInjectionPreview(msg.text)}
+          </span>
+        </summary>
+        <pre data-testid="context-injection-body" className="dsh-context-injection-body">
+          {msg.text}
+        </pre>
+      </details>
     </article>
   )
 }

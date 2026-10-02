@@ -25,6 +25,13 @@ export interface SubagentPromptState {
   label?: string
 }
 
+/** One subagent roster row mirrored from Host `panel/state.subagents` (phase-4). */
+export interface PanelSubagentEntry {
+  childSessionId: string
+  label: string
+  status: 'running' | 'ended'
+}
+
 /**
  * SpecDev workflow status mirrored from Host `specdev/status` (AD-CU-12). The
  * Webview renders what the workspace's durable status holds; a pending gate is
@@ -152,7 +159,7 @@ export interface UiMessage {
   text: string
   /** Images the user attached to this message, in send order. */
   images?: Array<{ mimeType: string; data: string }>
-  kind?: 'text' | 'compaction' | 'workflow' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity'
+  kind?: 'text' | 'compaction' | 'workflow' | 'subagent' | 'diff-summary' | 'notice' | 'change-list' | 'activity' | 'context-injection'
   streaming?: boolean
   /** Reasoning/thinking text from model. */
   reasoning?: string
@@ -173,6 +180,12 @@ export interface UiMessage {
   childSessionId?: string
   /** Subagent card lifecycle status (phase-4). */
   subagentStatus?: 'running' | 'ended' | 'deleted'
+  /**
+   * Producer of a `kind:'context-injection'` row, mirrored from Host: the logged
+   * `source.kind` of a user-role message the human did not write. `text` carries
+   * the model-visible payload in full.
+   */
+  producer?: string
 }
 
 export interface ContinueChrome {
@@ -371,6 +384,12 @@ export interface ChatUiState {
   breadcrumb?: BreadcrumbState
   /** Writable subagent address mirrored from Host (phase-4 continuation). */
   subagentPrompt?: SubagentPromptState
+  /**
+   * Subagent roster of the projected Tab's root session, mirrored from Host
+   * `panel/state.subagents`. The bar renders this list as-is; it is never derived
+   * from the message flow, so a running child cannot be lost by scrolling.
+   */
+  subagents: PanelSubagentEntry[]
   /** SpecDev workflow status mirrored from Host `specdev/status` (AD-CU-12). */
   specdev?: SpecdevStatusState
   searchOpen: boolean
@@ -397,8 +416,6 @@ export interface ChatUiState {
   settingsState?: SettingsState
   /** After history open, auto-fire Continue once Host chrome is ready. */
   pendingContinueSessionId?: string
-  /** Pending scroll/reveal from Host. */
-  pendingReveal: { sessionId: string; messageId?: string; kind: string; label?: string } | null
   /** Pending change-list reveal from Host. */
   pendingChangeListReveal: { sessionId: string; sourceMessageId: string; messageId?: string } | null
   /** Pending source reveal from Host. */
@@ -444,12 +461,12 @@ const initialState: ChatUiState = {
   settingsOpen: false,
   deferredRestoreCount: 0,
   settingsDeepLinkAvailable: false,
-  pendingReveal: null,
   pendingChangeListReveal: null,
   pendingSourceReveal: null,
   diffContents: new Map(),
   lastRevertResult: null,
   pendingInteractions: [],
+  subagents: [],
 }
 
 let state: ChatUiState = { ...initialState }
@@ -658,6 +675,7 @@ function mapMessage(m: unknown, index: number): UiMessage {
     ...(rec.subagentStatus === 'running' || rec.subagentStatus === 'ended' || rec.subagentStatus === 'deleted')
       ? { subagentStatus: rec.subagentStatus }
       : {},
+    ...typeof rec.producer === 'string' ? { producer: rec.producer } : {},
     ...activity ? { activity } : {},
     ...changeList ? { changeList } : {},
     ...compaction ? { compaction } : {},
@@ -833,6 +851,29 @@ function parseSubagentPrompt(raw: unknown): SubagentPromptState | undefined {
     childSessionId: rec.childSessionId,
     ...typeof rec.label === 'string' ? { label: rec.label } : {},
   }
+}
+
+/**
+ * Parse the Host's subagent roster; a row without an address or outside the
+ * closed status set is dropped, so the bar never shows an entry it cannot open.
+ */
+function parsePanelSubagents(raw: unknown): PanelSubagentEntry[] {
+  if (!Array.isArray(raw)) return []
+  const rows: PanelSubagentEntry[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const rec = entry as Record<string, unknown>
+    if (typeof rec.childSessionId !== 'string' || rec.childSessionId === '') continue
+    if (rec.status !== 'running' && rec.status !== 'ended') continue
+    rows.push({
+      childSessionId: rec.childSessionId,
+      label: typeof rec.label === 'string' && rec.label !== ''
+        ? rec.label
+        : `子代理 ${rec.childSessionId.slice(0, 8)}`,
+      status: rec.status,
+    })
+  }
+  return rows
 }
 
 /**
@@ -1130,11 +1171,6 @@ export function toggleActivityExpanded(activityId: string): void {
   emit()
 }
 
-export function clearPendingReveal(): void {
-  state = { ...state, pendingReveal: null }
-  emit()
-}
-
 export function clearPendingChangeListReveal(): void {
   state = { ...state, pendingChangeListReveal: null }
   emit()
@@ -1239,6 +1275,7 @@ export function applyHostFrame(raw: unknown): void {
         : undefined,
       breadcrumb,
       subagentPrompt: parseSubagentPrompt(frame.subagentPrompt),
+      subagents: parsePanelSubagents(frame.subagents),
       ...sessionChanged ? { tokenStatus: undefined, todoItems: [], route: undefined, specdev: undefined } : {},
     }
   } else if (type === 'panel/tabs') {
@@ -1545,18 +1582,6 @@ export function applyHostFrame(raw: unknown): void {
       specdev: specdev === undefined
         ? undefined
         : { ...specdev, ...lastScope === undefined ? {} : { lastApprovedScope: lastScope } },
-    }
-  } else if (type === 'scroll/reveal') {
-    const sessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''
-    if (!sessionId) return
-    state = {
-      ...state,
-      pendingReveal: {
-        sessionId,
-        ...typeof frame.messageId === 'string' ? { messageId: frame.messageId } : {},
-        kind: typeof frame.kind === 'string' ? frame.kind : 'none',
-        ...typeof frame.label === 'string' ? { label: frame.label } : {},
-      },
     }
   } else if (type === 'scroll/reveal-change-list') {
     const sessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''

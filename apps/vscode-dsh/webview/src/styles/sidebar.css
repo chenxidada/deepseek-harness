@@ -36,6 +36,44 @@
   letter-spacing: 0.01em;
 }
 
+.dsh-sidebar-head-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* Batch selection */
+.dsh-sidebar-bulk {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 8px var(--dsh-space-3);
+  border-bottom: 1px solid var(--dsh-border-soft);
+  font-size: var(--dsh-text-sm);
+  color: var(--dsh-muted);
+  flex-shrink: 0;
+}
+
+.dsh-sidebar-bulk > [data-testid='sidebar-bulk-count'] {
+  margin-right: auto;
+}
+
+.dsh-sidebar-item {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.dsh-sidebar-item > input[type='checkbox'] {
+  margin-top: 12px;
+  accent-color: var(--dsh-accent);
+}
+
+.dsh-sidebar-row[data-selected='true'] {
+  border-color: var(--dsh-accent);
+  background: var(--dsh-list-hover);
+}
+
 .dsh-sidebar-action,
 .dsh-sidebar-primary {
   font-family: inherit;

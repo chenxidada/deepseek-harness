@@ -45,8 +45,8 @@
   en: 9619cc022394d0ac
   zh: 0e82944c3ce92781
 /deepseek-ai-dsh-vscode-dsh/views:
-  en: c299e16aa3240a4c
-  zh: 6f5ffa3279bcd60b
+  en: 1813dfc399b26ee9
+  zh: 0d2bce9ed2405210
 /deepseek-ai-dsh-vscode-dsh/composer-path-references:
   en: c0c90311a28469f4
   zh: 1987f168cd477143
@@ -71,9 +71,12 @@
 /deepseek-ai-dsh-vscode-dsh/replay-diff-ad-cu-6:
   en: b80c4a13b8c9d2c3
   zh: 0645bc93adf5e565
+/deepseek-ai-dsh-vscode-dsh/injected-context-rows:
+  en: c17f7d67b96092e6
+  zh: 45627a1c2d208e4e
 /deepseek-ai-dsh-vscode-dsh/subagent-control-ad-cu-11:
-  en: 32d1a4bb1198d25d
-  zh: 44248d50d01a9d25
+  en: d433f70bbb53ea68
+  zh: 184a91bef2f0d369
 /deepseek-ai-dsh-vscode-dsh/specdev-status-ad-cu-12:
   en: 1dbc33149c36e582
   zh: b5d22cb56c7e6a1f

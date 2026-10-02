@@ -384,6 +384,173 @@ select:focus {
   font-size: 1em;
 }
 
+/* ===== Context injection row ===== */
+.dsh-context-injection {
+  padding: 6px 12px;
+}
+
+.dsh-context-injection > details > summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--dsh-text-sm);
+  color: var(--dsh-muted);
+}
+
+.dsh-context-injection-label {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--dsh-fg);
+}
+
+.dsh-context-injection-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-context-injection-body {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--dsh-reasoning-bg);
+  border-radius: var(--dsh-radius-sm);
+  color: var(--dsh-muted);
+  font-family: var(--dsh-font);
+  font-size: var(--dsh-text-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ===== Subagent roster bar ===== */
+.dsh-subagent-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--dsh-border);
+  background: var(--dsh-surface);
+  font-size: var(--dsh-text-sm);
+}
+
+.dsh-subagent-bar-head {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  font-weight: 600;
+  color: var(--dsh-muted);
+}
+
+.dsh-subagent-bar.is-running .dsh-subagent-bar-head {
+  color: var(--dsh-fg);
+}
+
+.dsh-subagent-bar-dot {
+  color: var(--dsh-accent);
+  animation: dsh-subagent-pulse 1.4s ease-in-out infinite;
+}
+
+.dsh-subagent-bar-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dsh-subagent-bar-row {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  max-width: 220px;
+  padding: 2px 8px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsh-fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dsh-subagent-bar-row:hover {
+  border-color: var(--dsh-accent);
+}
+
+.dsh-subagent-bar-row[data-active='true'] {
+  border-color: var(--dsh-accent);
+  background: var(--dsh-reasoning-bg);
+}
+
+.dsh-subagent-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-subagent-bar-marker[data-status='running'] {
+  color: var(--dsh-accent);
+}
+
+.dsh-subagent-bar-marker[data-status='ended'] {
+  color: var(--dsh-muted);
+}
+
+.dsh-subagent-bar-clear {
+  padding: 2px 8px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsh-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dsh-subagent-bar-clear:hover {
+  border-color: var(--dsh-accent);
+  color: var(--dsh-fg);
+}
+
+.dsh-subagent-bar-item {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.dsh-subagent-bar-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsh-muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dsh-subagent-bar-dismiss:hover {
+  background: var(--dsh-reasoning-bg);
+  color: var(--dsh-fg);
+}
+
+@keyframes dsh-subagent-pulse {
+  0%,
+  100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 /* ===== Markdown body ===== */
 .dsh-md {
   font-size: var(--dsh-text-md);
@@ -1653,6 +1820,28 @@ select:focus {
 
 .dsh-list-row:hover {
   background: var(--dsh-list-hover);
+}
+
+/* History batch selection */
+.dsh-history-bulk {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 0 10px 8px;
+  font-size: var(--dsh-text-sm);
+  color: var(--dsh-muted);
+}
+
+.dsh-history-bulk > [data-testid='history-bulk-count'] {
+  margin-right: auto;
+}
+
+.dsh-list-row[data-selected='true'] {
+  background: var(--dsh-reasoning-bg);
+}
+
+.dsh-list-row[data-selected='true'] input[type='checkbox'] {
+  accent-color: var(--dsh-accent);
 }
 
 /* History row actions */

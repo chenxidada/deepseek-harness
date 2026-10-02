@@ -60,6 +60,21 @@ export interface PanelBreadcrumb {
   label?: string
 }
 
+/**
+ * One durable subagent child of the projected Tab's root session, pushed via
+ * `panel/state`. The panel shows this roster in a fixed bar, so a running child
+ * stays visible after its inline card scrolls away and a finished child keeps a
+ * stable entry point.
+ */
+export interface PanelSubagent {
+  /** Durable child session identity addressed by `nav/open-subagent`. */
+  childSessionId: string
+  /** Display label the parent's projection recorded. */
+  label: string
+  /** Lifecycle status the parent's projection last recorded. */
+  status: 'running' | 'ended'
+}
+
 /** Host reject reasons for composer/send (send gate lives on Host). */
 export type RejectSendReason =
   | 'empty'
@@ -131,6 +146,12 @@ export type HostToWebviewMessage =
     contextSessionId?: string
     /** Parent→child lineage chrome (back / pin / deleted banners). */
     breadcrumb?: PanelBreadcrumb
+    /**
+     * Subagent roster of the projected Tab's root session, in projection order.
+     * Omitted (or empty) when that session has no children; the Webview renders
+     * the bar from this list and never derives children from the message flow.
+     */
+    subagents?: readonly PanelSubagent[]
     /**
      * Subagent address the composer may write to for this projection. Present
      * only when the projected child is continuable, not running, and its parent
@@ -208,13 +229,6 @@ export type HostToWebviewMessage =
     /** Prefill Conversation composer with pointer text (AC-1); Host→Webview. */
     type: 'composer/prefill'
     text: string
-  }
-  | {
-    type: 'scroll/reveal'
-    sessionId: string
-    messageId?: string
-    kind: 'user' | 'assistant' | 'none'
-    label?: string
   }
   | {
     /** Reveal a message-attached change-list bubble (AC-30 / AD-CCD-4). */
@@ -439,6 +453,12 @@ export type WebviewToHostMessage =
   /** Webview modal confirmed delete (AD-ECP-6); Host must skip native confirm. */
   | { type: 'ui/delete-request'; sessionId: string }
   /**
+   * Batch delete confirmed inside the History surface. The Host confirms once
+   * natively — a running member is stopped as part of the same decision — and
+   * then deletes every id.
+   */
+  | { type: 'ui/delete-many-request'; sessionIds: string[] }
+  /**
    * Webview asked to rename one session. The Host collects the text and writes it
    * through the runtime, which owns the title in the session log.
    */
@@ -477,13 +497,19 @@ export type WebviewToHostMessage =
   | { type: 'change/mark-reviewed'; changeId: string }
   | { type: 'change/revert'; changeId: string }
   | { type: 'change/revert-many'; changeIds: string[] }
-  | { type: 'scroll/reveal'; callId?: string }
   /** Enter a subagent child session in-panel (phase-4). */
   | { type: 'nav/open-subagent'; childSessionId: string }
   /** Leave an in-panel child context back to the Tab root (phase-4). */
   | { type: 'nav/back' }
   /** Promote the in-panel child context into its own pinned Tab (phase-4). */
   | { type: 'action/pin-subagent'; childSessionId: string }
+  /**
+   * Hide one finished child from the panel's roster bar. Dismissal is
+   * presentation only — the transcript card and the durable session stay.
+   */
+  | { type: 'action/dismiss-subagent'; childSessionId: string }
+  /** Hide every finished child from the panel's roster bar. */
+  | { type: 'action/dismiss-finished-subagents' }
   /**
    * Abort one subagent card's active turn. The card carries the durable address
    * it renders, so the Host interrupts under the parent the card belongs to.
@@ -547,6 +573,14 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
   if (type === 'ui/delete-request') {
     if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
     return { type: 'ui/delete-request', sessionId: record.sessionId }
+  }
+  if (type === 'ui/delete-many-request') {
+    if (!Array.isArray(record.sessionIds) || record.sessionIds.length === 0) return undefined
+    const sessionIds = record.sessionIds.filter((id): id is string => typeof id === 'string' && id !== '')
+    // A frame carrying anything but addresses is dropped whole, so a partial
+    // selection can never delete a different set than the user confirmed.
+    if (sessionIds.length !== record.sessionIds.length) return undefined
+    return { type: 'ui/delete-many-request', sessionIds: [...new Set(sessionIds)] }
   }
   if (type === 'ui/rename-request') {
     if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
@@ -670,18 +704,12 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
     if (changeIds.length !== record.changeIds.length) return undefined
     return { type: 'change/revert-many', changeIds }
   }
-  if (type === 'scroll/reveal') {
-    if (record.callId !== undefined && typeof record.callId !== 'string') return undefined
-    return {
-      type: 'scroll/reveal',
-      ...typeof record.callId === 'string' ? { callId: record.callId } : {},
-    }
-  }
-  if (type === 'nav/open-subagent' || type === 'action/pin-subagent') {
+  if (type === 'nav/open-subagent' || type === 'action/pin-subagent' || type === 'action/dismiss-subagent') {
     // Fail-closed: a child context id must be a non-empty string, or the frame is dropped.
     if (typeof record.childSessionId !== 'string' || record.childSessionId === '') return undefined
     return { type, childSessionId: record.childSessionId }
   }
+  if (type === 'action/dismiss-finished-subagents') return { type: 'action/dismiss-finished-subagents' }
   if (type === 'action/interrupt-subagent') {
     if (typeof record.parentSessionId !== 'string' || record.parentSessionId === '') return undefined
     if (typeof record.childSessionId !== 'string' || record.childSessionId === '') return undefined

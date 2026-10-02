@@ -50,6 +50,8 @@ export type ChromeIntent =
   | { type: 'ui/history-close' }
   | { type: 'ui/history-select'; sessionId: string }
   | { type: 'ui/delete-request'; sessionId: string }
+  /** Batch delete confirmed in the History surface; the Host confirms once. */
+  | { type: 'ui/delete-many-request'; sessionIds: string[] }
   /** Ask the Host to collect and write a new title for one session. */
   | { type: 'ui/rename-request'; sessionId: string }
   | { type: 'action/stop' }
@@ -73,6 +75,10 @@ export type ChromeIntent =
   | { type: 'nav/open-subagent'; childSessionId: string }
   | { type: 'nav/back' }
   | { type: 'action/pin-subagent'; childSessionId: string }
+  /** Hide one finished child from the panel's roster bar. */
+  | { type: 'action/dismiss-subagent'; childSessionId: string }
+  /** Hide every finished child from the panel's roster bar. */
+  | { type: 'action/dismiss-finished-subagents' }
   /** Abort one subagent card's active turn under the parent the card renders. */
   | { type: 'action/interrupt-subagent'; parentSessionId: string; childSessionId: string }
   /** Decide the SpecDev pending gate the status card renders (AD-CU-12). */
@@ -84,7 +90,6 @@ export type ChromeIntent =
   | { type: 'action/open-settings' }
   | { type: 'change/reveal-source'; sourceMessageId: string }
   | { type: 'change/revert-many'; changeIds: string[] }
-  | { type: 'scroll/reveal'; callId?: string }
   | { type: 'interaction/approve'; id: string; outcome: 'allowed-once' | 'rejected' | 'cancelled' }
   | { type: 'interaction/answer'; id: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }
   | { type: 'interaction/dismiss'; id: string; error: string }

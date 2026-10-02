@@ -218,6 +218,8 @@ The Todo view renders `todoItemsForSession` of the active Tab, so it is empty wi
 
 History is a **WebviewView**, not a `TreeView`: the row typography and the row menu belong to this Extension, and VS Code owns the native tree's font. Each row shows the recorded time and the first user text, plus 「可继续」when the runtime can resume that session. Right-clicking a row (or `Shift+F10` with the row focused) opens the row menu — **打开回放 / 继续本会话 / 复制会话 ID / 删除会话**. **继续本会话** is disabled for a session the runtime cannot resume, and it opens the replay first, then continues, because continue acts on the active Tab. **删除会话** asks for confirmation and then takes the same confirmed delete path as the panel. With no eligible sessions the view renders its own empty state, whose buttons start a conversation or open the panel.
 
+The view header's **多选** turns the list into a selection surface: each row takes a checkbox, 全选 / 清空 manage the set, and **删除所选** sends the whole set as one `sidebar/delete-many` intent. A long history is the normal case in a full development cycle, so the selection is confirmed once natively — the prompt names the count and how many members are running — and every id then takes the same confirmed delete path the single-row action uses. A batch that cannot delete an id still deletes the rest and reports the shortfall in one summary.
+
 ## Composer `@path` references
 
 Typing `@` in the composer opens a candidate list for the workspace root. Candidates come from the same search the Host mounts behind `ctx.fileReferences`, so the panel, the Web client, and the model's own `@` guidance rank and exclude identically. `↑`/`↓` move the highlight, `Enter` or `Tab` accepts, `Escape` closes; accepting a directory keeps the list open one level down, and a path with spaces is inserted as `@"path with spaces"`.
@@ -277,9 +279,17 @@ The composer's 压缩上下文 button and `dsh.triggerCompact` take the same pat
 - Both Diff sides open as virtual `dsh-diff` documents from the log — **never** current workspace files as before/after.
 - Incomplete / interrupted turns are marked on messages (`incomplete`) with notice「已停止/未完成」(AC-77).
 
+## Injected context rows
+
+- A logged `user/message` whose `source.kind` is not `user` is input the model received but the human did not write (agent instructions, goal rounds, scheduled follow-ups, question replies). The panel projects it as its own `kind:'context-injection'` row instead of a user bubble, carrying the logged producer and the payload in full.
+- The row is collapsed to `上下文注入 · <producer>` plus a one-line bounded preview, so a long instruction payload cannot flood the transcript. Expanding it shows the exact text the model received, scrollable inside the row.
+- Live sessions and a log-folded replay use the same projection, so the row a reader expands after the fact is the row the live panel showed.
+
 ## Subagent control (AD-CU-11)
 
 - `dsh.listSubagents` shows one session's roster from bridge `subagent/list` — `children` by default, `'descendants'` for the whole subtree with `parentId` / `depth`. Each row carries `mode` (`one-shot` / `continuable`), an `activity` re-sampled from the live Agent registry, and unreadable children appear as「无法识别 <id8>」.
+- The panel keeps a fixed roster bar above the message flow, pushed with `panel/state.subagents` from the Tab root session's own subagent cards. A running child is counted in the bar head and marked ●, so it stays visible after its inline card scrolls out of view; a finished child keeps its ✓ row and remains one click away; a deleted child is dropped. Every row enters its child through `nav/open-subagent`, the same path the inline card uses.
+- A finished row also carries its own dismiss control, and the bar head offers **清除已结束** for the whole finished set. Dismissal only hides the bar row — the transcript card and the durable session stay — and it never applies to a running child, whose row is the progress surface. A dismissed child that runs again returns to the bar.
 - A `continuable` child accepts messages only while its parent Tab is live and the child is not running: the composer then shows「发送给子代理 <label>」and delivers through bridge `subagent/prompt`. One-shot children, running children, replay parents, and an unreachable bridge keep the composer read-only.
 - A running child card offers「中断」→ bridge `subagent/interrupt` under the parent session's authority; one-shot and continuable children are both interruptible.
 - Runtime refusals (parent not live, child not continuable, service unavailable) surface verbatim in a banner.

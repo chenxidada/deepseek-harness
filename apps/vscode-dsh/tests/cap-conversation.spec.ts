@@ -2771,6 +2771,8 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         requestOpenSubagent: childSessionId => controller.openSubagentContext(childSessionId),
         requestNavBack: () => controller.navBack(),
         requestPinSubagent: childSessionId => controller.pinSubagent(childSessionId),
+        requestDismissSubagent: childSessionId => controller.dismissSubagent(childSessionId),
+        requestDismissFinishedSubagents: () => controller.dismissSubagent(),
         resolveContinueChrome: () => controller.continueChromeForTab(),
       })
       controller.setPanelHost(panel)
@@ -2951,6 +2953,61 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           .find(m => m.kind === 'subagent' && m.childSessionId === 'child-1')
         expect(card?.subagentStatus).toBe('deleted')
       })
+
+      it('CAP-CONVERSATION-110 the panel roster carries running and finished children and drops a deleted one', async () => {
+        const { controller, fake } = setup()
+        const parentSessionId = await parentWithRunningChild(controller, 'child-run')
+        await controller.applyTestSubagentNotification('started', parentSessionId, 'child-done')
+        await controller.applyTestSubagentNotification('finished', parentSessionId, 'child-done')
+        await controller.applyTestSubagentNotification('started', parentSessionId, 'child-gone')
+        await controller.deleteSession('child-gone', { confirmed: true })
+
+        const projection = controller.resolvePanelProjection()
+        expect(projection?.subagents).toEqual([
+          { childSessionId: 'child-run', label: expect.any(String), status: 'running' },
+          { childSessionId: 'child-done', label: expect.any(String), status: 'ended' },
+        ])
+
+        // The roster rides panel/state, so the bar is rebuilt on every push.
+        const state = [...fake.receivedFromHost].reverse()
+          .find(m => m.type === 'panel/state' && Array.isArray(m.subagents))
+        expect(state?.subagents).toHaveLength(2)
+      })
+
+      it('CAP-CONVERSATION-111 the roster follows the Tab root while the panel projects a child', async () => {
+        const { controller } = setup()
+        await parentWithRunningChild(controller, 'child-1')
+        await controller.openSubagentContext('child-1')
+
+        const projection = controller.resolvePanelProjection()
+        expect(projection?.sessionId).toBe('child-1')
+        expect(projection?.contextSessionId).toBe('child-1')
+        expect(projection?.subagents).toEqual([
+          { childSessionId: 'child-1', label: expect.any(String), status: 'running' },
+        ])
+      })
+
+      it('CAP-CONVERSATION-112 a running child is never dismissed, and a restarted child re-enters the roster', async () => {
+        const { controller } = setup()
+        const parentSessionId = await parentWithRunningChild(controller, 'child-run')
+        await controller.applyTestSubagentNotification('started', parentSessionId, 'child-done')
+        await controller.applyTestSubagentNotification('finished', parentSessionId, 'child-done')
+
+        // A running row is the progress surface, so the single-row frame leaves it alone.
+        expect(controller.dismissSubagent('child-run')).toBe(0)
+        // Clear-finished takes the ended row only.
+        expect(controller.dismissSubagent()).toBe(1)
+        expect(controller.resolvePanelProjection()?.subagents?.map(row => row.childSessionId))
+          .toEqual(['child-run'])
+
+        // A dismissed child that runs again is exactly what the bar has to show again.
+        await controller.applyTestSubagentNotification('finished', parentSessionId, 'child-run')
+        expect(controller.dismissSubagent()).toBe(1)
+        expect(controller.resolvePanelProjection()?.subagents).toBeUndefined()
+        await controller.applyTestSubagentNotification('started', parentSessionId, 'child-run')
+        expect(controller.resolvePanelProjection()?.subagents?.map(row => row.childSessionId))
+          .toEqual(['child-run'])
+      })
     })
 
     describe('VP-4-subagent: protocol fail-closed + Host routing', () => {
@@ -2965,6 +3022,19 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           .toEqual({ type: 'action/pin-subagent', childSessionId: 'child-9' })
         expect(parseWebviewToHostMessage({ type: 'nav/back' })).toEqual({ type: 'nav/back' })
         expect(parseWebviewToHostMessage({ type: 'unknown-frame' })).toBeUndefined()
+
+        // Dismissal addresses one child, or the whole finished set, and both stay fail-closed.
+        expect(parseWebviewToHostMessage({ type: 'action/dismiss-subagent', childSessionId: '' })).toBeUndefined()
+        expect(parseWebviewToHostMessage({ type: 'action/dismiss-subagent', childSessionId: 'child-9' }))
+          .toEqual({ type: 'action/dismiss-subagent', childSessionId: 'child-9' })
+        expect(parseWebviewToHostMessage({ type: 'action/dismiss-finished-subagents' }))
+          .toEqual({ type: 'action/dismiss-finished-subagents' })
+
+        // A batch delete carries addresses only, deduplicated, or the frame is dropped whole.
+        expect(parseWebviewToHostMessage({ type: 'ui/delete-many-request', sessionIds: [] })).toBeUndefined()
+        expect(parseWebviewToHostMessage({ type: 'ui/delete-many-request', sessionIds: ['a', 7] })).toBeUndefined()
+        expect(parseWebviewToHostMessage({ type: 'ui/delete-many-request', sessionIds: ['a', 'a', 'b'] }))
+          .toEqual({ type: 'ui/delete-many-request', sessionIds: ['a', 'b'] })
       })
 
       it('CAP-CONVERSATION-048 Host routes nav/open-subagent → nav/back → action/pin-subagent', async () => {
@@ -2980,6 +3050,25 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         await panel.handleWebviewMessage({ type: 'nav/open-subagent', childSessionId: 'child-1' })
         await panel.handleWebviewMessage({ type: 'action/pin-subagent', childSessionId: 'child-1' })
         expect(controller.registry.getBySessionId('child-1')?.pinnedSubagent).toBe(true)
+      })
+
+      it('CAP-CONVERSATION-113 Host routes dismiss frames into the roster projection', async () => {
+        const { controller, panel } = setup()
+        const parentSessionId = await parentWithRunningChild(controller, 'child-1')
+        await controller.applyTestSubagentNotification('finished', parentSessionId, 'child-1')
+        expect(controller.resolvePanelProjection()?.subagents).toHaveLength(1)
+
+        await panel.handleWebviewMessage({ type: 'action/dismiss-finished-subagents' })
+        expect(controller.resolvePanelProjection()?.subagents).toBeUndefined()
+
+        // The per-row frame addresses one child and leaves the others alone.
+        await controller.applyTestSubagentNotification('started', parentSessionId, 'child-1')
+        await controller.applyTestSubagentNotification('started', parentSessionId, 'child-2')
+        await controller.applyTestSubagentNotification('finished', parentSessionId, 'child-1')
+        await controller.applyTestSubagentNotification('finished', parentSessionId, 'child-2')
+        await panel.handleWebviewMessage({ type: 'action/dismiss-subagent', childSessionId: 'child-1' })
+        expect(controller.resolvePanelProjection()?.subagents?.map(row => row.childSessionId))
+          .toEqual(['child-2'])
       })
 
       it('CAP-CONVERSATION-049 onSdkNotification routes subagent.started / finished', async () => {
@@ -3413,6 +3502,37 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(executed.some(entry => entry.startsWith('warn:Permanently delete'))).toBe(true)
         expect(disposeSpy).toHaveBeenCalledWith(sessionId)
         expect(getConversationSnapshot().tabs).toHaveLength(0)
+      })
+
+      it('CAP-CONVERSATION-114 a sidebar batch delete asks once and deletes every selected session', async () => {
+        vi.spyOn(IdeSessionHost.prototype, 'start').mockImplementation(async function (
+          this: IdeSessionHost,
+        ) {
+          this.status = 'connected'
+        })
+        const disposeSpy = vi.spyOn(IdeSessionHost.prototype, 'disposeSession').mockResolvedValue()
+        vi.spyOn(IdeSessionHost.prototype, 'deleteSession').mockResolvedValue(undefined)
+
+        activateWith(makeVscode({ history: true, confirmDelete: true }))
+        await commands.get('dsh.test.setCredentialPresence')!(true)
+        await getChatPanelHost()!.handleWebviewMessage({ type: 'ui/tab-new' })
+        await vi.waitFor(() => {
+          expect(getConversationSnapshot().tabs.length).toBeGreaterThanOrEqual(1)
+        })
+
+        const probe = revealHistoryView()
+        probe.send({ type: 'sidebar/delete-many', sessionIds: ['hist-a', 'hist-b'] })
+        await vi.waitFor(() => {
+          expect(executed.some(entry => entry.includes('Permanently delete 2 conversations'))).toBe(true)
+        })
+        await vi.waitFor(() => {
+          expect(executed.some(entry => entry.startsWith('info:已删除 2 个会话'))).toBe(true)
+        })
+        // One prompt for the whole selection, and every id took the confirmed backend path.
+        expect(executed.filter(entry => entry.includes('Permanently delete 2 conversations')))
+          .toHaveLength(1)
+        expect(disposeSpy).toHaveBeenCalledWith('hist-a')
+        expect(disposeSpy).toHaveBeenCalledWith('hist-b')
       })
 
       it('CAP-CONVERSATION-052 disconnected ui/tab-new → connecting wait (not sendable live) → live', async () => {
@@ -4544,10 +4664,12 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
       const messages = controller.messages.get(sessionId)
       // The human prompt already has its optimistic bubble; the injected context
-      // appears as a notice instead of a second user bubble.
+      // appears as its own expandable row carrying the payload in full.
       expect(messages).toHaveLength(1)
       expect(messages[0]?.role).toBe('notice')
-      expect(messages[0]?.text).toBe('上下文注入（agent-instructions）：AGENTS.md 内容')
+      expect(messages[0]?.kind).toBe('context-injection')
+      expect(messages[0]?.producer).toBe('agent-instructions')
+      expect(messages[0]?.text).toBe('AGENTS.md 内容')
     })
 
     it('CAP-CONVERSATION-108 tool-role results pair by callId and render text plus failure status', () => {
@@ -4631,10 +4753,14 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       const messages = hydrateFromAuthoritativeLog('sess-v4', events).messages
       expect(messages.map(message => `${message.role}:${message.text}`)).toEqual([
         'user:hi',
-        'notice:上下文注入（goal）：goal round',
+        'notice:goal round',
         'notice:工具已更新：+bash',
         'assistant:answer',
       ])
+      // The injected row keeps its producer beside the full payload, so the panel
+      // can label it collapsed and expand it to the exact logged text.
+      expect(messages[1]?.kind).toBe('context-injection')
+      expect(messages[1]?.producer).toBe('goal')
       expect(messages[3]?.reasoning).toBe('think')
     })
   })
