@@ -2977,6 +2977,30 @@ describe('ide-bridge transport lifecycle paths', () => {
     }, { timeout: WAIT_MS })
     framing.close()
   })
+
+  it('reassembles one oversized line split across many transport chunks', async () => {
+    const [hostSide, runtimeSide] = createMemoryDuplexPair({ objectMode: true })
+    const framing = new NdjsonSocket(runtimeSide)
+    const frames: BridgeFrame[] = []
+    framing.onFrame((frame) => {
+      frames.push(frame)
+    })
+    hostSide.resume()
+
+    // A read-log response carries a whole stored log, so its single NDJSON line
+    // arrives split across many chunks and must be reassembled into exactly one frame.
+    const events = Array.from({ length: 4_000 }, (_, index) => ({ type: 'user/message', seq: index }))
+    const line = `${JSON.stringify({ kind: 'session/read-log/response', id: 'r-1', ok: true, events })}\n`
+    const chunkSize = 4_096
+    for (let at = 0; at < line.length; at += chunkSize) {
+      runtimeSide.push(Buffer.from(line.slice(at, at + chunkSize)))
+    }
+    await vi.waitFor(() => {
+      expect(frames).toHaveLength(1)
+    }, { timeout: WAIT_MS })
+    expect(frames[0]).toEqual({ kind: 'session/read-log/response', id: 'r-1', ok: true, events })
+    framing.close()
+  })
 })
 
 describe('ide-bridge session/read-log closer fallbacks', () => {

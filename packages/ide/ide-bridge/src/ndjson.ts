@@ -30,7 +30,14 @@ export function parseBridgeFrame(line: string): BridgeFrame | undefined {
  * Attach NDJSON read/write helpers to a caller-owned duplex socket.
  */
 export class NdjsonSocket {
-  private buffer = ''
+  /**
+   * Chunks of the line currently being received. A `session/read-log/response`
+   * carries a whole stored log, so one line can exceed the socket's chunk size
+   * by orders of magnitude. Appending to one growing string re-flattens it and
+   * re-scans it for the delimiter on every chunk; holding the chunks and joining
+   * once per completed line keeps framing linear in the bytes received.
+   */
+  private pendingLine: string[] = []
   private readonly decoder = new StringDecoder('utf8')
   private closed = false
   private frameHandler: ((frame: BridgeFrame) => void) | undefined
@@ -75,12 +82,19 @@ export class NdjsonSocket {
 
   private readonly onData = (chunk: string): void => {
     /* v8 ignore next -- the constructor calls setEncoding('utf8'), so Node's Readable decodes every chunk before 'data' fires. */
-    this.buffer += typeof chunk === 'string' ? chunk : this.decoder.write(chunk)
-    for (;;) {
-      const newline = this.buffer.indexOf('\n')
-      if (newline < 0) break
-      const line = this.buffer.slice(0, newline)
-      this.buffer = this.buffer.slice(newline + 1)
+    let rest = typeof chunk === 'string' ? chunk : this.decoder.write(chunk)
+    while (rest !== '') {
+      const newline = rest.indexOf('\n')
+      if (newline < 0) {
+        this.pendingLine.push(rest)
+        return
+      }
+      const head = rest.slice(0, newline)
+      // One join per completed line: cheap while a line spans many chunks, and
+      // an empty join while a chunk carries whole lines.
+      const line = this.pendingLine.length === 0 ? head : this.pendingLine.join('') + head
+      this.pendingLine = []
+      rest = rest.slice(newline + 1)
       const frame = parseBridgeFrame(line)
       if (frame !== undefined) this.frameHandler?.(frame)
     }
