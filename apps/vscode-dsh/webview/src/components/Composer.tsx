@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { MessageBridge } from '../bridge/message-bridge.ts'
 import {
   type AtCompletionReply,
+  type ComposerImage,
   type ComposerState,
   type ContinueChrome,
   type SlashCompletionReply,
@@ -11,9 +12,18 @@ import {
   type UiAtCandidate,
   type UiSlashCandidate,
 } from '../store/chat-ui-store.ts'
-import { consumeSendRestore, setComposerText, setPendingSend, setStopping } from '../store/chat-ui-store.ts'
+import {
+  addComposerImage,
+  clearComposerImages,
+  consumeSendRestore,
+  removeComposerImage,
+  setComposerImages,
+  setComposerText,
+  setPendingSend,
+  setStopping,
+} from '../store/chat-ui-store.ts'
 import { activeAtToken, formatFileMention } from '../utils/at-path-tokens.ts'
-import { sniffImageMediaType } from '../utils/image-media-type.ts'
+import { readImageAttachment } from '../utils/image-attachment.ts'
 import { ContextRing } from './ContextRing.tsx'
 
 /** Monotonic id pairing one `@` query with its reply. */
@@ -39,43 +49,6 @@ const SLASH_GROUP_LABEL: Record<UiSlashCandidate['group'], string> = {
   command: '命令',
   agent: '智能体',
   skill: '技能',
-}
-
-/**
- * Filesystem paths a Webview drop carries. VS Code hands Explorer drags over as
- * `text/uri-list`; an OS drop may only carry `text/plain`.
- * @param transfer - drop payload.
- * @returns decoded absolute paths, in payload order.
- */
-function droppedPaths(transfer: DataTransfer): string[] {
-  const out: string[] = []
-  for (const line of transfer.getData('text/uri-list').split(/\r?\n/u)) {
-    const trimmed = line.trim()
-    if (trimmed === '' || trimmed.startsWith('#')) continue
-    const path = fileUriToPath(trimmed)
-    if (path !== undefined) out.push(path)
-  }
-  if (out.length > 0) return out
-  const plain = transfer.getData('text/plain').trim()
-  return plain === '' ? [] : [plain]
-}
-
-/**
- * Decode one `file://` drag payload into a filesystem path.
- * @param uri - one `text/uri-list` line.
- * @returns the path, or undefined for a non-file or unparsable URI.
- */
-function fileUriToPath(uri: string): string | undefined {
-  if (!uri.startsWith('file://')) return undefined
-  let path: string
-  try {
-    path = decodeURIComponent(new URL(uri).pathname)
-  } catch {
-    return undefined
-  }
-  if (path === '') return undefined
-  // A Windows file URI carries a slash before the drive letter that no fsPath has.
-  return /^\/[A-Za-z]:[/\\]/u.test(path) ? path.slice(1) : path
 }
 
 /** Composer `@` token the open completion popup replaces. */
@@ -137,6 +110,11 @@ export interface ComposerProps {
    * writable child address, so its presence is what the composer renders.
    */
   subagentTarget?: string
+  /**
+   * Images staged for the next send. The store owns them because a drop lands
+   * anywhere on the panel while this composer renders the preview.
+   */
+  images: ComposerImage[]
 }
 
 export function Composer({
@@ -156,9 +134,9 @@ export function Composer({
   route,
   modelState,
   subagentTarget,
+  images,
 }: ComposerProps) {
   const [local, setLocal] = useState(text)
-  const [images, setImages] = useState<Array<{ data: string; mimeType: string; name?: string }>>([])
   const [atRequest, setAtRequest] = useState<OpenAtRequest | undefined>()
   const [atIndex, setAtIndex] = useState(0)
   const [slashRequest, setSlashRequest] = useState<OpenSlashRequest | undefined>()
@@ -176,7 +154,7 @@ export function Composer({
     if (draft === undefined) return
     setLocal(draft.text)
     setComposerText(draft.text)
-    setImages(draft.images ?? [])
+    setComposerImages(draft.images ?? [])
   }, [sendRestore])
   useEffect(() => {
     const caret = pendingCaretRef.current
@@ -291,25 +269,15 @@ export function Composer({
     setAtRequest(undefined)
   }
 
+  /**
+   * Read one pasted or dropped file into a staged attachment.
+   * The panel-wide drop zone shares this path, so both gestures stage identically.
+   * @param file - pasted or dropped file.
+   */
   const addImageFromFile = (file: File): void => {
-    if (!file.type.startsWith('image/')) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result
-      if (typeof result !== 'string') return
-      // data:image/png;base64,... → 提取 base64 部分
-      const base64 = result.split(',')[1] ?? ''
-      // The runtime's admission compares the declared type against the bytes, and a
-      // platform label lies for a mislabeled file (a WebP named `.png`, an `image/jpg`
-      // label); the sniffed signature wins whenever the bytes carry one.
-      const mimeType = sniffImageMediaType(base64) ?? file.type
-      setImages(prev => [...prev, { data: base64, mimeType, name: file.name }])
-    }
-    reader.readAsDataURL(file)
-  }
-
-  const removeImage = (index: number): void => {
-    setImages(prev => prev.filter((_, i) => i !== index))
+    void readImageAttachment(file).then((image) => {
+      if (image !== undefined) addComposerImage(image)
+    })
   }
 
   const send = (): void => {
@@ -324,7 +292,7 @@ export function Composer({
     }
     setLocal('')
     setComposerText('')
-    setImages([])
+    clearComposerImages()
   }
 
   const stop = (): void => {
@@ -366,7 +334,7 @@ export function Composer({
                 type="button"
                 data-testid="remove-image"
                 className="dsh-attach-remove"
-                onClick={() => removeImage(i)}
+                onClick={() => removeComposerImage(i)}
               >
                 ×
               </button>
@@ -447,23 +415,6 @@ export function Composer({
                 return
               }
             }
-          }}
-          onDrop={(event) => {
-            const transfer = event.dataTransfer
-            if (transfer === null) return
-            const image = Array.from(transfer.files).find(file => file.type.startsWith('image/'))
-            if (image !== undefined) {
-              event.preventDefault()
-              addImageFromFile(image)
-              return
-            }
-            const paths = droppedPaths(transfer)
-            if (paths.length === 0) return
-            event.preventDefault()
-            bridge.emitIntent({ type: 'composer/drop-paths', paths, text: value })
-          }}
-          onDragOver={(event) => {
-            event.preventDefault()
           }}
           onChange={(event) => {
             const next = event.target.value

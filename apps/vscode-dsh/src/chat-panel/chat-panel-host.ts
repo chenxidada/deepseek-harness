@@ -14,6 +14,7 @@ import type { SettingsNamespaceView } from '../session-host.ts'
 import type { BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
 import {
   formatOfficialAtPath,
+  normalizePathKey,
   resolveAtPathInWorkspace,
   validateComposerAtPaths,
   type ResolveAtPathOptions,
@@ -840,22 +841,44 @@ export class ChatPanelHost {
    * Append `@` mentions for dropped filesystem paths and push the result back to the composer.
    * Paths resolve through the same workspace check as a typed `@` token, so a drop from
    * outside the workspace is ignored instead of becoming a mention the send gate rejects.
+   * A resource drag carries one file twice (the workbench's single `text/uri-list` entry
+   * beside every resource's label), so mentions are deduplicated after resolution — the
+   * only point where two spellings of one file collapse. A drop that yields no mention
+   * says so, because a silent no-op reads as a broken gesture.
    * @param text - composer text the drop landed on.
-   * @param paths - absolute filesystem paths from the drop payload.
+   * @param paths - absolute or workspace-relative paths from the drop payload.
    */
   private appendDroppedMentions(text: string, paths: readonly string[]): void {
     const options = this.deps.getAtPathResolveOptions?.()
-    if (options === undefined) return
+    if (options === undefined || paths.length === 0) return
     const mentions: string[] = []
+    const seen = new Set<string>()
+    let unresolved = 0
     for (const path of paths) {
       const resolved = resolveAtPathInWorkspace(path, options)
-      if (!resolved.ok) continue
+      if (!resolved.ok) {
+        unresolved += 1
+        continue
+      }
+      const key = normalizePathKey(resolved.path)
+      if (seen.has(key)) continue
+      seen.add(key)
       const mention = formatOfficialAtPath(resolved.path)
-      if (mention !== undefined) mentions.push(mention)
+      if (mention === undefined) {
+        unresolved += 1
+        continue
+      }
+      mentions.push(mention)
     }
-    if (mentions.length === 0) return
+    if (mentions.length === 0) {
+      this.pushBanner('拖入的路径无法在工作区内解析', 'drop-paths')
+      return
+    }
     const base = text.trimEnd()
     this.prefillComposer(base === '' ? mentions.join(' ') : `${base} ${mentions.join(' ')}`)
+    if (unresolved > 0) {
+      this.pushBanner(`已忽略 ${unresolved} 个不在工作区内或无法解析的路径`, 'drop-paths')
+    }
   }
 
   /**

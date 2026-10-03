@@ -139,6 +139,38 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
+}
+
+/* Drop affordance: shown while a drag is over the panel, absent otherwise. The
+   overlay never takes pointer events, so a drop still reaches the element under
+   the cursor and bubbles to the root handler that accepts it. */
+.dsh-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--dsh-bg) 82%, transparent);
+  border: 2px dashed var(--dsh-accent);
+}
+
+.dsh-drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--dsh-space-1);
+  padding: var(--dsh-space-3) var(--dsh-space-5);
+  border: 1px solid var(--dsh-border);
+  border-radius: var(--dsh-radius-card);
+  background: var(--dsh-surface-raised);
+}
+
+.dsh-drop-card span {
+  color: var(--dsh-muted);
+  font-size: var(--dsh-text-sm);
 }
 
 .dsh-muted {

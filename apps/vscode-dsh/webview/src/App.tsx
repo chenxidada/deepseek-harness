@@ -9,6 +9,7 @@ import { SettingsPanel } from './components/SettingsPanel.tsx'
 import { SpecdevCard } from './components/SpecdevCard.tsx'
 import { SubagentBar } from './components/SubagentBar.tsx'
 import {
+  addComposerImage,
   getChatUiState,
   setPendingContinue,
   setSettingsOpen,
@@ -16,6 +17,8 @@ import {
   type ChatUiState,
   type TokenStatus,
 } from './store/chat-ui-store.ts'
+import { droppedPathsFromTransfer } from './utils/dropped-paths.ts'
+import { readImageAttachment } from './utils/image-attachment.ts'
 
 export interface AppProps {
   bridge: MessageBridge
@@ -23,6 +26,11 @@ export interface AppProps {
 
 export function App({ bridge }: AppProps) {
   const [ui, setUi] = useState<ChatUiState>(() => getChatUiState())
+  /**
+   * Nested drag targets each fire enter/leave as the pointer crosses them, so the
+   * overlay is keyed on a depth count rather than a single boolean.
+   */
+  const [dropDepth, setDropDepth] = useState(0)
 
   useEffect(() => subscribeChatUi(() => {
     setUi(getChatUiState())
@@ -31,6 +39,24 @@ export function App({ bridge }: AppProps) {
   useEffect(() => {
     bridge.emitIntent({ type: 'ready' })
   }, [bridge])
+
+  useEffect(() => {
+    // A file drag belongs to this panel, not to the editor group behind it: VS Code's
+    // webview wrapper only stands down when the inner content marks the drag handled,
+    // and it reads that mark on `dragenter`, before any drop target sees the event.
+    const claimDrag = (event: DragEvent): void => { event.preventDefault() }
+    const resetDropDepth = (): void => { setDropDepth(0) }
+    window.addEventListener('dragenter', claimDrag)
+    window.addEventListener('dragend', resetDropDepth)
+    window.addEventListener('drop', resetDropDepth)
+    window.addEventListener('blur', resetDropDepth)
+    return () => {
+      window.removeEventListener('dragenter', claimDrag)
+      window.removeEventListener('dragend', resetDropDepth)
+      window.removeEventListener('drop', resetDropDepth)
+      window.removeEventListener('blur', resetDropDepth)
+    }
+  }, [])
 
   // History Continue: open session first, then Continue when Host chrome is ready (AC-54).
   // Clear stuck pending when chrome settles to disabled/hidden (Should-Fix).
@@ -69,6 +95,36 @@ export function App({ bridge }: AppProps) {
             : undefined
   const canRetryConnect = ui.connectionPhase === 'failed' || ui.connectionPhase === 'disconnected-manual'
 
+  /**
+   * Ask the Host to append `@` mentions for a drop.
+   * The paths are sent unresolved: only the Host knows the workspace roots and the
+   * mention grammar, and it drops what it cannot resolve.
+   * @param transfer - drop payload.
+   */
+  const dropPaths = (transfer: DataTransfer): void => {
+    const paths = droppedPathsFromTransfer(transfer)
+    if (paths.length === 0) return
+    bridge.emitIntent({ type: 'composer/drop-paths', paths, text: ui.composerText })
+  }
+
+  /**
+   * Stage every image a drop carries; anything else becomes an `@path` mention.
+   * Both routes are the same ones the composer's own paste and drop use.
+   * @param transfer - drop payload.
+   */
+  const acceptDrop = (transfer: DataTransfer): void => {
+    const images = Array.from(transfer.files).filter(file => file.type.startsWith('image/'))
+    if (images.length > 0) {
+      for (const file of images) {
+        void readImageAttachment(file).then((image) => {
+          if (image !== undefined) addComposerImage(image)
+        })
+      }
+      return
+    }
+    dropPaths(transfer)
+  }
+
   return (
     <div
       data-testid="editor-chat-root"
@@ -77,6 +133,25 @@ export function App({ bridge }: AppProps) {
       data-tab-id={ui.tabId ?? ''}
       data-theme-kind={ui.themeKind ?? ''}
       data-parent-readonly={parentReadonly ? 'true' : undefined}
+      data-drop-active={dropDepth > 0 ? 'true' : undefined}
+      // A file drag must be claimed before VS Code decides to open it: its wrapper
+      // skips the drag once the inner content has called preventDefault on enter.
+      onDragEnter={(event) => {
+        event.preventDefault()
+        setDropDepth(depth => depth + 1)
+      }}
+      onDragOver={(event) => {
+        event.preventDefault()
+      }}
+      onDragLeave={() => setDropDepth(depth => Math.max(0, depth - 1))}
+      onDrop={(event) => {
+        setDropDepth(0)
+        const transfer = event.dataTransfer
+        if (transfer === null) return
+        // Always claim the drop: an unhandled file drop would navigate the frame.
+        event.preventDefault()
+        acceptDrop(transfer)
+      }}
     >
       <TabChrome
         tabs={ui.tabs}
@@ -202,12 +277,25 @@ export function App({ bridge }: AppProps) {
         sendRestore={ui.sendRestore}
         route={ui.route}
         modelState={ui.modelState}
+        images={ui.composerImages}
         subagentTarget={ui.subagentPrompt === undefined
           ? undefined
           : ui.subagentPrompt.label ?? ui.subagentPrompt.childSessionId.slice(0, 8)}
       />
       {ui.deleteConfirm ? (
         <DeleteConfirmModal confirm={ui.deleteConfirm} bridge={bridge} />
+      ) : null}
+      {dropDepth > 0 ? (
+        <div
+          data-testid="composer-drop-overlay"
+          className="dsh-drop-overlay"
+          aria-hidden="true"
+        >
+          <div className="dsh-drop-card">
+            <strong>松开以引用文件</strong>
+            <span>路径会作为 @ 引用加入输入框</span>
+          </div>
+        </div>
       ) : null}
     </div>
   )

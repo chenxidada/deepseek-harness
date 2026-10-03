@@ -2043,6 +2043,56 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       const prefill = fake.receivedFromHost.find(m => m.type === 'composer/prefill')
       // A drop the workspace check rejects is skipped: the send gate would refuse that token.
       expect(prefill?.type === 'composer/prefill' ? prefill.text : '').toBe('看一下 @src/a.ts @"docs/my file.md"')
+      // The skipped path is reported, because a partly-ignored drop must not read as a full one.
+      expect(fake.receivedFromHost.find(m => m.type === 'ui/banner')).toEqual({
+        type: 'ui/banner',
+        text: '已忽略 1 个不在工作区内或无法解析的路径',
+        kind: 'drop-paths',
+      })
+    })
+
+    it('CAP-CHAT-PANEL-106 two spellings of one dropped file collapse to a single mention', () => {
+      const panel = new ChatPanelHost(deps({
+        getAtPathResolveOptions: () => ({ workspaceFolders: ['/ws'], exists: () => true }),
+      }))
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      // A resource drag carries the first file twice: one absolute `text/uri-list`
+      // entry beside every resource's workspace-relative label.
+      fake.emitFromWebview({
+        type: 'composer/drop-paths',
+        paths: ['/ws/src/a.ts', 'src/a.ts', 'src/b.ts'],
+        text: '',
+      })
+
+      const prefill = fake.receivedFromHost.find(m => m.type === 'composer/prefill')
+      expect(prefill?.type === 'composer/prefill' ? prefill.text : '').toBe('@src/a.ts @src/b.ts')
+      expect(fake.receivedFromHost.some(m => m.type === 'ui/banner')).toBe(false)
+    })
+
+    it('CAP-CHAT-PANEL-107 a drop that resolves to no path says so instead of doing nothing', () => {
+      const panel = new ChatPanelHost(deps({
+        getAtPathResolveOptions: () => ({ workspaceFolders: ['/ws'], exists: () => true }),
+      }))
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({
+        type: 'composer/drop-paths',
+        paths: ['/elsewhere/b.ts'],
+        text: '看一下',
+      })
+
+      // Nothing was prefilled and nothing became a mention, so the gesture reports itself.
+      expect(fake.receivedFromHost.some(m => m.type === 'composer/prefill')).toBe(false)
+      expect(fake.receivedFromHost.find(m => m.type === 'ui/banner')).toEqual({
+        type: 'ui/banner',
+        text: '拖入的路径无法在工作区内解析',
+        kind: 'drop-paths',
+      })
     })
   })
 

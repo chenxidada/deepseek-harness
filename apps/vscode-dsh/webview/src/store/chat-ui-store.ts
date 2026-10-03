@@ -2,6 +2,10 @@
  * React presentation store for Editor Chat Panel (decision fields mirror Host only).
  */
 
+import type { ComposerImage } from '../utils/image-attachment.ts'
+
+export type { ComposerImage }
+
 export type ComposerState = 'live' | 'readonly' | 'waiting' | 'error'
 export type FollowState = 'on' | 'off'
 export type PanelMode = 'empty' | 'waiting-host' | 'replay' | 'live' | 'readonly-live' | 'error'
@@ -219,7 +223,7 @@ export interface DeleteConfirmState {
 /** Composer payload kept from `send` until its outcome is observed. */
 export interface SendDraft {
   text: string
-  images?: Array<{ data: string; mimeType: string; name?: string }>
+  images?: ComposerImage[]
 }
 
 /** One model route offered by a provider, mirrored from Host `model/state`. */
@@ -355,6 +359,12 @@ export interface ChatUiState {
   statusText: string
   composerState: ComposerState
   composerText: string
+  /**
+   * Images staged for the next send. Ownership is here rather than in the
+   * composer because a drop lands anywhere on the panel, while the preview and
+   * the send button belong to the composer.
+   */
+  composerImages: ComposerImage[]
   /** Payload of a send whose acceptance frame has not arrived yet. */
   pendingSend?: SendDraft
   /** Payload a refused send hands back to the composer, consumed once. */
@@ -447,6 +457,7 @@ const initialState: ChatUiState = {
   statusText: '',
   composerState: 'waiting',
   composerText: '',
+  composerImages: [],
   followState: 'off',
   streaming: false,
   stopping: false,
@@ -1052,6 +1063,40 @@ export function subscribeChatUi(listener: ChatUiListener): () => void {
 
 export function setComposerText(text: string): void {
   state = { ...state, composerText: text }
+  emit()
+}
+
+/**
+ * Stage one image for the next send.
+ * @param image - attachment read from a drop or a paste.
+ */
+export function addComposerImage(image: ComposerImage): void {
+  state = { ...state, composerImages: [...state.composerImages, image] }
+  emit()
+}
+
+/**
+ * Replace the staged attachments (a refused send hands its payload back).
+ * @param images - attachments the composer shows after this call.
+ */
+export function setComposerImages(images: ComposerImage[]): void {
+  state = { ...state, composerImages: images }
+  emit()
+}
+
+/** Drop every staged attachment (a send consumed them). */
+export function clearComposerImages(): void {
+  if (state.composerImages.length === 0) return
+  state = { ...state, composerImages: [] }
+  emit()
+}
+
+/**
+ * Remove one staged attachment by its position in the preview.
+ * @param index - preview position.
+ */
+export function removeComposerImage(index: number): void {
+  state = { ...state, composerImages: state.composerImages.filter((_, i) => i !== index) }
   emit()
 }
 

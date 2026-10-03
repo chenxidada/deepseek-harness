@@ -672,6 +672,118 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expect(input.value).toBe('看看这个 @src/a.ts')
       })
 
+      it('CAP-WEBVIEW-100 a drop on the message area reaches the Host, not only a drop on the input', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const root = screen.getByTestId('editor-chat-root')
+        const area = document.querySelector('.dsh-msg-area') as HTMLElement
+        await act(async () => {
+          fireEvent.drop(area, {
+            dataTransfer: {
+              files: [],
+              types: ['text/uri-list'],
+              getData: (format: string) => format === 'text/uri-list' ? 'file:///ws/src/a.ts' : '',
+            },
+          })
+        })
+        expect(root.getAttribute('data-drop-active')).toBeNull()
+        const drop = posts.find(p => (p as { type?: string }).type === 'composer/drop-paths') as
+          | { paths: string[] }
+          | undefined
+        // The panel owns the gesture: dropping nowhere near the two-row input still asks.
+        expect(drop?.paths).toEqual(['/ws/src/a.ts'])
+      })
+
+      it('CAP-WEBVIEW-101 a multi-file resource drag contributes its uri-list entry and every plain label', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const root = screen.getByTestId('editor-chat-root')
+        await act(async () => {
+          fireEvent.drop(root, {
+            dataTransfer: {
+              files: [],
+              types: ['text/uri-list', 'text/plain'],
+              getData: (format: string) => {
+                if (format === 'text/uri-list') return 'file:///ws/src/a.ts'
+                // The workbench writes only the first URI but all resource labels.
+                if (format === 'text/plain') return 'src/a.ts\r\nsrc/b.ts\r\ndocs/my file.md'
+                return ''
+              },
+            },
+          })
+        })
+        const drop = posts.find(p => (p as { type?: string }).type === 'composer/drop-paths') as
+          | { paths: string[] }
+          | undefined
+        // The Host resolves each path and collapses the two spellings of src/a.ts.
+        expect(drop?.paths).toEqual(['/ws/src/a.ts', 'src/a.ts', 'src/b.ts', 'docs/my file.md'])
+      })
+
+      it('CAP-WEBVIEW-102 a drag over the panel shows the drop affordance and the drop clears it', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const root = screen.getByTestId('editor-chat-root')
+        await act(async () => {
+          fireEvent.dragEnter(root, { dataTransfer: { files: [], types: ['Files'], getData: () => '' } })
+        })
+        expect(screen.getByTestId('composer-drop-overlay')).toBeTruthy()
+        expect(root.getAttribute('data-drop-active')).toBe('true')
+
+        await act(async () => {
+          fireEvent.drop(root, { dataTransfer: { files: [], types: [], getData: () => '' } })
+        })
+        expect(screen.queryByTestId('composer-drop-overlay')).toBeNull()
+        expect(root.getAttribute('data-drop-active')).toBeNull()
+      })
+
+      it('CAP-WEBVIEW-103 a prose drag without a file signal contributes no path', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        await act(async () => {
+          fireEvent.drop(screen.getByTestId('editor-chat-root'), {
+            dataTransfer: {
+              files: [],
+              types: ['text/plain'],
+              // Dragging selected editor text lands in `text/plain` too.
+              getData: (format: string) => format === 'text/plain' ? 'const a = 1\nconst b = 2' : '',
+            },
+          })
+        })
+        expect(posts.some(p => (p as { type?: string }).type === 'composer/drop-paths')).toBe(false)
+      })
+
+      it('CAP-WEBVIEW-104 an image dropped on the message area is staged for the next send', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+        })
+        const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+        await act(async () => {
+          fireEvent.drop(screen.getByTestId('editor-chat-root'), {
+            dataTransfer: {
+              files: [new File([png], 'shot.jpg', { type: 'image/jpg' })],
+              types: ['Files'],
+              getData: () => '',
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByTestId('image-preview-area')).toBeTruthy()
+        })
+        // The store owns the attachment, so the preview and the send see the same image.
+        expect(getChatUiState().composerImages).toHaveLength(1)
+        expect(getChatUiState().composerImages[0]?.mimeType).toBe('image/png')
+        expect(posts.some(p => (p as { type?: string }).type === 'composer/drop-paths')).toBe(false)
+      })
+
       it('CAP-WEBVIEW-068 header menus render outside the scrolling tab strips', async () => {
         render(<App bridge={bridge} />)
         await act(async () => {

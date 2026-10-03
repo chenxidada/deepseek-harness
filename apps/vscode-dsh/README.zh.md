@@ -224,7 +224,9 @@ History 是 **WebviewView** 而非 `TreeView`：行的字号与行菜单归本�
 
 在输入框键入 `@` 会为工作区根目录打开候选列表。候选来自 Host 挂在 `ctx.fileReferences` 背后的同一套搜索，因此面板、Web 客户端与模型自身的 `@` 指引在排序和排除上完全一致。`↑`/`↓` 移动高亮，`Enter` 或 `Tab` 接受，`Escape` 关闭；接受目录会让列表向下展开一级，含空格的路径以 `@"path with spaces"` 形式插入。
 
-把文件拖入输入框会把每个落下的路径转成一条 `@path` mention。Host 用发送门禁同一套工作区校验解析路径，因此工作区之外的落文件会被跳过，而不会变成本该被拒绝的 token。`dsh.insertFileReference` 无需拖拽即可插入一条 mention。
+把文件拖到面板的任意位置都会把每个落下的路径转成一条 `@path` mention；整块会话区都是放置区，而不只是两行高的输入框。资源拖拽会同时读取 VS Code 填充的两种形式——单条的 `text/uri-list` URI 与列出全部被拖资源的 `text/plain` 标签——因此多选拖拽会贡献每一个文件。Host 用发送门禁同一套工作区校验解析每个路径，并合并同一文件的两种写法，因此工作区之外的落文件会被跳过（并给出提示），而不会变成本该被拒绝的 token。带有图片文件对象的拖拽会成为附件；其余拖拽一律成为 `@path` mention。`dsh.insertFileReference` 无需拖拽即可插入一条 mention。
+
+**从资源管理器或编辑器标签拖拽时必须按住 Shift。** 在工作区内部拖拽期间，VS Code 会关闭 webview 的指针事件，好让编辑器组能打开被放下的文件；只有按住 Shift 时它才会恢复（[vscode#182449](https://github.com/microsoft/vscode/issues/182449) 与 [PR #209211](https://github.com/microsoft/vscode/pull/209211)，VS Code 1.91）。从窗口外拖入不受这条规则影响。
 
 消息正文里的 `path:line` 与卡片同路打开：正文中的 `src/a.ts:12` 会变成文件链接并在第 12 行打开该文件（尾随的 `:column` 会显示但无需点击），而 URL、`@` mention 与不带行号的路径保持纯文本。
 
