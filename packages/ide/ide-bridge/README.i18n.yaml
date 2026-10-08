@@ -15,8 +15,8 @@
   en: 751e4d607f736cbc
   zh: 0b4197f5efd3270b
 /deepseek-ai-dsh-ide-bridge/use-this-package:
-  en: e5bdaea0460aba1a
-  zh: 917ab87dc55af77d
+  en: cb850a4f518e55c9
+  zh: d08bc72a2a684a20
 /deepseek-ai-dsh-ide-bridge/use-this-package/session-model-and-settings-rpc:
   en: 42df48b5ce18bcc6
   zh: af1b618760ffdb26
@@ -27,8 +27,11 @@
   en: 2b205049352ce9bc
   zh: d66364e3f34b29fe
 /deepseek-ai-dsh-ide-bridge/use-this-package/specdev-status-and-gates:
-  en: 6a47282002e37156
-  zh: 5984b898a745a44f
+  en: 7f19f56c235286d9
+  zh: b0d36e17502ece92
+/deepseek-ai-dsh-ide-bridge/use-this-package/goal-state:
+  en: 0067bfaa99a16628
+  zh: 2bc7158a1c42dde0
 /deepseek-ai-dsh-ide-bridge/replaceability-contract-ad-8:
   en: ed4a1a33e3b2408b
   zh: d4a8dd0d11a41cd0

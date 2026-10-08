@@ -1,4 +1,5 @@
 import { useState, type CSSProperties } from 'react'
+import { interactionExpiredCopy } from '../utils/interaction-expiry.ts'
 
 export interface QuestionOption {
   label: string
@@ -22,6 +23,13 @@ export interface QuestionCardProps {
     answers: Array<{ id: string; selected: string[]; custom?: string }>
   }) => void
   onDismiss: (id: string, error: string) => void
+  /**
+   * Set once the runtime stopped waiting for this answer. The card then keeps its
+   * question but accepts nothing, because the answer would reach no one.
+   */
+  expiredReason?: string
+  /** Clear an expired card locally; an answerable one is the Host's to remove. */
+  onAcknowledge?: (id: string) => void
 }
 
 interface QuestionAnswerState {
@@ -29,7 +37,15 @@ interface QuestionAnswerState {
   custom: string
 }
 
-export function QuestionCard({ id, sessionId, questions, onAnswer, onDismiss }: QuestionCardProps) {
+export function QuestionCard({
+  id,
+  sessionId,
+  questions,
+  onAnswer,
+  onDismiss,
+  expiredReason,
+  onAcknowledge,
+}: QuestionCardProps) {
   const [answers, setAnswers] = useState<Map<string, QuestionAnswerState>>(() => {
     const map = new Map<string, QuestionAnswerState>()
     for (const q of questions) {
@@ -91,6 +107,35 @@ export function QuestionCard({ id, sessionId, questions, onAnswer, onDismiss }: 
     background: 'var(--dsh-bubble-notice, rgba(128,128,128,0.06))',
     cursor: submitted ? 'default' : 'pointer',
     fontSize: '0.85em',
+  }
+
+  if (expiredReason !== undefined) {
+    return (
+      <article
+        data-testid="question-card"
+        data-interaction-id={id}
+        data-session-id={sessionId}
+        data-expired="true"
+        className="dsh-interaction"
+      >
+        <div className="dsh-interaction-head">提问</div>
+        <div className="dsh-interaction-body">
+          <div data-testid="interaction-expired" className="dsh-muted">
+            {interactionExpiredCopy(expiredReason)}
+          </div>
+        </div>
+        <div className="dsh-interaction-actions">
+          <button
+            type="button"
+            data-testid="interaction-acknowledge"
+            style={actionBtnStyle}
+            onClick={() => onAcknowledge?.(id)}
+          >
+            知道了
+          </button>
+        </div>
+      </article>
+    )
   }
 
   return (

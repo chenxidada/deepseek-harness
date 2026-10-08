@@ -5,6 +5,7 @@ import { HistoryPanel } from './components/HistoryPanel.tsx'
 import { MessageList } from './components/MessageList.tsx'
 import { Composer } from './components/Composer.tsx'
 import { DeleteConfirmModal } from './components/DeleteConfirmModal.tsx'
+import { GoalCard } from './components/GoalCard.tsx'
 import { SettingsPanel } from './components/SettingsPanel.tsx'
 import { SpecdevCard } from './components/SpecdevCard.tsx'
 import { SubagentBar } from './components/SubagentBar.tsx'
@@ -215,6 +216,9 @@ export function App({ bridge }: AppProps) {
           onClose={() => setSettingsOpen(false)}
         />
       </div>
+      {ui.goal !== undefined && ui.goal.sessionId === ui.sessionId ? (
+        <GoalCard goal={ui.goal} bridge={bridge} />
+      ) : null}
       {ui.specdev === undefined ? null : (
         <SpecdevCard status={ui.specdev} bridge={bridge} sessionId={ui.sessionId} />
       )}

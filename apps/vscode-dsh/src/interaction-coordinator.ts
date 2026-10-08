@@ -74,6 +74,30 @@ export interface InteractionUi {
 export type InteractionPresentationState = 'pending' | 'presented' | 'resolved' | 'abort'
 
 /**
+ * Expiry reason the coordinator attaches to a retired wait's abort signal.
+ *
+ * The presenter that closes the card is the one that knows whether the wait ended
+ * with an answer or because the runtime gave up, so the reason rides the signal it
+ * already listens on instead of a side table the QuickPick path would never drain.
+ */
+export interface InteractionExpiry {
+  /** Stable lower-kebab-case code the runtime reported (`timeout`). */
+  readonly interactionExpired: string
+}
+
+/**
+ * Read the expiry code a retired wait's abort signal carries.
+ * @param signal - abort signal the coordinator passed to a presenter.
+ * @returns the code, or undefined when the wait ended any other way.
+ */
+export function readInteractionExpiry(signal: AbortSignal | undefined): string | undefined {
+  const reason: unknown = signal?.reason
+  if (typeof reason !== 'object' || reason === null) return undefined
+  const code = (reason as { interactionExpired?: unknown }).interactionExpired
+  return typeof code === 'string' && code !== '' ? code : undefined
+}
+
+/**
  * One Host interaction wait (queued or presented). An approval carries the tool
  * it asks about and, when the runtime supplied one, its reason — so a reader of
  * this projection can identify the wait without reaching into the queue (AD-13).
@@ -348,6 +372,30 @@ export class InteractionCoordinator {
     if (entry === undefined) return false
     this.finishQuestions(entry, answer)
     entry.abort.abort()
+    return true
+  }
+
+  /**
+   * Retire one interaction the runtime is no longer waiting for.
+   *
+   * The wait settles without a Host answer, so a later click on its card cannot
+   * reach the wire; the abort signal carries the runtime's reason so the present
+   * card can say why it stopped accepting an answer instead of vanishing.
+   * @param id - interaction id the runtime gave up on.
+   * @param reason - stable lower-kebab-case code the runtime reported.
+   * @returns true when an in-flight entry was retired, false when the id was unknown.
+   */
+  expire(id: string, reason: string): boolean {
+    const entry = this.queue.find(candidate => candidate.id === id)
+    if (entry === undefined || entry.settled) return false
+    entry.settled = true
+    entry.state = 'abort'
+    this.removeEntry(id)
+    entry.abort.abort({ interactionExpired: reason } satisfies InteractionExpiry)
+    if (entry.kind === 'approval') entry.resolve('unavailable')
+    else entry.reject(new Error(`interaction expired: ${reason}`))
+    this.syncApprovalBadges()
+    this.emit()
     return true
   }
 

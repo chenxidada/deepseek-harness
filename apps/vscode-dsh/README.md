@@ -296,6 +296,12 @@ The composer's 压缩上下文 button and `dsh.triggerCompact` take the same pat
 - A running child card offers「中断」→ bridge `subagent/interrupt` under the parent session's authority; one-shot and continuable children are both interruptible.
 - Runtime refusals (parent not live, child not continuable, service unavailable) surface verbatim in a banner.
 
+## Interaction cards
+
+- An approval or a question the runtime asks while the panel is visible is presented as a card in the message flow, so the decision sits beside the call it blocks; the QuickPick presenter stays the fallback the coordinator reaches for when the panel is not visible (AD-CU-7).
+- Both cards answer through the bridge: 允许一次 / 拒绝 / 取消 for an approval, 提交回答 for a question, and a question also carries 取消 as the fail-closed dismissal. Switching Tabs mid-decision returns the card to the queue rather than answering it by accident.
+- A card whose wait expired — the runtime's `interactionTimeoutMs` elapsed without an answer — keeps the request it was deciding and replaces its controls with 「已超时，回答不会再送达」, because the runtime has already failed that call closed and a late answer reaches nothing. 知道了 clears the card in the panel only; the runtime sends nothing further for that id.
+
 ## SpecDev status (AD-CU-12)
 
 - The workspace's Spec-driven workflow (`.specdev`) is durable state, not log state, so the panel reads it from the runtime: a status card appears whenever bridge `specdev/snapshot` answers a workflow, and no card appears when the workspace has none.
@@ -306,6 +312,15 @@ The composer's 压缩上下文 button and `dsh.triggerCompact` take the same pat
 - The decision and the note travel in one `action/specdev-gate` intent and land through bridge `specdev/confirm-gate`; gate order, artifact preconditions, and the durable write stay the runtime's, so a refusal (`SPECDEV_GATE_NOT_PENDING: …`) is shown verbatim while an accepted decision replaces the card's status.
 - `dsh.specdevStatus` keeps the QuickPick presenter as the palette route (通过 / 驳回 / 推迟, plus a note) and applies through the same path.
 - Out-of-workspace access requests from `dsh-specdev-guard` reuse the interaction card: its detail block carries the tool, the role, the access, the requested paths, a recursive-scan risk line, and the asker's reason, and its options are the four scope choices.
+
+## Goal card
+
+- A goal is durable session state whose automatic continuation is armed per process, so the card reads both halves from the runtime through bridge `goal/read`: the objective, the phase, the round count, and whether continuation is armed. A session whose agent is not materialized still has its durable phase, and the runtime answers that from the registered `goal` projection as disarmed. No goal means no card.
+- The verbs follow the reported state: an armed active goal offers 暂停, an active-but-disarmed, paused, or blocked goal offers 恢复, every unfinished goal offers 编辑, and every phase offers 清除. This is the user's path to resume a paused goal — the model itself may not, and `update_goal` refuses it with `GOAL_TOOL_RESUME_PAUSED`.
+- 编辑 opens the objective in a text area and writes the replacement only when it differs from the one on screen; 清除 asks once before it takes effect, because clearing stops continuation without recording the goal as achieved. The card closes either decision as soon as the runtime answers with a new revision.
+- A verb travels as one `action/goal-update` intent and runs the runtime's own `/goal <verb>` command, so the compare-and-set ref, the legal transitions, and the refusal text stay that command's; its result appears in the message flow as a command notice, and the card re-reads the goal it produced.
+- The card appears for the active Tab only, and a goal re-read follows every `goal/*` event, a Tab activation, and the opening of a replay Tab.
+- 折叠 shrinks the card to its headline plus one ellipsized line of the objective — the same toggle the Todo card offers — so a long objective can give the message area its room back without hiding which goal is running. Collapsing drops a half-finished edit or clear decision rather than carrying it into a state that cannot show it; a new revision keeps the collapsed state the human chose.
 
 ## Images in the conversation
 

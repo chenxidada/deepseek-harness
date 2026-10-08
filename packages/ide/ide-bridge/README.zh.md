@@ -29,9 +29,11 @@ kind: "package-reference"
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `sockEnv` | `DSH_IDE_BRIDGE_SOCK` | 命名 Host socket 路径的环境变量 |
-| `interactionTimeoutMs` | `120000` | 等待 Host 审批 / 提问应答的上限 |
+| `interactionTimeoutMs` | `120000` | 等待 Host 审批 / 提问应答的上限；超时会发出对应的 `/expired` 通知 |
 
 导出的辅助类 `IdeBridgeHostServer` 与 `IdeBridgeClient` 共享 NDJSON 帧格式，供扩展与测试使用。入站帧经 `parseBridgeFrame` / `validateBridgeFrame` 校验；畸形载荷丢弃（AC-31）。[src/types.ts](src/types.ts) 中的 `BridgeFrame` 联合类型是完整的帧清单。
+
+等待到达 `interactionTimeoutMs` 时以拒绝方式关闭，并针对它放弃的 id 发出 `approval/expired` 或 `user-questions/expired`，携带稳定的 `reason` 码（`timeout`）供 Host 本地化。Host 因此会收起它已呈现的卡片，而不是留下一个回答无处可去的表单：该 id 不再可答，迟到的应答会被忽略。提问超时报自己的 `INTERACTION_TIMEOUT` 码；`NO_PROVIDER` 仍留给"根本无人可答"的状态（socket 上没有 Host，或请求发不出去）。
 
 ### Session、model 与 settings RPC
 
@@ -91,6 +93,14 @@ settings 应答始终脱敏：每次读取都请求 `redactSecrets: true`，运�
 | `specdev/confirm-gate` | 经唯一被接受的写路径应用一条 Human Gate 决定（`pass` / `reject` / `defer` / `resolve` / `cancel`，可带一句说明），并回以变更后的状态 | `specdev service is not available`、`unknown session "<id>"`，或运行时自身的拒绝码与消息（`SPECDEV_GATE_NOT_PENDING: gate hg1 is not the current pending gate (hg2)`、`SPECDEV_NO_ACTIVE_WORKFLOW: …`） |
 
 `confirmGate` 拥有门禁次序、工件前置条件与持久写入，因此本桥只转发决定而不重新实现其中任何一项；拒绝会保留其错误码，便于扩展展示运行时自己的原因。成功的决定会向会话日志追加 `specdev/gate-decided`，这正是状态对模型可见、可回放的原因。
+
+### 目标状态
+
+会话目标属于持久日志状态，而它的自动续行是按进程激活的；扩展的目标卡片从运行时读取这两半：有活跃 agent 的会话由 `ctx.goals` 作答，那是进程本地激活标志的唯一来源；agent 尚未物化的会话则由已注册的 `goal` 投影作答持久阶段并报 `disarmed`，因为没有 agent 就无法激活续行。没有目标的会话回 `null` 而非失败。变更不走帧：卡片的动词通过 `commands/execute` 运行运行时自己的 `/goal` 命令，因此比较并交换的 ref、合法转换与拒绝文案都归该命令所有。
+
+| 请求（Host → runtime） | 用途 | Host 看到的失败 |
+|---|---|---|
+| `goal/read` | 读取被寻址会话的当前目标：用于比较并交换的 id 与修订号、目标描述、持久阶段、已接纳与最大 Goal Round 数、可能存在的阻塞码与消息，以及续行是否已激活 | 存在活跃 agent 时回 `goals service is not available`；agent 与持久投影都解析不到时回 `sessionProjections or sessions service is not available`；否则回 goal 服务自身的错误（包括被保留的严格重放失败） |
 
 <a id="replaceability-contract-ad-8"></a>
 ## 可替换性契约（AD-8）

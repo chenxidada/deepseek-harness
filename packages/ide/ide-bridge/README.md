@@ -29,9 +29,11 @@ Mount through the [`dsh-ide`](../../bundle/ide/README.md) profile bundle. The Ex
 | Field | Default | Meaning |
 |---|---|---|
 | `sockEnv` | `DSH_IDE_BRIDGE_SOCK` | Environment variable naming the Host socket path |
-| `interactionTimeoutMs` | `120000` | Bound waiting for Host approval / user-questions responses |
+| `interactionTimeoutMs` | `120000` | Bound waiting for Host approval / user-questions responses; expiry sends the matching `/expired` notice |
 
 Exported helpers `IdeBridgeHostServer` and `IdeBridgeClient` share the NDJSON frame format for Extension and tests. Inbound frames are validated (`parseBridgeFrame` / `validateBridgeFrame`); malformed payloads are dropped (AC-31). The `BridgeFrame` union in [src/types.ts](src/types.ts) is the complete frame inventory.
+
+A wait that reaches `interactionTimeoutMs` fails closed and sends `approval/expired` or `user-questions/expired` for the id it gave up on, carrying a stable `reason` code (`timeout`) for the Host to localize. The Host thereby retires the card it presented instead of leaving a form whose answer reaches nothing: the id is unanswerable, and a late response for it is ignored. The questions timeout reports its own `INTERACTION_TIMEOUT` code; `NO_PROVIDER` stays for the states where nothing could answer at all (the socket has no Host, or the request could not be sent).
 
 ### Session, model, and settings RPC
 
@@ -91,6 +93,14 @@ A workspace's Spec-driven workflow lives in `.specdev`, outside the session log,
 | `specdev/confirm-gate` | Apply one Human Gate decision (`pass` / `reject` / `defer` / `resolve` / `cancel`, with an optional note) through the sole accepted write path, answering the post-change status | `specdev service is not available`, `unknown session "<id>"`, or the runtime's own refusal code and message (`SPECDEV_GATE_NOT_PENDING: gate hg1 is not the current pending gate (hg2)`, `SPECDEV_NO_ACTIVE_WORKFLOW: …`) |
 
 `confirmGate` owns gate order, artifact preconditions, and the durable write, so the bridge forwards the decision rather than reimplementing any of them; a refusal keeps its code so the Extension can show the runtime's own reason. A successful decision appends `specdev/gate-decided` to the session log, which is what makes the status model-visible and replayable.
+
+### Goal state
+
+A session's goal is durable log state whose automatic continuation is armed per process, and the Extension's goal card reads both halves from the runtime: a session with a live agent answers from `ctx.goals`, the only source of the process-local activation flag; a session whose agent is not materialized answers the durable phase from the registered `goal` projection with `disarmed`, because continuation cannot be armed without an agent. A session with no goal answers `null` rather than a failure. Mutations are not frames: the card's verbs run the runtime's own `/goal` command over `commands/execute`, so the compare-and-set ref, the legal transitions, and the refusal text stay that command's.
+
+| Request (Host → runtime) | Purpose | Failure the Host sees |
+|---|---|---|
+| `goal/read` | Read the addressed session's current goal: compare-and-set id and revision, objective, durable phase, admitted and maximum goal rounds, any blocker code and message, and whether continuation is armed | `goals service is not available` when a live agent exists, `sessionProjections or sessions service is not available` when neither the agent nor the durable projection resolves, or the goal service's own error (a retained strict-replay failure included) |
 
 <a id="replaceability-contract-ad-8"></a>
 ## Replaceability contract (AD-8)

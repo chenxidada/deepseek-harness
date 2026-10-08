@@ -28,6 +28,7 @@ import {
   type BridgeAttachmentRef,
   type BridgeCommandSummary,
   type BridgeFrame,
+  type BridgeGoalView,
   type BridgePermissionPreset,
   type BridgeSessionSearchHit,
   type BridgeSkillSummary,
@@ -288,6 +289,8 @@ export class IdeSessionHost {
   private subagentTimeoutMs = 10_000
   /** Bound for one SpecDev status read and one gate confirmation. */
   private specdevTimeoutMs = 10_000
+  /** Bound for one goal read behind the panel's goal card. */
+  private goalTimeoutMs = 10_000
   private approvalPolicyTimeoutMs = 5_000
   private settingsTimeoutMs = 5_000
   private readonly pendingDispose = new Map<string, {
@@ -356,6 +359,10 @@ export class IdeSessionHost {
   }>()
   private readonly pendingSpecdevGate = new Map<string, {
     resolve: (value: BridgeSpecdevSnapshot | null) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingGoalRead = new Map<string, {
+    resolve: (value: BridgeGoalView | null) => void
     reject: (error: Error) => void
   }>()
   private readonly pendingApprovalPolicy = new Map<string, {
@@ -1253,6 +1260,43 @@ export class IdeSessionHost {
   }
 
   /**
+   * Read one session's goal via Host bridge `goal/read`. The runtime answers the
+   * durable phase plus the process-local activation flag the panel needs, so the
+   * card never folds the goal log itself.
+   * @param sessionId - Tab-bound SDK session identity.
+   * @returns the current goal, or null when the session has none.
+   */
+  async readGoal(sessionId: string): Promise<BridgeGoalView | null> {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error('ide-bridge runtime is not connected; cannot read the goal')
+    }
+    const id = randomUUID()
+    const response = new Promise<BridgeGoalView | null>((resolve, reject) => {
+      this.pendingGoalRead.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const waiting = this.pendingGoalRead.get(id)
+      if (waiting === undefined) return
+      this.pendingGoalRead.delete(id)
+      waiting.reject(new Error(`goal/read timed out after ${this.goalTimeoutMs}ms`))
+    }, this.goalTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'goal/read', id, sessionId })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive goal/read')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingGoalRead.delete(id)
+    }
+  }
+
+  /**
    * Read one session's effective approval policy via Host bridge `approval/policy`.
    * @param sessionId - Tab-bound SDK session identity.
    * @returns the policy every ask for this session resolves under right now.
@@ -1851,6 +1895,10 @@ export class IdeSessionHost {
       this.pendingProjection.delete(id)
       pending.reject(new Error(reason))
     }
+    for (const [id, pending] of this.pendingGoalRead) {
+      this.pendingGoalRead.delete(id)
+      pending.reject(new Error(reason))
+    }
     for (const [id, pending] of this.pendingSearch) {
       this.pendingSearch.delete(id)
       pending.reject(new Error(reason))
@@ -2141,6 +2189,17 @@ export class IdeSessionHost {
       pending.reject(new Error(frame.error))
       return
     }
+    if (frame.kind === 'goal/read/response') {
+      const pending = this.pendingGoalRead.get(frame.id)
+      if (pending === undefined) return
+      this.pendingGoalRead.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.goal)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
     if (frame.kind === 'specdev/confirm-gate/response') {
       const pending = this.pendingSpecdevGate.get(frame.id)
       if (pending === undefined) return
@@ -2290,6 +2349,12 @@ export class IdeSessionHost {
         return
       }
       pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'approval/expired' || frame.kind === 'user-questions/expired') {
+      // The runtime gave up on this id: retire the wait so a card on screen stops
+      // accepting an answer that could no longer reach the call.
+      this.interactions.expire(frame.id, frame.reason)
       return
     }
     if (frame.kind === 'approval/request') {
@@ -2459,6 +2524,10 @@ export class IdeSessionHost {
     for (const [id, pending] of this.pendingSpecdevGate) {
       this.pendingSpecdevGate.delete(id)
       pending.reject(new Error(`${reason} during specdev/confirm-gate`))
+    }
+    for (const [id, pending] of this.pendingGoalRead) {
+      this.pendingGoalRead.delete(id)
+      pending.reject(new Error(`${reason} during goal/read`))
     }
     for (const [id, pending] of this.pendingApprovalPolicy) {
       this.pendingApprovalPolicy.delete(id)

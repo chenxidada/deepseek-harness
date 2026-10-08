@@ -18,6 +18,7 @@ import {
   apply,
   APPROVAL_SERVICE,
   ATTACHMENT_SERVICE,
+  GOAL_SERVICE,
   IDE_BRIDGE_SOCK_ENV,
   IdeBridgeClient,
   IdeBridgeHostServer,
@@ -2693,6 +2694,19 @@ describe('ide-bridge interaction answerer failure paths', () => {
     }, { interactionTimeoutMs: 5_000 })
   })
 
+  it('answers unavailable and retires the card when an approval times out', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await harness.ctx.waterfall('approval/request', {
+        agent: stubAgent('a', 'sess-a'),
+        toolName: 'bash',
+      }, () => Promise.resolve('allowed-once' as const))).toBe('unavailable')
+      const expired = await awaitReceived(harness, frame => frame.kind === 'approval/expired')
+      // The decision is already refused, so the Host is told to stop presenting it.
+      expect(expired).toMatchObject({ reason: 'timeout', sessionId: 'sess-a' })
+      expect(expired.kind === 'approval/expired' && expired.id === '').toBe(false)
+    }, { interactionTimeoutMs: 60 })
+  })
+
   it('answers unavailable when the socket refuses an oversized approval frame', async () => {
     await withBridge(() => {}, async (harness) => {
       // A frame larger than the socket's writable buffer is refused by write():
@@ -2751,7 +2765,12 @@ describe('ide-bridge interaction answerer failure paths', () => {
       await expect(harness.ctx.waterfall('user-questions/request', {
         questions: [{ id: 'q1', question: 'Continue?' }],
       }, () => Promise.reject(new Error('unexpected fallthrough'))))
-        .rejects.toMatchObject({ code: 'NO_PROVIDER', message: 'user-questions timed out after 60ms' })
+        .rejects.toMatchObject({ code: 'INTERACTION_TIMEOUT', message: 'user-questions timed out after 60ms' })
+      // The card outlives the wait unless the Host is told, so the timeout hands it
+      // the code that retires it instead of leaving an answerable form behind.
+      const expired = await awaitReceived(harness, frame => frame.kind === 'user-questions/expired')
+      expect(expired).toMatchObject({ reason: 'timeout' })
+      expect(expired.kind === 'user-questions/expired' && expired.id === '').toBe(false)
     }, { interactionTimeoutMs: 60 })
 
     await withBridge(() => {}, async (harness) => {
@@ -3850,6 +3869,176 @@ describe('ide-bridge specdev frames', () => {
         ok: false,
         error: 'gate write is disabled on this profile',
       })
+    })
+  })
+})
+
+describe('ide-bridge goal frames', () => {
+  /** One complete goal view, the value the live-agent arm returns. */
+  const goal = {
+    id: 'goal-1',
+    revision: 3,
+    objective: 'ship the migration',
+    phase: 'paused',
+    roundsStarted: 2,
+    maxGoalRounds: 8,
+    activation: 'disarmed',
+  }
+
+  it('validates the request and both response arms', () => {
+    expect(validateBridgeFrame({ kind: 'goal/read', id: 'gr-1', sessionId: 'sess-1' }))
+      .toEqual({ kind: 'goal/read', id: 'gr-1', sessionId: 'sess-1' })
+    expect(validateBridgeFrame({ kind: 'goal/read', id: 'gr-1' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'goal/read/response', id: 'gr-1', ok: true, goal }))
+      .toEqual({ kind: 'goal/read/response', id: 'gr-1', ok: true, goal })
+    // No current goal is a legal answer, not a refusal.
+    expect(validateBridgeFrame({ kind: 'goal/read/response', id: 'gr-1', ok: true, goal: null }))
+      .toEqual({ kind: 'goal/read/response', id: 'gr-1', ok: true, goal: null })
+    expect(validateBridgeFrame({ kind: 'goal/read/response', id: 'gr-1', ok: true })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'goal/read/response', id: 'gr-1', ok: false, error: 'no runtime' }))
+      .toEqual({ kind: 'goal/read/response', id: 'gr-1', ok: false, error: 'no runtime' })
+    expect(validateBridgeFrame({
+      kind: 'goal/read/response',
+      id: 'gr-1',
+      ok: true,
+      goal: { ...goal, phase: 'stopped' },
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'goal/read/response',
+      id: 'gr-1',
+      ok: true,
+      goal: { ...goal, activation: 'idle' },
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'goal/read/response',
+      id: 'gr-1',
+      ok: true,
+      goal: { ...goal, maxGoalRounds: 0 },
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'goal/read/response',
+      id: 'gr-1',
+      ok: true,
+      goal: { ...goal, blockedReason: { code: '', message: 'x' } },
+    })).toBeUndefined()
+    // A blocker rides the view as its own validated pair of strings.
+    expect(validateBridgeFrame({
+      kind: 'goal/read/response',
+      id: 'gr-1',
+      ok: true,
+      goal: { ...goal, phase: 'blocked', blockedReason: { code: 'model-reported', message: 'needs a token' } },
+    })).toEqual({
+      kind: 'goal/read/response',
+      id: 'gr-1',
+      ok: true,
+      goal: { ...goal, phase: 'blocked', blockedReason: { code: 'model-reported', message: 'needs a token' } },
+    })
+  })
+
+  it('answers a live agent with the service view, including its activation', async () => {
+    const session = { id: 'sess-live' }
+    const agent = { id: 'sess-live', session }
+    await withBridge((ctx) => {
+      ctx.provide(AGENTS_SERVICE, { get: () => agent })
+      ctx.provide(GOAL_SERVICE, { get: (owner: object) => owner === agent ? goal : undefined })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'goal/read', id: 'gr-live', sessionId: 'sess-live' }))
+        .toEqual({ kind: 'goal/read/response', id: 'gr-live', ok: true, goal })
+    })
+  })
+
+  it('answers a session without a live agent from the durable projection as disarmed', async () => {
+    const session = { id: 'sess-cold' }
+    await withBridge((ctx) => {
+      ctx.provide(AGENTS_SERVICE, { get: () => undefined })
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SESSION_PROJECTION_REGISTRY_SERVICE, {
+        snapshot: (_session: object, keys?: readonly string[]) => {
+          expect(keys).toEqual(['goal'])
+          return {
+            asOfSeq: 4,
+            values: {
+              goal: {
+                goal: {
+                  id: 'goal-1',
+                  revision: 3,
+                  objective: 'ship the migration',
+                  phase: 'paused',
+                  maxGoalRounds: 8,
+                },
+                roundsStarted: 2,
+              },
+            },
+          }
+        },
+      })
+    }, async (harness) => {
+      // Without a live agent continuation cannot be armed, so the view says so
+      // instead of guessing an activation the service never reported.
+      expect(await roundTrip(harness, { kind: 'goal/read', id: 'gr-cold', sessionId: 'sess-cold' }))
+        .toEqual({
+          kind: 'goal/read/response',
+          id: 'gr-cold',
+          ok: true,
+          goal: {
+            id: 'goal-1',
+            revision: 3,
+            objective: 'ship the migration',
+            phase: 'paused',
+            roundsStarted: 2,
+            maxGoalRounds: 8,
+            activation: 'disarmed',
+          },
+        })
+    })
+  })
+
+  it('answers null when neither the agent nor the projection holds a goal', async () => {
+    const session = { id: 'sess-none' }
+    await withBridge((ctx) => {
+      ctx.provide(AGENTS_SERVICE, { get: () => undefined })
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SESSION_PROJECTION_REGISTRY_SERVICE, {
+        snapshot: () => ({ asOfSeq: 0, values: { goal: null } }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'goal/read', id: 'gr-none', sessionId: 'sess-none' }))
+        .toEqual({ kind: 'goal/read/response', id: 'gr-none', ok: true, goal: null })
+    })
+  })
+
+  it('refuses a live-agent read when the goal service is not mounted', async () => {
+    const agent = { id: 'sess-live', session: { id: 'sess-live' } }
+    await withBridge((ctx) => {
+      ctx.provide(AGENTS_SERVICE, { get: () => agent })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'goal/read', id: 'gr-nosvc', sessionId: 'sess-live' }))
+        .toEqual({
+          kind: 'goal/read/response',
+          id: 'gr-nosvc',
+          ok: false,
+          error: `${GOAL_SERVICE} service is not available`,
+        })
+    })
+  })
+
+  it('reports a refusal by the service own message', async () => {
+    const agent = { id: 'sess-live', session: { id: 'sess-live' } }
+    await withBridge((ctx) => {
+      ctx.provide(AGENTS_SERVICE, { get: () => agent })
+      ctx.provide(GOAL_SERVICE, {
+        get: () => {
+          throw new Error('goal replay failed at session event 12: illegal phase transition')
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'goal/read', id: 'gr-fail', sessionId: 'sess-live' }))
+        .toEqual({
+          kind: 'goal/read/response',
+          id: 'gr-fail',
+          ok: false,
+          error: 'goal replay failed at session event 12: illegal phase transition',
+        })
     })
   })
 })

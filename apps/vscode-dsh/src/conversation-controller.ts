@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { HarnessNotification, SdkPromptContentBlock } from '@deepseek-ai/dsh-sdk-client'
-import type { BridgeApprovalPolicy, BridgeSessionSearchHit, BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
+import type { BridgeApprovalPolicy, BridgeGoalView, BridgeSessionSearchHit, BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
 import {
   ConversationRegistry,
   titleFromFirstMessage,
@@ -37,7 +37,12 @@ import type {
   TodoStateItem,
   TokenStatusPayload,
 } from './chat-panel/chat-panel-host.ts'
-import type { PanelBreadcrumb, PanelMode, PanelSubagent, PromptImage } from './chat-panel/protocol.ts'
+import type {
+  PanelBreadcrumb,
+  PanelMode,
+  PanelSubagent,
+  PromptImage,
+} from './chat-panel/protocol.ts'
 import {
   compactionMarkerMessage,
   compactionSummaryText,
@@ -324,6 +329,14 @@ export class ConversationController {
   private readonly specdevLastScope = new Map<string, { decision: 'once' | 'directory' | 'session'; paths: string[] }>()
   /** Sessions with a `specdev/snapshot` read in flight. */
   private readonly specdevRefreshes = new Set<string>()
+  /**
+   * Last goal read per session, `null` once the runtime reported none. A goal is
+   * durable session state, so the projection survives a restore; the process-local
+   * activation flag rides the same read and is what the card switches on.
+   */
+  private readonly goalBySession = new Map<string, BridgeGoalView | null>()
+  /** Sessions with a `goal/read` in flight. */
+  private readonly goalRefreshes = new Set<string>()
   /** sessionId → turn awaiting assistant before settle. */
   private pendingSettleTurn = new Map<string, number>()
   /** Serialize per-session settle to keep last-assistant anchoring stable. */
@@ -472,6 +485,8 @@ export class ConversationController {
     // The workspace's SpecDev workflow is session-independent, so a freshly
     // activated Tab shows it before its own log reports any SpecDev event.
     if (active !== undefined) void this.refreshSpecdev(active.sessionId)
+    // A goal is durable session state, so the newly active Tab reads its own.
+    if (active !== undefined) void this.refreshGoal(active.sessionId)
     this.panelHost?.pushFullState()
   }
 
@@ -536,6 +551,7 @@ export class ConversationController {
     const tab = this.registry.create(title, sessionId, 'replay')
     this.host.interactions.onActiveSessionChange?.(tab.sessionId)
     void this.refreshSpecdev(sessionId)
+    void this.refreshGoal(sessionId)
     const hydrated = hydrateFromAuthoritativeLog(sessionId, events)
     this.messages.replace(sessionId, hydrated.messages)
     this.timeline.replace(sessionId, hydrated.timelineItems)
@@ -2196,6 +2212,39 @@ export class ConversationController {
   }
 
   /**
+   * Read one session's goal into the cache and push it to the panel.
+   * The durable phase and the process-local activation both come from the
+   * runtime, so the card never folds the goal log. Concurrent reads for one
+   * session coalesce, and a refusal keeps the last known goal — the next goal
+   * event, Tab activation, or cache miss reads again.
+   * @param sessionId - session whose current goal is read.
+   */
+  async refreshGoal(sessionId: string): Promise<void> {
+    if (this.goalRefreshes.has(sessionId)) return
+    if (this.host.status !== 'connected') return
+    this.goalRefreshes.add(sessionId)
+    try {
+      const goal = await this.host.readGoal(sessionId)
+      this.goalBySession.set(sessionId, goal)
+      this.panelHost?.pushGoalState(sessionId, goal)
+    } catch {
+      // A refusal leaves the card as it was; nothing else can act on it here.
+    } finally {
+      this.goalRefreshes.delete(sessionId)
+    }
+  }
+
+  /**
+   * Read the cached goal of one session.
+   * @param sessionId - session whose goal was last read.
+   * @returns the goal, `null` when the runtime reported none, or `undefined`
+   *   when this session was never read.
+   */
+  cachedGoal(sessionId: string): BridgeGoalView | null | undefined {
+    return this.goalBySession.get(sessionId)
+  }
+
+  /**
    * Resolve the subagent address the Conversation composer may write to for the
    * active Tab. A message needs a continuable child (the runtime's verdict, from
    * the cached `subagent/list`), a child that is not running, and a parent whose
@@ -3823,6 +3872,12 @@ export class ConversationController {
         }
       }
       void this.refreshSpecdev(sessionId)
+      return
+    }
+    if (typeof record.type === 'string' && record.type.startsWith('goal/')) {
+      // Every goal mutation is durable and logged, so the card follows the runtime
+      // state rather than the event payload the panel happened to receive.
+      void this.refreshGoal(sessionId)
       return
     }
     if (record.type === 'request/context') {

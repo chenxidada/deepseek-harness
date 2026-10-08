@@ -83,6 +83,8 @@ export type ChromeIntent =
   | { type: 'action/interrupt-subagent'; parentSessionId: string; childSessionId: string }
   /** Decide the SpecDev pending gate the status card renders (AD-CU-12). */
   | { type: 'action/specdev-gate'; sessionId: string; gate: string; decision: 'pass' | 'reject' | 'defer'; note?: string }
+  /** Act on the goal the card renders; the runtime's `/goal` command owns the transition. */
+  | { type: 'action/goal-update'; sessionId: string; action: 'pause' | 'resume' | 'clear' | 'edit'; objective?: string }
   | { type: 'action/restore-more'; all?: boolean }
   /** Put text in the composer without sending it (the status card's next action). */
   | { type: 'action/prefill-composer'; text: string }

@@ -6,6 +6,7 @@
 
 import { ConversationController } from './conversation-controller.ts'
 import { ConversationRegistry } from './conversation-registry.ts'
+import { readInteractionExpiry } from './interaction-coordinator.ts'
 import { MessageStore, type ChatMessage } from './message-store.ts'
 import type { ForkBoundary, ForkIntent, ForkRequest } from './fork/fork-orchestrator.ts'
 import {
@@ -2587,7 +2588,11 @@ function createPanelFirstInteractionUi(
         // The abort signal fires when the coordinator settles or fail-closes.
         return new Promise<import('@deepseek-ai/dsh-ide-bridge').ApprovalOutcome>((resolve) => {
           const onAbort = (): void => {
-            panel.resolveInteraction(request.id)
+            // An expired wait keeps its card, disabled and explained, because the
+            // human is about to look for the control that just stopped working.
+            const expired = readInteractionExpiry(signal)
+            if (expired === undefined) panel.resolveInteraction(request.id)
+            else panel.pushInteractionExpired(request.id, expired)
             resolve('unavailable')
           }
           if (signal?.aborted) { onAbort(); return }
@@ -2616,7 +2621,9 @@ function createPanelFirstInteractionUi(
         return new Promise<import('@deepseek-ai/dsh-ide-bridge').AskUserQuestionAnswer>(
           (_resolve, reject) => {
             const onAbort = (): void => {
-              panel.resolveInteraction(request.id)
+              const expired = readInteractionExpiry(signal)
+              if (expired === undefined) panel.resolveInteraction(request.id)
+              else panel.pushInteractionExpired(request.id, expired)
               reject(new Error('interaction cancelled'))
             }
             if (signal?.aborted) { onAbort(); return }
@@ -2822,6 +2829,20 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestSpecdevGate: async (sessionId, gate, decision, note) => {
       await applySpecdevGateDecision(vscode, sessionId, gate, decision, note)
     },
+    requestGoalUpdate: async (sessionId, action, objective) => {
+      // The card's verb is the runtime's own `/goal` line, so the compare-and-set
+      // ref, the legal transitions, and the result notice stay that command's.
+      // `edit` carries its replacement as the command's raw input; the objective
+      // itself may span lines, which that parser preserves verbatim.
+      const line = objective === undefined ? `/goal ${action}` : `/goal ${action} ${objective}`
+      const consumed = await runCommand(sessionId, line)
+      if (!consumed) throw new Error(`the runtime resolved no /goal ${action} command`)
+      await requireConversations()?.refreshGoal(sessionId)
+    },
+    requestGoalRefresh: async (sessionId) => {
+      await requireConversations()?.refreshGoal(sessionId)
+    },
+    resolveGoal: sessionId => requireConversations()?.cachedGoal(sessionId),
     requestOpenWorkspaceDiffs: async () => {
       await vscode.commands.executeCommand?.('dsh.reviewWorkspaceDiffs')
     },

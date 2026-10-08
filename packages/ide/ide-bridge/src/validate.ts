@@ -10,6 +10,7 @@ import {
   type ApprovalOutcome,
   type BridgeApprovalPolicy,
   type BridgeFrame,
+  type BridgeGoalView,
   type BridgePermissionPreset,
   type BridgeSpecdevSnapshot,
   type SettingsNamespaceView,
@@ -333,6 +334,38 @@ function isOptionalSpecdevSnapshot(value: unknown): value is BridgeSpecdevSnapsh
   return value === null || isSpecdevSnapshot(value)
 }
 
+/** Durable goal phases a `BridgeGoalView` may carry. */
+const GOAL_PHASES: readonly string[] = ['active', 'paused', 'blocked', 'complete']
+
+/** Process-local continuation flags a `BridgeGoalView` may carry. */
+const GOAL_ACTIVATIONS: readonly string[] = ['armed', 'disarmed']
+
+/**
+ * Whether `value` is one legal {@link BridgeGoalView}.
+ *
+ * The runtime validates the goal projection against the unit's own view schema,
+ * so this reads the wire fields the card renders rather than re-deriving a fold.
+ */
+function isGoalView(value: unknown): value is BridgeGoalView {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  if (!isNonEmptyString(record.id) || !isNonEmptyString(record.objective)) return false
+  if (!Number.isSafeInteger(record.revision) || (record.revision as number) < 1) return false
+  if (!GOAL_PHASES.includes(record.phase as string)) return false
+  if (!GOAL_ACTIVATIONS.includes(record.activation as string)) return false
+  if (!Number.isSafeInteger(record.roundsStarted) || (record.roundsStarted as number) < 0) return false
+  if (!Number.isSafeInteger(record.maxGoalRounds) || (record.maxGoalRounds as number) < 1) return false
+  if (record.blockedReason === undefined) return true
+  if (typeof record.blockedReason !== 'object' || record.blockedReason === null) return false
+  const reason = record.blockedReason as Record<string, unknown>
+  return isNonEmptyString(reason.code) && isNonEmptyString(reason.message)
+}
+
+/** Whether `value` is a `goal/read/response` goal field: a view or an explicit absence. */
+function isOptionalGoalView(value: unknown): value is BridgeGoalView | null {
+  return value === null || isGoalView(value)
+}
+
 /** Whether `value` is one legal {@link BridgeApprovalPolicy}. */
 function isApprovalPolicy(value: unknown): value is BridgeApprovalPolicy {
   return typeof value === 'string' && (APPROVAL_POLICIES as readonly string[]).includes(value)
@@ -428,6 +461,7 @@ type SessionScopedKind =
   | 'commands/list'
   | 'skills/list'
   | 'specdev/snapshot'
+  | 'goal/read'
 
 /**
  * Validate the `id` + `sessionId` pair shared by the session-scoped request frames.
@@ -527,6 +561,12 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
     case 'approval/response': {
       if (!isNonEmptyString(record.id) || !isApprovalOutcome(record.outcome)) return undefined
       return { kind, id: record.id, outcome: record.outcome }
+    }
+    case 'approval/expired':
+    case 'user-questions/expired': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
+      if (!isNonEmptyString(record.reason)) return undefined
+      return { kind, id: record.id, sessionId: record.sessionId, reason: record.reason }
     }
     case 'user-questions/request': {
       if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
@@ -722,6 +762,16 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       if (record.ok) {
         if (!isOptionalSpecdevSnapshot(record.snapshot)) return undefined
         return { kind, id: record.id, ok: true, snapshot: record.snapshot }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'goal/read': return sessionScopedFrame('goal/read', record)
+    case 'goal/read/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isOptionalGoalView(record.goal)) return undefined
+        return { kind, id: record.id, ok: true, goal: record.goal }
       }
       if (typeof record.error !== 'string') return undefined
       return { kind, id: record.id, ok: false, error: record.error }

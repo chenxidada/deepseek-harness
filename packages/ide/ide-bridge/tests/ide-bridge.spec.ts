@@ -60,6 +60,17 @@ describe('ide-bridge framing validation (AC-31)', () => {
     }))).toBeUndefined()
   })
 
+  it('validates the expiry notices that retire a presented interaction', () => {
+    for (const kind of ['approval/expired', 'user-questions/expired'] as const) {
+      expect(validateBridgeFrame({ kind, id: 'i1', sessionId: 'sess-1', reason: 'timeout' }))
+        .toEqual({ kind, id: 'i1', sessionId: 'sess-1', reason: 'timeout' })
+      // An expiry names the interaction, the session, and why, or it is dropped.
+      expect(validateBridgeFrame({ kind, id: 'i1', sessionId: 'sess-1' })).toBeUndefined()
+      expect(validateBridgeFrame({ kind, id: 'i1', sessionId: 'sess-1', reason: '' })).toBeUndefined()
+      expect(validateBridgeFrame({ kind, id: '', sessionId: 'sess-1', reason: 'timeout' })).toBeUndefined()
+    }
+  })
+
   it('parses permission frames', () => {
     expect(parseBridgeFrame('{"kind":"permission/select","id":"1","sessionId":"s","preset":"workspace-write"}')).toEqual({
       kind: 'permission/select',

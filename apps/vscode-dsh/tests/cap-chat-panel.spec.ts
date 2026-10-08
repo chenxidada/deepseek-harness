@@ -2096,6 +2096,131 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
     })
   })
 
+  describe('goal card', () => {
+    const GOAL = {
+      id: 'goal-1',
+      revision: 3,
+      objective: 'ship the migration',
+      phase: 'paused' as const,
+      roundsStarted: 2,
+      maxGoalRounds: 8,
+      activation: 'disarmed' as const,
+    }
+
+    it('CAP-CHAT-PANEL-108 full state pushes the cached goal, and a cache miss asks for one read', () => {
+      const reads: string[] = []
+      const registry = new ConversationRegistry()
+      const tab = registry.create('t', 'sess-goal', 'live')
+      const panel = createPanel({
+        registry,
+        resolveGoal: () => GOAL,
+        requestGoalRefresh: async (sessionId) => { reads.push(sessionId) },
+      })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      expect(fake.receivedFromHost.find(m => m.type === 'goal/state')).toEqual({
+        type: 'goal/state',
+        sessionId: tab.sessionId,
+        goal: GOAL,
+      })
+      expect(reads).toEqual([])
+    })
+
+    it('CAP-CHAT-PANEL-109 an unread session asks for a read instead of rendering no goal', () => {
+      const reads: string[] = []
+      const registry = new ConversationRegistry()
+      const tab = registry.create('t', 'sess-goal', 'live')
+      const panel = createPanel({
+        registry,
+        resolveGoal: () => undefined,
+        requestGoalRefresh: async (sessionId) => { reads.push(sessionId) },
+      })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      // Undefined means "never read", which must not render as "has no goal".
+      expect(fake.receivedFromHost.some(m => m.type === 'goal/state')).toBe(false)
+      expect(reads).toEqual([tab.sessionId])
+    })
+
+    it('CAP-CHAT-PANEL-110 an explicit null goal clears the card', () => {
+      const registry = new ConversationRegistry()
+      const tab = registry.create('t', 'sess-goal', 'live')
+      const panel = createPanel({ registry, resolveGoal: () => null })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      expect(fake.receivedFromHost.find(m => m.type === 'goal/state')).toEqual({
+        type: 'goal/state',
+        sessionId: tab.sessionId,
+        goal: null,
+      })
+    })
+
+    it('CAP-CHAT-PANEL-111 a card verb runs through the Extension and reports a refusal', async () => {
+      const calls: Array<{ sessionId: string; action: string }> = []
+      const panel = createPanel({
+        requestGoalUpdate: async (sessionId, action) => {
+          calls.push({ sessionId, action })
+          if (action === 'resume') throw new Error('goal "goal-1" is already active and armed')
+        },
+      })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({ type: 'action/goal-update', sessionId: 'sess-goal', action: 'clear' })
+      await waitFor(() => calls.length === 1, 1_000)
+      expect(calls[0]).toEqual({ sessionId: 'sess-goal', action: 'clear' })
+      expect(fake.receivedFromHost.some(m => m.type === 'ui/banner')).toBe(false)
+
+      fake.emitFromWebview({ type: 'action/goal-update', sessionId: 'sess-goal', action: 'resume' })
+      await waitFor(() => calls.length === 2, 1_000)
+      await waitFor(() => fake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
+      // The runtime owns which verbs are legal for the phase the card rendered.
+      expect(fake.receivedFromHost.find(m => m.type === 'ui/banner')).toEqual({
+        type: 'ui/banner',
+        text: 'goal "goal-1" is already active and armed',
+        kind: 'goal-update',
+      })
+    })
+
+    it('CAP-CHAT-PANEL-112 an edit carries its replacement, and one without it never reaches the Extension', async () => {
+      const calls: Array<{ sessionId: string; action: string; objective?: string }> = []
+      const panel = createPanel({
+        requestGoalUpdate: async (sessionId, action, objective) => {
+          calls.push({
+            sessionId,
+            action,
+            ...objective === undefined ? {} : { objective },
+          })
+        },
+      })
+      const fake = new FakeWebviewPort()
+      panel.attach(fake)
+      fake.receivedFromHost.length = 0
+
+      fake.emitFromWebview({
+        type: 'action/goal-update',
+        sessionId: 'sess-goal',
+        action: 'edit',
+        objective: '  ship the migration and the rollback  ',
+      })
+      await waitFor(() => calls.length === 1, 1_000)
+      // The replacement is trimmed, and the objective's own line breaks survive.
+      expect(calls[0]).toEqual({
+        sessionId: 'sess-goal',
+        action: 'edit',
+        objective: 'ship the migration and the rollback',
+      })
+
+      fake.emitFromWebview({ type: 'action/goal-update', sessionId: 'sess-goal', action: 'edit' })
+      fake.emitFromWebview({ type: 'action/goal-update', sessionId: 'sess-goal', action: 'edit', objective: '   ' })
+      // A verb the card never sends, and an edit with nothing to write, both stop here.
+      fake.emitFromWebview({ type: 'action/goal-update', sessionId: 'sess-goal', action: 'abandon' })
+      await new Promise(r => setTimeout(r, 10))
+      expect(calls).toHaveLength(1)
+    })
+  })
+
   describe('composer / menu and command execution', () => {
     const CATALOG = [
       { name: 'feature', description: '建立 .specdev 布局', group: 'command' as const },

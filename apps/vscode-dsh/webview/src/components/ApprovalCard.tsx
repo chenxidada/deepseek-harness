@@ -1,10 +1,18 @@
 import { useState, type CSSProperties } from 'react'
+import { interactionExpiredCopy } from '../utils/interaction-expiry.ts'
 
 export interface ApprovalCardProps {
   id: string
   toolName: string
   reason?: string
   onResolve: (id: string, outcome: 'allowed-once' | 'rejected' | 'cancelled') => void
+  /**
+   * Set once the runtime stopped waiting for this decision. The card then keeps
+   * the request but accepts nothing, because the decision would reach no one.
+   */
+  expiredReason?: string
+  /** Clear an expired card locally; an answerable one is the Host's to remove. */
+  onAcknowledge?: (id: string) => void
 }
 
 const DANGER_KEYWORDS = ['rm -rf', 'delete', 'remove', 'DROP']
@@ -23,7 +31,14 @@ const OUTCOME_LABELS: Record<ApprovalOutcome, string> = {
   'cancelled': '已取消',
 }
 
-export function ApprovalCard({ id, toolName, reason, onResolve }: ApprovalCardProps) {
+export function ApprovalCard({
+  id,
+  toolName,
+  reason,
+  onResolve,
+  expiredReason,
+  onAcknowledge,
+}: ApprovalCardProps) {
   const [resolved, setResolved] = useState<ApprovalOutcome | null>(null)
   const dangerous = isDangerous(reason)
 
@@ -65,8 +80,24 @@ export function ApprovalCard({ id, toolName, reason, onResolve }: ApprovalCardPr
             {OUTCOME_LABELS[resolved]}
           </div>
         ) : null}
+        {expiredReason === undefined || resolved !== null ? null : (
+          <div data-testid="interaction-expired" className="dsh-muted">
+            {interactionExpiredCopy(expiredReason)}
+          </div>
+        )}
       </div>
-      {resolved ? null : (
+      {resolved ? null : expiredReason !== undefined ? (
+        <div className="dsh-interaction-actions">
+          <button
+            type="button"
+            data-testid="interaction-acknowledge"
+            style={btnBase}
+            onClick={() => onAcknowledge?.(id)}
+          >
+            知道了
+          </button>
+        </div>
+      ) : (
         <div className="dsh-interaction-actions">
           <button
             type="button"

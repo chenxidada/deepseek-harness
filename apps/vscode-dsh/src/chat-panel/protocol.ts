@@ -8,7 +8,7 @@
 
 import type { ChatMessage, CompactionMarker, MessageImage, WorkflowMarker } from '../message-store.ts'
 import type { FileReferenceCandidate } from '@deepseek-ai/dsh-file-reference/types'
-import type { BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
+import type { BridgeGoalView, BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
 
 /**
  * One `@` completion candidate pushed to the composer. This is the record the Host's
@@ -46,6 +46,12 @@ export type PanelMode = 'empty' | 'waiting-host' | 'replay' | 'live' | 'readonly
 
 /** Decisions a SpecDev Human Gate card may send; the runtime accepts exactly these. */
 export type SpecdevGateDecision = 'pass' | 'reject' | 'defer'
+
+/**
+ * Goal verbs the card may send. They map one-to-one onto the `/goal` command's
+ * own input words, so the card and a typed line reach the same transition.
+ */
+export type GoalUpdateAction = 'pause' | 'resume' | 'clear' | 'edit'
 
 /**
  * Parent→child lineage chrome pushed via panel/state (phase-4 subagent context).
@@ -267,6 +273,15 @@ export type HostToWebviewMessage =
     snapshot: BridgeSpecdevSnapshot | null
   }
   | {
+    /**
+     * The active Tab's goal behind the goal card. `null` when the session has
+     * none; the Webview renders the card only when a goal is current.
+     */
+    type: 'goal/state'
+    sessionId: string
+    goal: BridgeGoalView | null
+  }
+  | {
     /** Optional theme class broadcast (AC-8a); native `--vscode-*` remains primary. */
     type: 'ui/theme'
     themeKind: string
@@ -421,6 +436,16 @@ export type HostToWebviewMessage =
     id: string
   }
   | {
+    /**
+     * Retire an interaction the runtime stopped waiting for: the card keeps its
+     * question but accepts no answer, because a late one could never reach the call.
+     */
+    type: 'interaction/expired'
+    id: string
+    /** Stable lower-kebab-case code the runtime reported (`timeout`). */
+    reason: string
+  }
+  | {
     /** Host-side render-detection request (DEBT-7). The webview answers with
      * `probe/render-state`; carries no presentation state. */
     type: 'probe/query-render-state'
@@ -521,6 +546,12 @@ export type WebviewToHostMessage =
    * the runtime, which owns gate order.
    */
   | { type: 'action/specdev-gate'; sessionId: string; gate: string; decision: SpecdevGateDecision; note?: string }
+  /**
+   * Act on the goal the card renders. The Host applies it through the runtime's
+   * own `/goal` command, which owns the compare-and-set ref and the valid
+   * transitions for the phase the card last saw.
+   */
+  | { type: 'action/goal-update'; sessionId: string; action: GoalUpdateAction; objective?: string }
   | {
     /** User selected a different model (feature: model-selector). */
     type: 'action/select-model'
@@ -729,6 +760,20 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
       gate: record.gate,
       decision: record.decision,
       ...typeof record.note === 'string' && record.note.trim() !== '' ? { note: record.note } : {},
+    }
+  }
+  if (type === 'action/goal-update') {
+    if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
+    const action = record.action
+    if (action !== 'pause' && action !== 'resume' && action !== 'clear' && action !== 'edit') return undefined
+    const objective = typeof record.objective === 'string' ? record.objective.trim() : ''
+    // Edit is the one verb carrying a replacement, and it is meaningless without one.
+    if (action === 'edit' && objective === '') return undefined
+    return {
+      type: 'action/goal-update',
+      sessionId: record.sessionId,
+      action,
+      ...action === 'edit' ? { objective } : {},
     }
   }
   if (type === 'nav/back') return { type: 'nav/back' }

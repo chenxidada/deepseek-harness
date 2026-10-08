@@ -1,6 +1,6 @@
 import { ConversationController } from '../src/conversation-controller.ts'
 import { ConversationRegistry } from '../src/conversation-registry.ts'
-import { InteractionCoordinator, type InteractionUi } from '../src/interaction-coordinator.ts'
+import { InteractionCoordinator, readInteractionExpiry, type InteractionUi } from '../src/interaction-coordinator.ts'
 import { type InteractionQuickPick, type InteractionWindow, createVscodeInteractionUi, pickPermissionPreset, pickSpecdevGateDecision } from '../src/interaction-ui.ts'
 import { IdeSessionHost, type IdeSessionHost as IdeSessionHostType } from '../src/session-host.ts'
 import { type ApprovalOutcome } from '@deepseek-ai/dsh-ide-bridge'
@@ -1001,6 +1001,84 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
       })
     })
 
+  })
+
+  describe('interaction expiry (runtime gave up on the wait)', () => {
+    /**
+     * A coordinator whose question popup stays open, recording the expiry code
+     * each wait's abort signal carries.
+     * @returns the coordinator and the recorded codes.
+     */
+    function coordinatorWithOpenQuestion(): {
+      coordinator: InteractionCoordinator
+      expired: Array<string | undefined>
+    } {
+      const coordinator = new InteractionCoordinator()
+      const expired: Array<string | undefined> = []
+      coordinator.setUi({
+        async presentApproval() {
+          return 'unavailable'
+        },
+        presentQuestions(_request, signal) {
+          if (signal !== undefined) {
+            signal.addEventListener('abort', () => { expired.push(readInteractionExpiry(signal)) }, { once: true })
+          }
+          return new Promise(() => {})
+        },
+      })
+      return { coordinator, expired }
+    }
+
+    it('CAP-INTERACTION-026 retires an expired wait and hands the presenter the reason', async () => {
+      const { coordinator, expired } = coordinatorWithOpenQuestion()
+      const wait = coordinator.handleQuestions({
+        id: 'q',
+        sessionId: 's1',
+        questions: [{ id: 'q1', question: 'Continue?' }],
+      })
+      await Promise.resolve()
+
+      expect(coordinator.expire('q', 'timeout')).toBe(true)
+      // The wait settles without an answer, so a click on the retired card cannot
+      // reach the wire, and the presenter learns why it was retired.
+      await expect(wait).rejects.toThrow('interaction expired: timeout')
+      expect(expired).toEqual(['timeout'])
+      expect(coordinator.listPending()).toEqual([])
+      expect(coordinator.hasPendingForSession('s1')).toBe(false)
+    })
+
+    it('CAP-INTERACTION-027 refuses an id it does not hold and never retires one twice', async () => {
+      const { coordinator, expired } = coordinatorWithOpenQuestion()
+      const wait = coordinator.handleQuestions({
+        id: 'q',
+        sessionId: 's1',
+        questions: [{ id: 'q1', question: 'Continue?' }],
+      })
+      await Promise.resolve()
+
+      expect(coordinator.expire('no-such-id', 'timeout')).toBe(false)
+      expect(coordinator.expire('q', 'timeout')).toBe(true)
+      await expect(wait).rejects.toThrow('interaction expired: timeout')
+      // The entry is gone, so a second notice for the same id changes nothing.
+      expect(coordinator.expire('q', 'timeout')).toBe(false)
+      expect(expired).toEqual(['timeout'])
+    })
+
+    it('CAP-INTERACTION-028 an answered wait carries no expiry code on its signal', async () => {
+      const { coordinator, expired } = coordinatorWithOpenQuestion()
+      const wait = coordinator.handleQuestions({
+        id: 'q',
+        sessionId: 's1',
+        questions: [{ id: 'q1', question: 'Continue?' }],
+      })
+      await Promise.resolve()
+
+      expect(coordinator.resolveQuestions('q', { answers: [{ id: 'q1', selected: ['yes'] }] })).toBe(true)
+      await expect(wait).resolves.toEqual({ answers: [{ id: 'q1', selected: ['yes'] }] })
+      // An answer closes the card the ordinary way, so the presenter removes it
+      // rather than replacing it with the retired form.
+      expect(expired).toEqual([undefined])
+    })
   })
 
 })

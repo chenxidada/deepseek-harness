@@ -1661,6 +1661,81 @@ select:focus {
   gap: 8px;
 }
 
+/* ===== Goal card ===== */
+.dsh-goal-card {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 16px 8px;
+  border-top: 1px solid var(--dsh-border);
+  background: var(--dsh-surface);
+  font-size: var(--dsh-text-sm);
+  color: var(--dsh-status-fg);
+}
+
+.dsh-goal-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.dsh-goal-title {
+  font-weight: 600;
+}
+
+.dsh-goal-phase {
+  padding: 1px 8px;
+  border-radius: var(--dsh-radius-pill);
+  background: var(--dsh-surface-sunken);
+}
+
+.dsh-goal-card[data-phase="blocked"] .dsh-goal-phase {
+  color: var(--vscode-errorForeground, var(--dsh-fg));
+}
+
+.dsh-goal-objective {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dsh-goal-edit-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border: 1px solid var(--dsh-border);
+  border-radius: var(--dsh-radius-sm);
+  background: var(--vscode-input-background, var(--dsh-bg));
+  color: var(--vscode-input-foreground, var(--dsh-fg));
+  font-family: inherit;
+  font-size: inherit;
+  resize: vertical;
+}
+
+.dsh-goal-blocker {
+  color: var(--vscode-errorForeground, var(--dsh-fg));
+}
+
+.dsh-goal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Collapsed card: the headline stays, and the objective shrinks to one
+   ellipsized line so the card still says which goal is running. */
+.dsh-goal-toggle {
+  margin-left: auto;
+}
+
+.dsh-goal-objective-inline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsh-muted);
+}
+
 /* ===== Status line ===== */
 .dsh-specdev-card {
   flex-shrink: 0;

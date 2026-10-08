@@ -6,6 +6,7 @@ import { extractAtPathTokens } from '../utils/at-path-tokens.ts'
 import {
   clearPendingChangeListReveal,
   clearPendingSourceReveal,
+  dismissPendingInteraction,
   setFollowState,
   toggleActivityExpanded,
   type ChatUiState,
@@ -191,6 +192,8 @@ export function MessageList({
                 id={interaction.id}
                 toolName={interaction.toolName ?? ''}
                 reason={interaction.reason}
+                expiredReason={interaction.expiredReason}
+                onAcknowledge={dismissPendingInteraction}
                 onResolve={(id, outcome) => {
                   bridge.emitIntent({ type: 'interaction/approve', id, outcome })
                 }}
@@ -201,6 +204,8 @@ export function MessageList({
                 id={interaction.id}
                 sessionId={interaction.sessionId}
                 questions={interaction.questions ?? []}
+                expiredReason={interaction.expiredReason}
+                onAcknowledge={dismissPendingInteraction}
                 onAnswer={(id, answer) => {
                   bridge.emitIntent({ type: 'interaction/answer', id, answer })
                 }}

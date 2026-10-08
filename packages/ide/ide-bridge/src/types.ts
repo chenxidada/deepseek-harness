@@ -134,6 +134,12 @@ export const SUBAGENT_SERVICE = 'subagents'
  */
 export const SPECDEV_SERVICE = 'specdev'
 
+/**
+ * Cordis service key for the persisted same-session goal domain (`ctx.goals`).
+ * Backs Host `goal/read`.
+ */
+export const GOAL_SERVICE = 'goals'
+
 /** Duck-typed persistence open/read surface for cold log reads. */
 export interface SessionPersistenceReadCapability {
   /**
@@ -396,6 +402,41 @@ export interface SpecdevConfirmGateResult {
   readonly message?: string
   /** Post-change snapshot, present when the runtime returns one. */
   readonly snapshot?: BridgeSpecdevSnapshot | null
+}
+
+/**
+ * The goal view the IDE card renders: the durable phase with its
+ * compare-and-set ref, plus the process-local flag that says whether automatic
+ * continuation is armed. The card chooses pause or resume from `activation`,
+ * which the registered `goal` projection deliberately omits.
+ */
+export interface BridgeGoalView {
+  /** Durable goal identity, part of the mutation ref. */
+  id: string
+  /** Current durable revision, part of the mutation ref. */
+  revision: number
+  /** The completion objective. */
+  objective: string
+  /** Durable lifecycle phase. */
+  phase: 'active' | 'paused' | 'blocked' | 'complete'
+  /** Admitted automatic continuation rounds. */
+  roundsStarted: number
+  /** Configured round cap. */
+  maxGoalRounds: number
+  /** Process-local continuation eligibility; never persisted. */
+  activation: 'armed' | 'disarmed'
+  /** Durable blocker, present only while the phase is `blocked`. */
+  blockedReason?: { code: string; message: string }
+}
+
+/** Duck-typed persisted-goal domain (`ctx.goals`) behind `goal/read`. */
+export interface GoalServiceCapability {
+  /**
+   * Read the current goal for one live agent.
+   * @param agent - the exact live agent owning the goal.
+   * @returns the goal view, or `undefined` when no goal is current.
+   */
+  get(agent: object): BridgeGoalView | undefined
 }
 
 /**
@@ -987,6 +1028,21 @@ export type BridgeFrame =
   }
   | { kind: 'approval/response'; id: string; outcome: ApprovalOutcome }
   | {
+    /**
+     * The runtime stopped waiting for one approval without an answer, so the Host
+     * retires the card it presented instead of leaving a question nobody is waiting
+     * on. The id is no longer answerable: a later `approval/response` is ignored.
+     */
+    kind: 'approval/expired'
+    id: string
+    sessionId: string
+    /**
+     * Stable lower-kebab-case code for why the runtime gave up (`timeout`), so the
+     * Host renders its own localized copy instead of the runtime's prose.
+     */
+    reason: string
+  }
+  | {
     kind: 'user-questions/request'
     id: string
     sessionId: string
@@ -997,6 +1053,14 @@ export type BridgeFrame =
     id: string
     answer?: AskUserQuestionAnswer
     error?: string
+  }
+  | {
+    /** The `approval/expired` case for a user-questions request. */
+    kind: 'user-questions/expired'
+    id: string
+    sessionId: string
+    /** Stable lower-kebab-case code for why the runtime gave up (`timeout`). */
+    reason: string
   }
   | { kind: 'session/dispose'; id: string; sessionId: string }
   | { kind: 'session/dispose/response'; id: string; ok: true }
@@ -1183,6 +1247,20 @@ export type BridgeFrame =
     snapshot: BridgeSpecdevSnapshot | null
   }
   | { kind: 'specdev/confirm-gate/response'; id: string; ok: false; error: string }
+  | {
+    kind: 'goal/read'
+    id: string
+    /** Session whose current goal is read. */
+    sessionId: string
+  }
+  | {
+    kind: 'goal/read/response'
+    id: string
+    ok: true
+    /** Current goal, or null when the session has none. */
+    goal: BridgeGoalView | null
+  }
+  | { kind: 'goal/read/response'; id: string; ok: false; error: string }
   | { kind: 'model/list'; id: string }
   | {
     kind: 'model/list/response'

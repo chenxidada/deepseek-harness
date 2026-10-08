@@ -784,6 +784,400 @@ describe('cap:webview — editor chat shell React rendering', () => {
         expect(posts.some(p => (p as { type?: string }).type === 'composer/drop-paths')).toBe(false)
       })
 
+      it('CAP-WEBVIEW-105 an armed active goal renders pause and clear', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's1',
+            goal: {
+              id: 'goal-1',
+              revision: 2,
+              objective: 'ship the migration',
+              phase: 'active',
+              roundsStarted: 1,
+              maxGoalRounds: 8,
+              activation: 'armed',
+            },
+          })
+        })
+        const card = screen.getByTestId('goal-card')
+        expect(card.getAttribute('data-phase')).toBe('active')
+        expect(card.getAttribute('data-activation')).toBe('armed')
+        expect(screen.getByTestId('goal-phase').textContent).toBe('进行中')
+        expect(screen.getByTestId('goal-objective').textContent).toBe('ship the migration')
+        expect(screen.getByTestId('goal-rounds').textContent).toBe('1/8 轮')
+        // Armed means continuation runs, so the offered verb is pause.
+        expect(screen.getByTestId('btn-goal-pause')).toBeTruthy()
+        expect(screen.queryByTestId('btn-goal-resume')).toBeNull()
+        expect(screen.getByTestId('btn-goal-clear')).toBeTruthy()
+      })
+
+      it('CAP-WEBVIEW-106 a paused goal offers resume, and the card asks the Host for it', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's1',
+            goal: {
+              id: 'goal-1',
+              revision: 3,
+              objective: 'ship the migration',
+              phase: 'paused',
+              roundsStarted: 2,
+              maxGoalRounds: 8,
+              activation: 'disarmed',
+            },
+          })
+        })
+        // The model may not resume a durable paused goal; the card is the user's path.
+        expect(screen.getByTestId('goal-phase').textContent).toBe('已暂停')
+        expect(screen.queryByTestId('btn-goal-pause')).toBeNull()
+        fireEvent.click(screen.getByTestId('btn-goal-resume'))
+        expect(posts).toContainEqual({
+          type: 'action/goal-update',
+          sessionId: 's1',
+          action: 'resume',
+        })
+      })
+
+      it('CAP-WEBVIEW-107 a background session goal is ignored and a null goal clears the card', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's2',
+            goal: {
+              id: 'goal-bg',
+              revision: 1,
+              objective: 'another session',
+              phase: 'active',
+              roundsStarted: 0,
+              maxGoalRounds: 8,
+              activation: 'armed',
+            },
+          })
+        })
+        expect(screen.queryByTestId('goal-card')).toBeNull()
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's1',
+            goal: {
+              id: 'goal-1',
+              revision: 1,
+              objective: 'ship the migration',
+              phase: 'blocked',
+              roundsStarted: 4,
+              maxGoalRounds: 8,
+              activation: 'disarmed',
+              blockedReason: { code: 'model-reported', message: 'needs a token' },
+            },
+          })
+        })
+        expect(screen.getByTestId('goal-blocker').textContent).toContain('needs a token')
+
+        await act(async () => {
+          applyHostFrame({ type: 'goal/state', sessionId: 's1', goal: null })
+        })
+        expect(screen.queryByTestId('goal-card')).toBeNull()
+      })
+
+      it('CAP-WEBVIEW-108 a malformed goal payload leaves the rendered card standing', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's1',
+            goal: {
+              id: 'goal-1',
+              revision: 1,
+              objective: 'ship the migration',
+              phase: 'active',
+              roundsStarted: 0,
+              maxGoalRounds: 8,
+              activation: 'armed',
+            },
+          })
+        })
+        await act(async () => {
+          applyHostFrame({ type: 'goal/state', sessionId: 's1', goal: { id: 'goal-1', phase: 'running' } })
+        })
+        expect(screen.getByTestId('goal-card').getAttribute('data-phase')).toBe('active')
+      })
+
+      it('CAP-WEBVIEW-109 editing the goal asks the Host for one edit with its replacement', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's1',
+            goal: {
+              id: 'goal-1',
+              revision: 1,
+              objective: 'ship the migration',
+              phase: 'active',
+              roundsStarted: 0,
+              maxGoalRounds: 8,
+              activation: 'armed',
+            },
+          })
+        })
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-edit'))
+        })
+        const input = screen.getByTestId('goal-edit-input') as HTMLTextAreaElement
+        expect(input.value).toBe('ship the migration')
+        // The verb row gives way to the form, so no other verb rides the save.
+        expect(screen.queryByTestId('btn-goal-pause')).toBeNull()
+        expect(screen.queryByTestId('btn-goal-clear')).toBeNull()
+
+        await act(async () => {
+          fireEvent.change(input, { target: { value: 'ship the migration and the rollback' } })
+        })
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-edit-save'))
+        })
+        expect(posts).toContainEqual({
+          type: 'action/goal-update',
+          sessionId: 's1',
+          action: 'edit',
+          objective: 'ship the migration and the rollback',
+        })
+        // Saving closes the form until the runtime answers with the new revision.
+        expect(screen.queryByTestId('goal-edit-input')).toBeNull()
+      })
+
+      it('CAP-WEBVIEW-110 an unchanged or empty objective is nothing to ask the runtime to write', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's1',
+            goal: {
+              id: 'goal-1',
+              revision: 1,
+              objective: 'ship the migration',
+              phase: 'paused',
+              roundsStarted: 2,
+              maxGoalRounds: 8,
+              activation: 'disarmed',
+            },
+          })
+        })
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-edit'))
+        })
+        const input = screen.getByTestId('goal-edit-input') as HTMLTextAreaElement
+
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '   ' } })
+        })
+        expect(screen.getByTestId('btn-goal-edit-save').hasAttribute('disabled')).toBe(true)
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-edit-cancel'))
+        })
+        expect(input.isConnected).toBe(false)
+        expect(posts.some(p => (p as { type?: string }).type === 'action/goal-update')).toBe(false)
+
+        // An edit left exactly as it started is not a write either.
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-edit'))
+        })
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-edit-save'))
+        })
+        expect(posts.some(p => (p as { type?: string }).type === 'action/goal-update')).toBe(false)
+      })
+
+      it('CAP-WEBVIEW-111 clearing asks once, and a new revision closes the editor', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's1',
+            goal: {
+              id: 'goal-1',
+              revision: 1,
+              objective: 'ship the migration',
+              phase: 'paused',
+              roundsStarted: 2,
+              maxGoalRounds: 8,
+              activation: 'disarmed',
+            },
+          })
+        })
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-clear'))
+        })
+        expect(screen.getByTestId('goal-clear-prompt')).toBeTruthy()
+        // The first click only arms the decision, so nothing has been asked yet.
+        expect(posts.some(p => (p as { type?: string }).type === 'action/goal-update')).toBe(false)
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-clear-cancel'))
+        })
+        expect(screen.queryByTestId('goal-clear-prompt')).toBeNull()
+        expect(screen.getByTestId('btn-goal-resume')).toBeTruthy()
+        expect(posts.some(p => (p as { type?: string }).type === 'action/goal-update')).toBe(false)
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-edit'))
+        })
+        expect(screen.getByTestId('goal-edit-input')).toBeTruthy()
+        await act(async () => {
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's1',
+            goal: {
+              id: 'goal-1',
+              revision: 2,
+              objective: 'ship the migration',
+              phase: 'active',
+              roundsStarted: 2,
+              maxGoalRounds: 8,
+              activation: 'armed',
+            },
+          })
+        })
+        // The runtime answered, so its revision owns the draft and the open form.
+        expect(screen.queryByTestId('goal-edit-input')).toBeNull()
+        expect(screen.getByTestId('btn-goal-pause')).toBeTruthy()
+      })
+
+      it('CAP-WEBVIEW-112 a completed goal offers only clear', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's1',
+            goal: {
+              id: 'goal-1',
+              revision: 5,
+              objective: 'ship the migration',
+              phase: 'complete',
+              roundsStarted: 4,
+              maxGoalRounds: 8,
+              activation: 'disarmed',
+            },
+          })
+        })
+        expect(screen.getByTestId('goal-phase').textContent).toBe('已完成')
+        // A finished goal has no objective left to change, and `/goal edit` would
+        // replace it with a new goal rather than edit this one.
+        expect(screen.queryByTestId('btn-goal-edit')).toBeNull()
+        expect(screen.queryByTestId('btn-goal-pause')).toBeNull()
+        expect(screen.queryByTestId('btn-goal-resume')).toBeNull()
+        expect(screen.getByTestId('btn-goal-clear')).toBeTruthy()
+      })
+
+      it('CAP-WEBVIEW-113 the goal card collapses to its headline and one objective line', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's1',
+            goal: {
+              id: 'goal-1',
+              revision: 1,
+              objective: 'ship the migration and the rollback',
+              phase: 'active',
+              roundsStarted: 1,
+              maxGoalRounds: 8,
+              activation: 'armed',
+            },
+          })
+        })
+        expect(screen.getByTestId('goal-card').getAttribute('data-collapsed')).toBeNull()
+        expect(screen.getByTestId('goal-objective')).toBeTruthy()
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-collapse'))
+        })
+        const card = screen.getByTestId('goal-card')
+        expect(card.getAttribute('data-collapsed')).toBe('true')
+        // The headline survives, so a collapsed card still says which goal runs.
+        expect(screen.getByTestId('goal-phase').textContent).toBe('进行中')
+        expect(screen.getByTestId('goal-rounds').textContent).toBe('1/8 轮')
+        // The full objective block and every verb give way to the one-line form.
+        expect(screen.queryByTestId('goal-objective')).toBeNull()
+        expect(screen.getByTestId('goal-objective-inline').textContent)
+          .toBe('ship the migration and the rollback')
+        expect(screen.queryByTestId('btn-goal-pause')).toBeNull()
+        expect(screen.queryByTestId('btn-goal-edit')).toBeNull()
+        expect(screen.queryByTestId('btn-goal-clear')).toBeNull()
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-expand'))
+        })
+        expect(screen.getByTestId('goal-card').getAttribute('data-collapsed')).toBeNull()
+        expect(screen.queryByTestId('goal-objective-inline')).toBeNull()
+        expect(screen.getByTestId('goal-objective').textContent)
+          .toBe('ship the migration and the rollback')
+        expect(screen.getByTestId('btn-goal-pause')).toBeTruthy()
+        expect(screen.getByTestId('btn-goal-clear')).toBeTruthy()
+      })
+
+      it('CAP-WEBVIEW-114 collapsing drops a half-finished edit or clear decision', async () => {
+        render(<App bridge={bridge} />)
+        await act(async () => {
+          applyHostFrame({ type: 'panel/state', mode: 'live', sessionId: 's1', tabId: 't1' })
+          applyHostFrame({
+            type: 'goal/state',
+            sessionId: 's1',
+            goal: {
+              id: 'goal-1',
+              revision: 1,
+              objective: 'ship the migration',
+              phase: 'paused',
+              roundsStarted: 2,
+              maxGoalRounds: 8,
+              activation: 'disarmed',
+            },
+          })
+        })
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-edit'))
+        })
+        expect(screen.getByTestId('goal-edit-input')).toBeTruthy()
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-collapse'))
+        })
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-expand'))
+        })
+        // Expanding lands on the verb row, not on the form the collapse discarded.
+        expect(screen.queryByTestId('goal-edit-input')).toBeNull()
+        expect(screen.getByTestId('btn-goal-resume')).toBeTruthy()
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-clear'))
+        })
+        expect(screen.getByTestId('goal-clear-prompt')).toBeTruthy()
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-collapse'))
+        })
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('btn-goal-expand'))
+        })
+        // The confirmation is not a decision the human made, so it does not survive.
+        expect(screen.queryByTestId('goal-clear-prompt')).toBeNull()
+        expect(posts.some(p => (p as { type?: string }).type === 'action/goal-update')).toBe(false)
+      })
+
       it('CAP-WEBVIEW-068 header menus render outside the scrolling tab strips', async () => {
         render(<App bridge={bridge} />)
         await act(async () => {
@@ -3425,6 +3819,50 @@ describe('cap:webview — editor chat shell React rendering', () => {
       expect(screen.getByText('选择方案')).toBeTruthy()
       expect(screen.getByText('A')).toBeTruthy()
       expect(screen.getByText('B')).toBeTruthy()
+    })
+
+    it('CAP-WEBVIEW-115 an expired question card keeps its notice and accepts nothing', () => {
+      const onAnswer = vi.fn()
+      const onAcknowledge = vi.fn()
+      render(
+        <QuestionCard
+          id="qc1"
+          sessionId="s1"
+          questions={[{ id: 'q1', question: '选择方案', options: [{ label: 'A' }] }]}
+          expiredReason="timeout"
+          onAnswer={onAnswer}
+          onAcknowledge={onAcknowledge}
+          onDismiss={vi.fn()}
+        />,
+      )
+      expect(screen.getByTestId('question-card').getAttribute('data-expired')).toBe('true')
+      expect(screen.getByTestId('interaction-expired').textContent).toBe('已超时，回答不会再送达')
+      // Nothing the runtime can no longer receive is offered: no options, no submit.
+      expect(screen.queryByTestId('question-submit')).toBeNull()
+      expect(screen.queryByTestId('question-option')).toBeNull()
+      expect(onAnswer).not.toHaveBeenCalled()
+
+      fireEvent.click(screen.getByTestId('interaction-acknowledge'))
+      expect(onAcknowledge).toHaveBeenCalledWith('qc1')
+    })
+
+    it('CAP-WEBVIEW-116 an expired approval card keeps its reason and offers only acknowledgement', () => {
+      render(
+        <ApprovalCard
+          id="a1"
+          toolName="bash"
+          reason="run the test suite"
+          expiredReason="timeout"
+          onResolve={vi.fn()}
+          onAcknowledge={vi.fn()}
+        />,
+      )
+      expect(screen.getByTestId('approval-card').getAttribute('data-interaction-id')).toBe('a1')
+      // The request the human was deciding stays, so the retirement is explainable.
+      expect(screen.getByTestId('approval-reason').textContent).toBe('run the test suite')
+      expect(screen.getByTestId('interaction-expired').textContent).toBe('已超时，回答不会再送达')
+      expect(screen.queryByTestId('approval-allow')).toBeNull()
+      expect(screen.queryByTestId('approval-reject')).toBeNull()
     })
 
     it('CAP-WEBVIEW-060 InlineDiff available renders add/del lines', () => {

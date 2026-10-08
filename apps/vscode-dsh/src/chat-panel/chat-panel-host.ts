@@ -11,7 +11,7 @@ import type { ExtensionIndex } from '../extension-index.ts'
 import type { InteractionCoordinator } from '../interaction-coordinator.ts'
 import type { ConnectionUiState } from '../connection-ui.ts'
 import type { SettingsNamespaceView } from '../session-host.ts'
-import type { BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
+import type { BridgeGoalView, BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
 import {
   formatOfficialAtPath,
   normalizePathKey,
@@ -32,6 +32,7 @@ import {
   type RejectSendReason,
   type SlashCandidate,
   type SpecdevGateDecision,
+  type GoalUpdateAction,
   type WebviewToHostMessage,
 } from './protocol.ts'
 
@@ -210,6 +211,29 @@ export interface ChatPanelHostDeps {
     decision: SpecdevGateDecision,
     note?: string,
   ) => Promise<void>
+  /**
+   * Act on the goal card's verb. The Extension owns the runtime write, which is
+   * the same `/goal` command path a typed line takes, so the card cannot reach a
+   * transition the command would refuse.
+   * @param sessionId - session whose goal the card rendered.
+   * @param action - verb the human picked on the card.
+   * @param objective - replacement objective, present only for `edit`.
+   */
+  requestGoalUpdate?: (sessionId: string, action: GoalUpdateAction, objective?: string) => Promise<void>
+  /**
+   * Read one session's goal into the Extension's cache and push it back.
+   * The panel asks only when its own cache has no entry, so a Tab switch or a
+   * panel reload costs one bridge read rather than one per full-state push.
+   * @param sessionId - active Tab's session.
+   */
+  requestGoalRefresh?: (sessionId: string) => Promise<void>
+  /**
+   * Read the cached goal of one session.
+   * @param sessionId - session whose goal was last read.
+   * @returns the goal, `null` when the runtime reported none, or `undefined`
+   *   when the Extension has not read this session yet.
+   */
+  resolveGoal?: (sessionId: string) => BridgeGoalView | null | undefined
   /**
    * Read the `/` menu catalogs for one session: commands, agent presets, skills.
    * The Extension assembles them from the runtime and orders them by group.
@@ -617,6 +641,9 @@ export class ChatPanelHost {
    */
   pushFullState(): void {
     const active = this.deps.registry.getActive()
+    // The goal card follows the active Tab, so full state carries its session's
+    // goal too; a Tab whose goal was never read asks for one read here.
+    if (active !== undefined) this.pushGoalFrame(active.sessionId)
     const connectionFields = {
       connectionPhase: this.connectionPhase,
       ...this.connectionMessage === undefined ? {} : { connectionMessage: this.connectionMessage },
@@ -921,6 +948,30 @@ export class ChatPanelHost {
   }
 
   /**
+   * Push the active Tab's goal behind the goal card.
+   * @param sessionId - session the goal belongs to.
+   * @param goal - current goal, or null when the session has none.
+   */
+  pushGoalState(sessionId: string, goal: BridgeGoalView | null): void {
+    this.post({ type: 'goal/state', sessionId, goal })
+  }
+
+  /**
+   * Push one session's cached goal, or ask the Extension for a read on a miss.
+   * A session that was never read must not render as a session without a goal,
+   * so an unknown cache entry triggers exactly one read instead of a null push.
+   * @param sessionId - active Tab's session.
+   */
+  private pushGoalFrame(sessionId: string): void {
+    const goal = this.deps.resolveGoal?.(sessionId)
+    if (goal !== undefined) {
+      this.pushGoalState(sessionId, goal)
+      return
+    }
+    void this.deps.requestGoalRefresh?.(sessionId)
+  }
+
+  /**
    * Push the model catalog and current selection to the Webview.
    * @param state - providers + current selection from `model/list`.
    */
@@ -1042,6 +1093,17 @@ export class ChatPanelHost {
    */
   resolveInteraction(id: string): void {
     this.post({ type: 'interaction/resolved', id })
+  }
+
+  /**
+   * Retire an interaction the runtime stopped waiting for (phase-5).
+   * The card stays so the human sees why the control stopped working, but it
+   * accepts no answer: only a local acknowledgement removes it.
+   * @param id - interaction correlation id.
+   * @param reason - stable lower-kebab-case code the runtime reported.
+   */
+  pushInteractionExpired(id: string, reason: string): void {
+    this.post({ type: 'interaction/expired', id, reason })
   }
 
   /**
@@ -1321,6 +1383,15 @@ export class ChatPanelHost {
       } catch (error) {
         // A refused decision carries the runtime's own gate-order or artifact reason.
         this.pushBanner(error instanceof Error ? error.message : String(error), 'specdev-gate')
+      }
+      return
+    }
+    if (message.type === 'action/goal-update') {
+      try {
+        await this.deps.requestGoalUpdate?.(message.sessionId, message.action, message.objective)
+      } catch (error) {
+        // The runtime owns which verbs are legal for the current phase.
+        this.pushBanner(error instanceof Error ? error.message : String(error), 'goal-update')
       }
       return
     }

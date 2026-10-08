@@ -19,6 +19,7 @@ import {
   APPROVAL_SERVICE,
   ATTACHMENT_SERVICE,
   COMMANDS_SERVICE,
+  GOAL_SERVICE,
   IDE_BRIDGE_SERVICE,
   IDE_BRIDGE_SOCK_ENV,
   PERMISSION_PRESETS_SERVICE,
@@ -41,9 +42,11 @@ import {
   type AttachmentReadCapability,
   type BridgeCommandSummary,
   type BridgeFrame,
+  type BridgeGoalView,
   type BridgeSessionHeader,
   type BridgeSessionSummary,
   type BridgeSubagentEntry,
+  type GoalServiceCapability,
   type IdeBridgeAgentPresets,
   type IdeBridgeAgents,
   type IdeBridgeCommandDescriptor,
@@ -83,6 +86,7 @@ export {
   APPROVAL_SERVICE,
   ATTACHMENT_SERVICE,
   COMMANDS_SERVICE,
+  GOAL_SERVICE,
   IDE_BRIDGE_SERVICE,
   IDE_BRIDGE_SOCK_ENV,
   PERMISSION_PRESETS_SERVICE,
@@ -111,6 +115,7 @@ export {
   type BridgeCommandSummary,
   type BridgeAgentPresetSummary,
   type BridgeFrame,
+  type BridgeGoalView,
   type BridgePermissionPreset,
   type BridgeSessionHeader,
   type BridgeSessionSearchHit,
@@ -331,6 +336,14 @@ async function awaitHostApproval(
     ...options.signal === undefined ? {} : { signal: options.signal },
     onTimeout: () => {
       pending.delete(id)
+      // The card outlives this wait unless the Host is told, and an answer to it
+      // could never reach the model; the code is the Host's to render.
+      client.send({
+        kind: 'approval/expired',
+        id,
+        sessionId: options.sessionId,
+        reason: 'timeout',
+      })
       return 'unavailable' as const
     },
     onAbort: () => {
@@ -386,9 +399,19 @@ async function awaitHostQuestions(
       ...options.signal === undefined ? {} : { signal: options.signal },
       onTimeout: () => {
         pending.delete(id)
+        // Same as the approval arm: retire the presented card, because the answer
+        // it would collect can no longer reach this call.
+        client.send({
+          kind: 'user-questions/expired',
+          id,
+          sessionId: options.sessionId,
+          reason: 'timeout',
+        })
         throw new UserQuestionError(
           `user-questions timed out after ${options.timeoutMs}ms`,
-          'NO_PROVIDER',
+          // Its own code: `NO_PROVIDER` also means "nothing could answer at all",
+          // and one code for both made the two states indistinguishable downstream.
+          'INTERACTION_TIMEOUT',
         )
       },
       onAbort: () => {
@@ -581,6 +604,10 @@ async function handleHostFrame(
   }
   if (frame.kind === 'specdev/confirm-gate') {
     await handleSpecdevConfirmGate(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'goal/read') {
+    handleGoalRead(ctx, client, frame)
     return
   }
   if (frame.kind === 'permission/select') {
@@ -1132,6 +1159,104 @@ async function handleSpecdevConfirmGate(
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     })
+  }
+}
+
+/**
+ * Read one session's goal for the IDE card.
+ *
+ * A session with a live agent answers from `ctx.goals`, which is the only
+ * source of the process-local `activation` flag the card needs to choose pause
+ * or resume. A session whose agent is not materialized still has a durable
+ * goal, so the registered projection answers the phase; without an agent,
+ * automatic continuation cannot be armed, so the response reports `disarmed`
+ * rather than inventing an activation.
+ */
+function handleGoalRead(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'goal/read' }>,
+): void {
+  const agents = ctx.get(AGENTS_SERVICE) as IdeBridgeAgents | undefined
+  const agent = agents?.get(frame.sessionId)
+  if (agent !== undefined) {
+    const goals = ctx.get(GOAL_SERVICE) as GoalServiceCapability | undefined
+    if (goals === undefined) {
+      client.send({
+        kind: 'goal/read/response',
+        id: frame.id,
+        ok: false,
+        error: `${GOAL_SERVICE} service is not available`,
+      })
+      return
+    }
+    try {
+      client.send({ kind: 'goal/read/response', id: frame.id, ok: true, goal: goals.get(agent) ?? null })
+    } catch (error) {
+      client.send({
+        kind: 'goal/read/response',
+        id: frame.id,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+    return
+  }
+  const durable = durableGoalView(ctx, frame.sessionId)
+  if (durable === 'unavailable') {
+    client.send({
+      kind: 'goal/read/response',
+      id: frame.id,
+      ok: false,
+      error: `${SESSION_PROJECTION_REGISTRY_SERVICE} or ${SESSIONS_SERVICE} service is not available`,
+    })
+    return
+  }
+  client.send({ kind: 'goal/read/response', id: frame.id, ok: true, goal: durable })
+}
+
+/**
+ * Project the durable `goal` unit into the card's view for a session without a
+ * live agent. Activation is process-local, so it reports `disarmed`.
+ * @param ctx - runtime context.
+ * @param sessionId - session identity addressed by the frame.
+ * @returns the durable view, null when no goal is current, or `'unavailable'`
+ *   when the projection registry or the session itself does not resolve.
+ */
+function durableGoalView(ctx: Context, sessionId: string): BridgeGoalView | null | 'unavailable' {
+  const registry = ctx.get(SESSION_PROJECTION_REGISTRY_SERVICE) as SessionProjectionRegistryCapability | undefined
+  const sessions = ctx.get(SESSIONS_SERVICE) as IdeBridgeSessions | undefined
+  if (registry === undefined || sessions === undefined) return 'unavailable'
+  const session = sessions.get(sessionId)
+  if (session === undefined) return 'unavailable'
+  const { values } = registry.snapshot(session, ['goal'])
+  const value = values.goal
+  if (typeof value !== 'object' || value === null) return null
+  const record = value as {
+    goal?: {
+      id?: unknown
+      revision?: unknown
+      objective?: unknown
+      phase?: unknown
+      maxGoalRounds?: unknown
+      blockedReason?: { code?: unknown; message?: unknown }
+    }
+    roundsStarted?: unknown
+  }
+  const goal = record.goal
+  if (goal === undefined) return null
+  const blockedReason = goal.blockedReason
+  return {
+    id: String(goal.id),
+    revision: Number(goal.revision),
+    objective: String(goal.objective),
+    phase: goal.phase as BridgeGoalView['phase'],
+    roundsStarted: Number(record.roundsStarted),
+    maxGoalRounds: Number(goal.maxGoalRounds),
+    activation: 'disarmed',
+    ...typeof blockedReason?.code !== 'string' || typeof blockedReason.message !== 'string'
+      ? {}
+      : { blockedReason: { code: blockedReason.code, message: blockedReason.message } },
   }
 }
 

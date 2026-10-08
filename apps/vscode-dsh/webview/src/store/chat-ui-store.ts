@@ -95,6 +95,32 @@ export interface HistoryRow {
   continueHint?: string
 }
 
+/**
+ * The active Tab's goal, mirrored from Host `goal/state`. The durable phase and
+ * the process-local activation both come from the runtime, so the card chooses
+ * its verbs from reported state rather than folding the goal log.
+ */
+export interface GoalState {
+  /** Session the goal belongs to; the card renders only for the active Tab. */
+  sessionId: string
+  /** Durable goal identity, part of the ref the runtime checks. */
+  id: string
+  /** Current durable revision, part of that ref. */
+  revision: number
+  /** The completion objective. */
+  objective: string
+  /** Durable lifecycle phase. */
+  phase: 'active' | 'paused' | 'blocked' | 'complete'
+  /** Admitted automatic continuation rounds. */
+  roundsStarted: number
+  /** Configured round cap. */
+  maxGoalRounds: number
+  /** Whether automatic continuation is armed right now. */
+  activation: 'armed' | 'disarmed'
+  /** Durable blocker, present only while the phase is `blocked`. */
+  blockedReason?: { code: string; message: string }
+}
+
 export interface UiActivity {
   id: string
   status: 'running' | 'done' | 'failed' | 'aborted'
@@ -330,6 +356,11 @@ export interface PendingInteraction {
   sessionId: string
   toolName?: string
   reason?: string
+  /**
+   * Stable lower-kebab-case code the runtime gave up with. Present means the card
+   * keeps its question but accepts no answer, because a late one reaches nothing.
+   */
+  expiredReason?: string
   questions?: Array<{
     id: string
     question: string
@@ -402,6 +433,8 @@ export interface ChatUiState {
   subagents: PanelSubagentEntry[]
   /** SpecDev workflow status mirrored from Host `specdev/status` (AD-CU-12). */
   specdev?: SpecdevStatusState
+  /** Active Tab's goal mirrored from Host `goal/state`; absent when it has none. */
+  goal?: GoalState
   searchOpen: boolean
   searchQuery: string
   searchHits: SearchHit[]
@@ -888,6 +921,46 @@ function parsePanelSubagents(raw: unknown): PanelSubagentEntry[] {
 }
 
 /**
+ * Parse one Host `goal/state` goal. A payload missing any closed-set or required
+ * field is dropped whole, so the card never renders a half-known goal.
+ * @param raw - `frame.goal` from the Host.
+ * @returns the parsed goal, or undefined when the payload is malformed.
+ */
+function parseGoalState(raw: unknown): Omit<GoalState, 'sessionId'> | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const record = raw as Record<string, unknown>
+  const phase = record.phase
+  if (phase !== 'active' && phase !== 'paused' && phase !== 'blocked' && phase !== 'complete') return undefined
+  const activation = record.activation
+  if (activation !== 'armed' && activation !== 'disarmed') return undefined
+  if (typeof record.id !== 'string' || record.id === '') return undefined
+  if (typeof record.objective !== 'string') return undefined
+  if (typeof record.revision !== 'number' || !Number.isSafeInteger(record.revision)) return undefined
+  if (typeof record.roundsStarted !== 'number' || !Number.isSafeInteger(record.roundsStarted)) return undefined
+  if (typeof record.maxGoalRounds !== 'number' || !Number.isSafeInteger(record.maxGoalRounds)) return undefined
+  const reason = record.blockedReason
+  const blockedReason = typeof reason === 'object' && reason !== null
+    ? (() => {
+      const rec = reason as Record<string, unknown>
+      return typeof rec.code === 'string' && typeof rec.message === 'string'
+        ? { code: rec.code, message: rec.message }
+        : undefined
+    })()
+    : undefined
+  if (phase === 'blocked' && blockedReason === undefined) return undefined
+  return {
+    id: record.id,
+    revision: record.revision,
+    objective: record.objective,
+    phase,
+    roundsStarted: record.roundsStarted,
+    maxGoalRounds: record.maxGoalRounds,
+    activation,
+    ...blockedReason === undefined ? {} : { blockedReason },
+  }
+}
+
+/**
  * Parse one Host `specdev/status` snapshot. A malformed payload renders no card,
  * which is the same presentation as a workspace without an active workflow.
  */
@@ -1121,6 +1194,20 @@ export function consumeSendRestore(): SendDraft | undefined {
   return draft
 }
 
+/**
+ * Remove one interaction card the human acknowledged.
+ *
+ * An expired card is already retired on the Host's side, so this clears the local
+ * list only; an answerable card is removed by the Host's own `interaction/resolved`.
+ * @param id - interaction id the card showed.
+ */
+export function dismissPendingInteraction(id: string): void {
+  const filtered = state.pendingInteractions.filter(entry => entry.id !== id)
+  if (filtered.length === state.pendingInteractions.length) return
+  state = { ...state, pendingInteractions: filtered }
+  emit()
+}
+
 export function setFollowState(followState: FollowState): void {
   if (state.followState === followState) return
   state = { ...state, followState }
@@ -1321,7 +1408,7 @@ export function applyHostFrame(raw: unknown): void {
       breadcrumb,
       subagentPrompt: parseSubagentPrompt(frame.subagentPrompt),
       subagents: parsePanelSubagents(frame.subagents),
-      ...sessionChanged ? { tokenStatus: undefined, todoItems: [], route: undefined, specdev: undefined } : {},
+      ...sessionChanged ? { tokenStatus: undefined, todoItems: [], route: undefined, specdev: undefined, goal: undefined } : {},
     }
   } else if (type === 'panel/tabs') {
     const tabs: TabChromeItem[] = Array.isArray(frame.tabs)
@@ -1628,6 +1715,19 @@ export function applyHostFrame(raw: unknown): void {
         ? undefined
         : { ...specdev, ...lastScope === undefined ? {} : { lastApprovedScope: lastScope } },
     }
+  } else if (type === 'goal/state') {
+    // A background Tab's goal must not own the card this panel shows.
+    const goalSessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''
+    if (goalSessionId !== '' && state.sessionId !== undefined && goalSessionId === state.sessionId) {
+      // An explicit null is the runtime's answer that this session has no goal, so
+      // the card clears; a malformed payload drops whole and leaves the last card.
+      if (frame.goal === null) {
+        state = { ...state, goal: undefined }
+      } else {
+        const goal = parseGoalState(frame.goal)
+        if (goal !== undefined) state = { ...state, goal: { ...goal, sessionId: goalSessionId } }
+      }
+    }
   } else if (type === 'scroll/reveal-change-list') {
     const sessionId = typeof frame.sessionId === 'string' ? frame.sessionId : ''
     const sourceMessageId = typeof frame.sourceMessageId === 'string' ? frame.sourceMessageId : ''
@@ -1692,6 +1792,17 @@ export function applyHostFrame(raw: unknown): void {
     state = {
       ...state,
       pendingInteractions: [...state.pendingInteractions, entry],
+    }
+  } else if (type === 'interaction/expired') {
+    if (typeof frame.id !== 'string' || frame.id === '') return
+    const reason = typeof frame.reason === 'string' ? frame.reason : ''
+    // Only a card this panel presented can be retired here: an id the runtime gave
+    // up on before the panel rendered it has no card to change.
+    if (!state.pendingInteractions.some(p => p.id === frame.id)) return
+    state = {
+      ...state,
+      pendingInteractions: state.pendingInteractions.map(entry =>
+        entry.id === frame.id ? { ...entry, expiredReason: reason } : entry),
     }
   } else if (type === 'interaction/resolved') {
     if (typeof frame.id !== 'string' || frame.id === '') return
