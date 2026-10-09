@@ -368,6 +368,77 @@ describe('ide-bridge delete / model / settings frame validation (AC-31)', () => 
     expect(validateBridgeFrame({ kind: 'settings/update/response', id: 'su-1', ok: false })).toBeUndefined()
     expect(validateBridgeFrame({ kind: 'settings/update/response', ok: true, namespace })).toBeUndefined()
   })
+
+  it('accepts terminal/exec with optional sessionId and rejects malformed variants', () => {
+    expect(validateBridgeFrame({ kind: 'terminal/exec', id: 't-1', command: 'ls', cwd: '/w', dedicated: false }))
+      .toEqual({ kind: 'terminal/exec', id: 't-1', command: 'ls', cwd: '/w', dedicated: false })
+    expect(validateBridgeFrame({ kind: 'terminal/exec', id: 't-2', sessionId: 's-1', command: 'pwd', cwd: '/w', dedicated: true }))
+      .toEqual({ kind: 'terminal/exec', id: 't-2', sessionId: 's-1', command: 'pwd', cwd: '/w', dedicated: true })
+    // missing id
+    expect(validateBridgeFrame({ kind: 'terminal/exec', command: 'ls', cwd: '/w', dedicated: false })).toBeUndefined()
+    // empty id
+    expect(validateBridgeFrame({ kind: 'terminal/exec', id: '', command: 'ls', cwd: '/w', dedicated: false })).toBeUndefined()
+    // missing command
+    expect(validateBridgeFrame({ kind: 'terminal/exec', id: 't-1', cwd: '/w', dedicated: false })).toBeUndefined()
+    // empty cwd
+    expect(validateBridgeFrame({ kind: 'terminal/exec', id: 't-1', command: 'ls', cwd: '', dedicated: false })).toBeUndefined()
+    // dedicated not boolean
+    expect(validateBridgeFrame({ kind: 'terminal/exec', id: 't-1', command: 'ls', cwd: '/w', dedicated: 'yes' })).toBeUndefined()
+    // sessionId empty string rejected
+    expect(validateBridgeFrame({ kind: 'terminal/exec', id: 't-1', sessionId: '', command: 'ls', cwd: '/w', dedicated: false })).toBeUndefined()
+  })
+
+  it('accepts terminal/exec/cancel and rejects malformed variants', () => {
+    expect(validateBridgeFrame({ kind: 'terminal/exec/cancel', id: 't-1', reason: 'killed' }))
+      .toEqual({ kind: 'terminal/exec/cancel', id: 't-1', reason: 'killed' })
+    expect(validateBridgeFrame({ kind: 'terminal/exec/cancel', id: '', reason: 'killed' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'terminal/exec/cancel', id: 't-1', reason: '' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'terminal/exec/cancel', id: 't-1' })).toBeUndefined()
+  })
+
+  it('accepts terminal/exec/started and rejects an empty id', () => {
+    expect(validateBridgeFrame({ kind: 'terminal/exec/started', id: 't-1' }))
+      .toEqual({ kind: 'terminal/exec/started', id: 't-1' })
+    expect(validateBridgeFrame({ kind: 'terminal/exec/started', id: '' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'terminal/exec/started' })).toBeUndefined()
+  })
+
+  it('accepts terminal/exec/refused and rejects missing fields', () => {
+    expect(validateBridgeFrame({ kind: 'terminal/exec/refused', id: 't-1', error: 'no shell integration' }))
+      .toEqual({ kind: 'terminal/exec/refused', id: 't-1', error: 'no shell integration' })
+    // empty error is allowed (typeof check, not isNonEmptyString)
+    expect(validateBridgeFrame({ kind: 'terminal/exec/refused', id: 't-1', error: '' }))
+      .toEqual({ kind: 'terminal/exec/refused', id: 't-1', error: '' })
+    expect(validateBridgeFrame({ kind: 'terminal/exec/refused', id: '', error: 'x' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'terminal/exec/refused', id: 't-1' })).toBeUndefined()
+  })
+
+  it('accepts terminal/exec/output and rejects missing fields', () => {
+    expect(validateBridgeFrame({ kind: 'terminal/exec/output', id: 't-1', data: 'hello world' }))
+      .toEqual({ kind: 'terminal/exec/output', id: 't-1', data: 'hello world' })
+    // empty data is allowed
+    expect(validateBridgeFrame({ kind: 'terminal/exec/output', id: 't-1', data: '' }))
+      .toEqual({ kind: 'terminal/exec/output', id: 't-1', data: '' })
+    expect(validateBridgeFrame({ kind: 'terminal/exec/output', id: '', data: 'x' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'terminal/exec/output', id: 't-1' })).toBeUndefined()
+  })
+
+  it('accepts terminal/exec/exit with null or integer exitCode', () => {
+    expect(validateBridgeFrame({ kind: 'terminal/exec/exit', id: 't-1', exitCode: 0 }))
+      .toEqual({ kind: 'terminal/exec/exit', id: 't-1', exitCode: 0 })
+    expect(validateBridgeFrame({ kind: 'terminal/exec/exit', id: 't-1', exitCode: 127 }))
+      .toEqual({ kind: 'terminal/exec/exit', id: 't-1', exitCode: 127 })
+    expect(validateBridgeFrame({ kind: 'terminal/exec/exit', id: 't-1', exitCode: null }))
+      .toEqual({ kind: 'terminal/exec/exit', id: 't-1', exitCode: null })
+    // non-integer exitCode
+    expect(validateBridgeFrame({ kind: 'terminal/exec/exit', id: 't-1', exitCode: 1.5 })).toBeUndefined()
+    // string exitCode
+    expect(validateBridgeFrame({ kind: 'terminal/exec/exit', id: 't-1', exitCode: '0' })).toBeUndefined()
+    // missing exitCode
+    expect(validateBridgeFrame({ kind: 'terminal/exec/exit', id: 't-1' })).toBeUndefined()
+    // empty id
+    expect(validateBridgeFrame({ kind: 'terminal/exec/exit', id: '', exitCode: 0 })).toBeUndefined()
+  })
 })
 
 describe('ide-bridge remaining frame-kind validation (AC-31)', () => {
@@ -4257,5 +4328,386 @@ describe('ide-bridge frame rejection arms (AC-31)', () => {
     expect(validateBridgeFrame({ kind: 'specdev/confirm-gate/response', id: 'sg-1', ok: false })).toBeUndefined()
     expect(validateBridgeFrame({ kind: 'approval/policy/response', id: 'ap-1', ok: false })).toBeUndefined()
     expect(validateBridgeFrame({ kind: 'approval/policy/set/response', id: 'ap-2', ok: false })).toBeUndefined()
+  })
+})
+
+describe('ide-bridge provider-write frame validation (AC-31)', () => {
+  it('accepts settings/mutate with path ops and an optional expectedRevision', () => {
+    const ops = [
+      { op: 'set', path: ['providers', 'acme-gateway'], value: { api: 'openai-completions' } },
+      { op: 'unset', path: ['providers', 'retired'] },
+    ]
+    expect(validateBridgeFrame({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops }))
+      .toEqual({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops })
+    expect(validateBridgeFrame({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops, expectedRevision: 3 }))
+      .toEqual({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops, expectedRevision: 3 })
+  })
+
+  it('drops a settings/mutate whose ops cannot be applied whole', () => {
+    const path = ['providers', 'acme']
+    expect(validateBridgeFrame({ kind: 'settings/mutate', id: '', ns: 'llm-pi-ai', ops: [{ op: 'unset', path }] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'settings/mutate', id: 'sm-1', ns: '', ops: [{ op: 'unset', path }] }))
+      .toBeUndefined()
+    // An empty op list is not a write at all.
+    expect(validateBridgeFrame({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops: [] })).toBeUndefined()
+    // A `set` must carry its value even when that value is null.
+    expect(validateBridgeFrame({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops: [{ op: 'set', path }] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'settings/mutate',
+      id: 'sm-1',
+      ns: 'llm-pi-ai',
+      ops: [{ op: 'set', path: ['providers', 7], value: 1 }],
+    })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops: [{ op: 'merge', path }] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops: 'unset' })).toBeUndefined()
+    // A null value is legal and must survive validation.
+    expect(validateBridgeFrame({
+      kind: 'settings/mutate',
+      id: 'sm-1',
+      ns: 'llm-pi-ai',
+      ops: [{ op: 'set', path, value: null }],
+    })).toEqual({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops: [{ op: 'set', path, value: null }] })
+    expect(validateBridgeFrame({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops: [{ op: 'unset', path }], expectedRevision: 2.5 }))
+      .toBeUndefined()
+  })
+
+  it('accepts settings/mutate/response only as a projected namespace', () => {
+    const namespace = { ns: 'llm-pi-ai', value: { providers: {} }, revision: 2 }
+    expect(validateBridgeFrame({ kind: 'settings/mutate/response', id: 'sm-1', ok: true, namespace }))
+      .toEqual({ kind: 'settings/mutate/response', id: 'sm-1', ok: true, namespace })
+    expect(validateBridgeFrame({ kind: 'settings/mutate/response', id: 'sm-1', ok: false, error: 'conflict' }))
+      .toEqual({ kind: 'settings/mutate/response', id: 'sm-1', ok: false, error: 'conflict' })
+    expect(validateBridgeFrame({ kind: 'settings/mutate/response', id: 'sm-1', ok: true })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'settings/mutate/response', id: 'sm-1', ok: false })).toBeUndefined()
+  })
+
+  it('accepts credential/describe with a non-empty reference list', () => {
+    expect(validateBridgeFrame({ kind: 'credential/describe', id: 'cd-1', refs: ['ACME_API_KEY'] }))
+      .toEqual({ kind: 'credential/describe', id: 'cd-1', refs: ['ACME_API_KEY'] })
+    expect(validateBridgeFrame({ kind: 'credential/describe', id: 'cd-1', refs: [] })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'credential/describe', id: 'cd-1', refs: [''] })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'credential/describe', id: 'cd-1', refs: [7] })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'credential/describe', id: 'cd-1' })).toBeUndefined()
+  })
+
+  it('accepts credential/describe/response only with well-formed state rows', () => {
+    const credentials = [{ ref: 'ACME_API_KEY', configured: true, writable: true, source: 'file' }]
+    expect(validateBridgeFrame({ kind: 'credential/describe/response', id: 'cd-1', ok: true, credentials }))
+      .toEqual({ kind: 'credential/describe/response', id: 'cd-1', ok: true, credentials })
+    expect(validateBridgeFrame({ kind: 'credential/describe/response', id: 'cd-1', ok: false, error: 'refused' }))
+      .toEqual({ kind: 'credential/describe/response', id: 'cd-1', ok: false, error: 'refused' })
+    expect(validateBridgeFrame({ kind: 'credential/describe/response', id: 'cd-1', ok: true, credentials: [{ ref: '', configured: false, writable: false }] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'credential/describe/response', id: 'cd-1', ok: true, credentials: [{ ref: 'A', configured: 'yes', writable: false }] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'credential/describe/response', id: 'cd-1', ok: true, credentials: [{ ref: 'A', configured: false, writable: false, source: 7 }] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'credential/describe/response', id: 'cd-1', ok: true })).toBeUndefined()
+  })
+
+  it('accepts credential/set and credential/unset only with an addressable reference', () => {
+    expect(validateBridgeFrame({ kind: 'credential/set', id: 'cs-1', ref: 'ACME_API_KEY', value: 'sk-live' }))
+      .toEqual({ kind: 'credential/set', id: 'cs-1', ref: 'ACME_API_KEY', value: 'sk-live' })
+    // An empty value is a removal, which has its own frame.
+    expect(validateBridgeFrame({ kind: 'credential/set', id: 'cs-1', ref: 'ACME_API_KEY', value: '' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'credential/set', id: 'cs-1', ref: '', value: 'sk-live' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'credential/unset', id: 'cu-1', ref: 'ACME_API_KEY' }))
+      .toEqual({ kind: 'credential/unset', id: 'cu-1', ref: 'ACME_API_KEY' })
+    expect(validateBridgeFrame({ kind: 'credential/unset', id: 'cu-1', ref: '' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'credential/set/response', id: 'cs-1', ok: true }))
+      .toEqual({ kind: 'credential/set/response', id: 'cs-1', ok: true })
+    expect(validateBridgeFrame({ kind: 'credential/unset/response', id: 'cu-1', ok: false, error: 'locked' }))
+      .toEqual({ kind: 'credential/unset/response', id: 'cu-1', ok: false, error: 'locked' })
+    expect(validateBridgeFrame({ kind: 'credential/set/response', id: 'cs-1', ok: false })).toBeUndefined()
+  })
+
+  it('accepts model/discover with the optional draft fields only', () => {
+    expect(validateBridgeFrame({ kind: 'model/discover', id: 'md-1', settingsNs: 'llm-pi-ai' }))
+      .toEqual({ kind: 'model/discover', id: 'md-1', settingsNs: 'llm-pi-ai' })
+    expect(validateBridgeFrame({
+      kind: 'model/discover',
+      id: 'md-1',
+      settingsNs: 'llm-pi-ai',
+      provider: 'acme-gateway',
+      baseURL: 'https://gateway.example/v1',
+      api: 'openai-completions',
+      apiKey: 'probe-key',
+    })).toEqual({
+      kind: 'model/discover',
+      id: 'md-1',
+      settingsNs: 'llm-pi-ai',
+      provider: 'acme-gateway',
+      baseURL: 'https://gateway.example/v1',
+      api: 'openai-completions',
+      apiKey: 'probe-key',
+    })
+    expect(validateBridgeFrame({ kind: 'model/discover', id: 'md-1', settingsNs: '' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'model/discover', id: 'md-1', settingsNs: 'llm-pi-ai', baseURL: '' })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'model/discover', id: 'md-1', settingsNs: 'llm-pi-ai', apiKey: 7 })).toBeUndefined()
+  })
+
+  it('accepts model/discover/response only with well-formed model rows', () => {
+    const models = [{ id: 'chat-1', name: 'Chat One', contextWindow: 128000, maxTokens: 8192, inputModalities: ['text'] }]
+    expect(validateBridgeFrame({ kind: 'model/discover/response', id: 'md-1', ok: true, models }))
+      .toEqual({ kind: 'model/discover/response', id: 'md-1', ok: true, models })
+    expect(validateBridgeFrame({ kind: 'model/discover/response', id: 'md-1', ok: true, models: [{ id: 'chat-1' }] }))
+      .toEqual({ kind: 'model/discover/response', id: 'md-1', ok: true, models: [{ id: 'chat-1' }] })
+    expect(validateBridgeFrame({ kind: 'model/discover/response', id: 'md-1', ok: false, error: 'listing refused' }))
+      .toEqual({ kind: 'model/discover/response', id: 'md-1', ok: false, error: 'listing refused' })
+    expect(validateBridgeFrame({ kind: 'model/discover/response', id: 'md-1', ok: true, models: [{ id: '' }] })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'model/discover/response', id: 'md-1', ok: true, models: [{ id: 'chat-1', contextWindow: 1.5 }] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'model/discover/response', id: 'md-1', ok: true, models: [{ id: 'chat-1', inputModalities: [7] }] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'model/discover/response', id: 'md-1', ok: false })).toBeUndefined()
+  })
+})
+
+describe('ide-bridge provider-write handlers', () => {
+  it('applies settings/mutate through the settings service and re-reads the namespace', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'settings/mutate',
+        id: 'sm-missing',
+        ns: 'llm-pi-ai',
+        ops: [{ op: 'unset', path: ['providers', 'acme'] }],
+      })).toEqual({
+        kind: 'settings/mutate/response',
+        id: 'sm-missing',
+        ok: false,
+        error: 'settings service is not available',
+      })
+    })
+
+    const calls: Array<{ ns: string; ops: unknown; revision: number | undefined }> = []
+    await withBridge((ctx) => {
+      ctx.provide('settings', {
+        describe: () => [{ ns: 'llm-pi-ai', value: { providers: { acme: {} } }, revision: 5 }],
+        mutate: async (ns: string, ops: unknown, revision?: number) => {
+          calls.push({ ns, ops, revision })
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'settings/mutate',
+        id: 'sm-ok',
+        ns: 'llm-pi-ai',
+        ops: [{ op: 'set', path: ['providers', 'acme'], value: { api: 'openai-completions' } }],
+        expectedRevision: 4,
+      })).toEqual({
+        kind: 'settings/mutate/response',
+        id: 'sm-ok',
+        ok: true,
+        namespace: { ns: 'llm-pi-ai', value: { providers: { acme: {} } }, revision: 5 },
+      })
+    })
+    expect(calls).toEqual([{
+      ns: 'llm-pi-ai',
+      ops: [{ op: 'set', path: ['providers', 'acme'], value: { api: 'openai-completions' } }],
+      revision: 4,
+    }])
+  })
+
+  it('reports a refused settings/mutate and an unregistered namespace', async () => {
+    await withBridge((ctx) => {
+      ctx.provide('settings', {
+        describe: () => [],
+        mutate: async (ns: string) => {
+          if (ns === 'llm-pi-ai') throw new Error('provider acme needs an api and a baseURL')
+          throw 'settings document is read-only'
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'settings/mutate',
+        id: 'sm-refused',
+        ns: 'llm-pi-ai',
+        ops: [{ op: 'unset', path: ['providers', 'acme'] }],
+      })).toEqual({
+        kind: 'settings/mutate/response',
+        id: 'sm-refused',
+        ok: false,
+        error: 'provider acme needs an api and a baseURL',
+      })
+      expect(await roundTrip(harness, {
+        kind: 'settings/mutate',
+        id: 'sm-text',
+        ns: 'other',
+        ops: [{ op: 'unset', path: [] }],
+      })).toEqual({
+        kind: 'settings/mutate/response',
+        id: 'sm-text',
+        ok: false,
+        error: 'settings document is read-only',
+      })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide('settings', {
+        describe: () => [{ ns: 'other', value: 1, revision: 0 }],
+        mutate: async () => {},
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'settings/mutate',
+        id: 'sm-unregistered',
+        ns: 'llm-pi-ai',
+        ops: [{ op: 'unset', path: ['providers', 'acme'] }],
+      })).toEqual({
+        kind: 'settings/mutate/response',
+        id: 'sm-unregistered',
+        ok: false,
+        error: 'settings namespace "llm-pi-ai" is not registered',
+      })
+    })
+  })
+
+  it('describes credential references without their values', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'credential/describe', id: 'cd-missing', refs: ['ACME_API_KEY'] }))
+        .toEqual({
+          kind: 'credential/describe/response',
+          id: 'cd-missing',
+          ok: false,
+          error: 'credentials service is not available',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide('credentials', {
+        describe: async (ref: string) => {
+          if (ref === 'BROKEN') throw new Error('credential ref "broken" must match the reference grammar')
+          if (ref === 'SHADOWED') return { configured: true, source: 'env', writable: false }
+          return { configured: false, writable: true }
+        },
+        set: async () => {},
+        unset: async () => {},
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'credential/describe',
+        id: 'cd-ok',
+        refs: ['ACME_API_KEY', 'SHADOWED'],
+      })).toEqual({
+        kind: 'credential/describe/response',
+        id: 'cd-ok',
+        ok: true,
+        credentials: [
+          { ref: 'ACME_API_KEY', configured: false, writable: true },
+          { ref: 'SHADOWED', configured: true, writable: false, source: 'env' },
+        ],
+      })
+      expect(await roundTrip(harness, { kind: 'credential/describe', id: 'cd-broken', refs: ['BROKEN'] }))
+        .toEqual({
+          kind: 'credential/describe/response',
+          id: 'cd-broken',
+          ok: false,
+          error: 'credential ref "broken" must match the reference grammar',
+        })
+    })
+  })
+
+  it('stores and removes one credential through the seam', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'credential/set', id: 'cs-missing', ref: 'A', value: 'sk' }))
+        .toEqual({
+          kind: 'credential/set/response',
+          id: 'cs-missing',
+          ok: false,
+          error: 'credentials service is not available',
+        })
+      expect(await roundTrip(harness, { kind: 'credential/unset', id: 'cu-missing', ref: 'A' }))
+        .toEqual({
+          kind: 'credential/unset/response',
+          id: 'cu-missing',
+          ok: false,
+          error: 'credentials service is not available',
+        })
+    })
+
+    const written: Array<[string, string]> = []
+    await withBridge((ctx) => {
+      ctx.provide('credentials', {
+        describe: async () => ({ configured: false, writable: true }),
+        set: async (ref: string, value: string) => { written.push([ref, value]) },
+        unset: async (ref: string) => {
+          if (ref === 'LOCKED') throw new Error('read-only source shadows LOCKED')
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'credential/set', id: 'cs-ok', ref: 'ACME_API_KEY', value: 'sk-live' }))
+        .toEqual({ kind: 'credential/set/response', id: 'cs-ok', ok: true })
+      expect(await roundTrip(harness, { kind: 'credential/unset', id: 'cu-ok', ref: 'ACME_API_KEY' }))
+        .toEqual({ kind: 'credential/unset/response', id: 'cu-ok', ok: true })
+      expect(await roundTrip(harness, { kind: 'credential/unset', id: 'cu-locked', ref: 'LOCKED' }))
+        .toEqual({ kind: 'credential/unset/response', id: 'cu-locked', ok: false, error: 'read-only source shadows LOCKED' })
+    })
+    // The seam receives the literal exactly once, and only from the store frame.
+    expect(written).toEqual([['ACME_API_KEY', 'sk-live']])
+  })
+
+  it('answers model/discover from a registered discovery and reports refusals', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'model/discover', id: 'md-missing', settingsNs: 'llm-pi-ai' }))
+        .toEqual({
+          kind: 'model/discover/response',
+          id: 'md-missing',
+          ok: false,
+          error: 'model discovery is not available in this deployment',
+        })
+    })
+
+    await withBridge((ctx) => {
+      ctx.provide('llm', {
+        listProviders: () => [],
+        listModels: async () => [],
+        discoverModels: async (settingsNs: string, request: { provider?: string; baseURL?: string; api?: string; apiKey?: string }) => {
+          if (settingsNs === 'other') throw new Error('no model discovery is registered for "other"')
+          if (request.baseURL === 'https://refused.example/v1') throw 'listing answered neither data nor models'
+          return [
+            { id: 'chat-1', name: 'Chat One', contextWindow: 128_000, maxTokens: 8_192, inputModalities: ['text'] as const },
+            { id: 'chat-1' },
+          ]
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, {
+        kind: 'model/discover',
+        id: 'md-ok',
+        settingsNs: 'llm-pi-ai',
+        baseURL: 'https://gateway.example/v1',
+        api: 'openai-completions',
+        apiKey: 'probe-key',
+      })).toEqual({
+        kind: 'model/discover/response',
+        id: 'md-ok',
+        ok: true,
+        models: [
+          { id: 'chat-1', name: 'Chat One', contextWindow: 128_000, maxTokens: 8_192, inputModalities: ['text'] },
+          { id: 'chat-1' },
+        ],
+      })
+      expect(await roundTrip(harness, { kind: 'model/discover', id: 'md-unknown', settingsNs: 'other' }))
+        .toEqual({
+          kind: 'model/discover/response',
+          id: 'md-unknown',
+          ok: false,
+          error: 'no model discovery is registered for "other"',
+        })
+      expect(await roundTrip(harness, {
+        kind: 'model/discover',
+        id: 'md-refused',
+        settingsNs: 'llm-pi-ai',
+        baseURL: 'https://refused.example/v1',
+      })).toEqual({
+        kind: 'model/discover/response',
+        id: 'md-refused',
+        ok: false,
+        error: 'listing answered neither data nor models',
+      })
+    })
   })
 })

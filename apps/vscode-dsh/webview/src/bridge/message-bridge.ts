@@ -43,6 +43,11 @@ export type ChromeIntent =
   }
   | { type: 'settings/open' }
   | { type: 'settings/update'; ns: string; patch: Record<string, unknown>; expectedRevision?: number }
+  | { type: 'settings/mutate'; ns: string; ops: Array<{ op: string; path: string[]; value?: unknown }>; expectedRevision: number; credential?: { ref: string; value: string } }
+  | { type: 'settings/credential-describe'; refs: string[] }
+  | { type: 'settings/credential-unset'; ref: string }
+  | { type: 'settings/discover-models'; requestId: string; settingsNs: string; provider?: string; baseURL?: string; api?: string; apiKey?: string }
+  | { type: 'action/permission-select'; sessionId: string; preset: string }
   | { type: 'ui/tab-select'; tabId: string }
   | { type: 'ui/tab-close'; tabId: string }
   | { type: 'ui/tab-new' }

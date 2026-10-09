@@ -212,6 +212,7 @@ export function App({ bridge }: AppProps) {
           open={ui.settingsOpen}
           modelState={ui.modelState}
           settingsState={ui.settingsState}
+          permission={ui.permission}
           bridge={bridge}
           onClose={() => setSettingsOpen(false)}
         />

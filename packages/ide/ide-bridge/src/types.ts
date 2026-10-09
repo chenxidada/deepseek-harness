@@ -46,6 +46,13 @@ export const SDK_SESSION_DELETE_SERVICE = 'sdkSessionDelete'
 export const PERMISSION_PRESETS_SERVICE = 'permissionPresets'
 
 /**
+ * Cordis service key for running shell commands in Extension-owned terminals.
+ * Published by this package; consumed by executors that hand command execution
+ * to the IDE instead of the harness process.
+ */
+export const IDE_TERMINAL_SERVICE = 'ideTerminals'
+
+/**
  * Cordis service key for the approval service (`ctx.approval`).
  * Backs Host `approval/policy` reads and `approval/policy/set` switches.
  */
@@ -788,6 +795,62 @@ export interface BridgePermissionPreset {
 }
 
 /**
+ * One IDE-terminal execution the runtime asks the Extension to run. The
+ * Extension owns the terminal; this request only names the command, so the
+ * harness never holds the process.
+ */
+export interface IdeTerminalExecRequest {
+  /** Calling session, when the caller could name one. */
+  sessionId?: string
+  /** Shell source, handed to the terminal as one command line. */
+  command: string
+  /** Absolute working directory the command must run in. */
+  cwd: string
+  /**
+   * Whether the execution owns a terminal of its own. A background job runs
+   * until stopped, so it must not queue behind the session's shared terminal.
+   */
+  dedicated: boolean
+  /** Cancels the execution when it fires; the provider sends one cancel frame. */
+  signal?: AbortSignal
+}
+
+/** A started IDE-terminal execution: the raw output stream plus its exit code. */
+export interface IdeTerminalExecution {
+  /**
+   * Raw terminal output in arrival order; iteration ends when the execution
+   * settles. Decoding and terminal-control normalization belong to the caller.
+   */
+  readonly output: AsyncIterable<string>
+  /** Exit code the terminal reported, or null when it reported none; rejects when the bridge failed mid-execution. */
+  readonly done: Promise<number | null>
+  /**
+   * Interrupt the running command. Idempotent; the exit frame still follows, so
+   * the execution's own settlement stays the single source of truth.
+   */
+  interrupt(): void
+}
+
+/**
+ * Runtime-side capability for running shell commands in Extension-owned
+ * terminals. Published by the ide-bridge plugin; a caller must treat
+ * `available()` as the only honest readiness fact and fail loud otherwise
+ * instead of silently running the command somewhere the user cannot watch.
+ */
+export interface IdeTerminalCapability {
+  /** Whether a connected Extension can run commands in a terminal right now. */
+  available(): boolean
+  /**
+   * Start one execution.
+   * @param request - command, working directory, ownership, and cancellation.
+   * @returns the started execution once the Extension accepted the command.
+   * @throws Error when the bridge is disconnected, or the Extension refused to
+   *   start the command (no shell integration, terminal creation failure).
+   */
+  execute(request: IdeTerminalExecRequest): Promise<IdeTerminalExecution>
+}
+
+/**
  * One settings namespace as the runtime projects it onto the wire.
  * Redaction belongs to the runtime: `value`, `base`, and `user` carry every
  * `role('secret')` field removed, and `secretFields` names those positions.
@@ -808,6 +871,48 @@ export interface SettingsNamespaceView {
    * layers above; present when the namespace declares any.
    */
   secretFields?: string[]
+}
+
+/**
+ * One path-addressed edit carried by `settings/mutate`. `set` writes the value
+ * at the path, creating intermediate objects; `unset` removes it. The empty
+ * path addresses the section root.
+ */
+export type SettingsPathOp =
+  | { op: 'set'; path: string[]; value: unknown }
+  | { op: 'unset'; path: string[] }
+
+/**
+ * Presence and writability of one credential reference, never its value, so a
+ * settings page can render a write-only key input and its stored hint.
+ */
+export interface BridgeCredentialState {
+  /** Reference the state was read for. */
+  ref: string
+  /** Whether resolving the reference would currently return a value. */
+  configured: boolean
+  /** Whether the runtime's credential store can write this reference right now. */
+  writable: boolean
+  /** Supplying layer of the configured value, when one is configured. */
+  source?: string
+}
+
+/**
+ * One model an endpoint reports about itself during `model/discover`. Every
+ * field but the id is optional because most provider listings disclose an id
+ * and nothing else.
+ */
+export interface BridgeDiscoveredModel {
+  /** Model id the endpoint accepts. */
+  id: string
+  /** Human-readable name when the endpoint supplies one. */
+  name?: string
+  /** Maximum combined request and response context, when disclosed. */
+  contextWindow?: number
+  /** Maximum output tokens, when disclosed. */
+  maxTokens?: number
+  /** Accepted input modalities when disclosed; absent means unknown. */
+  inputModalities?: string[]
 }
 
 /** Session store lookup used by permission RPC. */
@@ -1296,6 +1401,38 @@ export type BridgeFrame =
     current: string
   }
   | { kind: 'permission/list/response'; id: string; ok: false; error: string }
+  | {
+    /**
+     * Run one shell command in an Extension-owned terminal, so the user watches
+     * it execute. The Extension answers with `terminal/exec/started` (or
+     * `terminal/exec/refused`) and then streams `terminal/exec/output` until
+     * `terminal/exec/exit`.
+     */
+    kind: 'terminal/exec'
+    id: string
+    /** Calling session, when the executor could name one. */
+    sessionId?: string
+    command: string
+    /** Absolute working directory the command must run in. */
+    cwd: string
+    /**
+     * Whether this execution owns a terminal of its own. Background jobs run
+     * long and must not block the session's shared terminal, so they take a
+     * dedicated one.
+     */
+    dedicated: boolean
+  }
+  | {
+    /** Interrupt one running execution; the Extension reports its exit afterwards. */
+    kind: 'terminal/exec/cancel'
+    id: string
+    /** Stable lower-kebab-case code (`timeout`, `aborted`, `killed`). */
+    reason: string
+  }
+  | { kind: 'terminal/exec/started'; id: string }
+  | { kind: 'terminal/exec/refused'; id: string; error: string }
+  | { kind: 'terminal/exec/output'; id: string; data: string }
+  | { kind: 'terminal/exec/exit'; id: string; exitCode: number | null }
   | { kind: 'approval/policy'; id: string; sessionId: string }
   | { kind: 'approval/policy/response'; id: string; ok: true; policy: BridgeApprovalPolicy }
   | { kind: 'approval/policy/response'; id: string; ok: false; error: string }
@@ -1326,6 +1463,82 @@ export type BridgeFrame =
     namespace: SettingsNamespaceView
   }
   | { kind: 'settings/update/response'; id: string; ok: false; error: string }
+  | {
+    /** Apply path-addressed edits to one settings namespace's user layer. */
+    kind: 'settings/mutate'
+    id: string
+    ns: string
+    /** Ordered path operations against the stored section, applied as one write. */
+    ops: SettingsPathOp[]
+    /** Revision the Host read; omitted writes unconditionally. */
+    expectedRevision?: number
+  }
+  | {
+    kind: 'settings/mutate/response'
+    id: string
+    ok: true
+    namespace: SettingsNamespaceView
+  }
+  | { kind: 'settings/mutate/response'; id: string; ok: false; error: string }
+  | {
+    /** Read the presence and writability of credential references, never their values. */
+    kind: 'credential/describe'
+    id: string
+    refs: string[]
+  }
+  | {
+    kind: 'credential/describe/response'
+    id: string
+    ok: true
+    /** One state per requested reference, in request order. */
+    credentials: BridgeCredentialState[]
+  }
+  | { kind: 'credential/describe/response'; id: string; ok: false; error: string }
+  | {
+    /** Store one credential value in the runtime's writable credential source. */
+    kind: 'credential/set'
+    id: string
+    ref: string
+    /** The secret value; it never rides back in a response. */
+    value: string
+  }
+  | { kind: 'credential/set/response'; id: string; ok: true }
+  | { kind: 'credential/set/response'; id: string; ok: false; error: string }
+  | {
+    /** Remove one credential reference from the writable source; absent is a no-op. */
+    kind: 'credential/unset'
+    id: string
+    ref: string
+  }
+  | { kind: 'credential/unset/response'; id: string; ok: true }
+  | { kind: 'credential/unset/response'; id: string; ok: false; error: string }
+  | {
+    /**
+     * Interrogate one provider endpoint for the models it advertises. The
+     * request describes a draft, so `apiKey` is used for this call alone and
+     * never stored.
+     */
+    kind: 'model/discover'
+    id: string
+    /** Settings namespace whose registered discovery answers. */
+    settingsNs: string
+    /** Existing route the draft edits, when it edits one. */
+    provider?: string
+    /** Endpoint to interrogate. */
+    baseURL?: string
+    /** Wire protocol the endpoint speaks, when the draft names one. */
+    api?: string
+    /** One-shot credential for this interrogation. */
+    apiKey?: string
+  }
+  | {
+    kind: 'model/discover/response'
+    id: string
+    ok: true
+    /** Advertised models in endpoint order, duplicate ids collapsed. */
+    models: BridgeDiscoveredModel[]
+  }
+  | { kind: 'model/discover/response'; id: string; ok: false; error: string }
   | { kind: 'commands/list'; id: string; sessionId: string }
   | { kind: 'commands/list/response'; id: string; ok: true; commands: BridgeCommandSummary[] }
   | { kind: 'commands/list/response'; id: string; ok: false; error: string }

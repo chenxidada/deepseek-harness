@@ -9,6 +9,7 @@ import { mountDshProbes } from './probes.ts'
 // MathML copy at native size, with bare radicals and overlines.
 import 'katex/dist/katex.min.css'
 import './styles/tokens.css'
+import './styles/settings.css'
 import './styles/v2-enhancements.css'
 
 mountDshProbes()

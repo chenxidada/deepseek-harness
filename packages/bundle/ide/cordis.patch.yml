@@ -47,6 +47,17 @@
     - id: ide-bridge
       name: '@deepseek-ai/dsh-ide-bridge'
 
+    # The IDE runs bash in the Extension's own terminal: the user watches each
+    # command execute and it inherits their shell environment. The confining
+    # stack stays mounted underneath (sandbox, sandbox-policy, permission), and
+    # the executor refuses a confined session rather than running it unconfined.
+    # Windows keeps its pwsh-sandbox row: this executor is bash-only.
+    - id: bash-ide-terminal
+      name: '@deepseek-ai/dsh-bash-ide-terminal'
+      disabled: !!js process.platform === 'win32'
+      config:
+        terminal: ide
+
     - id: file-reference-local
       name: '@deepseek-ai/dsh-file-reference-local'
 
@@ -59,3 +70,21 @@
     # list a session's turns before their events page in.
     - id: session-turn-outline
       name: '@deepseek-ai/dsh-session-turn-outline'
+
+# Exactly one shell executor per context: the IDE-terminal row above replaces the
+# base's POSIX sandbox row. Its Windows twin (pwsh-sandbox) stays as dsh-base
+# mounts it.
+- id: bash-sandbox
+  disabled: true
+
+# IDE default: full file access with approval prompts. The user watches
+# commands in the integrated terminal and approves workspace-external access.
+# The volatile defaultPreset field is written to the IDE profile's user-layer
+# patch, so CLI and Web defaults stay unchanged.
+- id: permission
+  config:
+    presets:
+      full-access:
+        sandbox: danger-full-access
+        approval: ask
+    defaultPreset: full-access

@@ -37,6 +37,7 @@ import {
   type IdeBridgeHostConnection,
   type SettingsNamespaceView,
 } from '@deepseek-ai/dsh-ide-bridge'
+import type { IdeTerminalExecController } from './terminal-exec.ts'
 import type { StartErrorKind } from './auto-start-orchestrator.ts'
 import { buildIdeChildEnv } from './env.ts'
 import { assertNodeExecutable, NodeEnvironmentError, type NodeEnvironmentFailure } from './node-env-guard.ts'
@@ -516,6 +517,18 @@ export class IdeSessionHost {
     this.interactions.setUi(ui)
   }
 
+  /** Bind the IDE terminal execution controller for this Host instance. */
+  private terminalExec: IdeTerminalExecController | undefined
+
+  /**
+   * Install the terminal execution controller that routes `terminal/exec`
+   * frames to real VS Code integrated terminals.
+   * @param controller - the window-scoped terminal controller.
+   */
+  setTerminalExec(controller: IdeTerminalExecController): void {
+    this.terminalExec = controller
+  }
+
   /**
    * Bind Tab registry for sessionId → Tab routing on inbound interactions (AC-10).
    * @param registry - conversation registry, or `undefined` to clear.
@@ -563,6 +576,7 @@ export class IdeSessionHost {
       // independently fail-closed on their disconnect edge.
       if (this.bridgeHello) {
         this.interactions.failClosedAll('ide-bridge runtime disconnected')
+        this.terminalExec?.abandonAll()
       }
     })
     // Boundary the next awaited step can fail on. It disambiguates the one
@@ -2003,6 +2017,7 @@ export class IdeSessionHost {
       this.bridgeHello = true
       return
     }
+    if (this.terminalExec?.handle(frame, reply => connection.send(reply)) === true) return
     if (frame.kind === 'session/dispose/response') {
       const pending = this.pendingDispose.get(frame.id)
       if (pending === undefined) return

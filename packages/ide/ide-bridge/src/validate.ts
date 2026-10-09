@@ -486,6 +486,8 @@ type OkResponseKind =
   | 'session/delete/response'
   | 'model/select/response'
   | 'subagent/interrupt/response'
+  | 'credential/set/response'
+  | 'credential/unset/response'
 
 /**
  * Validate the `ok` / `error` pair shared by the plain response frames.
@@ -516,6 +518,47 @@ function isSettingsNamespaceView(value: unknown): value is SettingsNamespaceView
   return true
 }
 
+/** Response kinds whose whole success payload is one projected namespace. */
+type NamespaceResponseKind = 'settings/update/response' | 'settings/mutate/response'
+
+/** The validated `id` / `ok` payload shared by the namespace-write responses. */
+type NamespaceResponsePayload =
+  | { ok: true; id: string; namespace: SettingsNamespaceView }
+  | { ok: false; id: string; error: string }
+
+/**
+ * Validate the payload shared by the namespace-write responses, whose success
+ * case is the namespace re-read.
+ * @param record - parsed JSON object.
+ * @returns the payload, or `undefined` when a field is missing or malformed.
+ */
+function namespaceResponsePayload(record: Record<string, unknown>): NamespaceResponsePayload | undefined {
+  if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+  if (record.ok) {
+    if (!isSettingsNamespaceView(record.namespace)) return undefined
+    return { id: record.id, ok: true, namespace: record.namespace }
+  }
+  if (typeof record.error !== 'string') return undefined
+  return { id: record.id, ok: false, error: record.error }
+}
+
+/**
+ * Validate one namespace-write response, tagging its payload with the kind it answers.
+ * @param kind - one of {@link NamespaceResponseKind}.
+ * @param record - parsed JSON object.
+ * @returns the typed frame, or `undefined` when the payload is malformed.
+ */
+function namespaceResponseFrame(
+  kind: NamespaceResponseKind,
+  record: Record<string, unknown>,
+): BridgeFrame | undefined {
+  const payload = namespaceResponsePayload(record)
+  if (payload === undefined) return undefined
+  return kind === 'settings/update/response'
+    ? { kind: 'settings/update/response', ...payload }
+    : { kind: 'settings/mutate/response', ...payload }
+}
+
 /** Whether `value` is one selectable permission preset option. */
 function isPermissionPresetOption(value: unknown): value is BridgePermissionPreset {
   if (!isJsonObject(value)) return false
@@ -526,6 +569,65 @@ function isPermissionPresetOption(value: unknown): value is BridgePermissionPres
 /** Whether `value` is an array of projected settings namespaces. */
 function isSettingsNamespaceViewArray(value: unknown): value is SettingsNamespaceView[] {
   return Array.isArray(value) && value.every(isSettingsNamespaceView)
+}
+
+/** One path-addressed edit of a `settings/mutate` frame. */
+type WireSettingsPathOp = Extract<BridgeFrame, { kind: 'settings/mutate' }>['ops'][number]
+
+/** Whether `value` is one path-addressed edit: a string-path list plus the op's own payload. */
+function isSettingsPathOp(value: unknown): value is WireSettingsPathOp {
+  if (!isJsonObject(value)) return false
+  if (!Array.isArray(value.path) || !value.path.every(entry => typeof entry === 'string')) return false
+  if (value.op === 'unset') return true
+  // A `set` carries a value even when that value is `null`, so presence is the
+  // test — an absent field would write `undefined` into the stored section.
+  return value.op === 'set' && Object.hasOwn(value, 'value')
+}
+
+/** Whether `value` is the op array of a `settings/mutate`. */
+function isSettingsPathOpArray(value: unknown): value is WireSettingsPathOp[] {
+  return Array.isArray(value) && value.length > 0 && value.every(isSettingsPathOp)
+}
+
+/** One credential-state row of a `credential/describe/response`. */
+type WireCredentialState = Extract<BridgeFrame, { kind: 'credential/describe/response'; ok: true }>['credentials'][number]
+
+/** Whether `value` is one credential-state row. */
+function isCredentialState(value: unknown): value is WireCredentialState {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.ref)) return false
+  if (typeof value.configured !== 'boolean' || typeof value.writable !== 'boolean') return false
+  return value.source === undefined || typeof value.source === 'string'
+}
+
+/** Whether `value` is an array of credential-state rows. */
+function isCredentialStateArray(value: unknown): value is WireCredentialState[] {
+  return Array.isArray(value) && value.every(isCredentialState)
+}
+
+/** Whether `value` is a non-empty array of non-empty reference names. */
+function isCredentialRefArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.every(isNonEmptyString)
+}
+
+/** One model row of a `model/discover/response`. */
+type WireDiscoveredModel = Extract<BridgeFrame, { kind: 'model/discover/response'; ok: true }>['models'][number]
+
+/** Whether `value` is one discovered-model row. */
+function isDiscoveredModel(value: unknown): value is WireDiscoveredModel {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.id)) return false
+  if (value.name !== undefined && typeof value.name !== 'string') return false
+  for (const field of [value.contextWindow, value.maxTokens]) {
+    if (field !== undefined && !Number.isSafeInteger(field)) return false
+  }
+  return value.inputModalities === undefined
+    || (Array.isArray(value.inputModalities) && value.inputModalities.every(entry => typeof entry === 'string'))
+}
+
+/** Whether `value` is the model array of a `model/discover/response`. */
+function isDiscoveredModelArray(value: unknown): value is WireDiscoveredModel[] {
+  return Array.isArray(value) && value.every(isDiscoveredModel)
 }
 
 /**
@@ -890,6 +992,43 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       return { kind, id: record.id, ok: false, error: record.error }
     }
     case 'approval/policy': return sessionScopedFrame('approval/policy', record)
+    case 'terminal/exec': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.command)) return undefined
+      if (!isNonEmptyString(record.cwd)) return undefined
+      if (typeof record.dedicated !== 'boolean') return undefined
+      if (record.sessionId !== undefined && !isNonEmptyString(record.sessionId)) return undefined
+      return {
+        kind,
+        id: record.id,
+        ...record.sessionId === undefined ? {} : { sessionId: record.sessionId },
+        command: record.command,
+        cwd: record.cwd,
+        dedicated: record.dedicated,
+      }
+    }
+    case 'terminal/exec/cancel': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.reason)) return undefined
+      return { kind, id: record.id, reason: record.reason }
+    }
+    case 'terminal/exec/started': {
+      if (!isNonEmptyString(record.id)) return undefined
+      return { kind, id: record.id }
+    }
+    case 'terminal/exec/refused': {
+      if (!isNonEmptyString(record.id) || typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, error: record.error }
+    }
+    case 'terminal/exec/output': {
+      if (!isNonEmptyString(record.id) || typeof record.data !== 'string') return undefined
+      return { kind, id: record.id, data: record.data }
+    }
+    case 'terminal/exec/exit': {
+      if (!isNonEmptyString(record.id)) return undefined
+      if (record.exitCode === null) return { kind, id: record.id, exitCode: null }
+      if (!Number.isSafeInteger(record.exitCode)) return undefined
+      // isSafeInteger does not narrow unknown; the guard above is the whole test.
+      return { kind, id: record.id, exitCode: record.exitCode as number }
+    }
     case 'approval/policy/response':
     case 'approval/policy/set/response': {
       if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
@@ -933,11 +1072,70 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       }
       return frame
     }
-    case 'settings/update/response': {
+    case 'settings/update/response': return namespaceResponseFrame('settings/update/response', record)
+    case 'settings/mutate': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.ns)) return undefined
+      if (!isSettingsPathOpArray(record.ops)) return undefined
+      const frame: Extract<BridgeFrame, { kind: 'settings/mutate' }> = {
+        kind,
+        id: record.id,
+        ns: record.ns,
+        ops: record.ops,
+      }
+      if (record.expectedRevision !== undefined) {
+        if (typeof record.expectedRevision !== 'number'
+          || !Number.isSafeInteger(record.expectedRevision)) {
+          return undefined
+        }
+        frame.expectedRevision = record.expectedRevision
+      }
+      return frame
+    }
+    case 'settings/mutate/response': return namespaceResponseFrame('settings/mutate/response', record)
+    case 'credential/describe': {
+      if (!isNonEmptyString(record.id) || !isCredentialRefArray(record.refs)) return undefined
+      return { kind, id: record.id, refs: record.refs }
+    }
+    case 'credential/describe/response': {
       if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
       if (record.ok) {
-        if (!isSettingsNamespaceView(record.namespace)) return undefined
-        return { kind, id: record.id, ok: true, namespace: record.namespace }
+        if (!isCredentialStateArray(record.credentials)) return undefined
+        return { kind, id: record.id, ok: true, credentials: record.credentials }
+      }
+      if (typeof record.error !== 'string') return undefined
+      return { kind, id: record.id, ok: false, error: record.error }
+    }
+    case 'credential/set': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.ref)) return undefined
+      if (!isNonEmptyString(record.value)) return undefined
+      return { kind, id: record.id, ref: record.ref, value: record.value }
+    }
+    case 'credential/set/response': return okResponseFrame('credential/set/response', record)
+    case 'credential/unset': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.ref)) return undefined
+      return { kind, id: record.id, ref: record.ref }
+    }
+    case 'credential/unset/response': return okResponseFrame('credential/unset/response', record)
+    case 'model/discover': {
+      if (!isNonEmptyString(record.id) || !isNonEmptyString(record.settingsNs)) return undefined
+      for (const field of [record.provider, record.baseURL, record.api, record.apiKey]) {
+        if (field !== undefined && !isNonEmptyString(field)) return undefined
+      }
+      return {
+        kind,
+        id: record.id,
+        settingsNs: record.settingsNs,
+        ...isNonEmptyString(record.provider) ? { provider: record.provider } : {},
+        ...isNonEmptyString(record.baseURL) ? { baseURL: record.baseURL } : {},
+        ...isNonEmptyString(record.api) ? { api: record.api } : {},
+        ...isNonEmptyString(record.apiKey) ? { apiKey: record.apiKey } : {},
+      }
+    }
+    case 'model/discover/response': {
+      if (!isNonEmptyString(record.id) || typeof record.ok !== 'boolean') return undefined
+      if (record.ok) {
+        if (!isDiscoveredModelArray(record.models)) return undefined
+        return { kind, id: record.id, ok: true, models: record.models }
       }
       if (typeof record.error !== 'string') return undefined
       return { kind, id: record.id, ok: false, error: record.error }

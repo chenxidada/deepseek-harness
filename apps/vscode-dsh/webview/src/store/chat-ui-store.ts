@@ -289,6 +289,37 @@ export interface SettingsState {
   namespaces: SettingsNamespaceState[]
 }
 
+/** Permission presets of the active session mirrored from Host `permission/state`. */
+export interface PermissionState {
+  /** Currently active preset name. */
+  current: string
+  /** Available preset names. */
+  presets: Array<{ name: string; description?: string }>
+}
+
+/** Redacted credential reference state mirrored from Host `settings/credentials`. */
+export interface CredentialState {
+  ref: string
+  configured: boolean
+  writable: boolean
+  source?: string
+}
+
+/** One discovered model from an endpoint interrogation reply. */
+export interface DiscoveredModelState {
+  id: string
+  name?: string
+  contextWindow?: number
+  maxTokens?: number
+}
+
+/** Host reply to `settings/discover-models`. */
+export interface DiscoveryReply {
+  requestId: string
+  models?: DiscoveredModelState[]
+  error?: string
+}
+
 /** Token usage sample mirrored from Host `token/status` (feature: token-status). */
 export interface TokenStatus {
   /** Session the sample belongs to; omitted only by legacy senders. */
@@ -1666,6 +1697,11 @@ export function applyHostFrame(raw: unknown): void {
     state = {
       ...state,
       settingsState: { namespaces },
+    }
+  } else if (type === 'permission/state') {
+    state = {
+      ...state,
+      permission: frame as unknown as PermissionState,
     }
   } else if (type === 'token/status') {
     // A background session's sample must not own this panel's ring (multi-Tab).

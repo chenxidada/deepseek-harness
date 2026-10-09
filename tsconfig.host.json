@@ -387,6 +387,7 @@
     { "path": "./packages/sandbox/sandbox-policy" },
     { "path": "./packages/sandbox/sandbox-windows-acl" },
     { "path": "./packages/shell/bash-sandbox" },
+    { "path": "./packages/shell/bash-ide-terminal" },
     { "path": "./packages/shell/tool-bash" },
     { "path": "./packages/deliverables/tool-present" },
     { "path": "./packages/deliverables/workspace-changes" },

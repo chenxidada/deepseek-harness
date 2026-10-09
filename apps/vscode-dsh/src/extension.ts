@@ -41,6 +41,7 @@ import {
   type ModelListResult,
   type SettingsNamespaceView,
 } from './session-host.ts'
+import { IdeTerminalExecController, type TerminalExecExecution, type TerminalExecShellIntegration, type TerminalExecTerminal, type TerminalExecWindow } from './terminal-exec.ts'
 import {
   HOST_DIAGNOSTICS_CHANNEL_NAME,
   HostDiagnosticRecorder,
@@ -230,6 +231,14 @@ interface VsCodeLike {
         preview?: boolean
       },
     ): Promise<unknown>
+    createTerminal?(options: { name: string }): TerminalExecTerminal
+    readonly terminals?: readonly TerminalExecTerminal[]
+    onDidChangeTerminalShellIntegration?(
+      listener: (event: { terminal: TerminalExecTerminal; shellIntegration: TerminalExecShellIntegration }) => void,
+    ): { dispose(): void }
+    onDidEndTerminalShellExecution?(
+      listener: (event: { execution: TerminalExecExecution; exitCode: number | undefined }) => void,
+    ): { dispose(): void }
   }
   workspace: {
     workspaceFolders?: readonly { uri: { fsPath: string; scheme?: string } }[]
@@ -359,6 +368,7 @@ interface ExtensionContextLike {
 }
 
 let host: IdeSessionHost | undefined
+let terminalExec: IdeTerminalExecController | undefined
 let conversations: ConversationController | undefined
 let panelHost: ChatPanelHost | undefined
 let editorChatPanel: EditorChatPanelController | undefined
@@ -441,6 +451,26 @@ const TEST_COMPACTION_SUMMARY_BODY = 'LAYER-V-CAP-COMPACTION-OK'
  * assertion on the projection instead of on model sampling.
  */
 const TEST_REASONING_BODY = 'LAYER-V-CAP-REASONING-OK'
+
+/**
+ * Build the terminal execution window surface when VS Code exposes terminal
+ * shell integration APIs (stable since 1.93). Returns `undefined` when any
+ * required capability is missing, so the caller skips terminal registration.
+ */
+function terminalExecWindow(vscode: VsCodeLike): TerminalExecWindow | undefined {
+  const w = vscode.window
+  const ct = w.createTerminal
+  const ts = w.terminals
+  const si = w.onDidChangeTerminalShellIntegration
+  const ee = w.onDidEndTerminalShellExecution
+  if (ct === undefined || ts === undefined || si === undefined || ee === undefined) return undefined
+  return {
+    createTerminal: opts => ct(opts),
+    get terminals() { return ts },
+    onDidChangeTerminalShellIntegration: l => si(l),
+    onDidEndTerminalShellExecution: l => ee(l),
+  }
+}
 
 /**
  * Resolve the vscode module when the Extension Host activates without an
@@ -2383,6 +2413,8 @@ export async function deactivate(): Promise<void> {
   stopErrorWatch = undefined
   stopStatusWatch?.()
   stopStatusWatch = undefined
+  terminalExec?.dispose()
+  terminalExec = undefined
   stopOrchestratorWatch?.()
   stopOrchestratorWatch = undefined
   unbindConversations()
@@ -4439,6 +4471,9 @@ function createStartHostPort(
       workspaceKey = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''
       const next = new IdeSessionHost(diagnostics)
       hostCreateCount += 1
+      const terminalWindow = terminalExecWindow(vscode)
+      terminalExec ??= terminalWindow === undefined ? undefined : new IdeTerminalExecController(terminalWindow)
+      if (terminalExec !== undefined) next.setTerminalExec(terminalExec)
       if (vscode.window.showQuickPick !== undefined) {
         const nativeUi = createVscodeInteractionUi(vscode.window as InteractionWindow, {
           // The user allowed one call and asked not to be asked again in this session;
