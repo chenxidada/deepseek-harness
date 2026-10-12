@@ -84,7 +84,7 @@ export function buildDiffOpenArgs(hunk: TimelineDiffHunk): DiffOpenArgs {
 export function isRecoverableReplayDiff(hunk: TimelineDiffHunk | undefined): boolean {
   if (hunk === undefined) return false
   if (typeof hunk.path !== 'string' || typeof hunk.newText !== 'string') return false
-  return typeof hunk.oldText === 'string' || hunk.oldText === null
+  return hunk.oldText === null || typeof hunk.oldText === 'string'
 }
 
 /**
@@ -122,7 +122,7 @@ export async function openChangeSnapshotDiff(
   if (typeof snapshot.path !== 'string' || typeof snapshot.newText !== 'string') {
     throw new Error('Diff unavailable: missing authoritative before/after snapshot')
   }
-  if (typeof snapshot.oldText !== 'string' && snapshot.oldText !== null) {
+  if (snapshot.oldText !== null && typeof snapshot.oldText !== 'string') {
     throw new Error('Diff unavailable: missing authoritative before/after snapshot')
   }
   ensureDiffProvider(vscode)
@@ -159,7 +159,7 @@ export async function reviewWorkspaceDiffs(
 
 function ensureDiffProvider(vscode: DiffVsCodeLike): void {
   if (providerRegistered) return
-  const register = vscode.workspace.registerTextDocumentContentProvider
+  const register = vscode.workspace.registerTextDocumentContentProvider?.bind(vscode.workspace)
   if (register === undefined) return
   register('dsh-diff', {
     provideTextDocumentContent(uri: DiffUriLike): string {

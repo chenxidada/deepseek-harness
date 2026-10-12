@@ -378,7 +378,7 @@ export class ConversationController {
     this.snapshotStore = changeOptions?.snapshotStore
       ?? new SnapshotStore({ storageRoot: join(tmpdir(), 'dsh-vscode-dsh-changes') })
     this.readWorkspaceText = changeOptions?.readWorkspaceText
-      ?? (async () => undefined)
+      ?? (() => Promise.resolve(undefined))
     this.getIgnoreOptions = changeOptions?.getIgnoreOptions
       ?? (() => ({ workspaceFolders: [] }))
     this.compactionThresholdRatio = observability?.compactionThresholdRatio ?? (() => undefined)
@@ -388,7 +388,7 @@ export class ConversationController {
       getIgnoreOptions: () => this.getIgnoreOptions(),
       readWorkspaceText: path => this.readWorkspaceText(path),
     })
-    this.host.setConversationRegistry?.(this.registry)
+    this.bindConversationRegistry(this.registry)
     this.stopNotifications = this.host.onNotification((notification) => {
       this.onSdkNotification(notification)
     })
@@ -422,6 +422,26 @@ export class ConversationController {
   }
 
   /**
+   * Tell the Host which session is active. Doubles that stub `interactions` with
+   * the fail-closed hooks omit this callback, so presence is checked first.
+   * @param sessionId - newly active session, or `undefined` when no Tab is active.
+   */
+  private notifyActiveSessionChange(sessionId: string | undefined): void {
+    if (typeof this.host.interactions.onActiveSessionChange !== 'function') return
+    this.host.interactions.onActiveSessionChange(sessionId)
+  }
+
+  /**
+   * Bind or clear the Host's registry mirror. Doubles built without the Host
+   * wiring omit the setter, so presence is checked first.
+   * @param registry - registry to bind, or `undefined` to clear.
+   */
+  private bindConversationRegistry(registry: ConversationRegistry | undefined): void {
+    if (typeof this.host.setConversationRegistry !== 'function') return
+    this.host.setConversationRegistry(registry)
+  }
+
+  /**
    * Reconfigure ChangeList workspace readers / storage (extension activate).
    * @param options - SnapshotStore root + ignore + file reader.
    */
@@ -451,7 +471,7 @@ export class ConversationController {
    */
   newConversation(title?: string): ConversationTab {
     const tab = this.registry.create(title)
-    this.host.interactions.onActiveSessionChange?.(tab.sessionId)
+    this.notifyActiveSessionChange(tab.sessionId)
     // Empty Tab: do not write openTabSet yet (AD-CU-3); persistOpenTabs filters.
     this.persistOpenTabs()
     return tab
@@ -466,7 +486,7 @@ export class ConversationController {
   newConversationOrReuseEmpty(title?: string): ConversationTab {
     const active = this.registry.getActive()
     if (active !== undefined && !this.messages.hasContent(active.sessionId)) {
-      this.host.interactions.onActiveSessionChange?.(active.sessionId)
+      this.notifyActiveSessionChange(active.sessionId)
       this.panelHost?.pushFullState()
       return active
     }
@@ -481,7 +501,7 @@ export class ConversationController {
   switchConversation(tabId: string): void {
     this.registry.switchTo(tabId)
     const active = this.registry.getActive()
-    this.host.interactions.onActiveSessionChange?.(active?.sessionId)
+    this.notifyActiveSessionChange(active?.sessionId)
     // The workspace's SpecDev workflow is session-independent, so a freshly
     // activated Tab shows it before its own log reports any SpecDev event.
     if (active !== undefined) void this.refreshSpecdev(active.sessionId)
@@ -549,7 +569,7 @@ export class ConversationController {
     }
 
     const tab = this.registry.create(title, sessionId, 'replay')
-    this.host.interactions.onActiveSessionChange?.(tab.sessionId)
+    this.notifyActiveSessionChange(tab.sessionId)
     void this.refreshSpecdev(sessionId)
     void this.refreshGoal(sessionId)
     const hydrated = hydrateFromAuthoritativeLog(sessionId, events)
@@ -750,7 +770,7 @@ export class ConversationController {
 
       if (activeTabId !== undefined) {
         this.registry.switchTo(activeTabId)
-        this.host.interactions.onActiveSessionChange?.(this.registry.getActive()?.sessionId)
+        this.notifyActiveSessionChange(this.registry.getActive()?.sessionId)
       }
     } finally {
       this.openTabPersistSuspended = false
@@ -893,7 +913,7 @@ export class ConversationController {
         liveTab = existing
       }
       this.registry.switchTo(liveTab.tabId)
-      this.host.interactions.onActiveSessionChange?.(liveTab.sessionId)
+      this.notifyActiveSessionChange(liveTab.sessionId)
     } else {
       this.registry.setMode(tab.tabId, 'live')
     }
@@ -1730,19 +1750,20 @@ export class ConversationController {
   /**
    * Unload a Tab UI without disposing the session (AD-CU-3 / AC-23).
    * Empty Tabs never enter persisted openTabSet. Running Tabs need confirmStopClose.
+   * The body is synchronous; the returned Promise keeps the caller-facing API unchanged.
    * @param tabId - Tab to close.
    * @param options - running confirmation.
    * @returns close outcome for Extension / L2 hooks.
    */
-  async closeConversation(
+  closeConversation(
     tabId: string,
     options: CloseConversationOptions = {},
   ): Promise<CloseConversationResult> {
     const tab = this.registry.get(tabId)
-    if (tab === undefined) return { outcome: 'missing' }
+    if (tab === undefined) return Promise.resolve({ outcome: 'missing' })
 
     if (tab.status === 'running' && options.confirmStopClose !== true) {
-      return { outcome: 'needs-confirm-running', tabId: tab.tabId, sessionId: tab.sessionId }
+      return Promise.resolve({ outcome: 'needs-confirm-running', tabId: tab.tabId, sessionId: tab.sessionId })
     }
 
     const empty = !this.messages.hasContent(tab.sessionId)
@@ -1754,9 +1775,9 @@ export class ConversationController {
     // Keep timeline/message projection in memory for phase-2 reopen; do NOT dispose.
     this.registry.close(tabId)
     this.persistOpenTabs()
-    this.host.interactions.onActiveSessionChange?.(this.registry.getActive()?.sessionId)
+    this.notifyActiveSessionChange(this.registry.getActive()?.sessionId)
     this.panelHost?.pushFullState()
-    return { outcome: 'closed', tabId: tab.tabId, sessionId: tab.sessionId, empty }
+    return Promise.resolve({ outcome: 'closed', tabId: tab.tabId, sessionId: tab.sessionId, empty })
   }
 
   /**
@@ -2094,7 +2115,7 @@ export class ConversationController {
     if (pinned !== undefined) {
       this.registry.setContextSessionId(active.tabId, undefined)
       this.registry.switchTo(pinned.tabId)
-      this.host.interactions.onActiveSessionChange?.(pinned.sessionId)
+      this.notifyActiveSessionChange(pinned.sessionId)
       this.panelHost?.pushFullState()
       return {
         outcome: 'activated-tab',
@@ -2410,7 +2431,7 @@ export class ConversationController {
     const parentTab = this.registry.getBySessionId(parentSessionId)
     if (parentTab === undefined) return { outcome: 'disabled' }
     this.registry.switchTo(parentTab.tabId)
-    this.host.interactions.onActiveSessionChange?.(parentTab.sessionId)
+    this.notifyActiveSessionChange(parentTab.sessionId)
     this.panelHost?.pushFullState()
     return { outcome: 'restored' }
   }
@@ -2434,7 +2455,7 @@ export class ConversationController {
     if (existing !== undefined) {
       this.registry.setContextSessionId(active.tabId, undefined)
       this.registry.switchTo(existing.tabId)
-      this.host.interactions.onActiveSessionChange?.(existing.sessionId)
+      this.notifyActiveSessionChange(existing.sessionId)
       this.panelHost?.pushFullState()
       return {
         outcome: 'activated',
@@ -2463,7 +2484,7 @@ export class ConversationController {
     this.registry.setPinnedSubagent(childTab.tabId, true)
     // Restore parent as active after minting the child Tab.
     this.registry.switchTo(parentTabId)
-    this.host.interactions.onActiveSessionChange?.(active.sessionId)
+    this.notifyActiveSessionChange(active.sessionId)
     this.persistOpenTabs()
     this.panelHost?.pushFullState()
     return {
@@ -2655,7 +2676,7 @@ export class ConversationController {
     this.stopInteractionWatch = undefined
     this.stopStatusWatch?.()
     this.stopStatusWatch = undefined
-    this.host.setConversationRegistry?.(undefined)
+    this.bindConversationRegistry(undefined)
     this.panelHost = undefined
     this.deferredRestore = []
     this.pendingRestoreLatch = false
@@ -2889,7 +2910,7 @@ export class ConversationController {
   private async sessionDataGone(sessionId: string): Promise<boolean> {
     if (typeof this.host.statSession !== 'function') return false
     try {
-      return (await this.host.statSession(sessionId)).found === false
+      return !(await this.host.statSession(sessionId)).found
     } catch {
       // The read failure this check follows already names the user-visible cause.
       return false
@@ -3565,7 +3586,7 @@ export class ConversationController {
       ? [...list].reverse().find(m =>
         m.kind === 'activity'
         && m.activity?.status === 'running'
-        && (turn === undefined || m.turn === turn || m.activity?.turn === turn),
+        && (turn === undefined || m.turn === turn || m.activity.turn === turn),
       )
       : list.find(m => m.kind === 'activity' && m.activity?.callId === callId)
     if (target === undefined) {
@@ -3798,7 +3819,7 @@ export class ConversationController {
       return
     }
     if (record.type === 'assistant/chunk') {
-      const chunk = data.chunk as Record<string, unknown> | undefined
+      const chunk = data.chunk as Record<string, unknown> | null | undefined
       if (chunk === undefined || typeof chunk !== 'object' || chunk === null) return
       this.projectAssistantChunk(sessionId, chunk, turn)
       return

@@ -89,6 +89,7 @@ export interface ExtensionIndexSnapshot {
 
 /** Duck-typed VS Code Memento used for immediate index writes. */
 export interface WorkspaceStateLike {
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- mirrors VS Code Memento.get<T>; callers pass the stored type.
   get<T>(key: string): T | undefined
   update(key: string, value: unknown): Promise<void> | void
 }
@@ -113,7 +114,7 @@ export class ExtensionIndex {
     workspaceKey = '',
     private readonly state?: WorkspaceStateLike,
   ) {
-    const loaded = this.state?.get<ExtensionIndexSnapshot>(EXTENSION_INDEX_STATE_KEY)
+    const loaded = this.state?.get<unknown>(EXTENSION_INDEX_STATE_KEY)
     this.snapshot = loaded === undefined
       ? emptySnapshot(workspaceKey)
       : sanitizeLoaded(loaded, workspaceKey)
@@ -251,23 +252,63 @@ function emptySnapshot(workspaceKey: string): ExtensionIndexSnapshot {
   }
 }
 
-function sanitizeLoaded(loaded: ExtensionIndexSnapshot, workspaceKey: string): ExtensionIndexSnapshot {
-  const openTabSet = Array.isArray(loaded.openTabSet)
-    ? loaded.openTabSet.filter(tab =>
-      typeof tab?.tabId === 'string'
-      && typeof tab.sessionId === 'string'
-      && (tab.mode === 'live' || tab.mode === 'replay'))
-    : []
+function sanitizeLoaded(loaded: unknown, workspaceKey: string): ExtensionIndexSnapshot {
+  const raw: Record<string, unknown> = isRecordLike(loaded) ? loaded : {}
   // Recovery rule: drop empty-looking records that somehow landed in storage (AD-CU-3).
   return {
-    workspaceKey: typeof loaded.workspaceKey === 'string' ? loaded.workspaceKey : workspaceKey,
-    sessions: Array.isArray(loaded.sessions) ? loaded.sessions.map(row => ({ ...row })) : [],
-    openTabSet: openTabSet.map(tab => ({ ...tab })),
-    ...typeof loaded.activeSessionId === 'string' ? { activeSessionId: loaded.activeSessionId } : {},
+    workspaceKey: typeof raw.workspaceKey === 'string' ? raw.workspaceKey : workspaceKey,
+    sessions: readStoredSessions(raw.sessions),
+    openTabSet: readStoredOpenTabs(raw.openTabSet),
+    ...typeof raw.activeSessionId === 'string' ? { activeSessionId: raw.activeSessionId } : {},
     ui: {
-      restoreUiLimit: loaded.ui?.restoreUiLimit ?? DEFAULT_RESTORE_UI_LIMIT,
+      restoreUiLimit: readStoredRestoreUiLimit(raw.ui),
     },
   }
+}
+
+/** Whether a stored value is a record whose fields are still unvalidated. */
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+/**
+ * Stored session rows are listing metadata (identity, title, mtime) that nothing here
+ * dereferences beyond copying; restore keys on the open Tab rows validated below.
+ * @param value - stored `sessions` value.
+ * @returns shallow copies of the stored rows.
+ */
+function readStoredSessions(value: unknown): SessionIndexEntry[] {
+  if (!Array.isArray(value)) return []
+  return (value as SessionIndexEntry[]).map(row => ({ ...row }))
+}
+
+/**
+ * Open Tab rows the restore path may use. Rows without Tab identity are dropped.
+ * @param value - stored `openTabSet` value.
+ * @returns validated rows in storage order.
+ */
+function readStoredOpenTabs(value: unknown): OpenTabRecord[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(isStoredOpenTab).map(tab => ({ ...tab }))
+}
+
+/** Whether one stored row carries the required open-Tab identity fields. */
+function isStoredOpenTab(tab: unknown): tab is OpenTabRecord {
+  if (!isRecordLike(tab)) return false
+  return typeof tab.tabId === 'string'
+    && typeof tab.sessionId === 'string'
+    && (tab.mode === 'live' || tab.mode === 'replay')
+}
+
+/**
+ * Stored restore cap; an absent or non-numeric value keeps the default.
+ * @param value - stored `ui` value.
+ * @returns the stored cap or {@link DEFAULT_RESTORE_UI_LIMIT}.
+ */
+function readStoredRestoreUiLimit(value: unknown): number {
+  if (!isRecordLike(value)) return DEFAULT_RESTORE_UI_LIMIT
+  const limit = value.restoreUiLimit
+  return typeof limit === 'number' ? limit : DEFAULT_RESTORE_UI_LIMIT
 }
 
 function cloneSnapshot(snapshot: ExtensionIndexSnapshot): ExtensionIndexSnapshot {

@@ -49,7 +49,6 @@ export function planRestoreOpenTabs(
       || tab.tabId === ''
       || typeof tab.sessionId !== 'string'
       || tab.sessionId === ''
-      || (tab.mode !== 'live' && tab.mode !== 'replay')
     ) {
       stripped.push(tab)
       continue

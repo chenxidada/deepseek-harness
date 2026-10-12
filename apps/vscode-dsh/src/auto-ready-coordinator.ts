@@ -98,14 +98,14 @@ export class AutoReadyCoordinator {
    * @returns apply result.
    */
   async maybeApplyReady(options: AutoReadyRestoreOptions = {}): Promise<AutoReadyApplyResult> {
-    if (!this.conversationViewVisible || !this.hostReady) {
+    if (!this.gatesOpen()) {
       return { applied: false, reason: 'gated' }
     }
     if (this.applyInFlight !== undefined) {
       await this.applyInFlight
       // Prior apply settled: re-check gates. A hide→show during flight
       // bumps visibilityEpoch and clears readyApplied — must apply again.
-      if (!this.conversationViewVisible || !this.hostReady) {
+      if (!this.gatesOpen()) {
         return { applied: false, reason: 'gated' }
       }
       if (!this.readyAppliedForVisibilityEpoch) {
@@ -119,6 +119,11 @@ export class AutoReadyCoordinator {
     } finally {
       this.applyInFlight = undefined
     }
+  }
+
+  /** Whether the Conversation view is visible and the Host is ready right now. */
+  private gatesOpen(): boolean {
+    return this.conversationViewVisible && this.hostReady
   }
 
   private async applyBody(options: AutoReadyRestoreOptions): Promise<AutoReadyApplyResult> {

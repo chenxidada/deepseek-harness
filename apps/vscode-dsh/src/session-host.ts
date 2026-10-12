@@ -1186,7 +1186,8 @@ export class IdeSessionHost {
       if (sent === 0) {
         throw new Error('no ide-bridge runtime connection to receive subagent/interrupt')
       }
-      return await response
+      await response
+      return
     } finally {
       clearTimeout(timer)
       this.pendingSubagentInterrupt.delete(id)
@@ -1815,7 +1816,7 @@ export class IdeSessionHost {
         }
       } catch (error) {
         if (!stopped) {
-          void this.onTransportDeath(error)
+          this.onTransportDeath(error)
         }
       }
     }
@@ -1842,7 +1843,7 @@ export class IdeSessionHost {
    * the death and start an attempt of its own.
    * @param error - value the transport subscription failed with.
    */
-  private async onTransportDeath(error: unknown): Promise<void> {
+  private onTransportDeath(error: unknown): void {
     if (this.status !== 'connected' && this.status !== 'starting') return
     const afterHandshake = this.status === 'connected'
     const reason = error instanceof Error ? error.message : String(error)

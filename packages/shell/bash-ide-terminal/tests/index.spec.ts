@@ -9,14 +9,14 @@ import {
 describe('bash-ide-terminal utilities', () => {
   describe('confinedModeRefusal', () => {
     it('mentions the mode and both resolution actions', () => {
-      const msg = confinedModeRefusal('workspace-write' as never)
+      const msg = confinedModeRefusal('workspace-write')
       expect(msg).toContain('workspace-write')
       expect(msg).toContain('danger-full-access')
       expect(msg).toContain('settings page')
     })
 
     it('mentions read-only mode when given', () => {
-      expect(confinedModeRefusal('read-only' as never)).toContain('read-only')
+      expect(confinedModeRefusal('read-only')).toContain('read-only')
     })
   })
 

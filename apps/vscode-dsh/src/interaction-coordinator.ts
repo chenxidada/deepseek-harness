@@ -566,6 +566,9 @@ export class InteractionCoordinator {
       while (this.presentedId === undefined) {
         const next = this.pickNext()
         if (next === undefined) return
+        // Reset here, not in presentEntry: that method re-reads the flag after every
+        // await, and an assignment inside it would narrow those reads to `false`.
+        next.demoted = false
         await this.presentEntry(next)
       }
     } finally {
@@ -577,7 +580,6 @@ export class InteractionCoordinator {
   }
 
   private async presentEntry(entry: QueueEntry): Promise<void> {
-    entry.demoted = false
     entry.state = 'presented'
     this.presentedId = entry.id
     this.syncApprovalBadges()
@@ -611,7 +613,7 @@ export class InteractionCoordinator {
           ...entry.tabId === undefined ? {} : { tabId: entry.tabId },
         }
         const aborted = new Promise<ApprovalOutcome>((resolve) => {
-          entry.abort.signal.addEventListener('abort', () => resolve('unavailable'), { once: true })
+          entry.abort.signal.addEventListener('abort', () => { resolve('unavailable') }, { once: true })
         })
         let outcome: ApprovalOutcome
         try {

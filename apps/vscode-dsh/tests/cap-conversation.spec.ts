@@ -2967,8 +2967,8 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
         const projection = controller.resolvePanelProjection()
         expect(projection?.subagents).toEqual([
-          { childSessionId: 'child-run', label: expect.any(String), status: 'running' },
-          { childSessionId: 'child-done', label: expect.any(String), status: 'ended' },
+          { childSessionId: 'child-run', label: expect.any(String) as string, status: 'running' },
+          { childSessionId: 'child-done', label: expect.any(String) as string, status: 'ended' },
         ])
 
         // The roster rides panel/state, so the bar is rebuilt on every push.
@@ -2986,7 +2986,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         expect(projection?.sessionId).toBe('child-1')
         expect(projection?.contextSessionId).toBe('child-1')
         expect(projection?.subagents).toEqual([
-          { childSessionId: 'child-1', label: expect.any(String), status: 'running' },
+          { childSessionId: 'child-1', label: expect.any(String) as string, status: 'running' },
         ])
       })
 

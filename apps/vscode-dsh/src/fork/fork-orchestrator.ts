@@ -226,8 +226,7 @@ function collectTurnEnds(events: readonly ForkLogEvent[]): TurnEndInfo[] {
   let openStartSeq = 0
   let userText: string | undefined
 
-  for (let i = 0; i < events.length; i += 1) {
-    const event = events[i]!
+  for (const [i, event] of events.entries()) {
     const seq = typeof event.seq === 'number' && Number.isFinite(event.seq) ? event.seq : i
     const data = asRecord(event.data)
 
@@ -264,9 +263,10 @@ function collectTurnEnds(events: readonly ForkLogEvent[]): TurnEndInfo[] {
   }
 
   if (openTurn !== undefined) {
+    const last = events.at(-1)
     result.push({
       turn: openTurn,
-      seq: typeof events.at(-1)?.seq === 'number' ? events.at(-1)!.seq as number : events.length - 1,
+      seq: typeof last?.seq === 'number' ? last.seq : events.length - 1,
       startSeq: openStartSeq,
       aborted: false,
       open: true,

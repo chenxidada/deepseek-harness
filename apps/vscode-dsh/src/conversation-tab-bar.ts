@@ -58,9 +58,9 @@ export interface ConversationTabBarVsCode {
       },
     ): { dispose(): void }
   }
-  EventEmitter: new <T>() => {
+  EventEmitter: new () => {
     event: unknown
-    fire(data?: T): void
+    fire(data?: void | ConversationTreeItem): void
     dispose(): void
   }
 }
@@ -99,7 +99,7 @@ export function createConversationTabBar(
   dispose(): void
   refresh(): void
 } {
-  const change = new vscode.EventEmitter<void | ConversationTreeItem | undefined>()
+  const change = new vscode.EventEmitter()
   const provider = {
     onDidChangeTreeData: change.event,
     getChildren(): ConversationTreeItem[] {

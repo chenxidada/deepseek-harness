@@ -299,7 +299,7 @@ export function foldActivities(
     const data = asRecord(event.data) ?? {}
     if (event.type === 'tool/call') {
       const turn = asNumber(data.turn) ?? 0
-      const callId = data.callId === undefined ? undefined : String(data.callId)
+      const callId = asString(data.callId)
       const toolName = typeof data.name === 'string' ? data.name : 'tool'
       if (callId !== undefined && byCallId.has(callId)) continue
       pushRunning(Number(event.seq ?? 0), turn, callId, toolName, data.arguments)
@@ -744,10 +744,10 @@ export function foldTimeline(events: readonly HydratorSessionEvent[]): FoldedTim
       case 'tool/call': {
         const turn = asNumber(data.turn)
         const step = asNumber(data.step)
-        const callId = data.callId === undefined ? undefined : String(data.callId)
+        const callId = asString(data.callId)
         rows.push({
           kind: 'tool',
-          label: `tool ${String(data.name ?? 'tool')}`,
+          label: `tool ${asString(data.name) ?? 'tool'}`,
           hasRecoverableDiffs: false,
           ...turn === undefined ? {} : { turn },
           ...step === undefined ? {} : { step },
@@ -962,6 +962,10 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined
 }
 
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
 /**
  * Whether one event's surface marker is a positional replacement.
  * Structural counterpart of the module-private `isReplaceOp` behind
@@ -972,7 +976,7 @@ function asNumber(value: unknown): number | undefined {
  * @param surfaceOp - surface marker of one log event.
  * @returns true when the marker is the replace object form.
  */
-function isReplaceSurfaceOp(surfaceOp: HydratorSurfaceOp | undefined): boolean {
+function isReplaceSurfaceOp(surfaceOp: unknown): boolean {
   if (typeof surfaceOp !== 'object' || surfaceOp === null) return false
   return (surfaceOp as Record<string, unknown>)['op'] === 'replace'
 }

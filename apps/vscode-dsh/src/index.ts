@@ -103,6 +103,7 @@ export {
   FakeWebviewPort,
   CHAT_PANEL_VIEW_ID,
   EDITOR_CHAT_PANEL_VIEW_TYPE,
+  // oxlint-disable-next-line typescript/no-deprecated -- fixture-only thin HTML kept for layer-A tests; no replacement (AD-ECP-8).
   buildThinChatHtml,
   buildSidebarMigrationHtml,
   buildEditorChatSpaHtml,

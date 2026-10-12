@@ -70,5 +70,5 @@ export function changeStatusLabel(status: string | undefined): string {
   if (status === 'unreviewed') return CHANGE_STATUS_UNREVIEWED_LABEL
   if (status === 'reviewed') return CHANGE_STATUS_REVIEWED_LABEL
   if (status === 'reverted') return CHANGE_STATUS_REVERTED_LABEL
-  return String(status ?? '')
+  return status ?? ''
 }

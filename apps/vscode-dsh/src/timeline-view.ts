@@ -49,9 +49,9 @@ export interface TimelineViewVsCode {
       },
     ): { dispose(): void }
   }
-  EventEmitter: new <T>() => {
+  EventEmitter: new () => {
     event: unknown
-    fire(data?: T): void
+    fire(data?: void | TimelineTreeItem): void
     dispose(): void
   }
 }
@@ -96,7 +96,7 @@ export function createTimelineView(
   dispose(): void
   refresh(): void
 } {
-  const change = new vscode.EventEmitter<void | TimelineTreeItem | undefined>()
+  const change = new vscode.EventEmitter()
   const provider = {
     onDidChangeTreeData: change.event,
     getChildren(): TimelineTreeItem[] {

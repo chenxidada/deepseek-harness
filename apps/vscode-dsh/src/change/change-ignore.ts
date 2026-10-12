@@ -75,7 +75,7 @@ export function isOutsideWorkspace(path: string, workspaceFolders: readonly stri
   }
   if (!isAbsolutePath(path)) return false
   const normalized = normalizeSlashes(path)
-  return !workspaceFolders.some(folder => {
+  return !workspaceFolders.some((folder) => {
     const root = normalizeSlashes(folder).replace(/\/+$/, '')
     return normalized === root || normalized.startsWith(`${root}/`)
   })

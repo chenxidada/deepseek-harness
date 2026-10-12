@@ -7,7 +7,6 @@
  */
 
 import type { FollowState } from './render/follow-state.ts'
-import type { ActivityStatus } from './activity-types.ts'
 
 /**
  * Probe snapshot.
@@ -20,8 +19,12 @@ export interface ChatUxProbes {
   followState: FollowState
   /** Expand seats (message / activity id → expanded). */
   expanded: Record<string, boolean>
-  /** Activity item seats — filled by product activity path (GAP-CUX-001). */
-  activity?: Record<string, { status: ActivityStatus | string; expanded: boolean }>
+  /**
+   * Activity item seats — filled by product activity path (GAP-CUX-001).
+   * `status` mirrors the Host value; the known set is `running`, `done`,
+   * `failed`, and `aborted`.
+   */
+  activity?: Record<string, { status: string; expanded: boolean }>
   /** P-接续父 Tab E2 — Host mirror only. */
   parentReadonly?: boolean
   /** Continue chrome sealed — Host mirror only. */
@@ -45,7 +48,7 @@ export interface ChatUxProbeStore {
   /** Product activity seat updater (status + expanded). */
   setActivity(
     id: string,
-    value: { status: ActivityStatus | string; expanded: boolean } | undefined,
+    value: { status: string; expanded: boolean } | undefined,
   ): void
 }
 
@@ -78,30 +81,30 @@ export function createChatUxProbeStore(
       return snap
     },
     setStreaming(value) {
-      state.streaming = value === true
+      state.streaming = value
     },
     setFollowState(value) {
       state.followState = value === 'on' ? 'on' : 'off'
     },
     setExpanded(id, expanded) {
       if (!id) return
-      state.expanded = { ...state.expanded, [id]: expanded === true }
+      state.expanded = { ...state.expanded, [id]: expanded }
     },
     mirrorHostDecisions(partial) {
       if (partial.parentReadonly !== undefined) {
-        state.parentReadonly = partial.parentReadonly === true
+        state.parentReadonly = partial.parentReadonly
       }
       if (partial.continueSealed !== undefined) {
-        state.continueSealed = partial.continueSealed === true
+        state.continueSealed = partial.continueSealed
       }
     },
     setActivity(id, value) {
       if (!id) return
       if (!state.activity) state.activity = {}
       if (value === undefined) {
-        const next = { ...state.activity }
-        delete next[id]
-        state.activity = next
+        state.activity = Object.fromEntries(
+          Object.entries(state.activity).filter(([key]) => key !== id),
+        )
         return
       }
       state.activity = { ...state.activity, [id]: value }

@@ -48,10 +48,10 @@ export function activityStatusFromToolResult(data: Record<string, unknown>): Act
   if (code !== undefined && ACTIVITY_ABORTED_CODES.has(code)) return 'aborted'
 
   const message = asRecord(data.message)
-  const content0 = Array.isArray(message?.content) ? message.content[0] : undefined
+  const content: readonly unknown[] = Array.isArray(message?.content) ? message.content : []
   // Current logs carry `isError` on the tool-role message; older logs wrapped
   // the blocks in one tool-result block that carried it instead.
-  const contentError = message?.isError === true || asRecord(content0)?.isError === true
+  const contentError = message?.isError === true || asRecord(content[0])?.isError === true
   if (data.isError === true || contentError) return 'failed'
   return 'done'
 }

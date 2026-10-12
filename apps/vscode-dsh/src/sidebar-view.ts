@@ -139,8 +139,7 @@ export function createSidebarView(deps: SidebarViewDeps): {
   refresh(): void
   dispose(): void
 } {
-  const register = deps.vscode.window.registerWebviewViewProvider
-  if (register === undefined) {
+  if (deps.vscode.window.registerWebviewViewProvider === undefined) {
     return { refresh() {}, dispose() {} }
   }
   let view: SidebarWebviewView | undefined
@@ -181,7 +180,7 @@ export function createSidebarView(deps: SidebarViewDeps): {
     }
   }
 
-  const registration = register(
+  const registration = deps.vscode.window.registerWebviewViewProvider(
     SIDEBAR_VIEW_ID,
     {
       resolveWebviewView(webviewView) {

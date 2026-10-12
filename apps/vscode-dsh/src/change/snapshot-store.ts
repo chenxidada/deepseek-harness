@@ -37,6 +37,12 @@ interface SnapshotBlobFile {
   newText: string
 }
 
+/**
+ * Blob envelope as read back from storage: the stored version is a plain number
+ * because a file on disk is validated against v0 rather than trusted to match it.
+ */
+type StoredSnapshotBlobFile = Omit<SnapshotBlobFile, 'v'> & { v: number }
+
 /** Dependencies for resolving the storage root. */
 export interface SnapshotStoreOptions {
   /** Absolute extension storage root (`storageUri.fsPath` or global+workspaceKey). */
@@ -135,7 +141,7 @@ export class SnapshotStore {
         snapshotBlobPath(this.options.storageRoot, sessionId, snapshotRef),
         'utf8',
       )
-      const parsed = JSON.parse(raw) as SnapshotBlobFile
+      const parsed = JSON.parse(raw) as StoredSnapshotBlobFile
       if (parsed.v !== 0 || parsed.snapshotRef !== snapshotRef) return undefined
       return {
         snapshotRef: parsed.snapshotRef,

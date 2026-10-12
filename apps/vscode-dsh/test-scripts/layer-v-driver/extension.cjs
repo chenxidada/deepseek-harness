@@ -52,7 +52,6 @@ const {
   unwrap,
   poll,
   assistantText,
-  pngVerdict,
   sha256Of,
   resolveCaptureTool,
   captureScreenshot,

@@ -7,27 +7,25 @@
 import type { ChatUxProbeStore } from '../probes.ts'
 import { applyFollowState, type FollowState } from './follow-state.ts'
 
-/** Panel mode values mirrored from Host panel/state. */
-export type SyncPanelMode = 'empty' | 'waiting-host' | 'replay' | 'live' | 'error' | string
+/**
+ * Panel mode mirrored from Host panel/state. The Host authors `empty`,
+ * `waiting-host`, `replay`, `live`, and `error`; any other value is mirrored unchanged.
+ */
+export type SyncPanelMode = string
 
-/** Connection phase mirrored from Host. */
-export type SyncConnectionPhase =
-  | 'idle'
-  | 'connecting'
-  | 'connected'
-  | 'failed'
-  | 'disconnected-retrying'
-  | 'disconnected-manual'
-  | string
+/**
+ * Connection phase mirrored from Host. The Host authors `idle`, `connecting`,
+ * `connected`, `failed`, `disconnected-retrying`, and `disconnected-manual`;
+ * any other value is mirrored unchanged.
+ */
+export type SyncConnectionPhase = string
 
-/** Status values from Host status/set. */
-export type SyncPanelStatus =
-  | 'idle'
-  | 'running'
-  | 'waiting-interaction'
-  | 'disconnected'
-  | 'generating'
-  | string
+/**
+ * Status from Host status/set. The Host authors `idle`, `running`,
+ * `waiting-interaction`, `disconnected`, and `generating`; any other value is
+ * mirrored unchanged.
+ */
+export type SyncPanelStatus = string
 
 /**
  * Map Host status → `#status` chrome + streaming probe (AC-3).

@@ -8,7 +8,8 @@
 /** Minimal message shape for text bubble rendering. */
 export interface TextBubbleMessage {
   id?: string
-  role: 'user' | 'assistant' | 'system' | string
+  /** Known roles are `user`, `assistant`, `system`, and `notice`; any other value is mirrored. */
+  role: string
   text?: string
   turn?: number
   kind?: string
@@ -20,7 +21,7 @@ export interface TextBubbleMessage {
  * @param value - raw text.
  */
 export function escapeHtml(value: string): string {
-  return String(value)
+  return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -33,14 +34,14 @@ export function escapeHtml(value: string): string {
  * @param msg - message fields.
  */
 export function applyMessageIdentity(el: Element, msg: TextBubbleMessage): void {
-  el.setAttribute('data-role', String(msg.role))
-  if (msg.id) el.setAttribute('data-message-id', String(msg.id))
-  if (msg.turn !== undefined && msg.turn !== null) {
+  el.setAttribute('data-role', msg.role)
+  if (msg.id) el.setAttribute('data-message-id', msg.id)
+  if (msg.turn !== undefined) {
     el.setAttribute('data-turn', String(msg.turn))
   }
-  if (msg.kind) el.setAttribute('data-kind', String(msg.kind))
+  if (msg.kind) el.setAttribute('data-kind', msg.kind)
   if (msg.sourceMessageId) {
-    el.setAttribute('data-source-message-id', String(msg.sourceMessageId))
+    el.setAttribute('data-source-message-id', msg.sourceMessageId)
   }
 }
 
@@ -93,7 +94,7 @@ export function renderTextBubble(
 export function mountMessages(
   container: ParentNode & { innerHTML?: string; appendChild(node: Node): Node },
   list: readonly TextBubbleMessage[],
-  render: (msg: TextBubbleMessage) => HTMLElement = (msg) =>
+  render: (msg: TextBubbleMessage) => HTMLElement = msg =>
     renderTextBubble(
       // Prefer ownerDocument when available (jsdom / browser).
       ((container as { ownerDocument?: Document }).ownerDocument ?? globalThis.document),
@@ -119,7 +120,7 @@ export function mountMessages(
 export function appendMessage(
   container: ParentNode,
   msg: TextBubbleMessage,
-  render: (m: TextBubbleMessage) => HTMLElement = (m) =>
+  render: (m: TextBubbleMessage) => HTMLElement = m =>
     renderTextBubble(
       ((container as { ownerDocument?: Document }).ownerDocument ?? globalThis.document),
       m,
@@ -153,7 +154,7 @@ export function patchMessageDom(
   if (update.text !== undefined) {
     el.textContent = update.text
   } else if (update.appendText !== undefined) {
-    el.textContent = `${el.textContent ?? ''}${update.appendText}`
+    el.textContent = `${el.textContent}${update.appendText}`
   }
 
   if (update.incomplete === true) {

@@ -188,7 +188,7 @@ function renderInline(text: string): string {
     out += renderTextWithFileLinks(text.slice(last, match.index))
     const label = match[1] ?? ''
     const url = match[2] ?? ''
-    const whole = match[0] ?? ''
+    const whole = match[0]
     if (isSafeHttpUrl(url)) {
       out += `<a class="md-link" href="${escapeHtml(url)}" rel="noopener noreferrer">${escapeHtml(label)}</a>`
     } else {

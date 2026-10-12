@@ -24,7 +24,7 @@ export function changeStatusLabel(status: string | undefined): string {
   if (status === 'unreviewed') return '未查看'
   if (status === 'reviewed') return '已审阅'
   if (status === 'reverted') return '已撤销'
-  return String(status || '')
+  return status || ''
 }
 
 /**
@@ -47,8 +47,8 @@ export function fillChangeDiffPane(
   }
   const oldPart = msg.oldText === null || msg.oldText === undefined
     ? '(new file)\n'
-    : String(msg.oldText)
-  const newPart = String(msg.newText || '')
+    : msg.oldText
+  const newPart = msg.newText || ''
   pane.textContent = `--- before ---\n${oldPart}\n--- after ---\n${newPart}`
 }
 
@@ -61,15 +61,14 @@ export function renderDiffSummaryBubble(
   postMessage?: ChangeDiffPostMessage,
 ): HTMLElement {
   const div = doc.createElement('div')
-  div.className = `msg bubble ${msg.role ?? 'notice'}`
+  div.className = `msg bubble ${msg.role}`
   applyMessageIdentity(div, {
     ...msg,
-    role: msg.role ?? 'notice',
     kind: 'diff-summary',
   })
   div.setAttribute('data-kind', 'diff-summary')
   if (msg.sourceMessageId) {
-    div.setAttribute('data-source-message-id', String(msg.sourceMessageId))
+    div.setAttribute('data-source-message-id', msg.sourceMessageId)
   }
   const btn = doc.createElement('button')
   btn.type = 'button'
@@ -78,7 +77,7 @@ export function renderDiffSummaryBubble(
   btn.textContent = msg.text || ''
   btn.addEventListener('click', () => {
     const reveal: Record<string, unknown> = { type: 'action/reveal-change-list' }
-    if (msg.sourceMessageId) reveal.sourceMessageId = String(msg.sourceMessageId)
+    if (msg.sourceMessageId) reveal.sourceMessageId = msg.sourceMessageId
     postMessage?.(reveal)
   })
   div.appendChild(btn)
@@ -94,10 +93,9 @@ export function renderChangeListBubble(
   postMessage?: ChangeDiffPostMessage,
 ): HTMLElement {
   const div = doc.createElement('div')
-  div.className = `msg bubble ${msg.role ?? 'notice'}`
+  div.className = `msg bubble ${msg.role}`
   applyMessageIdentity(div, {
     ...msg,
-    role: msg.role ?? 'notice',
     kind: 'change-list',
   })
   div.setAttribute('data-kind', 'change-list')
@@ -105,7 +103,7 @@ export function renderChangeListBubble(
 
   const payload = msg.changeList
   if (payload?.sourceMessageId) {
-    div.setAttribute('data-source-message-id', String(payload.sourceMessageId))
+    div.setAttribute('data-source-message-id', payload.sourceMessageId)
   }
 
   const wrap = doc.createElement('div')
@@ -132,16 +130,16 @@ export function renderChangeListBubble(
     select.type = 'checkbox'
     select.className = 'change-list-select'
     select.setAttribute('data-testid', 'change-list-select')
-    select.setAttribute('data-change-id', String(change.changeId || ''))
+    select.setAttribute('data-change-id', change.changeId || '')
     select.disabled = change.status === 'reverted'
 
     const openBtn = doc.createElement('button')
     openBtn.type = 'button'
     openBtn.className = 'change-list-item'
     openBtn.setAttribute('data-testid', 'change-list-item')
-    openBtn.setAttribute('data-change-id', String(change.changeId || ''))
-    openBtn.setAttribute('data-path', String(change.path || ''))
-    openBtn.textContent = `${String(change.path || '')} · ${String(change.kind || '')}`
+    openBtn.setAttribute('data-change-id', change.changeId || '')
+    openBtn.setAttribute('data-path', change.path || '')
+    openBtn.textContent = `${change.path || ''} · ${change.kind}`
       + ` · +${String(change.additions || 0)}/-${String(change.deletions || 0)}`
       + ` · ${changeStatusLabel(change.status)}`
     openBtn.addEventListener('click', () => {
@@ -156,7 +154,7 @@ export function renderChangeListBubble(
     expandBtn.type = 'button'
     expandBtn.className = 'change-list-expand'
     expandBtn.setAttribute('data-testid', 'change-list-expand')
-    expandBtn.setAttribute('data-change-id', String(change.changeId || ''))
+    expandBtn.setAttribute('data-change-id', change.changeId || '')
     expandBtn.textContent = 'Diff'
     expandBtn.title = '展开/折叠内联 diff（默认）'
 
@@ -164,7 +162,7 @@ export function renderChangeListBubble(
     nativeBtn.type = 'button'
     nativeBtn.className = 'change-list-open-native-diff'
     nativeBtn.setAttribute('data-testid', 'change-list-open-native-diff')
-    nativeBtn.setAttribute('data-change-id', String(change.changeId || ''))
+    nativeBtn.setAttribute('data-change-id', change.changeId || '')
     nativeBtn.textContent = '在编辑器中打开 Diff'
     nativeBtn.title = '在 VS Code 原生 Diff 中打开'
     nativeBtn.addEventListener('click', () => {
@@ -175,7 +173,7 @@ export function renderChangeListBubble(
     diffPane.className = 'change-diff-pane'
     diffPane.hidden = true
     diffPane.setAttribute('data-testid', 'change-diff-pane')
-    diffPane.setAttribute('data-change-id', String(change.changeId || ''))
+    diffPane.setAttribute('data-change-id', change.changeId || '')
 
     expandBtn.addEventListener('click', () => {
       const expanded = expandBtn.classList.contains('is-expanded')
@@ -202,7 +200,7 @@ export function renderChangeListBubble(
       if (!payload?.sourceMessageId) return
       postMessage?.({
         type: 'change/reveal-source',
-        sourceMessageId: String(payload.sourceMessageId),
+        sourceMessageId: payload.sourceMessageId,
       })
     })
 
@@ -210,7 +208,7 @@ export function renderChangeListBubble(
     reviewBtn.type = 'button'
     reviewBtn.className = 'change-list-mark-reviewed'
     reviewBtn.setAttribute('data-testid', 'change-list-mark-reviewed')
-    reviewBtn.setAttribute('data-change-id', String(change.changeId || ''))
+    reviewBtn.setAttribute('data-change-id', change.changeId || '')
     reviewBtn.textContent = '已审阅'
     reviewBtn.title = '标记为已审阅（不写盘）'
     reviewBtn.disabled = change.status === 'reverted' || change.status === 'reviewed'
@@ -222,7 +220,7 @@ export function renderChangeListBubble(
     revertBtn.type = 'button'
     revertBtn.className = 'change-list-revert'
     revertBtn.setAttribute('data-testid', 'change-list-revert')
-    revertBtn.setAttribute('data-change-id', String(change.changeId || ''))
+    revertBtn.setAttribute('data-change-id', change.changeId || '')
     revertBtn.textContent = '撤销'
     revertBtn.title = '撤销此文件变更'
     revertBtn.disabled = change.status === 'reverted'
@@ -267,7 +265,7 @@ export function renderChangeListBubble(
     const ids: string[] = []
     for (const change of changes) {
       if (change.status === 'reverted') continue
-      if (change.changeId) ids.push(String(change.changeId))
+      if (change.changeId) ids.push(change.changeId)
     }
     if (ids.length === 0) return
     postMessage?.({ type: 'change/revert-many', changeIds: ids })

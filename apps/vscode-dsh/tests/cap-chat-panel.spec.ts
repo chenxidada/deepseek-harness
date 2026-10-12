@@ -983,7 +983,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         const statusListeners = new Set<(status: string) => void>()
         const listeners = new Set<NotificationListener>()
         const host = Object.assign(new IdeSessionHost(), {
-          status: 'connected' as string,
+          status: 'connected',
           interactions: {
             failClosedSession() {},
             listPending() { return [] },
@@ -3020,7 +3020,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       expect(fake.receivedFromHost.find(m => m.type === 'ui/banner')).toMatchObject({
         type: 'ui/banner',
         kind: 'settings',
-        text: expect.stringContaining('no adapter registered for provider "ghost"'),
+        text: expect.stringContaining('no adapter registered for provider "ghost"') as string,
       })
       expect(fake.receivedFromHost.filter(m => m.type === 'model/state')).toHaveLength(0)
     })
@@ -3082,7 +3082,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       expect(fake.receivedFromHost.find(m => m.type === 'ui/banner')).toMatchObject({
         type: 'ui/banner',
         kind: 'send-failed',
-        text: expect.stringContaining('SDK image prompt requires an attachment store'),
+        text: expect.stringContaining('SDK image prompt requires an attachment store') as string,
       })
     })
 

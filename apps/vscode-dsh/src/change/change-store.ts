@@ -79,7 +79,9 @@ export class ChangeStore {
     for (const [sessionId, list] of this.bySession) {
       const idx = list.findIndex(r => r.changeId === changeId)
       if (idx === -1) continue
-      const next = { ...list[idx]!, status, updatedAt }
+      const current = list[idx]
+      if (current === undefined) continue
+      const next = { ...current, status, updatedAt }
       list[idx] = next
       this.bySession.set(sessionId, list)
       this.emit()

@@ -127,7 +127,10 @@ export function resolveAtPathInWorkspace(rawPath: string, options: ResolveAtPath
     if (owners.length > 1) {
       return { ok: false, raw: rawPath, reason: 'ambiguous-root' }
     }
-    const owner = owners[0]!
+    const owner = owners[0]
+    if (owner === undefined) {
+      return { ok: false, raw: rawPath, reason: 'not-found' }
+    }
     if (!exists(abs)) {
       return { ok: false, raw: rawPath, reason: 'not-found' }
     }
@@ -150,7 +153,8 @@ export function resolveAtPathInWorkspace(rawPath: string, options: ResolveAtPath
     for (const folder of folders) tryFolder(folder)
   } else if (candidates.length === 1) {
     // Preferred unique hit wins even if other roots also contain the same relative path.
-    const hit = candidates[0]!
+    const hit = candidates[0]
+    if (hit === undefined) return { ok: false, raw: rawPath, reason: 'not-found' }
     return { ok: true, path: toPosixRelative(hit.folder, hit.abs), abs: hit.abs }
   }
 
@@ -160,7 +164,8 @@ export function resolveAtPathInWorkspace(rawPath: string, options: ResolveAtPath
   if (candidates.length > 1) {
     return { ok: false, raw: rawPath, reason: 'ambiguous-root' }
   }
-  const only = candidates[0]!
+  const only = candidates[0]
+  if (only === undefined) return { ok: false, raw: rawPath, reason: 'not-found' }
   return { ok: true, path: toPosixRelative(only.folder, only.abs), abs: only.abs }
 }
 

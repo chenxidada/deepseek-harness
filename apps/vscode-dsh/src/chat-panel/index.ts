@@ -7,12 +7,14 @@ export {
   ChatPanelHost,
   FakeWebviewPort,
   type ChatPanelHostDeps,
+  type ModelStatePayload,
   type PanelProjection,
   type SendGateResult,
   type WebviewMessagePort,
 } from './chat-panel-host.ts'
 export {
   CHAT_PANEL_VIEW_ID,
+  // oxlint-disable-next-line typescript/no-deprecated -- fixture-only thin HTML kept for layer-A tests; no replacement (AD-ECP-8).
   buildThinChatHtml,
   buildSidebarMigrationHtml,
   canRegisterChatPanel,

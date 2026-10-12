@@ -386,15 +386,13 @@ export class TimelineStore {
 
   private depthOf(sessionId: string): number {
     let depth = 0
-    let cursor: string | undefined = sessionId
     const seen = new Set<string>()
+    let cursor = this.parents.get(sessionId)
     while (cursor !== undefined) {
       if (seen.has(cursor)) break
       seen.add(cursor)
-      const parent = this.parents.get(cursor)
-      if (parent === undefined) break
       depth += 1
-      cursor = parent
+      cursor = this.parents.get(cursor)
     }
     return depth
   }

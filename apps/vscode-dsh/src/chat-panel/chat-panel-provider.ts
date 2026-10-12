@@ -85,7 +85,7 @@ export const CHAT_PANEL_VIEW_ID = 'dsh.chat'
 export function canRegisterChatPanel(vscode: unknown): vscode is ChatPanelVsCode {
   if (typeof vscode !== 'object' || vscode === null) return false
   const candidate = vscode as ChatPanelVsCode
-  return typeof candidate.window?.registerWebviewViewProvider === 'function'
+  return typeof candidate.window.registerWebviewViewProvider === 'function'
 }
 
 /**
@@ -100,12 +100,11 @@ export function registerChatPanelProvider(
   panelHost: ChatPanelHost,
   hooks?: ChatPanelProviderHooks,
 ): { dispose(): void } {
-  const register = vscode.window.registerWebviewViewProvider
-  if (register === undefined) {
+  if (vscode.window.registerWebviewViewProvider === undefined) {
     return { dispose() {} }
   }
   const disposers: { dispose(): void }[] = []
-  const registration = register(
+  const registration = vscode.window.registerWebviewViewProvider(
     CHAT_PANEL_VIEW_ID,
     {
       resolveWebviewView(webviewView) {

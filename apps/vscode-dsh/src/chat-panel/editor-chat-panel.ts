@@ -95,8 +95,8 @@ export const EDITOR_CHAT_PANEL_VIEW_TYPE = 'dsh.editorChat'
 export function canCreateEditorChatPanel(vscode: unknown): vscode is EditorChatVsCode {
   if (typeof vscode !== 'object' || vscode === null) return false
   const candidate = vscode as EditorChatVsCode
-  return typeof candidate.window?.createWebviewPanel === 'function'
-    && typeof candidate.Uri?.file === 'function'
+  return typeof candidate.window.createWebviewPanel === 'function'
+    && typeof candidate.Uri.file === 'function'
 }
 
 /**
@@ -159,12 +159,11 @@ export function createEditorChatPanelController(deps: EditorChatPanelDeps): Edit
         deps.onVisibilityChanged?.(true)
         return
       }
-      const create = deps.vscode.window.createWebviewPanel
-      if (create === undefined) {
+      if (deps.vscode.window.createWebviewPanel === undefined) {
         throw new Error('createWebviewPanel unavailable')
       }
       const localRoot = deps.vscode.Uri.file(distRoot)
-      panel = create(
+      panel = deps.vscode.window.createWebviewPanel(
         EDITOR_CHAT_PANEL_VIEW_TYPE,
         'Conversation',
         deps.vscode.ViewColumn?.Active ?? deps.vscode.ViewColumn?.One ?? 1,

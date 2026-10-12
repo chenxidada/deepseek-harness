@@ -21,7 +21,7 @@ export type RefCardSegment =
  * @param text - full composer or user-message text.
  */
 export function segmentTextWithRefs(text: string): RefCardSegment[] {
-  const source = String(text ?? '')
+  const source = text
   const tokens = extractAtPathTokens(source)
   if (tokens.length === 0) {
     return source.length === 0 ? [] : [{ kind: 'text', text: source }]
@@ -72,7 +72,7 @@ export function renderRefCardNodes(doc: Document, text: string): DocumentFragmen
  * @param text - user text.
  */
 export function fillUserBubbleWithRefCards(el: Element, text: string): void {
-  const doc = el.ownerDocument ?? globalThis.document
+  const doc = el.ownerDocument
   while (el.firstChild) el.removeChild(el.firstChild)
   el.appendChild(renderRefCardNodes(doc, text))
 }
@@ -84,7 +84,7 @@ export function fillUserBubbleWithRefCards(el: Element, text: string): void {
  * @param text - composer textarea value.
  */
 export function syncComposerRefCards(container: Element, text: string): void {
-  const doc = container.ownerDocument ?? globalThis.document
+  const doc = container.ownerDocument
   while (container.firstChild) container.removeChild(container.firstChild)
   const tokens = extractAtPathTokens(text)
   container.setAttribute('data-ref-count', String(tokens.length))

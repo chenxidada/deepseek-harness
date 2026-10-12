@@ -178,7 +178,7 @@ export async function askAboutSelection(deps: AskAboutSelectionDeps): Promise<As
   const doc = editor.document
   if (doc.isDirty) {
     const saved = await Promise.resolve(doc.save())
-    if (saved !== true) {
+    if (!saved) {
       deps.notify('自动保存失败，请手动保存后重试。', 'save-failed')
       return { ok: false, reason: 'save-failed' }
     }

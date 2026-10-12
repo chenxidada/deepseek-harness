@@ -74,10 +74,9 @@ export class ConnectionUiController {
     vscode: ConnectionUiVsCode,
     private readonly panel: ConnectionPanelPort,
   ) {
-    const create = vscode.window.createStatusBarItem
-    if (create !== undefined) {
+    if (vscode.window.createStatusBarItem !== undefined) {
       const align = vscode.StatusBarAlignment?.Left ?? 1
-      this.statusBar = create(align, 100)
+      this.statusBar = vscode.window.createStatusBarItem(align, 100)
       this.statusBar.command = 'dsh.statusBarAction'
     }
   }
@@ -154,7 +153,7 @@ export class ConnectionUiController {
                 ? 'Host disconnected. Click to open panel and retry.'
                 : settingsDeepLinkAvailable
                   ? 'Missing credentials. Open settings to configure.'
-                  : snap.errorMessage ?? 'Host connection failed.')
+                  : 'Host connection failed.')
     return {
       phase,
       ...message === undefined ? {} : { message },

@@ -22,6 +22,21 @@ export interface PathSessionIndexSnapshot {
   entries: PathSessionIndexEntry[]
 }
 
+/** Snapshot envelope as read back from workspaceState; every field is revalidated on load. */
+interface StoredPathSessionIndexSnapshot {
+  /** Stored workspace identity; the live key wins when this is not a string. */
+  workspaceKey?: unknown
+  /** Stored rows, revalidated one by one. */
+  entries?: unknown[]
+}
+
+/** Stored row whose fields passed validation; `sessionIds` elements stay unverified. */
+interface StoredPathSessionIndexRow {
+  path: string
+  sessionIds: unknown[]
+  mtime: number
+}
+
 /** Storage key for the path→session index in workspaceState. */
 export const PATH_SESSION_INDEX_STATE_KEY = 'dsh.pathSessionIndex'
 
@@ -52,7 +67,7 @@ export class PathSessionIndex {
     workspaceKey = '',
     private readonly state?: WorkspaceStateLike,
   ) {
-    const loaded = this.state?.get<PathSessionIndexSnapshot>(PATH_SESSION_INDEX_STATE_KEY)
+    const loaded = this.state?.get<StoredPathSessionIndexSnapshot>(PATH_SESSION_INDEX_STATE_KEY)
     this.snapshot = loaded === undefined
       ? emptySnapshot(workspaceKey)
       : sanitizeLoaded(loaded, workspaceKey)
@@ -155,7 +170,7 @@ export class PathSessionIndex {
     const needle = normalizeSearchPath(pathQuery).toLowerCase()
     if (needle === '') return []
     return this.snapshot.entries
-      .filter(entry => {
+      .filter((entry) => {
         const hay = entry.path.toLowerCase()
         return hay === needle || hay.endsWith(`/${needle}`) || hay.includes(needle)
       })
@@ -192,23 +207,31 @@ function emptySnapshot(workspaceKey: string): PathSessionIndexSnapshot {
   return { workspaceKey, entries: [] }
 }
 
+/**
+ * Whether a stored row carries the fields the index needs.
+ * @param value - row read back from workspaceState.
+ */
+function isStoredRow(value: unknown): value is StoredPathSessionIndexRow {
+  if (typeof value !== 'object' || value === null) return false
+  const row = value as Record<string, unknown>
+  return typeof row.path === 'string'
+    && Array.isArray(row.sessionIds)
+    && typeof row.mtime === 'number'
+}
+
 function sanitizeLoaded(
-  loaded: PathSessionIndexSnapshot,
+  loaded: StoredPathSessionIndexSnapshot,
   workspaceKey: string,
 ): PathSessionIndexSnapshot {
-  const entries = Array.isArray(loaded.entries)
-    ? loaded.entries
-      .filter(row =>
-        typeof row?.path === 'string'
-        && Array.isArray(row.sessionIds)
-        && typeof row.mtime === 'number')
-      .map(row => ({
-        path: normalizeSearchPath(row.path),
-        sessionIds: row.sessionIds.filter((id): id is string => typeof id === 'string' && id !== ''),
-        mtime: row.mtime,
-      }))
-      .filter(row => row.path !== '' && row.sessionIds.length > 0)
-    : []
+  const rows = Array.isArray(loaded.entries) ? loaded.entries : []
+  const entries: PathSessionIndexEntry[] = []
+  for (const candidate of rows) {
+    if (!isStoredRow(candidate)) continue
+    const path = normalizeSearchPath(candidate.path)
+    const sessionIds = candidate.sessionIds.filter((id): id is string => typeof id === 'string' && id !== '')
+    if (path === '' || sessionIds.length === 0) continue
+    entries.push({ path, sessionIds, mtime: candidate.mtime })
+  }
   return {
     workspaceKey: typeof loaded.workspaceKey === 'string' ? loaded.workspaceKey : workspaceKey,
     entries,

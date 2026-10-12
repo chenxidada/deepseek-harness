@@ -108,7 +108,8 @@ export function orderChangeIdsForBatch(
   }
   const ordered: string[] = []
   for (const path of pathOrder) {
-    const list = byPath.get(path)!
+    const list = byPath.get(path)
+    if (list === undefined) continue
     list.sort((a, b) => b.turn - a.turn)
     for (const rec of list) ordered.push(rec.changeId)
   }

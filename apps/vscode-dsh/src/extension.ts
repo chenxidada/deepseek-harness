@@ -332,9 +332,9 @@ interface VsCodeLike {
     command?: unknown
   }
   TreeItemCollapsibleState?: { None: number }
-  EventEmitter?: new <T>() => {
+  EventEmitter?: new () => {
     event: unknown
-    fire(data?: T): void
+    fire(data?: void): void
     dispose(): void
   }
   Uri?: DiffVsCodeLike['Uri'] & {
@@ -465,10 +465,10 @@ const TEST_REASONING_BODY = 'LAYER-V-CAP-REASONING-OK'
  */
 function terminalExecWindow(vscode: VsCodeLike): TerminalExecWindow | undefined {
   const w = vscode.window
-  const ct = w.createTerminal
+  const ct = w.createTerminal?.bind(w)
   const ts = w.terminals
-  const si = w.onDidChangeTerminalShellIntegration
-  const ee = w.onDidEndTerminalShellExecution
+  const si = w.onDidChangeTerminalShellIntegration?.bind(w)
+  const ee = w.onDidEndTerminalShellExecution?.bind(w)
   if (ct === undefined || ts === undefined || si === undefined || ee === undefined) return undefined
   return {
     createTerminal: opts => ct(opts),
@@ -568,12 +568,16 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         },
       },
     })
-    historyRefresh = () => sidebar.refresh()
+    historyRefresh = () => {
+      sidebar.refresh()
+    }
     context.subscriptions.push(sidebar)
   }
   if (typeof vscode.window.createTreeView === 'function') {
     const todoView = createTodoTreeView(vscode)
-    todoRefresh = () => todoView.refresh()
+    todoRefresh = () => {
+      todoView.refresh()
+    }
     context.subscriptions.push({
       dispose: () => {
         todoRefresh = undefined
@@ -629,7 +633,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
     if (snap.state === 'started') void refreshHostHistory()
   })
 
-  if (canCreateEditorChatPanel(vscode) && typeof vscode.Uri?.file === 'function') {
+  if (canCreateEditorChatPanel(vscode) && typeof vscode.Uri.file === 'function') {
     const emptyRegistry = new ConversationRegistry()
     editorChatPanel = createEditorChatPanelController({
       vscode,
@@ -647,7 +651,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
       onVisibilityChanged: (visible) => {
         handleConversationVisibility(visible)
       },
-      onOpenSession: async (sessionId) => {
+      onOpenSession: (sessionId) => {
         const controller = conversations
         if (controller === undefined) return
         const existing = controller.registry.getBySessionId(sessionId)
@@ -915,7 +919,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         )
       } else if (result.outcome === 'error') {
         await vscode.window.showErrorMessage(`Failed to open history replay: ${result.error}`)
-      } else if (result.outcome === 'missing') {
+      } else {
         await vscode.window.showErrorMessage('History session not found or deleted.')
       }
       return result
@@ -1012,7 +1016,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         )
       } else if (result.outcome === 'error') {
         await vscode.window.showErrorMessage(`Failed to open search result: ${result.error}`)
-      } else if (result.outcome === 'missing') {
+      } else {
         await vscode.window.showErrorMessage('Search result session not found or deleted.')
       }
       return { outcome: 'opened' as const, hits, open: result }
@@ -1481,7 +1485,10 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         async (sessionId?: unknown, opts?: unknown) => {
           const controller = conversations
           if (controller === undefined) {
-            return { outcome: 'host-not-ready' as const, sessionId: String(sessionId ?? '') }
+            return {
+              outcome: 'host-not-ready' as const,
+              sessionId: typeof sessionId === 'string' ? sessionId : '',
+            }
           }
           if (typeof sessionId !== 'string' || sessionId === '') {
             return { outcome: 'missing' as const, sessionId: '' }
@@ -1672,7 +1679,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
           : undefined
         return controller.continueConversation(tabId)
       }),
-      vscode.commands.registerCommand('dsh.test.newConversation', async () => {
+      vscode.commands.registerCommand('dsh.test.newConversation', () => {
         const controller = conversations
         if (controller === undefined) return { outcome: 'waiting-host' as const }
         const tab = controller.newConversationOrReuseEmpty(EMPTY_LIVE_TITLE)
@@ -1735,12 +1742,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         if (hunks.length === 0) {
           return { available: false, reason: 'no-diffs' as const, hunks: [] as const }
         }
-        const recoverable = hunks.filter(h => typeof h.newText === 'string'
-          && (typeof h.oldText === 'string' || h.oldText === null))
-        if (recoverable.length === 0) {
-          return { available: false, reason: 'missing-before' as const, hunks }
-        }
-        return { available: true, reason: 'ok' as const, hunks: recoverable }
+        return { available: true, reason: 'ok' as const, hunks }
       }),
       vscode.commands.registerCommand('dsh.test.getStartState', () => {
         return orchestrator?.getSnapshot() ?? { state: 'idle', pendingReasons: [], autoRetryUsed: false }
@@ -1789,7 +1791,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         return orchestrator?.getSnapshot()
       }),
       vscode.commands.registerCommand('dsh.test.openActivityBar', async () => {
-        const revealed = conversationVisible !== true
+        const revealed = !conversationVisible
         await onActivityBarOpened(vscode)
         return { ok: true as const, revealed, visible: conversationVisible }
       }),
@@ -1893,7 +1895,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         if (typeof changeId !== 'string' || changeId === '') {
           return { ok: false as const, reason: 'missing-change-id' as const }
         }
-        const result = await controller.revertChange(changeId, { confirmGate: async () => true })
+        const result = await controller.revertChange(changeId, { confirmGate: () => Promise.resolve(true) })
         return result
       }),
       /**
@@ -1913,7 +1915,7 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
         if (changeIds.length === 0) {
           return { ok: true as const, reverted: 0 as const, results: [] as const }
         }
-        const results = await controller.revertChanges(changeIds, { confirmGate: async () => true })
+        const results = await controller.revertChanges(changeIds, { confirmGate: () => Promise.resolve(true) })
         const reverted = results.filter(result => result.ok).length
         return { ok: reverted === changeIds.length, reverted, results }
       }),
@@ -2527,7 +2529,7 @@ export function getLastCopiedText(): string | undefined {
  * @returns handle with dispose + refresh.
  */
 function createTodoTreeView(vscode: VsCodeLike): { dispose(): void; refresh(): void } {
-  const change = vscode.EventEmitter === undefined ? undefined : new vscode.EventEmitter<void>()
+  const change = vscode.EventEmitter === undefined ? undefined : new vscode.EventEmitter()
   const view = vscode.window.createTreeView?.('dsh.todo', {
     treeDataProvider: {
       ...change === undefined ? {} : { onDidChangeTreeData: change.event },
@@ -2827,11 +2829,12 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
         await vscode.window.showErrorMessage('子会话已删除，无法进入。')
       }
     },
-    requestNavBack: async () => {
+    requestNavBack: () => {
       const controller = conversations
-      if (controller === undefined) return
+      if (controller === undefined) return Promise.resolve()
       controller.navBack()
       panelHost?.pushFullState()
+      return Promise.resolve()
     },
     requestPinSubagent: async (childSessionId) => {
       const controller = conversations
@@ -2884,10 +2887,12 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestOpenWorkspaceDiffs: async () => {
       await vscode.commands.executeCommand?.('dsh.reviewWorkspaceDiffs')
     },
-    requestRevealChangeList: async (sourceMessageId) => {
+    requestRevealChangeList: (sourceMessageId) => {
       const controller = conversations
       const active = controller?.registry.getActive()
-      if (controller === undefined || active === undefined || panelHost === undefined) return
+      if (controller === undefined || active === undefined || panelHost === undefined) {
+        return Promise.resolve()
+      }
       const messages = controller.messages.get(active.sessionId)
       const list = [...messages].reverse().find(m =>
         m.kind === 'change-list'
@@ -2899,6 +2904,7 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
         list?.changeList?.sourceMessageId ?? sourceMessageId ?? '',
         list?.id,
       )
+      return Promise.resolve()
     },
     requestChangeDiff: async (changeId) => {
       const controller = conversations
@@ -2926,12 +2932,15 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestChangeOpenNativeDiff: async (changeId) => {
       await openChangedNativeDiff(vscode, changeId)
     },
-    requestRevealSource: async (sourceMessageId) => {
+    requestRevealSource: (sourceMessageId) => {
       const controller = conversations
       const active = controller?.registry.getActive()
-      if (controller === undefined || active === undefined || panelHost === undefined) return
+      if (controller === undefined || active === undefined || panelHost === undefined) {
+        return Promise.resolve()
+      }
       // AC-19: scroll to the assistant bubble, not the change-list.
       panelHost.pushRevealSource(active.sessionId, sourceMessageId)
+      return Promise.resolve()
     },
     requestMarkReviewed: async (changeId) => {
       const controller = conversations
@@ -2969,10 +2978,11 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
     requestOpenReference: async (path, line) => {
       await openReferencePath(vscode, path, line)
     },
-    requestSelectTab: async (tabId) => {
+    requestSelectTab: (tabId) => {
       const controller = conversations
-      if (controller === undefined) return
+      if (controller === undefined) return Promise.resolve()
       controller.switchConversation(tabId)
+      return Promise.resolve()
     },
     requestCloseTab: async (tabId) => {
       const controller = conversations
@@ -3282,9 +3292,9 @@ function createRevertWorkspace(folders: () => string[]): RevertWorkspace {
         return undefined
       }
     },
-    async exists(absPath) {
-      if (findOpenDocument(absPath) !== undefined) return true
-      return existsSync(absPath)
+    exists(absPath) {
+      if (findOpenDocument(absPath) !== undefined) return Promise.resolve(true)
+      return Promise.resolve(existsSync(absPath))
     },
     openDocument(absPath) {
       return findOpenDocument(absPath)
@@ -4199,10 +4209,7 @@ async function runAskAboutSelection(vscode: VsCodeLike): Promise<unknown> {
     getWorkspaceFolders: () => (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath),
     ...(vscode.workspace.asRelativePath === undefined
       ? {}
-      : { asRelativePath: (fsPath) => {
-        const relative = vscode.workspace.asRelativePath
-        return relative === undefined ? fsPath : relative(fsPath, false)
-      } }),
+      : { asRelativePath: fsPath => vscode.workspace.asRelativePath?.(fsPath, false) ?? fsPath }),
     selectionMeta: selectionMetaStore,
     ensureLiveTab: () => ensureLiveTabForPrefill(controller),
     prefillComposer: (text) => {
@@ -4555,9 +4562,9 @@ function createStartHostPort(
           if (list !== undefined) panelHost?.pushModelState(list)
         })()
       } catch (error) {
-        stopErrorWatch?.()
+        stopErrorWatch()
         stopErrorWatch = undefined
-        stopStatusWatch?.()
+        stopStatusWatch()
         stopStatusWatch = undefined
         unbindConversations()
         host = undefined

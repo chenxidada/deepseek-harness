@@ -278,7 +278,7 @@ export function HistoryPanel({
                           menuSessionId === row.sessionId ? undefined : row.sessionId,
                         )}
                       >
-                      ⋮
+                        ⋮
                       </button>
                       <div
                         className={`dsh-history-menu${menuSessionId === row.sessionId ? ' is-open' : ''}`}
@@ -300,7 +300,7 @@ export function HistoryPanel({
                               })
                             }}
                           >
-                          Continue
+                            Continue
                           </button>
                         ) : null}
                         <button
@@ -316,7 +316,7 @@ export function HistoryPanel({
                             })
                           }}
                         >
-                        删除
+                          删除
                         </button>
                       </div>
                     </div>

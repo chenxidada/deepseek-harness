@@ -57,7 +57,8 @@ export async function readChangeIndex(
 ): Promise<ChangeRecord[]> {
   try {
     const raw = await readFile(changeIndexPath(storageRoot, sessionId), 'utf8')
-    const parsed = JSON.parse(raw) as ChangeIndexFile
+    // Read back from disk: validate the stored envelope instead of trusting the v0 writer.
+    const parsed = JSON.parse(raw) as Partial<ChangeIndexFile>
     if (parsed.v !== 0 || parsed.sessionId !== sessionId || !Array.isArray(parsed.records)) {
       return []
     }

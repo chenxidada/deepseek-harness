@@ -128,7 +128,7 @@ export function applyActivityExpanded(
   if (toggle) {
     toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false')
     const status = el.getAttribute('data-status') ?? 'running'
-    const label = (toggle.textContent ?? '').replace(/^[▶▼]\s*/, '')
+    const label = toggle.textContent.replace(/^[▶▼]\s*/, '')
     const base = label.includes(' · ')
       ? label.replace(/\s·\s(?:running|done|failed|aborted)\s*$/, '')
       : label
@@ -157,7 +157,7 @@ export function applyActivityStatus(
   const expanded = el.getAttribute('data-expanded') === 'true'
   const toggle = el.querySelector('.activity-toggle')
   if (toggle) {
-    const label = (toggle.textContent ?? '').replace(/^[▶▼]\s*/, '')
+    const label = toggle.textContent.replace(/^[▶▼]\s*/, '')
     const base = label.includes(' · ')
       ? label.replace(/\s·\s(?:running|done|failed|aborted)\s*$/, '')
       : label
@@ -167,7 +167,7 @@ export function applyActivityStatus(
   if (body) {
     const callId = el.getAttribute('data-call-id')
     const parts = [
-      body.textContent?.split(' · ')[0] ?? 'tool',
+      body.textContent.split(' · ')[0] ?? 'tool',
       callId ? `callId=${callId}` : '',
       `status=${status}`,
     ].filter(Boolean)

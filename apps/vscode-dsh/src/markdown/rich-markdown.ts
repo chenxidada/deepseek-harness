@@ -4,12 +4,29 @@
  * @module @deepseek-ai/dsh-vscode-dsh/markdown/rich-markdown
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any -- markdown-it CJS types use any in renderer callbacks */
-import MarkdownIt from 'markdown-it'
+import MarkdownIt, {
+  type Env,
+  type MarkdownIt as MarkdownItInstance,
+  type MarkdownItOptions,
+  type Renderer,
+  type RendererRule,
+  type StateBlock,
+  type StateInline,
+  type Token,
+} from 'markdown-it'
 // @ts-expect-error -- markdown-it-task-lists ships no type declarations
-import taskLists from 'markdown-it-task-lists'
+import taskListsUntyped from 'markdown-it-task-lists'
 import hljs from 'highlight.js'
 import katex from 'katex'
+
+/** Options the untyped markdown-it-task-lists plugin accepts. */
+interface TaskListOptions {
+  enabled: boolean
+  label: boolean
+}
+
+/** The untyped task-list plugin, typed as the signature `MarkdownIt#use` accepts. */
+const taskLists = taskListsUntyped as (md: MarkdownItInstance, options: TaskListOptions) => void
 
 /* ------------------------------------------------------------------ */
 /*  Public interface (mirrors safe-markdown.ts)                       */
@@ -57,20 +74,19 @@ export function containsUnsafeHtml(html: string): boolean {
 /**
  * Read one parser-indexed entry. markdown-it fills `bMarks`, `tShift`, `eMarks`
  * and the token list for every line and token it visits, so an index the parser
- * itself produced always holds a value; the `any` result states that invariant
- * once instead of asserting it at every use. The parameter is `any`-typed
- * because markdown-it hands these arrays to untyped ruler callbacks.
+ * itself produced always holds a value; the cast states that invariant once
+ * instead of asserting it at every use.
  * @param values - dense parser array.
  * @param index - position produced by the parser.
  * @returns the entry at `index`.
  */
-function indexed(values: readonly any[], index: number): any {
-  return values[index]
+function indexed<T>(values: readonly T[], index: number): T {
+  return values[index] as T
 }
 
-function katexPlugin(md: any): void {
+function katexPlugin(md: MarkdownItInstance): void {
   // Inline math: $...$
-  md.inline.ruler.after('escape', 'math_inline', (state: any, silent: any) => {
+  md.inline.ruler.after('escape', 'math_inline', (state: StateInline, silent: boolean) => {
     if (state.src.charCodeAt(state.pos) !== 0x24 /* $ */) return false
     if (state.src.charCodeAt(state.pos + 1) === 0x24) return false
     const start = state.pos + 1
@@ -90,7 +106,7 @@ function katexPlugin(md: any): void {
     return true
   })
 
-  md.renderer.rules['math_inline'] = (tokens: any[], idx: number): string => {
+  md.renderer.rules['math_inline'] = (tokens: Token[], idx: number): string => {
     try {
       return katex.renderToString(indexed(tokens, idx).content, { throwOnError: false, displayMode: false })
     } catch {
@@ -99,7 +115,7 @@ function katexPlugin(md: any): void {
   }
 
   // Block math: $$...$$
-  md.block.ruler.after('blockquote', 'math_block', (state: any, startLine: number, endLine: number, silent: boolean) => {
+  md.block.ruler.after('blockquote', 'math_block', (state: StateBlock, startLine: number, endLine: number, silent: boolean) => {
     const startPos = indexed(state.bMarks, startLine) + indexed(state.tShift, startLine)
     const lineText = state.src.slice(startPos, indexed(state.eMarks, startLine))
     if (!lineText.startsWith('$$')) return false
@@ -136,7 +152,7 @@ function katexPlugin(md: any): void {
     return true
   })
 
-  md.renderer.rules['math_block'] = (tokens: any[], idx: number): string => {
+  md.renderer.rules['math_block'] = (tokens: Token[], idx: number): string => {
     try {
       return `<div class="md-math-block">${katex.renderToString(indexed(tokens, idx).content, { throwOnError: false, displayMode: true })}</div>\n`
     } catch {
@@ -197,16 +213,22 @@ const md = new MarkdownIt({ html: false, linkify: true, typographer: false, high
 /*  Custom renderer rules to preserve md-* class names                */
 /* ------------------------------------------------------------------ */
 
-md.renderer.rules['heading_open'] = (tokens: any[], idx: number): string => {
+md.renderer.rules['heading_open'] = (tokens: Token[], idx: number): string => {
   return `<${indexed(tokens, idx).tag} class="md-h">`
 }
 
 md.renderer.rules['paragraph_open'] = (): string => '<p class="md-p">'
 
-const defaultLinkOpen = md.renderer.rules['link_open'] ?? function (tokens: any[], idx: number, options: any, _env: any, self: any): string {
+const defaultLinkOpen: RendererRule = md.renderer.rules['link_open'] ?? function (tokens, idx, options, _env, self): string {
   return self.renderToken(tokens, idx, options)
 }
-md.renderer.rules['link_open'] = (tokens: any[], idx: number, options: any, env: any, self: any): string => {
+md.renderer.rules['link_open'] = (
+  tokens: Token[],
+  idx: number,
+  options: Required<MarkdownItOptions>,
+  env: Env | undefined,
+  self: Renderer,
+): string => {
   indexed(tokens, idx).attrSet('class', 'md-link')
   indexed(tokens, idx).attrSet('rel', 'noopener noreferrer')
   return defaultLinkOpen(tokens, idx, options, env, self)
@@ -216,11 +238,11 @@ md.renderer.rules['table_open'] = (): string => '<table class="md-table">'
 md.renderer.rules['bullet_list_open'] = (): string => '<ul class="md-list">'
 md.renderer.rules['ordered_list_open'] = (): string => '<ol class="md-list">'
 
-md.renderer.rules['code_inline'] = (tokens: any[], idx: number): string => {
+md.renderer.rules['code_inline'] = (tokens: Token[], idx: number): string => {
   return `<code class="md-code">${escapeHtml(indexed(tokens, idx).content)}</code>`
 }
 
-md.renderer.rules['fence'] = (tokens: any[], idx: number): string => {
+md.renderer.rules['fence'] = (tokens: Token[], idx: number): string => {
   const token = indexed(tokens, idx)
   const lang = (token.info || '').trim()
   return highlightCode(token.content, lang) + '\n'

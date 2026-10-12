@@ -379,11 +379,11 @@ export interface ChatPanelHostDeps {
    * Hide one finished child from the panel's roster bar (phase-4).
    * @param childSessionId - child session id to dismiss.
    */
-  requestDismissSubagent?: (childSessionId: string) => Promise<unknown> | unknown
+  requestDismissSubagent?: (childSessionId: string) => unknown
   /**
    * Hide every finished child from the panel's roster bar (phase-4).
    */
-  requestDismissFinishedSubagents?: () => Promise<unknown> | unknown
+  requestDismissFinishedSubagents?: () => unknown
   /**
    * Batch delete already confirmed inside the History surface.
    * @param sessionIds - sessions the user selected.
@@ -591,10 +591,10 @@ export class ChatPanelHost {
     } else if (state.phase === 'failed' || state.phase === 'disconnected-manual'
       || state.phase === 'disconnected-retrying') {
       this.pushBanner(state.message ?? 'Host connection issue', state.phase)
-    } else if (state.phase === 'connected' || state.phase === 'idle') {
-      // Retract the connecting/progress banner: this channel never clears itself,
-      // and the full state below omits `connectionMessage`, so a stale banner
-      // would keep owning the panel status line after the connection is live.
+    } else {
+      // `connected` / `idle`: retract the connecting/progress banner. This channel
+      // never clears itself, and the full state below omits `connectionMessage`, so a
+      // stale banner would keep owning the panel status line after the connection is live.
       this.pushBanner('', 'connection-clear')
       this.pushFullState()
       // A mount-time catalog read loses the handshake race; the live transition
@@ -1667,10 +1667,9 @@ export class ChatPanelHost {
       this.deps.resolveQuestion?.(message.id, message.answer)
       return
     }
-    if (message.type === 'interaction/dismiss') {
-      this.deps.dismissQuestion?.(message.id, message.error)
-      return
-    }
+    // The wire parser admits only the union's frames, so `interaction/dismiss` is the
+    // one left here.
+    this.deps.dismissQuestion?.(message.id, message.error)
   }
 
   private reject(reason: RejectSendReason): SendGateResult {

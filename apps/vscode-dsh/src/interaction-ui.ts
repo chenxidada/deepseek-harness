@@ -265,7 +265,7 @@ async function pickItems(
 ): Promise<InteractionQuickPickItem | InteractionQuickPickItem[] | undefined> {
   if (signal?.aborted) return undefined
 
-  const createQuickPick = window.createQuickPick
+  const createQuickPick = window.createQuickPick?.bind(window)
   if (createQuickPick !== undefined) {
     return await new Promise((resolve) => {
       const qp = createQuickPick()
@@ -309,7 +309,7 @@ async function pickItems(
   return Promise.race([
     window.showQuickPick(items, options),
     new Promise<undefined>((resolve) => {
-      signal.addEventListener('abort', () => resolve(undefined), { once: true })
+      signal.addEventListener('abort', () => { resolve(undefined) }, { once: true })
     }),
   ])
 }
@@ -334,7 +334,7 @@ async function promptFreeText(
   return Promise.race([
     window.showInputBox(options),
     new Promise<undefined>((resolve) => {
-      signal.addEventListener('abort', () => resolve(undefined), { once: true })
+      signal.addEventListener('abort', () => { resolve(undefined) }, { once: true })
     }),
   ])
 }
