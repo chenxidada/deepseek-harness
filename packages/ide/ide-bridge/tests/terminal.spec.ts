@@ -195,5 +195,116 @@ describe('terminal.ts — runtime-side IDE terminal provider', () => {
 
       await expect(execution.done).rejects.toThrow('bridge dropped')
     })
+
+    it('hands a chunk to a consumer that already awaits the next one', async () => {
+      const transport = fakeTransport()
+      const pending: IdeTerminalExecutions = new Map()
+      const execPromise = startIdeTerminalExecution(transport, pending, {
+        command: 'echo late', cwd: '/w', dedicated: false,
+      })
+
+      const id = (transport.sent[0] as { id: string }).id
+      const state = pending.get(id)!
+      state.start()
+      const execution = await execPromise
+
+      const collected = collectOutput(execution.output)
+      await Promise.resolve()
+      state.output('late chunk')
+      state.exit(0)
+
+      expect(await collected).toEqual(['late chunk'])
+      expect(await execution.done).toBe(0)
+    })
+
+    it('ignores output, exit, refusal, failure, and interrupt after the execution ended', async () => {
+      const transport = fakeTransport()
+      const pending: IdeTerminalExecutions = new Map()
+      const execPromise = startIdeTerminalExecution(transport, pending, {
+        command: 'ls', cwd: '/w', dedicated: false,
+      })
+
+      const id = (transport.sent[0] as { id: string }).id
+      const state = pending.get(id)!
+      state.start()
+      const execution = await execPromise
+      state.exit(7)
+
+      state.output('after exit')
+      state.exit(0)
+      state.refuse(new Error('too late'))
+      state.fail(new Error('too late'))
+      execution.interrupt()
+
+      expect(await execution.done).toBe(7)
+      expect(await collectOutput(execution.output)).toEqual([])
+      expect(transport.sent.filter(frame => frame.kind === 'terminal/exec/cancel')).toEqual([])
+    })
+
+    it('sends cancel when the request signal aborts after started', async () => {
+      const transport = fakeTransport()
+      const pending: IdeTerminalExecutions = new Map()
+      const controller = new AbortController()
+      const execPromise = startIdeTerminalExecution(transport, pending, {
+        command: 'sleep 99', cwd: '/w', dedicated: false, signal: controller.signal,
+      })
+
+      const id = (transport.sent[0] as { id: string }).id
+      const state = pending.get(id)!
+      state.start()
+      const execution = await execPromise
+
+      controller.abort()
+
+      expect(transport.sent.find(frame => frame.kind === 'terminal/exec/cancel'))
+        .toEqual({ kind: 'terminal/exec/cancel', id, reason: 'aborted' })
+
+      state.exit(null)
+      await execution.done
+    })
+
+    it('defers an abort that arrives before the started handshake', async () => {
+      const transport = fakeTransport()
+      const pending: IdeTerminalExecutions = new Map()
+      const controller = new AbortController()
+      const execPromise = startIdeTerminalExecution(transport, pending, {
+        command: 'sleep 99', cwd: '/w', dedicated: false, signal: controller.signal,
+      })
+
+      const id = (transport.sent[0] as { id: string }).id
+      const state = pending.get(id)!
+      controller.abort()
+      expect(transport.sent.filter(frame => frame.kind === 'terminal/exec/cancel')).toEqual([])
+
+      state.start()
+      const execution = await execPromise
+
+      expect(transport.sent.find(frame => frame.kind === 'terminal/exec/cancel'))
+        .toEqual({ kind: 'terminal/exec/cancel', id, reason: 'aborted' })
+
+      state.exit(null)
+      await execution.done
+    })
+
+    it('sends a deferred cancel when the request signal was already aborted', async () => {
+      const transport = fakeTransport()
+      const pending: IdeTerminalExecutions = new Map()
+      const controller = new AbortController()
+      controller.abort()
+      const execPromise = startIdeTerminalExecution(transport, pending, {
+        command: 'sleep 99', cwd: '/w', dedicated: false, signal: controller.signal,
+      })
+
+      const id = (transport.sent[0] as { id: string }).id
+      const state = pending.get(id)!
+      state.start()
+      const execution = await execPromise
+
+      expect(transport.sent.find(frame => frame.kind === 'terminal/exec/cancel'))
+        .toEqual({ kind: 'terminal/exec/cancel', id, reason: 'aborted' })
+
+      state.exit(null)
+      await execution.done
+    })
   })
 })

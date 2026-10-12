@@ -65,7 +65,7 @@ describe('resolveWorkspaceRoot candidates', () => {
   it('rejects empty and non-string candidates', () => {
     expect(() => resolveWorkspaceRoot({ cwd: '   ' })).toThrow(/non-empty string/)
     expect(() => resolveWorkspaceRoot({ folders: [''] })).toThrow(TypeError)
-    expect(() => resolveWorkspaceRoot({ cwd: 42 as unknown as string })).toThrow(TypeError)
+    expect(() => resolveWorkspaceRoot({ cwd: 42 as never })).toThrow(TypeError)
   })
 })
 
@@ -85,7 +85,7 @@ describe('.specdev path helpers', () => {
     const builders = [currentStatusPath, workflowLogPath, specsSlugDir]
     for (const build of builders) {
       expect(() => build(layout, '   ')).toThrow(/non-empty string/)
-      expect(() => build(layout, 7 as unknown as string)).toThrow(/non-empty string/)
+      expect(() => build(layout, 7 as never)).toThrow(/non-empty string/)
     }
   })
 

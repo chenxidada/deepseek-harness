@@ -35,6 +35,19 @@ const PROTOCOLS: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'anthropic-messages', label: 'Anthropic Messages' },
 ]
 
+/**
+ * 一个模型可以声明的输入模态，与 dsh-llm-pi-ai 的 `input` 取值一致；标识符
+ * 就是写入 profile 的值。列表顺序同时是规范化顺序，保证同一组模态只有一种
+ * 写法，未改动的行因此不会写出多余差异。
+ */
+const INPUT_TYPES: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'text', label: '文本' },
+  { id: 'image', label: '图片' },
+]
+
+/** 路由未声明 `defaultInput` 时模型继承的模态，与 dsh-llm-pi-ai 一致。 */
+const INHERITED_INPUT: readonly string[] = ['text']
+
 /** 用户层已声明的路由数量，供设置页的分区计数显示。 */
 export function declaredProviderCount(settingsState?: SettingsState): number {
   const namespace = settingsState?.namespaces.find(ns => ns.ns === PROVIDERS_NS)
@@ -93,6 +106,16 @@ interface ModelDraft {
   name: string
   contextWindow: string
   maxTokens: string
+  /**
+   * 该行显式声明的输入模态；`undefined` 表示这一行不声明，沿用路由或内置
+   * 目录的能力，因此没有声明的行保存后仍不写出 `input`。
+   */
+  input: readonly string[] | undefined
+  /**
+   * 表单不编辑的字段，原样带回。编辑一行模型会整份重写 `models`，所以任何
+   * 不在这里保留的字段（如 `reasoningEfforts`、`compat`）都会被保存抹掉。
+   */
+  extra: Record<string, unknown>
 }
 
 /** 编辑器草稿。 */
@@ -112,28 +135,44 @@ function modelDraftsOf(profile: unknown): ModelDraft[] {
   const drafts: ModelDraft[] = []
   for (const entry of models) {
     const rec = asRecord(entry)
-    if (rec === undefined || typeof rec.id !== 'string' || rec.id === '') continue
+    if (rec === undefined) continue
+    const { id, name, contextWindow, maxTokens, input, ...extra } = rec
+    if (typeof id !== 'string' || id === '') continue
     drafts.push({
-      id: rec.id,
-      name: typeof rec.name === 'string' ? rec.name : '',
-      contextWindow: typeof rec.contextWindow === 'number' ? String(rec.contextWindow) : '',
-      maxTokens: typeof rec.maxTokens === 'number' ? String(rec.maxTokens) : '',
+      id,
+      name: typeof name === 'string' ? name : '',
+      contextWindow: typeof contextWindow === 'number' ? String(contextWindow) : '',
+      maxTokens: typeof maxTokens === 'number' ? String(maxTokens) : '',
+      input: declaredInputTypes(input),
+      extra,
     })
   }
   return drafts
 }
 
+/** 一行声明的输入模态；缺失与空数组同义，都不构成声明。 */
+function declaredInputTypes(raw: unknown): readonly string[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const declared = raw.filter((entry): entry is string => typeof entry === 'string')
+  return declared.length === 0 ? undefined : declared
+}
+
+/** 两组模态是否等价；顺序无关，因为写入前都会规范化。 */
+function sameInputTypes(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every(entry => right.includes(entry))
+}
+
 /** 把草稿行转成写入 profile 的模型对象；空字段不写。 */
 function modelProfileOf(draft: ModelDraft): Record<string, unknown> {
+  const contextWindow = parsePositiveInt(draft.contextWindow)
+  const maxTokens = parsePositiveInt(draft.maxTokens)
   return {
+    ...draft.extra,
     id: draft.id.trim(),
     ...draft.name.trim() === '' ? {} : { name: draft.name.trim() },
-    ...parsePositiveInt(draft.contextWindow) === undefined
-      ? {}
-      : { contextWindow: parsePositiveInt(draft.contextWindow) },
-    ...parsePositiveInt(draft.maxTokens) === undefined
-      ? {}
-      : { maxTokens: parsePositiveInt(draft.maxTokens) },
+    ...contextWindow === undefined ? {} : { contextWindow },
+    ...maxTokens === undefined ? {} : { maxTokens },
+    ...draft.input === undefined ? {} : { input: [...draft.input] },
   }
 }
 
@@ -539,6 +578,30 @@ function ProviderEditorForm({
   const keyRef = stringAt(shown, 'apiKeyEnv')
     ?? deriveKeyRef(mode === 'edit' ? provider : draft.provider)
 
+  /** 本路由的模型继承的输入模态：路由级 `defaultInput`，否则 dsh-llm-pi-ai 的默认。 */
+  const inheritedInput = declaredInputTypes(asRecord(shown)?.defaultInput) ?? INHERITED_INPUT
+
+  /** 一行当前生效的输入模态：显式声明优先，否则继承路由。 */
+  const inputTypesOf = (row: ModelDraft): readonly string[] => row.input ?? inheritedInput
+
+  /**
+   * 切换一行的输入模态。选回与继承值等价时重新记为未声明，这样打开一条目录
+   * 路由不做改动就保存仍然什么都不写；最后一种模态不允许取消。
+   */
+  const toggleInputType = (index: number, id: string, checked: boolean): void => {
+    const row = draft.models[index]
+    if (row === undefined) return
+    const current = inputTypesOf(row)
+    const next = checked
+      ? INPUT_TYPES.map(entry => entry.id).filter(entry => entry === id || current.includes(entry))
+      : current.filter(entry => entry !== id)
+    if (next.length === 0) return
+    edit({
+      models: draft.models.map((entry, at) =>
+        at === index ? { ...entry, input: sameInputTypes(next, inheritedInput) ? undefined : next } : entry),
+    })
+  }
+
   const routeInvalid = draft.provider.length > 0 && !ROUTE_PATTERN.test(draft.provider)
   const routeTaken = mode === 'create' && taken.has(draft.provider)
   const normalizedBaseURL = draft.baseURL.trim()
@@ -742,7 +805,9 @@ function ProviderEditorForm({
               data-testid="settings-provider-model-add"
               className="dsh-secondary-btn dsh-set-btn-sm"
               onClick={() => edit({
-                models: [...draft.models, { id: '', name: '', contextWindow: '', maxTokens: '' }],
+                models: [...draft.models, {
+                  id: '', name: '', contextWindow: '', maxTokens: '', input: undefined, extra: {},
+                }],
               })}
             >
               添加模型
@@ -761,6 +826,7 @@ function ProviderEditorForm({
                   <span>显示名</span>
                   <span className="dsh-set-col-cap">上下文</span>
                   <span className="dsh-set-col-cap">最大输出</span>
+                  <span className="dsh-set-col-input">输入类型</span>
                   <span />
                 </div>
                 {draft.models.map((model, index) => (
@@ -813,6 +879,27 @@ function ProviderEditorForm({
                           i === index ? { ...row, maxTokens: event.target.value } : row),
                       })}
                     />
+                    <span className="dsh-set-col-input dsh-set-modalities">
+                      {INPUT_TYPES.map((entry) => {
+                        const active = inputTypesOf(model)
+                        const checked = active.includes(entry.id)
+                        return (
+                          <label key={entry.id} className="dsh-set-modality">
+                            <input
+                              type="checkbox"
+                              data-testid="settings-provider-model-input"
+                              data-modality={entry.id}
+                              checked={checked}
+                              // 至少保留一种模态，所以唯一被选中的那一项不能取消。
+                              disabled={checked && active.length === 1}
+                              aria-label={`模型 ${String(index + 1)} ${entry.label}`}
+                              onChange={event => toggleInputType(index, entry.id, event.target.checked)}
+                            />
+                            <span>{entry.label}</span>
+                          </label>
+                        )
+                      })}
+                    </span>
                     <button
                       type="button"
                       data-testid="settings-provider-model-remove"
@@ -989,5 +1076,8 @@ function fromCandidate(candidate: DiscoveredModelState): ModelDraft {
     name: candidate.name ?? '',
     contextWindow: candidate.contextWindow === undefined ? '' : String(candidate.contextWindow),
     maxTokens: candidate.maxTokens === undefined ? '' : String(candidate.maxTokens),
+    // 端点只报告 id 与容量，不报告模态：留作未声明，由用户显式勾选。
+    input: undefined,
+    extra: {},
   }
 }

@@ -54,7 +54,8 @@ export interface DispatchSpecdevRoleResult {
 
 /**
  * Map a SpecDev role label to its shipped preset id (`specdev-<role>`).
- * @param role - SpecDev role or preset id.
+ * @param role - role label, or an id that already carries the `specdev-` prefix.
+ * @returns the `specdev-`-prefixed preset id.
  */
 export function rolePresetId(role: string): string {
   return role.startsWith('specdev-') ? role : `specdev-${role}`
@@ -64,6 +65,7 @@ export function rolePresetId(role: string): string {
  * Default wake prompt for a SpecDev role (GAP-002).
  * @param role - SpecDev role.
  * @param ctx - slug / optional phaseId.
+ * @returns the wake prompt for `role`, naming the workflow slug and the phase when one is given.
  */
 export function defaultRolePrompt(
   role: SpecdevRole,
@@ -108,6 +110,7 @@ export function defaultRolePrompt(
  * Attach orchestrator metadata onto the main-session agent (AC-22 / AC-24).
  * @param agent - Orchestrator (or main) agent.
  * @param slug - active workflow slug (or provisional sdk slug).
+ * @returns the same agent with the orchestrator role and slug attached.
  */
 export function attachOrchestratorMetadata(agent: Agent, slug: string): Agent {
   return attachSpecdevMetadata(agent, { role: 'orchestrator', slug })
@@ -117,6 +120,7 @@ export function attachOrchestratorMetadata(agent: Agent, slug: string): Agent {
  * Emit a whole-view `specdev/dispatch` event on the parent session.
  * @param parent - parent (Orchestrator) agent whose session receives the event.
  * @param payload - dispatch fields without kind/version.
+ * @returns the event as appended to the parent session.
  */
 export function emitSpecdevDispatch(
   parent: Agent,
@@ -152,6 +156,7 @@ export function emitSpecdevDispatch(
  * @param ctx - host context (`agents`, optional `agentPresets`, optional `specdev` for snapshot).
  * @param parent - Orchestrator / calling agent.
  * @param request - role / slug / optional phaseId / prompt.
+ * @returns the child session id and agent, plus which preset mount, factory, and wake steps ran.
  */
 export async function dispatchSpecdevRole(
   ctx: Context,

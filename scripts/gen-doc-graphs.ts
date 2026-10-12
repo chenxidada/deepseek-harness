@@ -868,6 +868,14 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Serves NDJSON frames over DSH_IDE_BRIDGE_SOCK, resolves each frame to its session and service, and relays command, gate, approval, and question traffic to the runtime that owns it.',
   },
   {
+    key: 'ideTerminals',
+    pkg: 'ide-bridge',
+    title: 'IDE Extension-owned terminal executions',
+    mode: 'core',
+    consumers: ['bash-ide-terminal'],
+    note: 'Publishes whether a connected Extension can run a command and starts one execution in a terminal the user can watch, so a caller that cannot reach the Extension fails loud instead of running the command out of sight.',
+  },
+  {
     key: 'sdkSessionEnsure',
     pkg: 'sdk-jsonrpc-server',
     title: 'SDK session materialization',

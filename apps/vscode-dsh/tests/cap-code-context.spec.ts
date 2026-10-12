@@ -32,7 +32,7 @@ describe('cap:code-context — @path resolution, references, and selection conte
     }
 
     function connectedHost(prompts: string[]): IdeSessionHost {
-      return {
+      return Object.assign(new IdeSessionHost(), {
         status: 'connected' as const,
         interactions: { failClosedSession() {}, listPending() { return [] } },
         setConversationRegistry() {},
@@ -42,7 +42,7 @@ describe('cap:code-context — @path resolution, references, and selection conte
           return 'msg-1'
         },
         async disposeSession() {},
-      } as unknown as IdeSessionHost
+      })
     }
 
     describe('phase-1 @path grammar + resolve (P1-2 / P1-3)', () => {

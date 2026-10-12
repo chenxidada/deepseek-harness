@@ -25904,7 +25904,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevPlanRow"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:183"
+        "packages/specdev/specdev/src/types.ts:184"
       ]
     },
     {
@@ -26160,7 +26160,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevRole"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:59"
+        "packages/specdev/specdev/src/types.ts:60"
       ]
     },
     {
@@ -26221,7 +26221,7 @@
       "digest": "264ebe58eb564535d5678499cd988e27a9d9b5ed4e08c0add2109b815ba2b067",
       "names": [],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:171"
+        "packages/specdev/specdev/src/types.ts:172"
       ]
     },
     {
@@ -26533,7 +26533,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevPhaseEvent"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:290"
+        "packages/specdev/specdev/src/types.ts:295"
       ]
     },
     {
@@ -26662,7 +26662,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevWorkflowEvent"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:264"
+        "packages/specdev/specdev/src/types.ts:269"
       ]
     },
     {
@@ -26743,7 +26743,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevUiView"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:202"
+        "packages/specdev/specdev/src/types.ts:203"
       ]
     },
     {
@@ -27194,7 +27194,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevGatePendingEvent"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:272"
+        "packages/specdev/specdev/src/types.ts:277"
       ]
     },
     {
@@ -27446,7 +27446,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevReviewVerdictEvent"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:310"
+        "packages/specdev/specdev/src/types.ts:315"
       ]
     },
     {
@@ -27867,7 +27867,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevPhaseSteps"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:97"
+        "packages/specdev/specdev/src/types.ts:98"
       ]
     },
     {
@@ -27916,7 +27916,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevGateState"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:53"
+        "packages/specdev/specdev/src/types.ts:54"
       ]
     },
     {
@@ -28071,7 +28071,7 @@
       "digest": "995debd17d14500c9186e9551877d277a14900ffd28a24a51091895a28278c0e",
       "names": [],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:159"
+        "packages/specdev/specdev/src/types.ts:160"
       ]
     },
     {
@@ -28343,7 +28343,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevAdvanceEvent"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:319"
+        "packages/specdev/specdev/src/types.ts:324"
       ]
     },
     {
@@ -28722,7 +28722,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevDispatchEvent"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:299"
+        "packages/specdev/specdev/src/types.ts:304"
       ]
     },
     {
@@ -28792,7 +28792,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevArtifactRow"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:191"
+        "packages/specdev/specdev/src/types.ts:192"
       ]
     },
     {
@@ -29092,7 +29092,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevActive"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:135"
+        "packages/specdev/specdev/src/types.ts:136"
       ]
     },
     {
@@ -29160,7 +29160,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevSnapshot"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:154"
+        "packages/specdev/specdev/src/types.ts:155"
       ]
     },
     {
@@ -29450,7 +29450,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevStepState"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:50"
+        "packages/specdev/specdev/src/types.ts:51"
       ]
     },
     {
@@ -29626,7 +29626,7 @@
         "packages/specdev/specdev/src/types.ts#SpecdevGateDecidedEvent"
       ],
       "sources": [
-        "packages/specdev/specdev/src/types.ts:280"
+        "packages/specdev/specdev/src/types.ts:285"
       ]
     },
     {

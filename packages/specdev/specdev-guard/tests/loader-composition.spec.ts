@@ -107,13 +107,21 @@ async function boot(workspace: string): Promise<{ ctx: Context; session: Session
     ['@deepseek-ai/dsh-user-questions', UserQuestionService],
     ['@deepseek-ai/dsh-specdev-guard', SpecdevGuard],
   ])
+  const unexpectedLoaderOperation = (): never => {
+    throw new Error('this composition resolves modules through the stubbed import only')
+  }
   ctx.loader.internal = {
     version: 'v2',
+    loadCache: new Map(),
+    register: unexpectedLoaderOperation,
+    getOrCreateModuleJob: unexpectedLoaderOperation,
+    resolveSync: unexpectedLoaderOperation,
+    load: unexpectedLoaderOperation,
     async import(specifier: string) {
       if (!modules.has(specifier)) throw new Error(`unexpected Loader import: ${specifier}`)
       return modules.get(specifier)
     },
-  } as unknown as NonNullable<typeof ctx.loader.internal>
+  }
   await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
   await ctx.loader.await()
 

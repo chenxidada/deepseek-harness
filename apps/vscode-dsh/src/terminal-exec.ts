@@ -29,6 +29,29 @@ const DEDICATED_TERMINAL_LIMIT = 6
 /** One terminal name component; a longer session id or command is truncated to it. */
 const NAME_SNIPPET = 40
 
+/**
+ * Build the command line for one runtime command. The working directory travels
+ * as an explicit `cd` instead of `executeCommand`'s own `cwd` argument: VS Code
+ * writes that argument into the terminal as a character-separated path, and the
+ * shell then reads every character as another argument to the command.
+ * @param command - the shell source the runtime asked to run.
+ * @param cwd - the directory the command must start in.
+ * @returns one command line that enters the directory before running.
+ */
+function commandLineIn(command: string, cwd: string): string {
+  return `cd ${quoteForShell(cwd)} && ${command}`
+}
+
+/**
+ * Quote one path as a single shell word, so a directory with spaces or shell
+ * metacharacters stays one argument.
+ * @param value - the raw path.
+ * @returns the path in single quotes, with embedded single quotes escaped.
+ */
+function quoteForShell(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
 /** The terminal surface this controller drives; the real `vscode.Terminal` satisfies it. */
 export interface TerminalExecTerminal {
   readonly name: string
@@ -179,7 +202,7 @@ export class IdeTerminalExecController {
     terminal.show(true)
     let execution: TerminalExecExecution
     try {
-      execution = integration.executeCommand(frame.command, frame.cwd)
+      execution = integration.executeCommand(commandLineIn(frame.command, frame.cwd))
     } catch (error) {
       send({
         kind: 'terminal/exec/refused',

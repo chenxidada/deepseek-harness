@@ -5,10 +5,9 @@ import { ConversationController } from '../src/conversation-controller.ts'
 import { DEFAULT_POST_HOC_DIFF_ONLY, buildDiffOpenArgs, isRecoverableReplayDiff, openTimelineDiff, resetDiffProviderForTests } from '../src/diff-entry.ts'
 import { EXTENSION_INDEX_STATE_KEY, ExtensionIndex, type ExtensionIndexSnapshot, type OpenTabRecord } from '../src/extension-index.ts'
 import { activate, deactivate, getTimelineTreeItems, getWriteDiffEntries } from '../src/extension.ts'
-import { InteractionCoordinator } from '../src/interaction-coordinator.ts'
 import { type HydratorSessionEvent, detectIncomplete, hydrateFromAuthoritativeLog, recoverableDiffsFromMeta } from '../src/replay-hydrator.ts'
 import { planRestoreOpenTabs } from '../src/restore-planner.ts'
-import { IdeSessionHost } from '../src/session-host.ts'
+import { IdeSessionHost, type IdeSessionHostStatus } from '../src/session-host.ts'
 import { TimelineStore } from '../src/timeline-store.ts'
 import { timelineTreeItems } from '../src/timeline-view.ts'
 import { attributionPathsForLatestTurn, simulateUserManualSave } from './spike-attribution-helpers.ts'
@@ -1086,47 +1085,44 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
       })
     })
 
-    function stubHost(): IdeSessionHost & {
-      promptCalls: number
-      lastPromptSessionId?: string
-      readSessionLog: (sessionId: string) => Promise<unknown[]>
-    } {
-      const statusListeners = new Set<(status: string) => void>()
-      let status: 'idle' | 'starting' | 'connected' | 'error' | 'disconnected' = 'connected'
-      const host = {
-        promptCalls: 0,
-        lastPromptSessionId: undefined as string | undefined,
-        interactions: new InteractionCoordinator(),
-        get status() { return status },
-        set status(value: typeof status) {
-          if (status === value) return
-          status = value
-          for (const listener of statusListeners) listener(value)
-        },
-        onStatusChange(listener: (next: typeof status) => void) {
-          statusListeners.add(listener)
-          return () => { statusListeners.delete(listener) }
-        },
-        setConversationRegistry(registry?: unknown) {
-          if (registry !== undefined) {
-            ;(this.interactions).setRegistry(registry as never)
-          }
-        },
-        onNotification() { return () => {} },
-        async prompt(sessionId: string) {
-          this.promptCalls += 1
-          this.lastPromptSessionId = sessionId
-          return 'msg'
-        },
-        async disposeSession() {},
-        async readSessionLog(_sessionId: string) { return [] as unknown[] },
-        async resumeSession() {},
+    /**
+     * Host double whose status fan-out and prompt bookkeeping the case drives
+     * directly; every other member keeps the real Host's behaviour.
+     */
+    class StubHost extends IdeSessionHost {
+      promptCalls = 0
+      lastPromptSessionId: string | undefined
+      private readonly reportedStatusListeners = new Set<(status: IdeSessionHostStatus) => void>()
+      private reportedStatus: IdeSessionHostStatus = 'connected'
+
+      override get status(): IdeSessionHostStatus {
+        return this.reportedStatus
       }
-      return host as unknown as IdeSessionHost & {
-        promptCalls: number
-        lastPromptSessionId?: string
-        readSessionLog: (sessionId: string) => Promise<unknown[]>
+
+      override set status(value: IdeSessionHostStatus) {
+        if (this.reportedStatus === value) return
+        this.reportedStatus = value
+        for (const listener of this.reportedStatusListeners) listener(value)
       }
+
+      override onStatusChange(listener: (status: IdeSessionHostStatus) => void): () => void {
+        this.reportedStatusListeners.add(listener)
+        return () => { this.reportedStatusListeners.delete(listener) }
+      }
+
+      override async prompt(sessionId: string): Promise<string> {
+        this.promptCalls += 1
+        this.lastPromptSessionId = sessionId
+        return 'msg'
+      }
+
+      override async disposeSession(): Promise<void> {}
+      override async readSessionLog(_sessionId: string): Promise<unknown[]> { return [] }
+      override async resumeSession(): Promise<void> {}
+    }
+
+    function stubHost(): StubHost {
+      return new StubHost()
     }
 
     async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
@@ -2091,7 +2087,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
       notify: ((n: HarnessNotification) => void) | undefined
     } {
       let notify: ((n: HarnessNotification) => void) | undefined
-      const host = {
+      const host = Object.assign(new IdeSessionHost(), {
         status: 'connected' as const,
         interactions: { failClosedSession() {}, listPending() { return [] } },
         setConversationRegistry() {},
@@ -2101,7 +2097,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         },
         async prompt() { return 'm' },
         async disposeSession() {},
-      } as unknown as IdeSessionHost
+      })
       return { host, get notify() { return notify } }
     }
 
@@ -2164,11 +2160,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         forkCalls,
         resumeCalls,
       }
-      return host as unknown as IdeSessionHost & {
-        emit: (n: HarnessNotification) => void
-        forkCalls: typeof forkCalls
-        resumeCalls: string[]
-      }
+      return Object.assign(new IdeSessionHost(), host)
     }
 
     function closedTurnEvents(userText = 'hello', reason: 'completed' | 'aborted' = 'completed'): HydratorSessionEvent[] {

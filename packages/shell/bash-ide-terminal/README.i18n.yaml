@@ -1,0 +1,82 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/shell/bash-ide-terminal/README.md
+/:
+  en: 500017e4e1da2253
+  zh: 487a5651cd1bd95b
+/deepseek-ai-dsh-bash-ide-terminal:
+  en: c4f14093b42c8708
+  zh: a2c6122670d249e0
+/deepseek-ai-dsh-bash-ide-terminal/summary:
+  en: 1b8431e9a64fc793
+  zh: 339e5e3260afb883
+/deepseek-ai-dsh-bash-ide-terminal/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-bash-ide-terminal/use-this-package:
+  en: 1cdb4e9230317467
+  zh: 987b8d55ddd7c1fd
+/deepseek-ai-dsh-bash-ide-terminal/use-this-package/when-to-choose-it:
+  en: 4051296ed21334c9
+  zh: fc457e0969b78f3f
+/deepseek-ai-dsh-bash-ide-terminal/use-this-package/minimal-configuration:
+  en: b653a1af170ff7c4
+  zh: 5b4d92196b544990
+/deepseek-ai-dsh-bash-ide-terminal/use-this-package/choosing-the-execution-stack:
+  en: 51c64579bd46062f
+  zh: cf164606a599e165
+/deepseek-ai-dsh-bash-ide-terminal/use-this-package/adjusting-the-switch-at-runtime:
+  en: f063cf640937335f
+  zh: 1788802770afa4d7
+/deepseek-ai-dsh-bash-ide-terminal/understand-the-implementation:
+  en: 05e2abe4a25886fd
+  zh: affb2274040e0aaf
+/deepseek-ai-dsh-bash-ide-terminal/understand-the-implementation/design-concept:
+  en: 5da13f387a993303
+  zh: faf2753bbda0ef95
+/deepseek-ai-dsh-bash-ide-terminal/understand-the-implementation/source-map:
+  en: 1c28eb97bb77612f
+  zh: ddcc6ed592f6a42d
+/deepseek-ai-dsh-bash-ide-terminal/understand-the-implementation/main-flow:
+  en: 0f7dc71df63328c1
+  zh: 8f12be8d705d7f99
+/deepseek-ai-dsh-bash-ide-terminal/understand-the-implementation/invariants-and-ownership:
+  en: 1895129cad445933
+  zh: 6871b9a3a2594549
+/deepseek-ai-dsh-bash-ide-terminal/further-exploration:
+  en: dab1212deb826b53
+  zh: aad320c857b0a6f2
+/deepseek-ai-dsh-bash-ide-terminal/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-bash-ide-terminal/model-experience/bash-tool-result-indirectly:
+  en: ba37fed04252f1eb
+  zh: 0e91d66334ec17c3
+/deepseek-ai-dsh-bash-ide-terminal/model-experience/bash-tool-result-indirectly/what-the-model-sees:
+  en: 5b2789aeedf9dd57
+  zh: 419f5ead9e6bd495
+/deepseek-ai-dsh-bash-ide-terminal/model-experience/bash-tool-result-indirectly/token-effect:
+  en: 615c0ace303ff9b0
+  zh: a7b20f092e90d827
+/deepseek-ai-dsh-bash-ide-terminal/model-experience/bash-tool-result-indirectly/kv-cache-effect:
+  en: f5d5f97a153f7c70
+  zh: e50203071adb379a
+/deepseek-ai-dsh-bash-ide-terminal/model-experience/bash-tool-error-indirectly:
+  en: 8e6caeadd596ea8f
+  zh: fe525ddc52b2d711
+/deepseek-ai-dsh-bash-ide-terminal/model-experience/bash-tool-error-indirectly/what-the-model-sees:
+  en: 042195bd5b8e35f9
+  zh: 458574a210b75edb
+/deepseek-ai-dsh-bash-ide-terminal/model-experience/bash-tool-error-indirectly/token-effect:
+  en: 2251281d251762ea
+  zh: e70ea534cb410983
+/deepseek-ai-dsh-bash-ide-terminal/model-experience/bash-tool-error-indirectly/kv-cache-effect:
+  en: f5d5f97a153f7c70
+  zh: e50203071adb379a
+/deepseek-ai-dsh-bash-ide-terminal/known-limitations-and-deferred-work:
+  en: ff210e399127248a
+  zh: 1646d7a2054f9fb1
+/deepseek-ai-dsh-bash-ide-terminal/known-limitations-and-deferred-work/dev-note:
+  en: 676cf4e7e81f8d76
+  zh: b16327cc044370e7

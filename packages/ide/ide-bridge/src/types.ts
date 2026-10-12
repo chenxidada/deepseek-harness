@@ -3,6 +3,7 @@
  * @module @deepseek-ai/dsh-ide-bridge/types
  */
 
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval/types'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions/types'
 
@@ -164,7 +165,7 @@ export interface SessionPersistenceReadCapability {
      * @returns the slice the frame forwards; the ownership state beside it is
      *   not part of this wire contract.
      */
-    read(offset?: number): Promise<{ readonly events: readonly unknown[] }>
+    read(offset?: number): Promise<{ readonly events: readonly SessionEvent[] }>
     close(): Promise<void>
   }>
 }
@@ -838,7 +839,10 @@ export interface IdeTerminalExecution {
  * instead of silently running the command somewhere the user cannot watch.
  */
 export interface IdeTerminalCapability {
-  /** Whether a connected Extension can run commands in a terminal right now. */
+  /**
+   * Whether a connected Extension can run commands in a terminal right now.
+   * @returns true while a connected Extension can accept a command.
+   */
   available(): boolean
   /**
    * Start one execution.

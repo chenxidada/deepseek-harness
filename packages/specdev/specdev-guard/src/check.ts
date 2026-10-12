@@ -59,6 +59,7 @@ const PROTOTYPE_GATED_ROLES: ReadonlySet<SpecdevRole> = new Set([
  * @param role - SpecDev role being dispatched or waking.
  * @param auth - authoritative status (projection / fail-closed).
  * @param options - git branch and related checks.
+ * @returns the denial to honor, or `undefined` when the role may run.
  */
 export function evaluateRoleDispatch(
   role: SpecdevRole,
@@ -229,6 +230,7 @@ function evaluateImplementer(
 /**
  * Format a denial for tools / thrown errors, including escalate marker.
  * @param denial - structured denial.
+ * @returns the reason with its code appended, plus the escalate marker when the denial needs the user.
  */
 export function formatGateDenial(denial: SpecdevGateDenial): string {
   if (denial.escalate === true) {
@@ -240,6 +242,7 @@ export function formatGateDenial(denial: SpecdevGateDenial): string {
 /**
  * Detect whether a tool path targets durable SpecDev status (AC-28 defense).
  * @param filePath - tool `file_path` / `path` argument.
+ * @returns true when the path names a `current-status.json`, at any depth and on either separator.
  */
 export function isCurrentStatusPath(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, '/')
@@ -250,6 +253,7 @@ export function isCurrentStatusPath(filePath: string): boolean {
 /**
  * Extract a filesystem path from common write/edit tool arguments.
  * @param args - tool arguments bag.
+ * @returns the first non-empty `file_path` / `path` / `filePath` argument, or `undefined` when the call names none.
  */
 export function toolFilePath(args: Readonly<Record<string, unknown>>): string | undefined {
   for (const key of ['file_path', 'path', 'filePath'] as const) {

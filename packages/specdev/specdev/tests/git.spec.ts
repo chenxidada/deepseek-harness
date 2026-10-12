@@ -195,7 +195,7 @@ describe('normalizeExplicitFiles', () => {
   it('refuses an empty list and empty or non-string entries', () => {
     expect(codeOf(() => normalizeExplicitFiles([]))).toBe('SPECDEV_GIT_FILES_REQUIRED')
     expect(codeOf(() => normalizeExplicitFiles(['  ']))).toBe('SPECDEV_GIT_FILES_INVALID')
-    expect(codeOf(() => normalizeExplicitFiles([7 as unknown as string]))).toBe('SPECDEV_GIT_FILES_INVALID')
+    expect(codeOf(() => normalizeExplicitFiles([7 as never]))).toBe('SPECDEV_GIT_FILES_INVALID')
     expect(codeOf(() => normalizeExplicitFiles(['a\0b']))).toBe('SPECDEV_GIT_FILES_INVALID')
   })
 

@@ -9,6 +9,8 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { interruptedTurnClosers } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval/types'
 import type { AskUserQuestionAnswer, AskUserQuestionRequestEvent } from '@deepseek-ai/dsh-user-questions/types'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
@@ -19,6 +21,7 @@ import {
   APPROVAL_SERVICE,
   ATTACHMENT_SERVICE,
   COMMANDS_SERVICE,
+  GOAL_SERVICE,
   IDE_BRIDGE_SERVICE,
   IDE_BRIDGE_SOCK_ENV,
   PERMISSION_PRESETS_SERVICE,
@@ -40,10 +43,14 @@ import {
   type ApprovalPolicyCapability,
   type AttachmentReadCapability,
   type BridgeCommandSummary,
+  type BridgeCredentialState,
+  type BridgeDiscoveredModel,
   type BridgeFrame,
+  type BridgeGoalView,
   type BridgeSessionHeader,
   type BridgeSessionSummary,
   type BridgeSubagentEntry,
+  type GoalServiceCapability,
   type IdeBridgeAgentPresets,
   type IdeBridgeAgents,
   type IdeBridgeCommandDescriptor,
@@ -67,6 +74,7 @@ import {
   type SessionQueryListCapability,
   type SessionQuerySearchCapability,
   type SettingsNamespaceView,
+  type SettingsPathOp,
   type SpecdevSessionHandle,
   type SpecdevSessionsCapability,
   type SpecdevStatusCapability,
@@ -366,6 +374,14 @@ async function awaitHostApproval(
     ...options.signal === undefined ? {} : { signal: options.signal },
     onTimeout: () => {
       pending.delete(id)
+      // The card outlives this wait unless the Host is told, and an answer to it
+      // could never reach the model; the code is the Host's to render.
+      client.send({
+        kind: 'approval/expired',
+        id,
+        sessionId: options.sessionId,
+        reason: 'timeout',
+      })
       return 'unavailable' as const
     },
     onAbort: () => {
@@ -421,9 +437,19 @@ async function awaitHostQuestions(
       ...options.signal === undefined ? {} : { signal: options.signal },
       onTimeout: () => {
         pending.delete(id)
+        // Same as the approval arm: retire the presented card, because the answer
+        // it would collect can no longer reach this call.
+        client.send({
+          kind: 'user-questions/expired',
+          id,
+          sessionId: options.sessionId,
+          reason: 'timeout',
+        })
         throw new UserQuestionError(
           `user-questions timed out after ${options.timeoutMs}ms`,
-          'NO_PROVIDER',
+          // Its own code: `NO_PROVIDER` also means "nothing could answer at all",
+          // and one code for both made the two states indistinguishable downstream.
+          'INTERACTION_TIMEOUT',
         )
       },
       onAbort: () => {
@@ -618,6 +644,10 @@ async function handleHostFrame(
     await handleSpecdevConfirmGate(ctx, client, frame)
     return
   }
+  if (frame.kind === 'goal/read') {
+    handleGoalRead(ctx, client, frame)
+    return
+  }
   if (frame.kind === 'permission/select') {
     handlePermissionSelect(ctx, client, frame)
     return
@@ -648,6 +678,26 @@ async function handleHostFrame(
   }
   if (frame.kind === 'settings/update') {
     await handleSettingsUpdate(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'settings/mutate') {
+    await handleSettingsMutate(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'credential/describe') {
+    await handleCredentialDescribe(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'credential/set') {
+    await handleCredentialSet(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'credential/unset') {
+    await handleCredentialUnset(ctx, client, frame)
+    return
+  }
+  if (frame.kind === 'model/discover') {
+    await handleModelDiscover(ctx, client, frame)
     return
   }
   if (frame.kind === 'commands/list') {
@@ -1171,6 +1221,104 @@ async function handleSpecdevConfirmGate(
 }
 
 /**
+ * Read one session's goal for the IDE card.
+ *
+ * A session with a live agent answers from `ctx.goals`, which is the only
+ * source of the process-local `activation` flag the card needs to choose pause
+ * or resume. A session whose agent is not materialized still has a durable
+ * goal, so the registered projection answers the phase; without an agent,
+ * automatic continuation cannot be armed, so the response reports `disarmed`
+ * rather than inventing an activation.
+ */
+function handleGoalRead(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'goal/read' }>,
+): void {
+  const agents = ctx.get(AGENTS_SERVICE) as IdeBridgeAgents | undefined
+  const agent = agents?.get(frame.sessionId)
+  if (agent !== undefined) {
+    const goals = ctx.get(GOAL_SERVICE) as GoalServiceCapability | undefined
+    if (goals === undefined) {
+      client.send({
+        kind: 'goal/read/response',
+        id: frame.id,
+        ok: false,
+        error: `${GOAL_SERVICE} service is not available`,
+      })
+      return
+    }
+    try {
+      client.send({ kind: 'goal/read/response', id: frame.id, ok: true, goal: goals.get(agent) ?? null })
+    } catch (error) {
+      client.send({
+        kind: 'goal/read/response',
+        id: frame.id,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+    return
+  }
+  const durable = durableGoalView(ctx, frame.sessionId)
+  if (durable === 'unavailable') {
+    client.send({
+      kind: 'goal/read/response',
+      id: frame.id,
+      ok: false,
+      error: `${SESSION_PROJECTION_REGISTRY_SERVICE} or ${SESSIONS_SERVICE} service is not available`,
+    })
+    return
+  }
+  client.send({ kind: 'goal/read/response', id: frame.id, ok: true, goal: durable })
+}
+
+/**
+ * Project the durable `goal` unit into the card's view for a session without a
+ * live agent. Activation is process-local, so it reports `disarmed`.
+ * @param ctx - runtime context.
+ * @param sessionId - session identity addressed by the frame.
+ * @returns the durable view, null when no goal is current, or `'unavailable'`
+ *   when the projection registry or the session itself does not resolve.
+ */
+function durableGoalView(ctx: Context, sessionId: string): BridgeGoalView | null | 'unavailable' {
+  const registry = ctx.get(SESSION_PROJECTION_REGISTRY_SERVICE) as SessionProjectionRegistryCapability | undefined
+  const sessions = ctx.get(SESSIONS_SERVICE) as IdeBridgeSessions | undefined
+  if (registry === undefined || sessions === undefined) return 'unavailable'
+  const session = sessions.get(sessionId)
+  if (session === undefined) return 'unavailable'
+  const { values } = registry.snapshot(session, ['goal'])
+  const value = values.goal
+  if (typeof value !== 'object' || value === null) return null
+  const record = value as {
+    goal?: {
+      id?: unknown
+      revision?: unknown
+      objective?: unknown
+      phase?: unknown
+      maxGoalRounds?: unknown
+      blockedReason?: { code?: unknown; message?: unknown }
+    }
+    roundsStarted?: unknown
+  }
+  const goal = record.goal
+  if (goal === undefined) return null
+  const blockedReason = goal.blockedReason
+  return {
+    id: String(goal.id),
+    revision: Number(goal.revision),
+    objective: String(goal.objective),
+    phase: goal.phase as BridgeGoalView['phase'],
+    roundsStarted: Number(record.roundsStarted),
+    maxGoalRounds: Number(goal.maxGoalRounds),
+    activation: 'disarmed',
+    ...typeof blockedReason?.code !== 'string' || typeof blockedReason.message !== 'string'
+      ? {}
+      : { blockedReason: { code: blockedReason.code, message: blockedReason.message } },
+  }
+}
+
+/**
  * Resolve the live session object the SpecDev service must receive.
  * @param ctx - runtime context.
  * @param sessionId - session identity addressed by the frame.
@@ -1227,7 +1375,7 @@ async function handleReadLog(
   }
   try {
     const handle = await persistence.open(frame.sessionId, 'read')
-    let events: unknown[]
+    let events: SessionEvent[]
     try {
       events = [...(await handle.read(0)).events]
     } catch (error: unknown) {
@@ -1239,8 +1387,8 @@ async function handleReadLog(
       throw error
     }
     await handle.close()
-    // Prefer cold-balanced events when dsh-session interrupt closers are loadable.
-    const balanced = await applyInterruptClosers(events)
+    // Balance a log whose writer crashed mid-turn; the read never writes back.
+    const balanced = [...events, ...interruptedTurnClosers(events)]
     client.send({
       kind: 'session/read-log/response',
       id: frame.id,
@@ -1439,18 +1587,6 @@ async function handleDelete(
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     })
-  }
-}
-
-async function applyInterruptClosers(events: unknown[]): Promise<unknown[]> {
-  try {
-    const mod = await import('@deepseek-ai/dsh-session') as {
-      interruptedTurnClosers?: (events: unknown[]) => unknown[]
-    }
-    if (typeof mod.interruptedTurnClosers !== 'function') return events
-    return [...events, ...mod.interruptedTurnClosers(events)]
-  } catch {
-    return events
   }
 }
 
@@ -1788,6 +1924,76 @@ interface SettingsCapability {
    * @param expectedRevision - revision the caller read; `undefined` writes unconditionally.
    */
   update(ns: string, patch: object, expectedRevision?: number): Promise<void>
+  /**
+   * Apply path-addressed edits to one registered namespace's user layer as a
+   * single write.
+   * @param ns - the registered namespace to edit.
+   * @param ops - ordered path operations, applied in order within one write.
+   * @param expectedRevision - revision the caller read; `undefined` writes unconditionally.
+   */
+  mutate(ns: string, ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<void>
+}
+
+/** The credential facts ide-bridge reads from the credential service's `describe`. */
+interface CredentialStateView {
+  /** Whether resolving the reference would currently return a value. */
+  configured: boolean
+  /** Supplying layer of the configured value, when one is configured. */
+  source?: string
+  /** Whether the runtime's credential store can write this reference right now. */
+  writable: boolean
+}
+
+/**
+ * Duck-typed credential surface, matching the `ctx.credentials` Service
+ * Definition without a dependency on it. Reads disclose presence, source, and
+ * writability only; a value crosses this seam in the write direction alone.
+ */
+interface CredentialsCapability {
+  /**
+   * Describe one reference for a configuration surface.
+   * @param ref - the reference to describe.
+   * @returns configured state, supplying source, and writability.
+   */
+  describe(ref: string): Promise<CredentialStateView>
+  /**
+   * Store one value in the provider-managed writable source.
+   * @param ref - the reference to store.
+   * @param value - the non-empty secret value.
+   */
+  set(ref: string, value: string): Promise<void>
+  /**
+   * Remove one reference from the writable source; removing an absent one is a no-op.
+   * @param ref - the reference to remove.
+   */
+  unset(ref: string): Promise<void>
+}
+
+/** The draft one `model/discover` frame describes. */
+interface ModelDiscoveryRequestView {
+  /** Existing route the draft edits, when it edits one. */
+  provider?: string
+  /** Endpoint to interrogate. */
+  baseURL?: string
+  /** Wire protocol the endpoint speaks, when the draft names one. */
+  api?: string
+  /** One-shot credential for this interrogation; the harness never stores it. */
+  apiKey?: string
+}
+
+/**
+ * Duck-typed model discovery surface, matching the `llm` runtime's
+ * `discoverModels` without a dependency on that package. A deployment whose
+ * runtime exposes no discovery leaves `discoverModels` absent.
+ */
+interface ModelDiscoveryCapability {
+  /**
+   * Interrogate the discovery registered for one settings namespace.
+   * @param settingsNs - namespace whose registered discovery serves this draft.
+   * @param request - the endpoint, protocol, and one-shot credential to use.
+   * @returns the advertised models in endpoint order.
+   */
+  discoverModels?(settingsNs: string, request: ModelDiscoveryRequestView): Promise<readonly BridgeDiscoveredModel[]>
 }
 
 /**
@@ -1859,6 +2065,139 @@ async function handleSettingsUpdate(
     })
   } catch (error) {
     client.send({ kind: 'settings/update/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/** Apply one Host edit batch to a settings namespace and answer with its new redacted view. */
+async function handleSettingsMutate(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'settings/mutate' }>,
+): Promise<void> {
+  const settings = ctx.get('settings') as SettingsCapability | undefined
+  if (settings === undefined) {
+    client.send({ kind: 'settings/mutate/response', id: frame.id, ok: false, error: 'settings service is not available' })
+    return
+  }
+  try {
+    await settings.mutate(frame.ns, frame.ops, frame.expectedRevision)
+    const descriptor = settings.describe({ redactSecrets: true })
+      .find(candidate => candidate.ns === frame.ns)
+    if (descriptor === undefined) {
+      client.send({
+        kind: 'settings/mutate/response',
+        id: frame.id,
+        ok: false,
+        error: `settings namespace "${frame.ns}" is not registered`,
+      })
+      return
+    }
+    client.send({
+      kind: 'settings/mutate/response',
+      id: frame.id,
+      ok: true,
+      namespace: toSettingsNamespaceView(descriptor),
+    })
+  } catch (error) {
+    client.send({ kind: 'settings/mutate/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/** Answer the Host with one credential state per requested reference, values excluded. */
+async function handleCredentialDescribe(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'credential/describe' }>,
+): Promise<void> {
+  const credentials = ctx.get('credentials') as CredentialsCapability | undefined
+  if (credentials === undefined) {
+    client.send({ kind: 'credential/describe/response', id: frame.id, ok: false, error: 'credentials service is not available' })
+    return
+  }
+  try {
+    const states: BridgeCredentialState[] = []
+    for (const ref of frame.refs) {
+      const info = await credentials.describe(ref)
+      states.push({
+        ref,
+        configured: info.configured,
+        writable: info.writable,
+        ...info.source === undefined ? {} : { source: info.source },
+      })
+    }
+    client.send({ kind: 'credential/describe/response', id: frame.id, ok: true, credentials: states })
+  } catch (error) {
+    client.send({ kind: 'credential/describe/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/** Store one credential value through the seam; the value never rides back in a response. */
+async function handleCredentialSet(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'credential/set' }>,
+): Promise<void> {
+  const credentials = ctx.get('credentials') as CredentialsCapability | undefined
+  if (credentials === undefined) {
+    client.send({ kind: 'credential/set/response', id: frame.id, ok: false, error: 'credentials service is not available' })
+    return
+  }
+  try {
+    await credentials.set(frame.ref, frame.value)
+    client.send({ kind: 'credential/set/response', id: frame.id, ok: true })
+  } catch (error) {
+    client.send({ kind: 'credential/set/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/** Remove one credential reference from the writable source; an absent reference is a no-op. */
+async function handleCredentialUnset(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'credential/unset' }>,
+): Promise<void> {
+  const credentials = ctx.get('credentials') as CredentialsCapability | undefined
+  if (credentials === undefined) {
+    client.send({ kind: 'credential/unset/response', id: frame.id, ok: false, error: 'credentials service is not available' })
+    return
+  }
+  try {
+    await credentials.unset(frame.ref)
+    client.send({ kind: 'credential/unset/response', id: frame.id, ok: true })
+  } catch (error) {
+    client.send({ kind: 'credential/unset/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/** Interrogate one provider endpoint through its registered discovery and answer with the models it advertises. */
+async function handleModelDiscover(
+  ctx: Context,
+  client: IdeBridgeClient,
+  frame: Extract<BridgeFrame, { kind: 'model/discover' }>,
+): Promise<void> {
+  const llm = ctx.get('llm') as ModelDiscoveryCapability | undefined
+  if (llm?.discoverModels === undefined) {
+    client.send({ kind: 'model/discover/response', id: frame.id, ok: false, error: 'model discovery is not available in this deployment' })
+    return
+  }
+  const request = {
+    ...frame.provider === undefined ? {} : { provider: frame.provider },
+    ...frame.baseURL === undefined ? {} : { baseURL: frame.baseURL },
+    ...frame.api === undefined ? {} : { api: frame.api },
+    ...frame.apiKey === undefined ? {} : { apiKey: frame.apiKey },
+  }
+  try {
+    const discovered = await llm.discoverModels(frame.settingsNs, request)
+    const models = discovered.map(model => ({
+      id: model.id,
+      ...model.name === undefined ? {} : { name: model.name },
+      ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
+      ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
+      ...model.inputModalities === undefined ? {} : { inputModalities: [...model.inputModalities] },
+    }))
+    client.send({ kind: 'model/discover/response', id: frame.id, ok: true, models })
+  } catch (error) {
+    client.send({ kind: 'model/discover/response', id: frame.id, ok: false, error: error instanceof Error ? error.message : String(error) })
   }
 }
 

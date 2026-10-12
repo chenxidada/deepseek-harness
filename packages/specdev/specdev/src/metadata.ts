@@ -21,6 +21,7 @@ export interface SpecdevMetadataAttach {
 /**
  * Validate and return a SpecDev role string.
  * @param value - untrusted role candidate.
+ * @returns the candidate as a role label.
  */
 export function parseSpecdevRole(value: unknown): SpecdevRole {
   if (typeof value !== 'string' || !(SPECDEV_ROLES as readonly string[]).includes(value)) {
@@ -58,6 +59,7 @@ export function attachSpecdevMetadata(agent: Agent, meta: SpecdevMetadataAttach)
 /**
  * Read SpecDev metadata from an agent, if present.
  * @param agent - agent to inspect.
+ * @returns the role, slug, and phaseId the agent carries; each key is absent when the agent does not set it.
  */
 export function readSpecdevMetadata(agent: Agent): {
   role?: SpecdevRole

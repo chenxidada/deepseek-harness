@@ -92,6 +92,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   fs: 'filesystem.md',
   goals: 'goal.md',
   ideBridge: 'ide-bridge.md',
+  ideTerminals: 'ide-bridge.md',
   schedule: 'schedule.md',
   inspector: 'extensions.md',
   webServer: 'web-server.md',
@@ -287,6 +288,8 @@ export const EVENT_WALK_EXEMPTIONS: Record<string, string> = {
  * appear on more than one page.
  */
 export const LINK_MAP: Readonly<Record<string, string>> = {
+  IdeTerminalExecRequest: 'ide-bridge.md',
+  IdeTerminalExecution: 'ide-bridge.md',
   EventLogOptions: 'otel.md',
   EventLogReporter: 'otel.md',
   SessionLogOptions: 'otel.md',

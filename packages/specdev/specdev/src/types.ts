@@ -41,6 +41,7 @@ export const SPECDEV_GATE_IDS: readonly SpecdevGateId[] = [
 /**
  * Whether a value is a gate id the runtime accepts.
  * @param value - untrusted candidate.
+ * @returns true when the value is one of {@link SPECDEV_GATE_IDS}.
  */
 export function isSpecdevGateId(value: unknown): value is SpecdevGateId {
   return typeof value === 'string' && (SPECDEV_GATE_IDS as readonly string[]).includes(value)

@@ -419,7 +419,7 @@
 
 .dsh-set-model-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 92px 92px 34px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 92px 92px 120px 34px;
   align-items: center;
   border-bottom: 1px solid var(--dsh-border);
 }
@@ -454,6 +454,27 @@
 
 .dsh-set-model-row input:focus {
   background: var(--dsh-input-bg);
+}
+
+.dsh-set-modalities {
+  display: flex;
+  gap: 8px;
+  color: var(--dsh-muted);
+  font-size: var(--dsh-text-xs);
+  white-space: nowrap;
+}
+
+.dsh-set-modality {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* 复选框不是文本输入：撤销上面给整行输入框设的宽度与内边距。 */
+.dsh-set-model-row .dsh-set-modality input {
+  width: auto;
+  margin: 0;
+  padding: 0;
 }
 
 /* ===== Discovery panel ===== */
@@ -659,6 +680,46 @@
   padding: 4px 6px;
 }
 
+/* ===== Path whitelist ===== */
+.dsh-set-path-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.dsh-set-path-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--vscode-input-background, #1e1e1e);
+}
+.dsh-set-path-text {
+  flex: 1;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-set-path-remove {
+  background: none;
+  border: none;
+  color: var(--vscode-errorForeground, #f44);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+.dsh-set-path-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 /* ===== Narrow panels ===== */
 @media (max-width: 520px) {
   .dsh-set-grid2,
@@ -685,8 +746,9 @@
     flex-wrap: wrap;
   }
 
+  /* 窄面板收起容量两列；输入类型保留，否则图片能力在窄侧栏里无从声明。 */
   .dsh-set-model-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 104px 34px;
   }
 
   .dsh-set-model-row > .dsh-set-col-cap {

@@ -651,7 +651,7 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
       notify: ((n: HarnessNotification) => void) | undefined
     } {
       let notify: ((n: HarnessNotification) => void) | undefined
-      const host = {
+      const host = Object.assign(new IdeSessionHost(), {
         status: 'connected' as const,
         interactions: { failClosedSession() {}, listPending() { return [] } },
         setConversationRegistry() {},
@@ -661,7 +661,7 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
         },
         async prompt() { return 'm' },
         async disposeSession() {},
-      } as unknown as IdeSessionHost
+      })
       return { host, get notify() { return notify } }
     }
 

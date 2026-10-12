@@ -117,7 +117,7 @@ function execFrame(
     cwd: overrides.cwd ?? '/w',
     dedicated: overrides.dedicated ?? false,
     ...('sessionId' in overrides ? { sessionId: overrides.sessionId } : {}),
-  } as BridgeFrame
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +164,31 @@ describe('cap:terminal-exec — IDE terminal execution controller', () => {
     const exitFrame = sent.find(f => f.kind === 'terminal/exec/exit') as { kind: string; id: string; exitCode: number | null }
     expect(exitFrame.id).toBe('t-1')
     expect(exitFrame.exitCode).toBe(0)
+
+    ctrl.dispose()
+  })
+
+  it('enters the working directory with an explicit cd instead of executeCommand cwd', async () => {
+    const win = fakeWindow()
+    const ctrl = new IdeTerminalExecController(win)
+    const sent: BridgeFrame[] = []
+    const send: TerminalExecSend = (frame) => { sent.push(frame); return true }
+
+    ctrl.handle(execFrame({ id: 't-cd', command: 'echo hi', cwd: "/w/it's here" }), send)
+    await waitFor(() => sent.some(f => f.kind === 'terminal/exec/started'), 3000)
+
+    const terminal = win.created[0]!
+    win.fireEnd({ execution: terminal.executions[0]!, exitCode: 0 })
+    await waitFor(() => sent.some(f => f.kind === 'terminal/exec/exit'), 3000)
+
+    const output = sent
+      .filter(f => f.kind === 'terminal/exec/output')
+      .map(f => (f as { data: string }).data)
+      .join('')
+    // VS Code renders the cwd argument of `executeCommand` as a character-spaced
+    // path that the shell reads as extra arguments, so the directory must travel
+    // in the command line itself, quoted as one word.
+    expect(output).toContain("cd '/w/it'\\''s here' && echo hi")
 
     ctrl.dispose()
   })
@@ -222,7 +247,7 @@ describe('cap:terminal-exec — IDE terminal execution controller', () => {
 
     // Now cancel it
     const cancelResult = ctrl.handle(
-      { kind: 'terminal/exec/cancel', id: 't-cancel', reason: 'timeout' } as BridgeFrame,
+      { kind: 'terminal/exec/cancel', id: 't-cancel', reason: 'timeout' },
       send,
     )
     expect(cancelResult).toBe(true)

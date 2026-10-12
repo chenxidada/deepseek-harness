@@ -35,6 +35,7 @@ export interface MergedReviewResult {
 /**
  * Merge rule (AC-43): any MUST-FIX → MUST-FIX; else any SHOULD-FIX → SHOULD-FIX; else PASS.
  * @param perspectives - at least one perspective.
+ * @returns the merged verdict: MUST-FIX when any perspective reports it, else SHOULD-FIX when any does, else PASS.
  */
 export function mergeReviewVerdicts(perspectives: readonly ReviewPerspectiveInput[]): ReviewVerdict {
   if (perspectives.length === 0) {
@@ -48,6 +49,7 @@ export function mergeReviewVerdicts(perspectives: readonly ReviewPerspectiveInpu
 /**
  * Extract a verdict from free-form review markdown (EN + optional 中文 markers).
  * @param markdown - review-*.md contents.
+ * @returns the verdict read from an explicit 判决 / Verdict line when present, else the first verdict token in the text.
  */
 export function parseReviewVerdict(markdown: string): ReviewVerdict {
   const text = markdown.trim()
@@ -120,6 +122,7 @@ export function formatMergedReviewMarkdown(
  * @param phaseDir - `phases/<phaseId>/`.
  * @param phaseId - DAG id.
  * @param options - `visual: true` additionally requires `review-visual.md` (UI phases).
+ * @returns the merged verdict, perspectives, and the markdown written to `review.md`.
  */
 export function mergePhaseReviews(
   phaseDir: string,
@@ -151,6 +154,7 @@ export function mergePhaseReviews(
  * Uses `mv` only — never git reset/clean (AC-45).
  * @param phaseDir - `phases/<phaseId>/`.
  * @param now - optional UTC date for deterministic tests.
+ * @returns the archive path, or `null` when there is no `review.md` to archive.
  */
 export function archiveMergedReview(
   phaseDir: string,
@@ -168,6 +172,10 @@ export function archiveMergedReview(
 
 /**
  * Build a `specdev/review-verdict` event payload.
+ * @param phaseId - DAG phase id the verdict belongs to.
+ * @param verdict - merged verdict.
+ * @param snapshot - status after the merge, or `null` when none is available.
+ * @returns the whole-view event payload for the parent session to append.
  */
 export function buildReviewVerdictEvent(
   phaseId: string,
@@ -183,7 +191,10 @@ export function buildReviewVerdictEvent(
   }
 }
 
-/** Ensure parent directory exists (for tests writing fixtures). */
+/**
+ * Ensure parent directory exists (for tests writing fixtures).
+ * @param phaseDir - `phases/<phaseId>/` to create, including its parents.
+ */
 export function ensurePhaseDir(phaseDir: string): void {
   mkdirSync(dirname(join(phaseDir, '_')), { recursive: true, mode: 0o755 })
   mkdirSync(phaseDir, { recursive: true, mode: 0o755 })

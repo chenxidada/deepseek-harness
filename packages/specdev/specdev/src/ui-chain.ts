@@ -70,6 +70,7 @@ export function uiWorkflowOf(slugDir: string): boolean | 'unknown' {
  * Whether the phase's implementation carries the prototype section the user
  * confirms before reviewers run.
  * @param phaseDir - `phases/<phaseId>` under the slug directory.
+ * @returns true when `implementation.md` exists there and contains the prototype heading.
  */
 export function hasPrototypeSection(phaseDir: string): boolean {
   const path = join(phaseDir, 'implementation.md')
@@ -81,6 +82,7 @@ export function hasPrototypeSection(phaseDir: string): boolean {
  * The directory of one DAG phase.
  * @param slugDir - `.specdev/specs/<slug>`.
  * @param phaseId - DAG phase id.
+ * @returns the phase directory under `slugDir`.
  */
 export function phaseDirOf(slugDir: string, phaseId: string): string {
   return join(slugDir, 'phases', phaseId)

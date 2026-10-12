@@ -39,7 +39,8 @@ describe('cap:test-harness — test scripts, drivers, and capability runner', ()
 
     type PlanRowWrite = (indexText: string, row: string) => RowOutcome & { next: string }
     type ApplyRowWrite = (indexPath: string, row: string) => RowOutcome
-    type DescribeProblem = (outcome: RowOutcome) => string | null
+    /** The script answers an unreadable verdict (`null` / non-object) with its own message. */
+    type DescribeProblem = (outcome: RowOutcome | null | undefined) => string | null
 
     const require = createRequire(import.meta.url)
     const { planRowWrite, inspectRow, applyRowWrite, describeProblem } = require(
@@ -183,7 +184,7 @@ describe('cap:test-harness — test scripts, drivers, and capability runner', ()
       })
 
       it('CAP-TEST-HARNESS-009 reports an unreadable verdict rather than passing it', () => {
-        expect(describeProblem(undefined as unknown as RowOutcome)).toBe('the index write verdict was unreadable')
+        expect(describeProblem(undefined)).toBe('the index write verdict was unreadable')
       })
     })
 

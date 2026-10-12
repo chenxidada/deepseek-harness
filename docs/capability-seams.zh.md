@@ -285,6 +285,8 @@ flowchart LR
   pkg_ide_bridge["ide-bridge"]
   svc_ideBridge["ctx.ideBridge<br/>IDE Host bridge channel"]
   pkg_ide["ide"]
+  svc_ideTerminals["ctx.ideTerminals<br/>IDE Extension-owned terminal executions"]
+  pkg_bash_ide_terminal["bash-ide-terminal"]
   pkg_sdk_jsonrpc_server["sdk-jsonrpc-server"]
   svc_sdkSessionEnsure["ctx.sdkSessionEnsure<br/>SDK session materialization"]
   svc_sdkSessionDispose["ctx.sdkSessionDispose<br/>SDK session teardown"]
@@ -366,6 +368,7 @@ flowchart LR
   pkg_host_product_telemetry_otel --> svc_productTelemetry
   pkg_host_webserver --> svc_webServer
   pkg_ide_bridge --> svc_ideBridge
+  pkg_ide_bridge --> svc_ideTerminals
   pkg_inspector --> svc_inspector
   pkg_invariants --> svc_invariants
   pkg_jobs --> svc_jobs
@@ -502,6 +505,7 @@ flowchart LR
   svc_fs --> pkg_tool_fs
   svc_hmr --> pkg_app_boot
   svc_ideBridge --> pkg_ide
+  svc_ideTerminals --> pkg_bash_ide_terminal
   svc_invariants --> pkg_agent
   svc_invariants --> pkg_agent_loop
   svc_invariants --> pkg_scope
@@ -719,12 +723,13 @@ flowchart LR
 | `ctx.cordisInspect` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | 注册 Host inspect 提供方、镜像 Client 提供方 manifest，并通过动态 Cordis 传输路由 Client 查询。 |
 | `ctx.cordisInspect` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | 注册 Host inspect 提供方、镜像 Client 提供方 manifest，并通过动态 Cordis 传输路由 Client 查询。 |
 | `ctx.ideBridge` | `core` | [`ide-bridge`](../packages/ide/ide-bridge) | - | [`ide`](../packages/bundle/ide) | - | 在 DSH_IDE_BRIDGE_SOCK 上提供 NDJSON 帧服务，把每帧解析到其 Session 与服务，并把命令、门禁、审批与提问流量中继给拥有该帧的运行时。 |
-| `ctx.sdkModelSelect` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 校验 Host 请求的模型路由，对之后创建的 Session 采用该路由，并在每个活跃 Session 下一次组装 prompt 时交给它。 |
-| `ctx.sdkModelSelect` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 校验 Host 请求的模型路由，对之后创建的 Session 采用该路由，并在每个活跃 Session 下一次组装 prompt 时交给它。 |
-| `ctx.sdkModelSelect` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 校验 Host 请求的模型路由，对之后创建的 Session 采用该路由，并在每个活跃 Session 下一次组装 prompt 时交给它。 |
-| `ctx.sdkModelSelect` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 校验 Host 请求的模型路由，对之后创建的 Session 采用该路由，并在每个活跃 Session 下一次组装 prompt 时交给它。 |
-| `ctx.sdkModelSelect` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 校验 Host 请求的模型路由，对之后创建的 Session 采用该路由，并在每个活跃 Session 下一次组装 prompt 时交给它。 |
-| `ctx.sdkModelSelect` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 校验 Host 请求的模型路由，对之后创建的 Session 采用该路由，并在每个活跃 Session 下一次组装 prompt 时交给它。 |
+| `ctx.ideTerminals` | `core` | [`ide-bridge`](../packages/ide/ide-bridge) | - | [`bash-ide-terminal`](../packages/shell/bash-ide-terminal) | - | 发布已连接的 Extension 是否能运行命令，并在用户可观看的终端里启动一次执行，使无法触达 Extension 的调用方直接失败，而不是把命令跑在用户看不到的地方。 |
+| `ctx.sdkSessionEnsure` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 创建首条 prompt 会创建的会话记录，使从未触碰过的 Tab 发出的 Host 命令也作用在活跃 agent 上。 |
+| `ctx.sdkSessionDispose` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 在释放会话句柄之前移除会话记录，使同一 id 的后续帧无法触达已释放的 agent。 |
+| `ctx.sdkSessionResume` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 把恢复或冷启动的会话句柄重新注册进服务器会话表，并重放其投影基线。 |
+| `ctx.sdkSessionCancel` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 取消当前轮次并保留 agent 收件箱，使会话保持活跃以接收下一条 prompt。 |
+| `ctx.sdkSessionFork` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 按运行时已存有的父系血缘，把一个会话派生为子记录。 |
+| `ctx.sdkSessionDelete` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 释放活跃会话，并通过它从上下文里按结构识别的持久化面移除其持久化数据。 |
 | `ctx.sdkModelSelect` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | 校验 Host 请求的模型路由，对之后创建的 Session 采用该路由，并在每个活跃 Session 下一次组装 prompt 时交给它。 |
 | `ctx.specdev` | `core` | [`specdev`](../packages/specdev/specdev) | - | [`specdev-guard`](../packages/specdev/specdev-guard), [`sdk-jsonrpc-server`](../packages/sdk/server), [`ide-bridge`](../packages/ide/ide-bridge) | - | 拥有工作区 `.specdev` 布局、作为工作流权威来源的追加式工作流日志及其生成的 status 镜像、唯一的 Human Gate 写入路径、slash 命令面和 `specdev/status` 投影。 |
 | `ctx.specdevPresets` | `core` | [`specdev-presets`](../packages/specdev/specdev-presets) | - | `agent-presets` | - | 发布随附 SpecDev preset 源目录，以及 `dsh-specdev-app` 为 agent-preset registry 声明的角色 preset id。 |

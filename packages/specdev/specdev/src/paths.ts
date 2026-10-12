@@ -10,7 +10,11 @@ import { existsSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { ResolveWorkspaceRootOptions } from './types.ts'
 
-/** Whether `root` contains a `.specdev` directory (not a file). */
+/**
+ * Whether `root` contains a `.specdev` directory (not a file).
+ * @param root - candidate workspace root.
+ * @returns true when `<root>/.specdev` exists and is a directory.
+ */
 export function hasSpecdevLayout(root: string): boolean {
   const layout = join(root, '.specdev')
   try {
@@ -81,6 +85,7 @@ export function resolveWorkspaceRoot(options: ResolveWorkspaceRootOptions = {}):
 /**
  * SpecDev layout root under a resolved workspace: `<workspace>/.specdev`.
  * @param workspaceRoot - absolute workspace root.
+ * @returns the absolute `.specdev` path under that root.
  */
 export function layoutRootOf(workspaceRoot: string): string {
   return join(assertAbsolute(workspaceRoot), '.specdev')
@@ -89,6 +94,7 @@ export function layoutRootOf(workspaceRoot: string): string {
 /**
  * Path to `.specdev/active-workflow` (single-line slug).
  * @param layoutRoot - absolute `.specdev` directory.
+ * @returns the absolute path to the active-workflow file.
  */
 export function activeWorkflowPath(layoutRoot: string): string {
   return join(layoutRoot, 'active-workflow')
@@ -98,6 +104,7 @@ export function activeWorkflowPath(layoutRoot: string): string {
  * Path to `.specdev/specs/<slug>/current-status.json`.
  * @param layoutRoot - absolute `.specdev` directory.
  * @param slug - workflow slug.
+ * @returns the absolute path to that workflow's durable status file.
  */
 export function currentStatusPath(layoutRoot: string, slug: string): string {
   if (typeof slug !== 'string' || slug.trim().length === 0) {
@@ -111,6 +118,7 @@ export function currentStatusPath(layoutRoot: string, slug: string): string {
  * log that is the workflow's source of truth.
  * @param layoutRoot - absolute `.specdev` directory.
  * @param slug - workflow slug.
+ * @returns the absolute path to the append-only workflow log.
  */
 export function workflowLogPath(layoutRoot: string, slug: string): string {
   if (typeof slug !== 'string' || slug.trim().length === 0) {
@@ -123,6 +131,7 @@ export function workflowLogPath(layoutRoot: string, slug: string): string {
  * Path to `.specdev/specs/<slug>/`.
  * @param layoutRoot - absolute `.specdev` directory.
  * @param slug - workflow slug.
+ * @returns the absolute directory holding that workflow's artifacts.
  */
 export function specsSlugDir(layoutRoot: string, slug: string): string {
   if (typeof slug !== 'string' || slug.trim().length === 0) {

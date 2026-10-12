@@ -1289,6 +1289,26 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'ideTerminals',
+    summary: 'Runtime-side capability for running shell commands in Extension-owned terminals.',
+    description: 'Runtime-side capability for running shell commands in Extension-owned terminals. Published by the ide-bridge plugin; a caller must treat `available()` as the only honest readiness fact and fail loud otherwise instead of silently running the command somewhere the user cannot watch.',
+    methods: [
+      {
+        signature: 'available(): boolean',
+        description: 'Whether a connected Extension can run commands in a terminal right now.',
+        parameters: [],
+        returns: 'true while a connected Extension can accept a command.',
+      },
+      {
+        signature: 'execute(request: IdeTerminalExecRequest): Promise<IdeTerminalExecution>',
+        description: 'Start one execution.',
+        parameters: [{ name: 'request', description: 'command, working directory, ownership, and cancellation.' }],
+        returns: 'the started execution once the Extension accepted the command.',
+        throws: ['Error when the bridge is disconnected, or the Extension refused to start the command (no shell integration, terminal creation failure).'],
+      },
+    ],
+  },
+  {
     key: 'inspector',
     summary: 'Shared Host/Client service façade over the realm\'s source publisher.',
     description: 'Shared Host/Client service façade over the realm\'s source publisher.',
@@ -5702,6 +5722,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface HostConnectionRpc {\n    handle(channel: string, handler: ConnectionRpcHandler): () => Promise<void>;\n    intercept(channel: \'/api\', matches: ConnectionRpcEndpointMatcher, handler: ConnectionRpcHandler): () => Promise<void>;\n}',
   },
   {
+    name: 'IdeTerminalExecRequest',
+    declaration: 'export interface IdeTerminalExecRequest {\n    sessionId?: string;\n    command: string;\n    cwd: string;\n    dedicated: boolean;\n    signal?: AbortSignal;\n}',
+  },
+  {
+    name: 'IdeTerminalExecution',
+    declaration: 'export interface IdeTerminalExecution {\n    readonly output: AsyncIterable<string>;\n    readonly done: Promise<number | null>;\n    interrupt(): void;\n}',
+  },
+  {
     name: 'ImageAttachmentLimits',
     declaration: 'export interface ImageAttachmentLimits {\n    maxImageBytes: number;\n    maxImagesPerMessage: number;\n    maxMessageImageBytes: number;\n    maxImagePixels: number;\n    maxImageDimension: number;\n    mediaTypes: readonly ImageMediaType[];\n}',
   },
@@ -7380,10 +7408,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SettingsNamespace',
     declaration: 'export type SettingsNamespace = Branded<\'SettingsNamespace\'>;',
-  },
-  {
-    name: 'SettingsPathOp',
-    declaration: 'export type SettingsPathOp = {\n    op: \'set\';\n    path: readonly string[];\n    value: unknown;\n} | {\n    op: \'unset\';\n    path: readonly string[];\n};',
   },
   {
     name: 'SettingsPathOpView',

@@ -11,7 +11,7 @@ import type { ExtensionIndex } from '../extension-index.ts'
 import type { InteractionCoordinator } from '../interaction-coordinator.ts'
 import type { ConnectionUiState } from '../connection-ui.ts'
 import type { SettingsNamespaceView } from '../session-host.ts'
-import type { BridgeGoalView, BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
+import type { BridgeApprovalPolicy, BridgeGoalView, BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
 import {
   formatOfficialAtPath,
   normalizePathKey,
@@ -426,6 +426,27 @@ export interface ChatPanelHostDeps {
     patch: Record<string, unknown>,
     expectedRevision?: number,
   ) => Promise<SettingsNamespaceView[] | undefined>
+  /**
+   * List permission presets for a session (feature: permission-selector).
+   * Resolves `undefined` when the bridge cannot answer.
+   * @param sessionId - Tab-bound SDK session identity.
+   */
+  requestPermissionList?: (sessionId: string) => Promise<
+    { options: Array<{ value: string; name: string; description?: string }>; current: string } | undefined
+  >
+  /**
+   * Apply a permission preset for a session (feature: permission-selector).
+   * Resolves `undefined` when the bridge cannot answer.
+   * @param sessionId - Tab-bound SDK session identity.
+   * @param preset - preset table key.
+   */
+  requestPermissionSelect?: (sessionId: string, preset: string) => Promise<string | undefined>
+  /**
+   * Read a session's effective approval policy (feature: permission-selector).
+   * Resolves `undefined` when the bridge cannot answer.
+   * @param sessionId - Tab-bound SDK session identity.
+   */
+  requestApprovalPolicy?: (sessionId: string) => Promise<BridgeApprovalPolicy | undefined>
   /**
    * Reveal message-attached change-list (AC-30 primary / AD-CCD-4).
    * @param sourceMessageId - optional assistant id from the summary bubble's turn.
@@ -997,6 +1018,26 @@ export class ChatPanelHost {
   }
 
   /**
+   * Push the permission preset projection to the Webview settings page.
+   * @param sessionId - session the presets apply to.
+   * @param current - effective preset value.
+   * @param options - available presets.
+   * @param approvalPolicy - effective approval policy, when the Host read one.
+   */
+  pushPermissionState(
+    sessionId: string,
+    current: string,
+    options: Array<{ value: string; name: string; description?: string }>,
+    approvalPolicy?: BridgeApprovalPolicy,
+  ): void {
+    this.post(
+      approvalPolicy === undefined
+        ? { type: 'permission/state', sessionId, current, options }
+        : { type: 'permission/state', sessionId, current, options, approvalPolicy },
+    )
+  }
+
+  /**
    * Push a single complete message append for the active session (live turn).
    * @param message - complete chat message.
    */
@@ -1479,6 +1520,15 @@ export class ChatPanelHost {
         return
       }
       this.pushSettingsState(namespaces)
+      // Also push permission state when the settings page opens.
+      const sessionId = this.projectedSessionId()
+      if (sessionId !== undefined) {
+        const perm = await this.deps.requestPermissionList?.(sessionId)
+        if (perm !== undefined) {
+          const policy = await this.deps.requestApprovalPolicy?.(sessionId)
+          this.pushPermissionState(sessionId, perm.current, perm.options, policy)
+        }
+      }
       return
     }
     if (message.type === 'settings/update') {
@@ -1504,6 +1554,26 @@ export class ChatPanelHost {
         return
       }
       this.pushSettingsState(namespaces)
+      return
+    }
+    if (message.type === 'action/permission-select') {
+      try {
+        const applied = await this.deps.requestPermissionSelect?.(message.sessionId, message.preset)
+        if (applied === undefined) {
+          this.pushBanner('权限切换失败：Host 未就绪', 'settings')
+          return
+        }
+        const perm = await this.deps.requestPermissionList?.(message.sessionId)
+        if (perm !== undefined) {
+          const policy = await this.deps.requestApprovalPolicy?.(message.sessionId)
+          this.pushPermissionState(message.sessionId, perm.current, perm.options, policy)
+        }
+      } catch (error) {
+        this.pushBanner(
+          `权限切换失败：${error instanceof Error ? error.message : String(error)}`,
+          'settings',
+        )
+      }
       return
     }
     if (message.type === 'action/compact') {

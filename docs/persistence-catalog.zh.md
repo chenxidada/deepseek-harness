@@ -888,7 +888,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'specdev/advance': SpecdevAdvanceEvent
 ```
 
-来源：[`packages/specdev/specdev/src/types.ts:369`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:374`](../packages/specdev/specdev/src/types.ts)
 
 <a id="specdevdispatch--log-only"></a>
 
@@ -903,7 +903,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'specdev/dispatch': SpecdevDispatchEvent
 ```
 
-来源：[`packages/specdev/specdev/src/types.ts:357`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:362`](../packages/specdev/specdev/src/types.ts)
 
 <a id="specdevgate-decided--log-only"></a>
 
@@ -918,7 +918,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'specdev/gate-decided': SpecdevGateDecidedEvent
 ```
 
-来源：[`packages/specdev/specdev/src/types.ts:345`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:350`](../packages/specdev/specdev/src/types.ts)
 
 <a id="specdevgate-pending--log-only"></a>
 
@@ -933,7 +933,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'specdev/gate-pending': SpecdevGatePendingEvent
 ```
 
-来源：[`packages/specdev/specdev/src/types.ts:339`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:344`](../packages/specdev/specdev/src/types.ts)
 
 <a id="specdevphase--log-only"></a>
 
@@ -948,7 +948,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'specdev/phase': SpecdevPhaseEvent
 ```
 
-来源：[`packages/specdev/specdev/src/types.ts:351`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:356`](../packages/specdev/specdev/src/types.ts)
 
 <a id="specdevreview-verdict--log-only"></a>
 
@@ -963,7 +963,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'specdev/review-verdict': SpecdevReviewVerdictEvent
 ```
 
-来源：[`packages/specdev/specdev/src/types.ts:363`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:368`](../packages/specdev/specdev/src/types.ts)
 
 <a id="specdevscope-decided--log-only"></a>
 
@@ -1012,7 +1012,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'specdev/workflow': SpecdevWorkflowEvent
 ```
 
-来源：[`packages/specdev/specdev/src/types.ts:333`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:338`](../packages/specdev/specdev/src/types.ts)
 
 ### `step/*`
 
@@ -5027,7 +5027,7 @@ SHA-256: `672c4aa2a9b736e3d6e5da6346d2e2ed5e3573f2d0baafa18e7407c9f3fee3db`
 
 SHA-256: `dc3a6af958c362c5ed61713f72c10c5f73d61feef0c61248e9fdc4e6e5f336b7`
 
-来源：[`packages/specdev/specdev/src/types.ts:135`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:136`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5045,7 +5045,7 @@ SHA-256: `dc3a6af958c362c5ed61713f72c10c5f73d61feef0c61248e9fdc4e6e5f336b7`
 
 SHA-256: `a95c4fad724ca1af13c5190f874bf21247908cb4e17c2e94cc1872fc0cadf4d8`
 
-来源：[`packages/specdev/specdev/src/types.ts:319`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:324`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5064,7 +5064,7 @@ SHA-256: `a95c4fad724ca1af13c5190f874bf21247908cb4e17c2e94cc1872fc0cadf4d8`
 
 SHA-256: `c124886ad4b788a2c25c4f36115a03bd9dc9de266b29007cb73c470eadf877c6`
 
-来源：[`packages/specdev/specdev/src/types.ts:191`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:192`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5091,7 +5091,7 @@ SHA-256: `eedd01f37f8424515a692f9a04b3ad84a66f27649e59719e47250645395408a1`
 
 SHA-256: `ba1fe24a0c0d4da93e01704e1fe0465c860b002b281994ec7f8c45f4dbe8fb26`
 
-来源：[`packages/specdev/specdev/src/types.ts:299`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:304`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5113,7 +5113,7 @@ SHA-256: `ba1fe24a0c0d4da93e01704e1fe0465c860b002b281994ec7f8c45f4dbe8fb26`
 
 SHA-256: `fc707eb56aa40003c53b22afec2adb78865dda5f8c4ece2d07c62b9dc943aa97`
 
-来源：[`packages/specdev/specdev/src/types.ts:280`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:285`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5155,7 +5155,7 @@ SHA-256: `28d8db334899530b9b3446988b69abac85f905b17f341f8efb2f58c1c2b08a0d`
 
 SHA-256: `60c6d5af97c480e4c1742af03cf34dc3ba2916cd309571ec86dc96c33bbf2a55`
 
-来源：[`packages/specdev/specdev/src/types.ts:272`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:277`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5174,7 +5174,7 @@ SHA-256: `60c6d5af97c480e4c1742af03cf34dc3ba2916cd309571ec86dc96c33bbf2a55`
 
 SHA-256: `8ed2f8b705ff3e357fdbf6fc47bf415d3211066bb53ac0b29be1511c19a4355b`
 
-来源：[`packages/specdev/specdev/src/types.ts:53`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:54`](../packages/specdev/specdev/src/types.ts)
 
 以下类型之一：
 
@@ -5191,7 +5191,7 @@ SHA-256: `8ed2f8b705ff3e357fdbf6fc47bf415d3211066bb53ac0b29be1511c19a4355b`
 
 SHA-256: `3ac0a1b91da872b5d8824c69640c7e3960dc7bb4658d1b9c1b43392698db1468`
 
-来源：[`packages/specdev/specdev/src/types.ts:290`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:295`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5211,7 +5211,7 @@ SHA-256: `3ac0a1b91da872b5d8824c69640c7e3960dc7bb4658d1b9c1b43392698db1468`
 
 SHA-256: `8ccbbb5031c8e1f54e3ad654f1de792489cb98cfdb5a07cb0064ccaa61d059cd`
 
-来源：[`packages/specdev/specdev/src/types.ts:97`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:98`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5230,7 +5230,7 @@ SHA-256: `8ccbbb5031c8e1f54e3ad654f1de792489cb98cfdb5a07cb0064ccaa61d059cd`
 
 SHA-256: `166fd23e375af2cb7e22dee4cfb03dcad624766da03a767e37410db8a7df5586`
 
-来源：[`packages/specdev/specdev/src/types.ts:183`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:184`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5256,7 +5256,7 @@ SHA-256: `76080575aba9a5a94b2a2bbc5bf75758142eb652867fa79e284d53aea5be2c20`
 
 SHA-256: `6fd13722091b9ecf52567e94b94208d550679b8e74c736a72cab04869fb18fec`
 
-来源：[`packages/specdev/specdev/src/types.ts:310`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:315`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5276,7 +5276,7 @@ SHA-256: `6fd13722091b9ecf52567e94b94208d550679b8e74c736a72cab04869fb18fec`
 
 SHA-256: `22e2dc130c8e0ecddfa95f1c9f39110fb31a25fefc6fea374c380daf39b6b3a9`
 
-来源：[`packages/specdev/specdev/src/types.ts:59`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:60`](../packages/specdev/specdev/src/types.ts)
 
 以下类型之一：
 
@@ -5365,7 +5365,7 @@ SHA-256: `eac265ffb603a3e98c9013eadbe24e1bf0d1124d6cb2df2c4d2bd09caab930f2`
 
 SHA-256: `e1a32c97950000805f6f525079b93bee68677ce69ec26418b4b9365c148cf79a`
 
-来源：[`packages/specdev/specdev/src/types.ts:154`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:155`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5395,7 +5395,7 @@ SHA-256: `e1a32c97950000805f6f525079b93bee68677ce69ec26418b4b9365c148cf79a`
 
 SHA-256: `f1fa5aa2116cce425517b0af83479b425580bf5952563f1e38555b4709ed69df`
 
-来源：[`packages/specdev/specdev/src/types.ts:50`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:51`](../packages/specdev/specdev/src/types.ts)
 
 以下类型之一：
 
@@ -5414,7 +5414,7 @@ SHA-256: `f1fa5aa2116cce425517b0af83479b425580bf5952563f1e38555b4709ed69df`
 
 SHA-256: `4849a63bebecc3bcab11bdade7d83ab4b76f2c62d7725c5a22fb81cbc4a3b83a`
 
-来源：[`packages/specdev/specdev/src/types.ts:202`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:203`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5431,7 +5431,7 @@ SHA-256: `4849a63bebecc3bcab11bdade7d83ab4b76f2c62d7725c5a22fb81cbc4a3b83a`
 
 SHA-256: `412f15ef9db91315c011296c8d735d7bdb7b0863f6ec13ce29ab6810b8250304`
 
-来源：[`packages/specdev/specdev/src/types.ts:264`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:269`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -6569,7 +6569,7 @@ SHA-256: `e4c18e294232c3ba6c9f1999f168263cc55956147cfe4121720899be8e52edd1`
 
 SHA-256: `264ebe58eb564535d5678499cd988e27a9d9b5ed4e08c0add2109b815ba2b067`
 
-来源：[`packages/specdev/specdev/src/types.ts:171`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:172`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -7030,7 +7030,7 @@ SHA-256: `0f46153645c297846a3fad3911636659ca4717a5e7d71c9f50bffacd312115ef`
 
 SHA-256: `995debd17d14500c9186e9551877d277a14900ffd28a24a51091895a28278c0e`
 
-来源：[`packages/specdev/specdev/src/types.ts:159`](../packages/specdev/specdev/src/types.ts)
+来源：[`packages/specdev/specdev/src/types.ts:160`](../packages/specdev/specdev/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|

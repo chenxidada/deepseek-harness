@@ -47,6 +47,11 @@
     - id: ide-bridge
       name: '@deepseek-ai/dsh-ide-bridge'
 
+    - id: path-guard
+      name: '@deepseek-ai/dsh-path-guard'
+      config:
+        allowedPaths: []
+
     # The IDE runs bash in the Extension's own terminal: the user watches each
     # command execute and it inherits their shell environment. The confining
     # stack stays mounted underneath (sandbox, sandbox-policy, permission), and

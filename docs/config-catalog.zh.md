@@ -382,6 +382,33 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-attachment-local -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-bash-ide-terminal -->
+<a id="deepseek-aidsh-bash-ide-terminal"></a>
+
+## `@deepseek-ai/dsh-bash-ide-terminal`
+
+- `inject`: `subprocess` · `sandbox` · `sandboxPolicy` · `ideTerminals`
+- `refs`: [`LocalConfig`](#deepseek-aidsh-bash-local) · `Volatile` (`@deepseek-ai/cordis`)
+- `source`: [`packages/shell/bash-ide-terminal/src/index.ts:154`](../packages/shell/bash-ide-terminal/src/index.ts)
+
+```ts config-catalog
+/**
+ * Plugin config: the local executor's knobs verbatim, plus the execution-stack
+ * switch. The sandbox policy (default mode, fallback root) stays on
+ * `ctx.sandboxPolicy`; this plugin only chooses which stack runs a command.
+ */
+export interface Config extends LocalConfig {
+  /**
+   * Which stack runs this deployment's commands. `ide` runs every model-facing
+   * command in a VS Code integrated terminal through the ide bridge; `sandbox`
+   * runs the inherited confining stack. Volatile, so the settings page can
+   * switch it without restarting the Host.
+   */
+  terminal: Volatile<'ide' | 'sandbox'>
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-bash-ide-terminal -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-bash-local -->
 <a id="deepseek-aidsh-bash-local"></a>
 
@@ -1605,7 +1632,7 @@ export interface Config {
 
 ## `@deepseek-ai/dsh-ide-bridge`
 
-- `source`: [`packages/ide/ide-bridge/src/index.ts:168`](../packages/ide/ide-bridge/src/index.ts)
+- `source`: [`packages/ide/ide-bridge/src/index.ts:198`](../packages/ide/ide-bridge/src/index.ts)
 
 ```ts config-catalog
 /** ide-bridge configuration. */
@@ -2265,6 +2292,28 @@ export interface Config {
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-office-to-pdf -->
+
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-path-guard -->
+<a id="deepseek-aidsh-path-guard"></a>
+
+## `@deepseek-ai/dsh-path-guard`
+
+- `inject`: `tools`
+- `refs`: `Volatile` (`@deepseek-ai/cordis`)
+- `source`: [`packages/guard/path-guard/src/index.ts:38`](../packages/guard/path-guard/src/index.ts)
+
+```ts config-catalog
+/**
+ * Plugin config, validated by the same-named schemastery schema. The whitelist
+ * is read through {@link Volatile} at call time, so a settings-page rewrite
+ * takes effect on the next tool call rather than at plugin load.
+ */
+export interface Config {
+  /** Extra directories that are treated as workspace-internal (auto-approved). */
+  allowedPaths: Volatile<string[]>
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-path-guard -->
 
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-permission-presets -->
 <a id="deepseek-aidsh-permission-presets"></a>
@@ -3031,7 +3080,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-specdev-guard`
 
 - `inject`: `specdev` · `tools` · `sessionProjections`
-- `source`: [`packages/specdev/specdev-guard/src/index.ts:98`](../packages/specdev/specdev-guard/src/index.ts)
+- `source`: [`packages/specdev/specdev-guard/src/index.ts:100`](../packages/specdev/specdev-guard/src/index.ts)
 
 ```ts config-catalog
 /** Optional test hook: override git branch reader. */

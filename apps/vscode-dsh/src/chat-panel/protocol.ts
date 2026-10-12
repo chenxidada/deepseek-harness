@@ -8,7 +8,7 @@
 
 import type { ChatMessage, CompactionMarker, MessageImage, WorkflowMarker } from '../message-store.ts'
 import type { FileReferenceCandidate } from '@deepseek-ai/dsh-file-reference/types'
-import type { BridgeGoalView, BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
+import type { BridgeApprovalPolicy, BridgeGoalView, BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
 
 /**
  * One `@` completion candidate pushed to the composer. This is the record the Host's
@@ -454,6 +454,16 @@ export type HostToWebviewMessage =
   | { type: 'composer/at-candidates'; requestId: string; candidates: AtPathCandidate[] }
   /** `/` menu candidates for one composer query; `requestId` pairs it with its query. */
   | { type: 'composer/slash-candidates'; requestId: string; candidates: SlashCandidate[] }
+  | {
+    /** Permission preset projection for the in-panel settings page. */
+    type: 'permission/state'
+    current: string
+    options: Array<{ value: string; name: string; description?: string }>
+    /** Session these presets apply to, as `action/permission-select` names it. */
+    sessionId: string
+    /** Approval policy that session runs under; absent when the Host read none. */
+    approvalPolicy?: BridgeApprovalPolicy
+  }
 
 /** One image attached to a composer send (feature: image-upload). */
 export interface PromptImage {
@@ -579,6 +589,8 @@ export type WebviewToHostMessage =
   | { type: 'interaction/answer'; id: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }
   /** Dismiss an in-panel question interaction with an error (phase-5). */
   | { type: 'interaction/dismiss'; id: string; error: string }
+  /** Select a permission preset for a session. */
+  | { type: 'action/permission-select'; sessionId: string; preset: string }
   /** Host-side render-detection response (DEBT-7). */
   | { type: 'probe/render-state'; testIds: string[]; renderState: Record<string, boolean> }
   /** Ask the Host for `@` completion candidates; the Host answers with the same `requestId`. */
@@ -874,6 +886,11 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
     if (typeof record.id !== 'string' || record.id === '') return undefined
     if (typeof record.error !== 'string') return undefined
     return { type: 'interaction/dismiss', id: record.id, error: record.error }
+  }
+  if (type === 'action/permission-select') {
+    if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
+    if (typeof record.preset !== 'string' || record.preset === '') return undefined
+    return { type: 'action/permission-select', sessionId: record.sessionId, preset: record.preset }
   }
   return undefined
 }

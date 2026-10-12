@@ -26,6 +26,7 @@ const CASCADE: Readonly<Record<PhaseStepName, readonly PhaseStepName[]>> = {
  * @param status - durable status.
  * @param phaseId - DAG phase id.
  * @param step - step being re-run.
+ * @returns a copy with that step and everything downstream reset to pending, `prototype` pending, and `loop_count` zeroed.
  */
 export function prepareStepRerun(
   status: CurrentStatusJson,
@@ -59,6 +60,7 @@ export function prepareStepRerun(
 /**
  * List cascade targets for a re-run step (for tests / guidance).
  * @param step - step being re-run.
+ * @returns the steps reset along with `step`.
  */
 export function cascadeDownstreamOf(step: PhaseStepName): readonly PhaseStepName[] {
   return CASCADE[step]
@@ -66,6 +68,11 @@ export function cascadeDownstreamOf(step: PhaseStepName): readonly PhaseStepName
 
 /**
  * Set a single step state without cascading (normal progress updates).
+ * @param status - durable status.
+ * @param phaseId - DAG phase id; a phase the status does not carry yet starts all-pending.
+ * @param step - step to move.
+ * @param state - state to set.
+ * @returns a copy with that step set and `last_update` refreshed.
  */
 export function setPhaseStepState(
   status: CurrentStatusJson,
@@ -91,6 +98,8 @@ export function setPhaseStepState(
 
 /**
  * Increment loop_count after a MUST-FIX re-dispatch of implementer.
+ * @param status - durable status.
+ * @returns a copy with `loop_count` raised by one and `last_update` refreshed.
  */
 export function bumpLoopCount(status: CurrentStatusJson): CurrentStatusJson {
   return {

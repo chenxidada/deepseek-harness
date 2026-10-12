@@ -356,7 +356,7 @@ describe('plugin registration and load assertions', () => {
 
   it('requires the mode, because neither default is safe', async () => {
     // The schema rejects a config without the required mode before the provider sees it.
-    await expect(mount({ allowedOrigins: ['*'] } as unknown as Parameters<typeof mount>[0]))
+    await expect(mount({ allowedOrigins: ['*'] } as never))
       .rejects.toThrow('$.mode missing required value')
   })
 

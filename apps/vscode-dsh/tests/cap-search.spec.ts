@@ -4,7 +4,7 @@ import { ChatPanelHost, FakeWebviewPort } from '../src/chat-panel/index.ts'
 import { ConversationController } from '../src/conversation-controller.ts'
 import { type HydratorSessionEvent } from '../src/replay-hydrator.ts'
 import { TIER3_FULL_TEXT_SEARCH_API, searchSessions } from '../src/search/index.ts'
-import { type IdeSessionHost } from '../src/session-host.ts'
+import { IdeSessionHost } from '../src/session-host.ts'
 import { type HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp } from 'node:fs/promises'
@@ -62,7 +62,7 @@ describe('cap:search — session search and reverse path index', () => {
         },
         startCalls,
       }
-      return host as unknown as IdeSessionHost & { startCalls: number[] }
+      return Object.assign(new IdeSessionHost(), host)
     }
 
     function changeRecord(

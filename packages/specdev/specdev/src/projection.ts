@@ -136,6 +136,7 @@ function snapshotFromEvent(event: SessionEvent): SpecdevSnapshot | null | undefi
  * Unrelated events return the same state reference.
  * @param state - prior projection state.
  * @param event - next committed session event.
+ * @returns the folded state: unrelated events leave it, `snapshot: null` clears it, invalid JSON records a `failure`.
  */
 export function applySpecdevProjection(
   state: SpecdevStatusProjectionState,

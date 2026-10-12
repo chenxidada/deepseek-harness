@@ -13,6 +13,7 @@ export type GitBranchReader = (cwd: string) => string | null
 /**
  * Default reader: `git -C <cwd> branch --show-current`.
  * @param cwd - workspace / project repo root (SpecDev Q-1 root).
+ * @returns the current branch name, or `null` when git fails or HEAD is detached.
  */
 export function readGitBranch(cwd: string): string | null {
   try {

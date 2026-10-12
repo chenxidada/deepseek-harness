@@ -85,4 +85,29 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 Live connection state exposed to the runtime and tests.
 
 Source: [`packages/ide/ide-bridge/src/types.ts`](../../packages/ide/ide-bridge/src/types.ts)
+
+<a id="ctxideterminals--ideterminalcapability"></a>
+
+### `ctx.ideTerminals` — `IdeTerminalCapability`
+
+Runtime-side capability for running shell commands in Extension-owned terminals. Published by the ide-bridge plugin; a caller must treat `available()` as the only honest readiness fact and fail loud otherwise instead of silently running the command somewhere the user cannot watch.
+
+```ts cordis-catalog
+/**
+ * Whether a connected Extension can run commands in a terminal right now.
+ * @returns true while a connected Extension can accept a command.
+ */
+available(): boolean
+
+/**
+ * Start one execution.
+ * @param request - command, working directory, ownership, and cancellation.
+ * @returns the started execution once the Extension accepted the command.
+ * @throws Error when the bridge is disconnected, or the Extension refused to
+ *   start the command (no shell integration, terminal creation failure).
+ */
+execute(request: IdeTerminalExecRequest): Promise<IdeTerminalExecution>
+```
+
+Source: [`packages/ide/ide-bridge/src/types.ts`](../../packages/ide/ide-bridge/src/types.ts)
 <!-- END GENERATED cordis-surface -->

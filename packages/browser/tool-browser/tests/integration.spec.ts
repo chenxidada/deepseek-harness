@@ -18,6 +18,7 @@ import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { type ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 import BrowserRuntime from '@deepseek-ai/dsh-browser'
 import * as BrowserPlaywright from '@deepseek-ai/dsh-browser-playwright'
 import * as ToolBrowser from '@deepseek-ai/dsh-tool-browser'
@@ -55,7 +56,21 @@ afterEach(async () => {
 /** A parent Agent backed by a real Session, routed to the fake image-capable model. */
 function agentWithSession(id: string): Agent & { session: Session } {
   const session = Session.create(SessionId(id))
-  return { id: SessionId(id), session, options: IMAGE_ROUTE } as unknown as Agent & { session: Session }
+  return {
+    id: session.id,
+    options: IMAGE_ROUTE,
+    session,
+    inbox: unsupportedInbox(),
+    ctx: new Context(),
+    status: 'idle',
+    send: () => {},
+    followup: () => {},
+    steer: () => {},
+    inject: () => {},
+    cancel() {},
+    runMaintenance: task => task(new AbortController().signal),
+    whenIdle: () => Promise.resolve(),
+  }
 }
 
 /** One mounted composition: the call entry point, the store, and the trace directory. */

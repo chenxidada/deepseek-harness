@@ -38,6 +38,14 @@ Every package below exports a Cordis plugin that a bundle patch can name in a Lo
 | `@deepseek-ai/dsh-hmr` | yes | Coordinated module and profile configuration hot reload |
 | `@deepseek-ai/dsh-plugin-manager` | yes | Current-profile plugin and bundle management shared by dsh CLI, Web and agent tools |
 
+## browser
+
+| Package | Config | Description |
+|---|---|---|
+| `@deepseek-ai/dsh-browser` | yes | Browser automation capability seam (ctx.browser) for the DeepSeek Harness — provider registry, registration-order-independent selection, per-conversation session ownership, action/observation vocabulary, and the BrowserError taxonomy |
+| `@deepseek-ai/dsh-browser-playwright` | yes | Playwright browser provider for the DeepSeek Harness browser capability seam (ctx.browser) |
+| `@deepseek-ai/dsh-tool-browser` | yes | Model-facing browser tools (browser_navigate, browser_snapshot, browser_click, browser_type, browser_press, browser_console, browser_network, browser_close) over the DeepSeek Harness browser capability seam (ctx.browser) |
+
 ## browser-use
 
 | Package | Config | Description |
@@ -234,6 +242,7 @@ Every package below exports a Cordis plugin that a bundle patch can name in a Lo
 
 | Package | Config | Description |
 |---|---|---|
+| `@deepseek-ai/dsh-path-guard` | yes | Path-level approval guard: a tools/pre-execute listener that requires user approval when a tool call's resolved paths fall outside the workspace root and the configured whitelist |
 | `@deepseek-ai/dsh-repeat-tool-reminder` | yes | Repeat-tool-call guard plugin: advisory reminders when an agent loops on identical tool calls |
 | `@deepseek-ai/dsh-tool-call-timeout-policy` | no | Tool-call timeout policy: a tools/execute wrapper that arms a per-tool deadline on exec.signal and returns TOOL_TIMEOUT when it wins |
 
@@ -256,6 +265,12 @@ Every package below exports a Cordis plugin that a bundle patch can name in a Lo
 | `@deepseek-ai/dsh-host-plugin-inventory` | no | Read-only Remote projection of current Cordis Loader plugin state |
 | `@deepseek-ai/dsh-host-product-telemetry-otel` | yes | Explicit product usage events exported through OpenTelemetry HTTP logs |
 | `@deepseek-ai/dsh-host-webserver` | yes | Web route-registration plugin: HTTP and upgrade routes, index transform taps, and static dist fallback; knows no harness concepts |
+
+## ide
+
+| Package | Config | Description |
+|---|---|---|
+| `@deepseek-ai/dsh-ide-bridge` | yes | Host bridge plugin for the ide profile: Unix socket / named-pipe NDJSON answerer for approval and user-questions |
 
 ## interaction
 
@@ -381,6 +396,7 @@ Every package below exports a Cordis plugin that a bundle patch can name in a Lo
 
 | Package | Config | Description |
 |---|---|---|
+| `@deepseek-ai/dsh-bash-ide-terminal` | yes | IDE-terminal implementation of the DeepSeek Harness bash executor seam: with `terminal: 'ide'` every model-facing command runs in a VS Code integrated terminal through the ide bridge, and the confining stack is one config value away |
 | `@deepseek-ai/dsh-bash-local` | yes | Local-subprocess implementation of the DeepSeek Harness bash executor seam |
 | `@deepseek-ai/dsh-bash-sandbox` | yes | Sandbox-consuming implementation of the DeepSeek Harness bash executor seam (confines every command via ctx.sandbox, reports denial/enforcement result facts) |
 | `@deepseek-ai/dsh-pwsh-local` | yes | Local PowerShell implementation of the DeepSeek Harness bash executor seam |
@@ -401,6 +417,14 @@ Every package below exports a Cordis plugin that a bundle patch can name in a Lo
 | `@deepseek-ai/dsh-skill-office` | yes | Bundled Word, PowerPoint, and Excel workflows and structural checks |
 | `@deepseek-ai/dsh-tool-skill` | yes | Model-facing skill loading tool for the DeepSeek Harness |
 | `@deepseek-ai/dsh-tool-workspace-dependencies` | yes | The load_workspace_dependencies tool: absolute paths into a bundled Python, Node.js, and pnpm payload |
+
+## specdev
+
+| Package | Config | Description |
+|---|---|---|
+| `@deepseek-ai/dsh-specdev` | no | SpecDev domain runtime: workspace .specdev resolution, workflow log authority, confirmGate, slash commands, session events, advance guidance, and specdev/status projection |
+| `@deepseek-ai/dsh-specdev-guard` | yes | SpecDev fail-closed guard: Cordis pre-step / pre-execute / tools.guard enforcement for Human Gates, role dispatch, branch discipline, and the durable status file |
+| `@deepseek-ai/dsh-specdev-presets` | no | SpecDev role agent presets and the shipped preset root for roster composition |
 
 ## spill
 

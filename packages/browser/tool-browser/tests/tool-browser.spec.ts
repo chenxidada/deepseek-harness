@@ -8,6 +8,7 @@ import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { type ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 import BrowserRuntime from '@deepseek-ai/dsh-browser'
 import type {
   BrowserAction,
@@ -75,7 +76,21 @@ function agentWithSession(
   route: { provider: string; model: string } | null = IMAGE_ROUTE,
 ): Agent & { session: Session } {
   const session = Session.create(SessionId(id))
-  return { id: SessionId(id), session, options: route ?? {} } as unknown as Agent & { session: Session }
+  return {
+    id: session.id,
+    options: route ?? {},
+    session,
+    inbox: unsupportedInbox(),
+    ctx: new Context(),
+    status: 'idle',
+    send: () => {},
+    followup: () => {},
+    steer: () => {},
+    inject: () => {},
+    cancel() {},
+    runMaintenance: task => task(new AbortController().signal),
+    whenIdle: () => Promise.resolve(),
+  }
 }
 
 /** A session that records every call and answers from one script. */

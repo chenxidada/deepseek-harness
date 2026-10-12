@@ -38,6 +38,7 @@ export interface TechDebtRegistry {
 /**
  * Parse the 「活跃债务」table from `tech-debt-registry.md`.
  * @param slugDir - `.specdev/specs/<slug>`.
+ * @returns the registry path, its markdown, and the active rows the table lists.
  */
 export function parseTechDebtRegistry(slugDir: string): TechDebtRegistry {
   const path = join(slugDir, 'tech-debt-registry.md')
@@ -53,6 +54,7 @@ export function parseTechDebtRegistry(slugDir: string): TechDebtRegistry {
  * Items targeting `currentPhase` with 🔴 blocking severity (Phase Entry Gate).
  * @param registry - parsed registry.
  * @param currentPhase - DAG phase id.
+ * @returns the blocking active items whose target phase is `currentPhase`.
  */
 export function listBlockingInheritedDebt(
   registry: TechDebtRegistry,
@@ -67,6 +69,7 @@ export function listBlockingInheritedDebt(
 /**
  * Human-readable Phase Entry Gate presentation table.
  * @param items - blocking inherited items.
+ * @returns the markdown table, or `(no blocking inherited debt)` when `items` is empty.
  */
 export function formatPhaseEntryDebtTable(items: readonly TechDebtItem[]): string {
   if (items.length === 0) return '(no blocking inherited debt)'
@@ -89,6 +92,7 @@ export function formatPhaseEntryDebtTable(items: readonly TechDebtItem[]): strin
  * @param registry - parsed registry.
  * @param dispositions - item id groups + disposition.
  * @param options - defer target phase when disposition is defer.
+ * @returns the registry re-parsed from the rewritten file.
  */
 export function applyPhaseEntryDispositions(
   registry: TechDebtRegistry,
@@ -128,6 +132,7 @@ export function applyPhaseEntryDispositions(
 /**
  * Summarize active debt counts for snapshot `techDebtSummary`.
  * @param registry - parsed registry.
+ * @returns the blocking count and the total active row count.
  */
 export function summarizeTechDebt(registry: TechDebtRegistry): { blocking: number; total: number } {
   const blocking = registry.active.filter(i => i.blocking === 'blocking').length
@@ -138,6 +143,9 @@ export function summarizeTechDebt(registry: TechDebtRegistry): { blocking: numbe
  * Whether Phase Entry Gate is required before implementer for this phase.
  * Prefer: any phase that is not the first ready (empty-deps) node — i.e. has
  * dependencies or is not `firstReadyPhaseId`.
+ * @param phaseId - DAG phase id.
+ * @param firstReadyId - first ready phase id, or `null` when the plan has none.
+ * @returns true when `phaseId` differs from `firstReadyId`; false when it matches or `firstReadyId` is `null`.
  */
 export function requiresPhaseEntryGate(
   phaseId: string,

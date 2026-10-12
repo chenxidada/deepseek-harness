@@ -19,6 +19,9 @@ const PERMISSION_NS = 'permission'
 /** Settings namespace whose `terminal` selects the execution stack. */
 const EXECUTION_NS = 'bash-ide-terminal'
 
+/** Settings namespace whose `allowedPaths` skips approval outside the workspace. */
+const PATH_GUARD_NS = 'path-guard'
+
 /** The page's section tabs, in display order. */
 type SettingsSection = 'model' | 'provider' | 'compact' | 'permission'
 
@@ -596,6 +599,7 @@ function PermissionSection({
   const execution = layerString(executionNs?.value, 'terminal')
   const permissionNs = settingsState?.namespaces.find(ns => ns.ns === PERMISSION_NS)
   const defaultPreset = layerString(permissionNs?.value, 'defaultPreset')
+  const pathGuardNs = settingsState?.namespaces.find(ns => ns.ns === PATH_GUARD_NS)
 
   return (
     <>
@@ -627,7 +631,114 @@ function PermissionSection({
             bridge={bridge}
           />
         )}
+      <PathWhitelistCard namespace={pathGuardNs} bridge={bridge} />
     </>
+  )
+}
+
+/** Path whitelist: paths outside the workspace that skip approval. */
+function PathWhitelistCard({
+  namespace,
+  bridge,
+}: {
+  namespace?: SettingsNamespaceState
+  bridge: MessageBridge
+}) {
+  const [newPath, setNewPath] = useState('')
+
+  const currentPaths: string[] = (() => {
+    if (namespace?.value === undefined || typeof namespace.value !== 'object' || namespace.value === null) return []
+    const val = (namespace.value as Record<string, unknown>).allowedPaths
+    if (!Array.isArray(val)) return []
+    return val.filter((v): v is string => typeof v === 'string')
+  })()
+
+  const addPath = (): void => {
+    const trimmed = newPath.trim()
+    if (trimmed === '' || namespace === undefined) return
+    if (currentPaths.includes(trimmed)) return
+    bridge.emitIntent({
+      type: 'settings/update',
+      ns: PATH_GUARD_NS,
+      patch: { allowedPaths: [...currentPaths, trimmed] },
+      expectedRevision: namespace.revision,
+    })
+    setNewPath('')
+  }
+
+  const removePath = (path: string): void => {
+    if (namespace === undefined) return
+    bridge.emitIntent({
+      type: 'settings/update',
+      ns: PATH_GUARD_NS,
+      patch: { allowedPaths: currentPaths.filter(p => p !== path) },
+      expectedRevision: namespace.revision,
+    })
+  }
+
+  return (
+    <section data-testid="settings-whitelist" className="dsh-set-card">
+      <div className="dsh-set-card-head">
+        <div className="dsh-set-stack">
+          <span className="dsh-set-card-title">路径白名单</span>
+          <span className="dsh-set-card-desc">
+            白名单内的路径免审批直接访问；工作空间内路径始终免审批。
+          </span>
+        </div>
+      </div>
+      <div className="dsh-set-card-body">
+        {namespace === undefined
+          ? (
+            <div data-testid="settings-whitelist-unavailable" className="dsh-set-hint">
+              路径守卫未挂载 — 所有路径访问由沙箱策略控制。
+            </div>
+          )
+          : (
+            <>
+              {currentPaths.length > 0 && (
+                <ul className="dsh-set-path-list" data-testid="settings-whitelist-list">
+                  {currentPaths.map(p => (
+                    <li key={p} className="dsh-set-path-item">
+                      <code className="dsh-set-path-text">{p}</code>
+                      <button
+                        type="button"
+                        className="dsh-set-path-remove"
+                        onClick={() => removePath(p)}
+                        aria-label={`移除 ${p}`}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {currentPaths.length === 0 && (
+                <div className="dsh-set-hint">暂无白名单路径。工作空间外的路径访问将需要审批。</div>
+              )}
+              <div className="dsh-set-path-add">
+                <input
+                  type="text"
+                  className="dsh-set-input"
+                  data-testid="settings-whitelist-input"
+                  placeholder="/额外/允许/的/路径"
+                  value={newPath}
+                  onChange={e => setNewPath(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addPath() }}
+                />
+                <button
+                  type="button"
+                  className="dsh-secondary-btn"
+                  data-testid="settings-whitelist-add"
+                  disabled={newPath.trim() === ''}
+                  onClick={addPath}
+                >
+                  添加
+                </button>
+              </div>
+            </>
+          )}
+      </div>
+    </section>
   )
 }
 

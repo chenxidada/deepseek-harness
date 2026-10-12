@@ -64,6 +64,14 @@ function restoreUserQuestionError(reason) {
 export { UserQuestionError, restoreUserQuestionError };
 `
       }
+      if (id === '\0shim:dsh-session') {
+        return `
+export function interruptedTurnClosers() { return []; }
+export function SessionLogOffset(value) { return value; }
+export const TOOL_OUTCOME_UNKNOWN = 'TOOL_OUTCOME_UNKNOWN';
+export const TOOL_NOT_STARTED = 'TOOL_NOT_STARTED';
+`
+      }
       if (id === '\0shim:cordis') {
         return `
 class Service { static [Symbol.hasInstance]() { return false; } }
@@ -85,6 +93,7 @@ export default Service;
 const EMPTY_SHIMS = [
   '@deepseek-ai/dsh-user-questions',
   '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-session',
 ]
 
 /**
@@ -118,6 +127,6 @@ export default defineConfig({
     '@deepseek-ai/schemastery',
     '@deepseek-ai/cosmokit',
   ],
-  external: ['vscode', /^@deepseek-ai\/(?!dsh-sdk-client|dsh-sdk-protocol|dsh-subprocess|dsh-ide-bridge|dsh-file-reference|dsh-http-proxy|dsh-user-questions|cordis|schemastery|cosmokit)/],
+  external: ['vscode', /^@deepseek-ai\/(?!dsh-sdk-client|dsh-sdk-protocol|dsh-subprocess|dsh-ide-bridge|dsh-file-reference|dsh-http-proxy|dsh-session|dsh-user-questions|cordis|schemastery|cosmokit)/],
   plugins: [aliasPlugin()],
 })

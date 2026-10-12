@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-specdev-app",
   "description": "The dsh SpecDev profile bundle: Spec-driven workflow runtime, gate guard, and role presets over dsh-sdk-app",
-  "version": "0.1.2-rc.1",
+  "version": "0.2.0-rc.2",
   "publishConfig": {
     "access": "public"
   },
@@ -93,10 +93,10 @@
     "@deepseek-ai/dsh-workflow-ptc": "workspace:*"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:~"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/cordis-plugin-include": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:~",
+    "@deepseek-ai/cordis-plugin-include": "workspace:~"
   }
 }

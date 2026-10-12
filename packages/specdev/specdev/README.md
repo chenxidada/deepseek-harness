@@ -34,6 +34,18 @@ Load the package with a composition entry that also provides `ctx.sessionProject
 The service publishes `ctx.specdev`. Typical calls:
 
 ```ts
+import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Session } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-specdev'
+
+declare const ctx: Context
+declare const session: Session
+declare const parent: Agent
+declare const workspaceRoot: string
+declare const slug: string
+declare const phaseId: string
+
 const active = ctx.specdev.active({ cwd: workspaceRoot })
 const snap = ctx.specdev.snapshot(session, { cwd: workspaceRoot })
 const result = await ctx.specdev.confirmGate(session, { gate: 'hg1', decision: 'pass' }, { cwd: workspaceRoot })

@@ -10,7 +10,7 @@ import { hostSessionHistoryRow, listHistoryFromIndex, mergeHistoryRows } from '.
 import { InteractionCoordinator, type InteractionUi } from '../src/interaction-coordinator.ts'
 import { MessageStore } from '../src/message-store.ts'
 import { foldTimeline, hydrateFromAuthoritativeLog, recoverableDiffsFromMeta } from '../src/replay-hydrator.ts'
-import { IdeSessionHost } from '../src/session-host.ts'
+import { IdeSessionHost, type IdeSessionHostStatus } from '../src/session-host.ts'
 import { TimelineStore } from '../src/timeline-store.ts'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -977,14 +977,14 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-delete-race-'))
         dirs.push(dir)
         const disposed: string[] = []
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
           onNotification() { return () => {} },
           async disposeSession(sessionId: string) { disposed.push(sessionId) },
           async prompt() { return 'mid' },
-        } as unknown as IdeSessionHost
+        })
         // Fast clear keeps the delete's awaits microtask-only while the settle below still has a
         // change-index write in flight, so the interleaving under test is deterministic rather
         // than dependent on relative I/O timing.
@@ -1013,7 +1013,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             writes.push(value as { openTabSet: unknown[] })
           },
         }
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
@@ -1022,7 +1022,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             throw new Error('dispose must not run for empty close')
           },
           async prompt() { return 'mid' },
-        } as unknown as IdeSessionHost
+        })
 
         const controller = new ConversationController(host, state, '/ws')
         const empty = controller.newConversation('empty')
@@ -1041,14 +1041,14 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
       it('CAP-CONVERSATION-011 running close requires confirm; cancel leaves Tab; confirmStopClose unloads without dispose', async () => {
         const disposed: string[] = []
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
           onNotification() { return () => {} },
           async disposeSession(sessionId: string) { disposed.push(sessionId) },
           async prompt() { return 'mid' },
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const tab = controller.newConversation('run')
         controller.registry.setStatus(tab.tabId, 'running')
@@ -1066,13 +1066,13 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
       it('CAP-CONVERSATION-012 delete without confirm does not dispose; host-not-ready blocks delete', async () => {
         const disposed: string[] = []
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
           onNotification() { return () => {} },
           async disposeSession(sessionId: string) { disposed.push(sessionId) },
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const tab = controller.newConversation('del')
         controller.registry.setStatus(tab.tabId, 'running')
@@ -1179,7 +1179,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
     describe('L3 fake Webview protocol (VP-1-send / VP-1-reject)', () => {
       it('CAP-CONVERSATION-016 accepts composer/send on live Tab and rejects empty / no-host', async () => {
         const prompts: string[] = []
-        const registryHost = {
+        const registryHost = Object.assign(new IdeSessionHost(), {
           status: 'connected' as const,
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
@@ -1189,7 +1189,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             return 'msg-1'
           },
           async disposeSession() {},
-        } as unknown as IdeSessionHost
+        })
 
         const controller = new ConversationController(registryHost)
         const tab = controller.newConversation('live')
@@ -1227,14 +1227,14 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       })
 
       it('CAP-CONVERSATION-017 switches Tab with messages/replace and does not cross sessions', async () => {
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected' as const,
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
           onNotification() { return () => {} },
           async prompt() { return 'm' },
           async disposeSession() {},
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const a = controller.newConversation('A')
         await controller.promptTab(a.tabId, 'from-a')
@@ -1263,7 +1263,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       })
 
       it('CAP-CONVERSATION-018 closes last content Tab with messages/replace([])', async () => {
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected' as const,
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
@@ -1272,7 +1272,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           async disposeSession() {
             throw new Error('close must not dispose')
           },
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const tab = controller.newConversation('only')
         await controller.promptTab(tab.tabId, 'bubble-to-clear')
@@ -1314,7 +1314,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
       it('CAP-CONVERSATION-019 surfaces waiting-interaction status from listPending', () => {
         const pending = [{ kind: 'approval' as const, id: '1', sessionId: '', abort: new AbortController() }]
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected' as const,
           interactions: {
             failClosedSession() {},
@@ -1324,7 +1324,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           onNotification() { return () => {} },
           async prompt() { return 'm' },
           async disposeSession() {},
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const tab = controller.newConversation('wait')
         pending[0]!.sessionId = tab.sessionId
@@ -1880,7 +1880,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
   describe('phase2-multitab-history-replay.spec.ts', () => {
     describe('dual-running status does not cross Tabs', () => {
       it('CAP-CONVERSATION-030 pushStatus after switch only carries active sessionId generating', async () => {
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected' as const,
           interactions: {
             failClosedSession() {},
@@ -1892,7 +1892,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           onNotification() { return () => {} },
           async prompt() { return 'm' },
           async disposeSession() {},
-        } as unknown as IdeSessionHost
+        })
 
         const controller = new ConversationController(host)
         const a = controller.newConversation('A')
@@ -2398,7 +2398,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
       it('CAP-CONVERSATION-081 a step with no assistant text closes its bubble so the next step opens its own', () => {
         const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
           setConversationRegistry() {},
@@ -2409,7 +2409,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           onStatusChange: () => () => {},
           prompt: async () => 'msg',
           disposeSession: async () => {},
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const sessionId = controller.newConversation('steps').sessionId
 
@@ -2689,19 +2689,19 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
     })
 
     function stubHost(): IdeSessionHost {
-      return {
+      return Object.assign(new IdeSessionHost(), {
         status: 'connected' as const,
         interactions: new InteractionCoordinator(),
         setConversationRegistry(registry?: unknown) {
           if (registry !== undefined) {
-            ;(this.interactions as InteractionCoordinator).setRegistry(registry as never)
+            this.interactions.setRegistry(registry as never)
           }
         },
         onNotification() { return () => {} },
         async prompt() { return 'msg' },
         async disposeSession() {},
         async readSessionLog() { return [] },
-      } as unknown as IdeSessionHost
+      })
     }
 
     function delay(ms: number): Promise<void> {
@@ -2718,44 +2718,47 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       fake: FakeWebviewPort
     }
 
-    interface StubHost extends IdeSessionHost {
-      emitNotification: (notification: { method: string; params: Record<string, unknown> }) => void
+    /**
+     * Host double whose status and notification fan-out the case drives directly;
+     * every other member keeps the real Host's behaviour.
+     */
+    class StubHost extends IdeSessionHost {
+      private readonly reportedStatusListeners = new Set<(status: IdeSessionHostStatus) => void>()
+      private readonly reportedNotifications = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
+      private reportedStatus: IdeSessionHostStatus = 'connected'
+
+      override get status(): IdeSessionHostStatus {
+        return this.reportedStatus
+      }
+
+      override set status(value: IdeSessionHostStatus) {
+        if (this.reportedStatus === value) return
+        this.reportedStatus = value
+        for (const listener of this.reportedStatusListeners) listener(value)
+      }
+
+      override onStatusChange(listener: (status: IdeSessionHostStatus) => void): () => void {
+        this.reportedStatusListeners.add(listener)
+        return () => { this.reportedStatusListeners.delete(listener) }
+      }
+
+      override onNotification(listener: (notification: { method: string; params: Record<string, unknown> }) => void): () => void {
+        this.reportedNotifications.add(listener)
+        return () => { this.reportedNotifications.delete(listener) }
+      }
+
+      emitNotification(notification: { method: string; params: Record<string, unknown> }): void {
+        for (const listener of this.reportedNotifications) listener(notification)
+      }
+
+      override async prompt(): Promise<string> { return 'msg' }
+      override async disposeSession(): Promise<void> {}
+      override async readSessionLog(): Promise<unknown[]> { return [] }
+      override async resumeSession(): Promise<void> {}
     }
 
     function stubHost(): StubHost {
-      const statusListeners = new Set<(status: string) => void>()
-      const notificationListeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
-      let status: 'idle' | 'starting' | 'connected' | 'error' | 'disconnected' = 'connected'
-      const host = {
-        interactions: new InteractionCoordinator(),
-        get status() { return status },
-        set status(value: typeof status) {
-          if (status === value) return
-          status = value
-          for (const listener of statusListeners) listener(value)
-        },
-        onStatusChange(listener: (next: typeof status) => void) {
-          statusListeners.add(listener)
-          return () => { statusListeners.delete(listener) }
-        },
-        setConversationRegistry(registry?: unknown) {
-          if (registry !== undefined) {
-            ;(this.interactions).setRegistry(registry as never)
-          }
-        },
-        onNotification(listener: (notification: { method: string; params: Record<string, unknown> }) => void) {
-          notificationListeners.add(listener)
-          return () => { notificationListeners.delete(listener) }
-        },
-        emitNotification(notification: { method: string; params: Record<string, unknown> }) {
-          for (const listener of notificationListeners) listener(notification)
-        },
-        async prompt() { return 'msg' },
-        async disposeSession() {},
-        async readSessionLog() { return [] as unknown[] },
-        async resumeSession() {},
-      }
-      return host as unknown as StubHost
+      return new StubHost()
     }
 
     /** Fresh controller + panel + fake port with Host projection wired to the controller. */
@@ -3843,7 +3846,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       it('CAP-CONVERSATION-059 keeps the Tab in the registry while disposeSession is in-flight', async () => {
         let sawTabDuringDispose = false
         let dropTabId = ''
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {} },
           setConversationRegistry() {},
@@ -3852,7 +3855,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             sawTabDuringDispose = controller.registry.get(dropTabId) !== undefined
             await new Promise(resolve => setTimeout(resolve, 5))
           },
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         controller.newConversation('keep')
         const drop = controller.newConversation('drop')
@@ -3865,7 +3868,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       })
 
       it('CAP-CONVERSATION-060 retains the Tab when disposeSession fails so delete can be retried', async () => {
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {} },
           setConversationRegistry() {},
@@ -3873,7 +3876,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           async disposeSession(): Promise<void> {
             throw new Error('bridge dispose failed')
           },
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const keep = controller.newConversation('keep')
         const drop = controller.newConversation('drop')
@@ -3887,7 +3890,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
       it('CAP-CONVERSATION-061 calls disposeSession before registry.close on the delete success path', async () => {
         const order: string[] = []
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: {
             failClosedSession(sessionId: string) {
@@ -3899,7 +3902,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           async disposeSession(sessionId: string): Promise<void> {
             order.push(`dispose:${sessionId}`)
           },
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const drop = controller.newConversation('drop')
         const originalClose = controller.registry.close.bind(controller.registry)
@@ -3919,7 +3922,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
       it('CAP-CONVERSATION-062 closeConversation does not call disposeSession (AD-CU-3)', async () => {
         const disposed: string[] = []
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {} },
           setConversationRegistry() {},
@@ -3927,7 +3930,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           async disposeSession(sessionId: string): Promise<void> {
             disposed.push(sessionId)
           },
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const drop = controller.newConversation('drop')
         await controller.closeConversation(drop.tabId)
@@ -3937,7 +3940,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
       it('CAP-CONVERSATION-064 explicit delete erases the persisted data after disposeSession', async () => {
         const order: string[] = []
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {} },
           setConversationRegistry() {},
@@ -3949,7 +3952,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             order.push(`delete:${sessionId}`)
             return true
           },
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const keep = controller.newConversation('keep')
         const drop = controller.newConversation('drop')
@@ -3965,7 +3968,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
       it('CAP-CONVERSATION-065 closeConversation does not call deleteSession (recoverable close)', async () => {
         const deleted: string[] = []
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {} },
           setConversationRegistry() {},
@@ -3977,7 +3980,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
             deleted.push(sessionId)
             return true
           },
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const drop = controller.newConversation('drop')
 
@@ -3989,7 +3992,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       })
 
       it('CAP-CONVERSATION-066 failed session/delete still clears projections and banners the runtime text', async () => {
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {} },
           setConversationRegistry() {},
@@ -3999,7 +4002,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           async deleteSession(): Promise<boolean> {
             throw new Error('session/delete exploded')
           },
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const drop = controller.newConversation('drop')
         await controller.promptTab(drop.tabId, 'content to drop')
@@ -4368,7 +4371,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           for (const listener of listeners) listener(notification)
         },
       }
-      return host as unknown as IdeSessionHost & { emit(notification: Notification): void }
+      return Object.assign(new IdeSessionHost(), host)
     }
 
     function sessionEvent(
@@ -4457,7 +4460,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
     it('CAP-CONVERSATION-100 a prompted image rides the optimistic user bubble', async () => {
       const prompted: Array<{ blocks: unknown[] }> = []
-      const host = {
+      const host = Object.assign(new IdeSessionHost(), {
         status: 'connected',
         interactions: { failClosedSession() {}, listPending() { return [] } },
         setConversationRegistry() {},
@@ -4467,7 +4470,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           return 'msg-image'
         },
         async disposeSession() {},
-      } as unknown as IdeSessionHost
+      })
       const controller = new ConversationController(host)
       const tab = controller.newConversation('images')
       await controller.promptTab(tab.tabId, '看这张', [{ data: 'AA==', mimeType: 'image/png' }])
@@ -4485,7 +4488,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
     it('CAP-CONVERSATION-104 assistant stream frames stream text and reasoning onto one bubble', () => {
       const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
-      const host = {
+      const host = Object.assign(new IdeSessionHost(), {
         status: 'connected',
         interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
         setConversationRegistry() {},
@@ -4496,7 +4499,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         onStatusChange: () => () => {},
         prompt: async () => 'msg',
         disposeSession: async () => {},
-      } as unknown as IdeSessionHost
+      })
       const controller = new ConversationController(host)
       const sessionId = controller.newConversation('stream').sessionId
       const frame = (payload: Record<string, unknown>): void => {
@@ -4562,7 +4565,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
     it('CAP-CONVERSATION-105 turn-end error and max-tokens reasons append notices', () => {
       const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
-      const host = {
+      const host = Object.assign(new IdeSessionHost(), {
         status: 'connected',
         interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
         setConversationRegistry() {},
@@ -4573,7 +4576,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         onStatusChange: () => () => {},
         prompt: async () => 'msg',
         disposeSession: async () => {},
-      } as unknown as IdeSessionHost
+      })
       const controller = new ConversationController(host)
       const sessionId = controller.newConversation('reasons').sessionId
 
@@ -4592,7 +4595,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
     it('CAP-CONVERSATION-106 developer tool changes and llm retries append notices', () => {
       const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
-      const host = {
+      const host = Object.assign(new IdeSessionHost(), {
         status: 'connected',
         interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
         setConversationRegistry() {},
@@ -4603,7 +4606,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         onStatusChange: () => () => {},
         prompt: async () => 'msg',
         disposeSession: async () => {},
-      } as unknown as IdeSessionHost
+      })
       const controller = new ConversationController(host)
       const sessionId = controller.newConversation('changes').sessionId
 
@@ -4634,7 +4637,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
     it('CAP-CONVERSATION-107 injected user messages append notices while human prompts stay optimistic', () => {
       const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
-      const host = {
+      const host = Object.assign(new IdeSessionHost(), {
         status: 'connected',
         interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
         setConversationRegistry() {},
@@ -4645,7 +4648,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         onStatusChange: () => () => {},
         prompt: async () => 'msg',
         disposeSession: async () => {},
-      } as unknown as IdeSessionHost
+      })
       const controller = new ConversationController(host)
       const sessionId = controller.newConversation('inject').sessionId
 
@@ -4674,7 +4677,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
 
     it('CAP-CONVERSATION-108 tool-role results pair by callId and render text plus failure status', () => {
       const listeners = new Set<(notification: { method: string; params: Record<string, unknown> }) => void>()
-      const host = {
+      const host = Object.assign(new IdeSessionHost(), {
         status: 'connected',
         interactions: { failClosedSession() {}, listPending: () => [], onChange: () => () => {} },
         setConversationRegistry() {},
@@ -4685,7 +4688,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         onStatusChange: () => () => {},
         prompt: async () => 'msg',
         disposeSession: async () => {},
-      } as unknown as IdeSessionHost
+      })
       const controller = new ConversationController(host)
       const sessionId = controller.newConversation('toolv4').sessionId
 

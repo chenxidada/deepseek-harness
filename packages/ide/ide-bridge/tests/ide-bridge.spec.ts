@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { afterEach, describe, expect, it } from 'vitest'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import {
@@ -647,8 +649,28 @@ describe('ide-bridge permission RPC (AC-21/22)', () => {
   })
 })
 
+/**
+ * An agent over a detached session.
+ * @param id - agent identity the bridge falls back to without a session id.
+ * @param sessionId - session identity the bridge forwards.
+ * @returns the agent.
+ */
 function stubAgent(id: string, sessionId: string): Agent {
-  return { id, session: { id: sessionId } } as unknown as Agent
+  return {
+    id: SessionId(id),
+    options: {},
+    session: Session.create(SessionId(sessionId)),
+    inbox: unsupportedInbox(),
+    ctx: new Context(),
+    status: 'idle',
+    send: () => {},
+    followup: () => {},
+    steer: () => {},
+    inject: () => {},
+    cancel() {},
+    runMaintenance: task => task(new AbortController().signal),
+    whenIdle: () => Promise.resolve(),
+  }
 }
 
 function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {

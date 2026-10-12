@@ -2,7 +2,7 @@ import { ConversationController } from '../src/conversation-controller.ts'
 import { ConversationRegistry } from '../src/conversation-registry.ts'
 import { InteractionCoordinator, readInteractionExpiry, type InteractionUi } from '../src/interaction-coordinator.ts'
 import { type InteractionQuickPick, type InteractionWindow, createVscodeInteractionUi, pickPermissionPreset, pickSpecdevGateDecision } from '../src/interaction-ui.ts'
-import { IdeSessionHost, type IdeSessionHost as IdeSessionHostType } from '../src/session-host.ts'
+import { IdeSessionHost } from '../src/session-host.ts'
 import { type ApprovalOutcome } from '@deepseek-ai/dsh-ide-bridge'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -607,11 +607,14 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
         host.onError((message) => {
           seen.push(message)
         })
-        // Force connected so onTransportDeath applies.
-        ;(host as unknown as { status: string }).status = 'connected'
-        await (host as unknown as {
-          onTransportDeath(reason: string): Promise<void>
-        }).onTransportDeath('SDK transport closed or child process exited')
+        // Force connected so onTransportDeath applies. The handler is private, and a
+        // real death needs a live runtime, so this reaches it off the prototype the
+        // way the transport watcher calls it.
+        host.status = 'connected'
+        const onTransportDeath = Object.getOwnPropertyDescriptor(IdeSessionHost.prototype, 'onTransportDeath')?.value as
+          ((this: IdeSessionHost, error: unknown) => Promise<void>) | undefined
+        if (onTransportDeath === undefined) throw new Error('IdeSessionHost#onTransportDeath is missing')
+        await onTransportDeath.call(host, 'SDK transport closed or child process exited')
 
         expect(host.status).toBe('error')
         expect(host.errorMessage).toContain('transport closed')
@@ -900,7 +903,7 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
             return { answers: [] }
           },
         })
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: coordinator,
           setConversationRegistry() {},
@@ -910,7 +913,7 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
           async disposeSession(sessionId: string): Promise<void> {
             order.push(`dispose:${sessionId}`)
           },
-        } as unknown as IdeSessionHostType
+        })
         const controller = new ConversationController(host)
         const keep = controller.newConversation('keep')
         const drop = controller.newConversation('drop')

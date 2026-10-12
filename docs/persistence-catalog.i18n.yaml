@@ -189,23 +189,23 @@
   en: c31fd818742aa164
   zh: c31fd818742aa164
 /session-persistence-event-catalog/events/specdev/specdev-advance-log-only:
-  en: 4c41f282e6cc8972
-  zh: 22c72c0a77031743
+  en: d0d9ecb7c8226fe1
+  zh: ff88015990f66eaf
 /session-persistence-event-catalog/events/specdev/specdev-dispatch-log-only:
-  en: 909b83a0cca0be23
-  zh: 5d1b7edd68e68a69
+  en: 30c05b6036d3e68f
+  zh: 9fe3e7cb0d77db74
 /session-persistence-event-catalog/events/specdev/specdev-gate-decided-log-only:
-  en: 20b90cbedfe78b42
-  zh: 7584acca5687ecd3
+  en: 8252de658083ba7a
+  zh: 7c009901ce06a01b
 /session-persistence-event-catalog/events/specdev/specdev-gate-pending-log-only:
-  en: e26918f841e689c9
-  zh: 43b3448f91082be4
+  en: 8200031c5e115b87
+  zh: 82aed0e821fdd270
 /session-persistence-event-catalog/events/specdev/specdev-phase-log-only:
-  en: 4277fb1d0a92431c
-  zh: 1db5eccec2c72b4e
+  en: 7ce7f50acacc5651
+  zh: 188faf62487fbb17
 /session-persistence-event-catalog/events/specdev/specdev-review-verdict-log-only:
-  en: 7224baa5107c3d33
-  zh: 24208fce70e71f8f
+  en: 12d2322210d5dd32
+  zh: ba512e351f540cc7
 /session-persistence-event-catalog/events/specdev/specdev-scope-decided-log-only:
   en: 170eae445fa1edd7
   zh: da162cc271906ad8
@@ -213,8 +213,8 @@
   en: 26689e4270b1e8e9
   zh: 0e222bb84f6735c0
 /session-persistence-event-catalog/events/specdev/specdev-workflow-log-only:
-  en: 5bfe7e539c7e4641
-  zh: 52672a486107bbc4
+  en: 0e5b4086f2c7a32e
+  zh: 2a7bcd5ef4553fc9
 /session-persistence-event-catalog/events/step:
   en: bd0dcbbc352b771a
   zh: bd0dcbbc352b771a
@@ -1308,50 +1308,50 @@
   en: c64070dea84f81fe
   zh: 5797e229d5027147
 /session-persistence-event-catalog/resolved-persistence-types/specdevactive:
-  en: 68806668085caed5
-  zh: 8b3dcea72a80b1b4
+  en: 22821c6a55310410
+  zh: 738ab5143f20a5ab
 /session-persistence-event-catalog/resolved-persistence-types/specdevadvanceevent:
-  en: 5e063d55c11a4f1d
-  zh: 25c10f6302e6796b
+  en: dc70b0e81cc68598
+  zh: 2da748e4c52bd830
 /session-persistence-event-catalog/resolved-persistence-types/specdevartifactrow:
-  en: 57841d23597a6be5
-  zh: c97f8ca666fe7de9
+  en: 7f5ea971d7d1ea98
+  zh: 9a05b63bd85ca917
 /session-persistence-event-catalog/resolved-persistence-types/specdevartifactrow~2:
   en: 4c9adc7df0ba7e94
   zh: 129072a38bcdb6c6
 /session-persistence-event-catalog/resolved-persistence-types/specdevdispatchevent:
-  en: 423ebc62175bd8dd
-  zh: 0e7297634a203cd8
+  en: 3b9b5047827e68e4
+  zh: f751ce2585dd528a
 /session-persistence-event-catalog/resolved-persistence-types/specdevgatedecidedevent:
-  en: 6ae6eb90ac7197d7
-  zh: 4e8d032022c7650f
+  en: d8cbd6b8298dfa80
+  zh: eb35c7c17d32c461
 /session-persistence-event-catalog/resolved-persistence-types/specdevgateid:
   en: 4ae4d2f98e296b2f
   zh: 3353a243ecbab935
 /session-persistence-event-catalog/resolved-persistence-types/specdevgatependingevent:
-  en: e8f51192380ef187
-  zh: 2b1b584206640ef3
+  en: ad787b9417c2e4dd
+  zh: ec2fccf93aa4aeb3
 /session-persistence-event-catalog/resolved-persistence-types/specdevgatestate:
-  en: b1c2aa7bbcfd2195
-  zh: 9910964fed42bca0
+  en: 82b3754103770572
+  zh: aba27408a3fc3fea
 /session-persistence-event-catalog/resolved-persistence-types/specdevphaseevent:
-  en: ec75c327319795bb
-  zh: cacef52d9b506b6b
+  en: d8215bc06da0a562
+  zh: 2451725a2511b36d
 /session-persistence-event-catalog/resolved-persistence-types/specdevphasesteps:
-  en: 98fdb22e1fe7a665
-  zh: e9849bc325a202af
+  en: 1cd4e1cc5ba99ff2
+  zh: 3391a471096f9660
 /session-persistence-event-catalog/resolved-persistence-types/specdevplanrow:
-  en: 7e0cd16b5e0a69f6
-  zh: 3376e70e8f0de1fd
+  en: 8ff2cbe295dbc4a1
+  zh: 53989343257a5bf1
 /session-persistence-event-catalog/resolved-persistence-types/specdevplanrow~2:
   en: 25c94d1e4f652d22
   zh: 7332cd5c5d1b6c11
 /session-persistence-event-catalog/resolved-persistence-types/specdevreviewverdictevent:
-  en: ebb2cb2ce4b3a5ef
-  zh: 0190a86b2f1bf515
+  en: f49806e27115e751
+  zh: 26ae724ac9ebcfe1
 /session-persistence-event-catalog/resolved-persistence-types/specdevrole:
-  en: f8a55da4342cef80
-  zh: 905eb6712178b94e
+  en: 27203b7deda418ca
+  zh: 975c4afbbb9812c7
 /session-persistence-event-catalog/resolved-persistence-types/specdevscopedecidedevent:
   en: 68980a730eaa3c9b
   zh: b517a03357d53e4c
@@ -1362,17 +1362,17 @@
   en: ac5d5d5cfaaaee3a
   zh: 96fc72f063253dc8
 /session-persistence-event-catalog/resolved-persistence-types/specdevsnapshot:
-  en: e7d471849c16762b
-  zh: 3487c28d286fcd13
+  en: 9e3177e6ed0935ba
+  zh: b50dabaf177ba7fa
 /session-persistence-event-catalog/resolved-persistence-types/specdevstepstate:
-  en: 45dfc79417a7e4b6
-  zh: 79172b7c0e50a917
+  en: 1d8d27396254fd75
+  zh: ddb2f9b41fd4ab3b
 /session-persistence-event-catalog/resolved-persistence-types/specdevuiview:
-  en: cbd6a02d32c894d0
-  zh: cf79545aa560858a
+  en: 0387bd950eb9c3a5
+  zh: c04e8f4e58638b9d
 /session-persistence-event-catalog/resolved-persistence-types/specdevworkflowevent:
-  en: cdd0cce869610ae6
-  zh: 6f5bd9f0776e9d28
+  en: a35fbaeda727b782
+  zh: f764b259f1008813
 /session-persistence-event-catalog/resolved-persistence-types/streamchunk:
   en: e865a9a3b7749c1a
   zh: 16800bf55135c89e
@@ -1587,8 +1587,8 @@
   en: 400510f6d8cfd49a
   zh: a1876781e846a820
 /session-persistence-event-catalog/resolved-persistence-types/blocking-total:
-  en: 843378200457b62a
-  zh: e4415f53f9903ee0
+  en: 01e53e65bd8e8f68
+  zh: ddde45f0e2850280
 /session-persistence-event-catalog/resolved-persistence-types/callid-files-turn:
   en: 5f4d3f66ed86a14d
   zh: 7c729360fa1279e6
@@ -1680,8 +1680,8 @@
   en: 0c52150270146b3b
   zh: 2610a41b1ea55d1c
 /session-persistence-event-catalog/resolved-persistence-types/hg1-hg1-5-hg2-hg3:
-  en: 6682dfd6faf7a627
-  zh: 8a7facea5071b20e
+  en: 8a259e23f370f35d
+  zh: 4808ef23dca17b05
 /session-persistence-event-catalog/resolved-persistence-types/id-outcome:
   en: 6a4a45ec415442ee
   zh: 360f6ed2f30d16b1

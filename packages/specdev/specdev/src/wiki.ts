@@ -45,6 +45,7 @@ export interface DispatchWikiResult extends DispatchSpecdevRoleResult {
 /**
  * Build the wake prompt for the wiki role (aligned with reference wiki agent).
  * @param opts - slug, mode, optional phaseId.
+ * @returns the wake prompt for the chosen mode, naming the slug and the last completed phase when one is given.
  */
 export function wikiRolePrompt(opts: {
   readonly slug: string
@@ -82,6 +83,7 @@ export const WIKI_RELATIVE_ROOT = 'docs/wiki'
  * @param ctx - host context with agents / sessions / optional specdev.
  * @param parent - Orchestrator / calling agent (session cwd = workspace).
  * @param request - slug + mode (+ optional phaseId / prompt).
+ * @returns the role dispatch result extended with the wiki root and the mode it ran in.
  */
 export async function dispatchWiki(
   ctx: Context,
@@ -125,6 +127,10 @@ export async function dispatchWiki(
 /**
  * True when a successful HG-3 pass left no remaining dependent phase
  * (`snapshot.phase === null`) — AC-20 auto-wiki trigger.
+ * @param gate - gate id the decision came from.
+ * @param decision - decision string as the gate recorded it.
+ * @param snapshot - snapshot after the decision, or `undefined` when the caller has none.
+ * @returns true when the gate was hg3, the decision was pass, and no phase remains.
  */
 export function isFinalFeatureHg3Pass(
   gate: string,

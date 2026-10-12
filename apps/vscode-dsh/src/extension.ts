@@ -153,6 +153,12 @@ interface QuickPickItemLike {
   gate?: string
 }
 
+/** A `TextDocumentShowOptions.selection`: the two positions a reveal spans. */
+interface EditorSelection {
+  start: { line: number; character: number }
+  end: { line: number; character: number }
+}
+
 /** Minimal vscode API surface used by this Extension. */
 interface VsCodeLike {
   window: {
@@ -309,7 +315,7 @@ interface VsCodeLike {
     startCharacter: number,
     endLine: number,
     endCharacter: number,
-  ) => unknown
+  ) => EditorSelection
   commands: {
     registerCommand(command: string, callback: (...args: unknown[]) => unknown): { dispose(): void }
     executeCommand?(command: string, ...args: unknown[]): Promise<unknown>
@@ -3020,6 +3026,31 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       await liveHost.updateSetting(ns, patch, expectedRevision)
       return await liveHost.describeSettings()
     },
+    requestPermissionList: async (sessionId) => {
+      const liveHost = host
+      if (liveHost === undefined || liveHost.status !== 'connected') return undefined
+      try {
+        const listed = await liveHost.listPermissionPresets(sessionId)
+        return {
+          current: listed.current,
+          options: listed.options.map((o) => {
+            const opt: { value: string; name: string; description?: string } = { value: o.value, name: o.name }
+            if (o.description !== undefined) opt.description = o.description
+            return opt
+          }),
+        }
+      } catch { return undefined }
+    },
+    requestPermissionSelect: async (sessionId, preset) => {
+      const liveHost = host
+      if (liveHost === undefined || liveHost.status !== 'connected') return undefined
+      return await liveHost.selectPermissionPreset(sessionId, preset)
+    },
+    requestApprovalPolicy: async (sessionId) => {
+      const liveHost = host
+      if (liveHost === undefined || liveHost.status !== 'connected') return undefined
+      return await liveHost.readApprovalPolicy(sessionId)
+    },
     resolveContinueChrome: () => conversations?.continueChromeForTab(),
     resolveTabParentHint: sessionId => conversations?.parentLineageLabel(sessionId),
     resolveDeferredRestoreCount: () => conversations?.panelSnapshot().deferredRestoreCount ?? 0,
@@ -3128,18 +3159,14 @@ function resolveWorkspacePath(path: string, roots: readonly string[]): string | 
  *
  * `askAboutSelection` rejects an empty selection, so the harness needs a non-empty
  * one. A real `Range` is what `TextDocumentShowOptions.selection` documents; the
- * plain object only feeds the injected Node stub, which never reads it as an API
- * type. Reading the constructor off the injected module keeps both callers working.
+ * plain object covers an injected module that carries no `Range` constructor.
  * @param vscode - duck-typed vscode module.
  * @returns a two-line selection from the document start.
  */
-function editorSelection(vscode: VsCodeLike): { start: { line: number; character: number }; end: { line: number; character: number } } {
-  const rangeCtor = (vscode as unknown as {
-    Range?: new (startLine: number, startCharacter: number, endLine: number, endCharacter: number) => unknown
-  }).Range
-  const plain = { start: { line: 0, character: 0 }, end: { line: 1, character: 1 } }
-  if (rangeCtor === undefined) return plain
-  return new rangeCtor(0, 0, 1, 1) as typeof plain
+function editorSelection(vscode: VsCodeLike): EditorSelection {
+  const rangeCtor = vscode.Range
+  if (rangeCtor === undefined) return { start: { line: 0, character: 0 }, end: { line: 1, character: 1 } }
+  return new rangeCtor(0, 0, 1, 1)
 }
 
 /**

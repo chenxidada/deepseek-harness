@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-ide",
   "description": "The dsh ide profile bundle: SDK stdio plus Host bridge over dsh-base and dsh-sdk-app",
-  "version": "0.1.2-rc.1",
+  "version": "0.2.0-rc.2",
   "publishConfig": {
     "access": "public"
   },
@@ -34,17 +34,18 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-bash-ide-terminal": "workspace:^",
-    "@deepseek-ai/dsh-file-reference-local": "workspace:^",
-    "@deepseek-ai/dsh-ide-bridge": "workspace:^",
-    "@deepseek-ai/dsh-session-stats": "workspace:^",
-    "@deepseek-ai/dsh-session-turn-outline": "workspace:^"
+    "@deepseek-ai/dsh-bash-ide-terminal": "workspace:*",
+    "@deepseek-ai/dsh-file-reference-local": "workspace:*",
+    "@deepseek-ai/dsh-ide-bridge": "workspace:*",
+    "@deepseek-ai/dsh-session-stats": "workspace:*",
+    "@deepseek-ai/dsh-session-turn-outline": "workspace:*",
+    "@deepseek-ai/dsh-path-guard": "workspace:*"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:~"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/cordis-plugin-include": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:~",
+    "@deepseek-ai/cordis-plugin-include": "workspace:~"
   }
 }

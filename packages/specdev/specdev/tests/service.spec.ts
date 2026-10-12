@@ -504,7 +504,7 @@ describe('confirmGate gate paths', () => {
       {
         gate: 'phase-entry',
         decision: 'defer',
-        phaseEntry: [{ itemIds: ['STUB-A'], disposition: 'defer', deferredTargetPhase: 7 as unknown as string }],
+        phaseEntry: [{ itemIds: ['STUB-A'], disposition: 'defer', deferredTargetPhase: 7 as never }],
       },
       { cwd: malformed.workspace },
     )).rejects.toThrow(TypeError)

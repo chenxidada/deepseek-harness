@@ -66,7 +66,12 @@ const ALLOW_SESSION_LABEL = 'Allow for this session'
 /** Answer meaning "keep it blocked". */
 const REFUSE_LABEL = 'Refuse'
 
-/** The session whose grants and requests a call belongs to: its tree's root. */
+/**
+ * The session whose grants and requests a call belongs to: its tree's root.
+ * @param ctx - host context with the live `sessions` registry.
+ * @param session - session the call runs in.
+ * @returns the root session of the tree, or `session` itself when it has no parent or that parent is gone.
+ */
 export function authoritySessionOf(ctx: Context, session: Session): Session {
   const parentId = session.header.parentSession
   if (parentId === undefined) return session

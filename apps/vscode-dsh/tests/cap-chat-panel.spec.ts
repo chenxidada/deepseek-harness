@@ -89,11 +89,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         cancelCalls,
         revertCalls,
       }
-      return host as unknown as IdeSessionHost & {
-        emit: (n: HarnessNotification) => void
-        cancelCalls: string[]
-        revertCalls: string[]
-      }
+      return Object.assign(new IdeSessionHost(), host)
     }
 
     function createLivePanel() {
@@ -779,10 +775,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         },
         cancelCalls,
       }
-      return host as unknown as IdeSessionHost & {
-        emit: (n: HarnessNotification) => void
-        cancelCalls: string[]
-      }
+      return Object.assign(new IdeSessionHost(), host)
     }
 
     describe('layer-B streaming / cancel / incomplete', () => {
@@ -989,7 +982,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       it('CAP-CHAT-PANEL-012 Host disconnect fail-closes streaming', () => {
         const statusListeners = new Set<(status: string) => void>()
         const listeners = new Set<NotificationListener>()
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected' as string,
           interactions: {
             failClosedSession() {},
@@ -1015,10 +1008,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
             this.status = next
             for (const l of statusListeners) l(next)
           },
-        } as unknown as IdeSessionHost & {
-          emit: (n: HarnessNotification) => void
-          setStatus: (s: string) => void
-        }
+        })
 
         const controller = new ConversationController(host)
         const tab = controller.newConversation('live')
@@ -1115,14 +1105,14 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         expect(html).toContain('applyThemeKind')
 
         const registry = new ConversationRegistry()
-        const messages = new ConversationController({
+        const messages = new ConversationController(Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
           onNotification() { return () => {} },
           async prompt() { return 'm' },
           async disposeSession() {},
-        } as unknown as IdeSessionHost).messages
+        })).messages
         const panel = new ChatPanelHost({
           registry,
           messages,
@@ -1145,14 +1135,14 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         expect(html).toContain('Generating…')
         expect(html).toContain('is-generating')
 
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected' as const,
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
           onNotification() { return () => {} },
           async prompt() { return 'm' },
           async disposeSession() {},
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const tab = controller.newConversation(EMPTY_LIVE_TITLE)
         const panel = new ChatPanelHost({
@@ -1285,14 +1275,14 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
 
         const copied: string[] = []
         const registry = new ConversationRegistry()
-        const messages = new ConversationController({
+        const messages = new ConversationController(Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
           onNotification() { return () => {} },
           async prompt() { return 'm' },
           async disposeSession() {},
-        } as unknown as IdeSessionHost).messages
+        })).messages
         const panel = new ChatPanelHost({
           registry,
           messages,
@@ -1374,7 +1364,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
     describe('regression smoke', () => {
       it('CAP-CHAT-PANEL-029 composer/send still accepted on live Tab (send path)', async () => {
         const prompts: string[] = []
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected' as const,
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
@@ -1384,7 +1374,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
             return 'msg-1'
           },
           async disposeSession() {},
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const tab = controller.newConversation('live')
         const panel = new ChatPanelHost({
@@ -1403,14 +1393,14 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       })
 
       it('CAP-CHAT-PANEL-030 openFromHistory non-empty → mode=replay and rejects composer/send', async () => {
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected' as const,
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
           onNotification() { return () => {} },
           async prompt() { return 'm' },
           async disposeSession() {},
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const events = [
           {
@@ -1590,15 +1580,15 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       })
 
       it('CAP-CHAT-PANEL-038 L2: controller maps live / unknown / host-not-ready to distinct reasons', () => {
-        const host = {
-          status: 'connected' as const,
+        const host = Object.assign(new IdeSessionHost(), {
+          status: 'connected',
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
           onNotification() { return () => {} },
           async prompt() { return 'm' },
           async disposeSession() {},
           async resumeSession() {},
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const liveTab = controller.newConversation('live')
         const liveChrome = controller.continueChromeForTab(liveTab.tabId)
@@ -1651,7 +1641,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
 
       it('CAP-CHAT-PANEL-040 L2: assistant turn with diffs appends 「本回合改了 N 个文件」; zero diffs forges none', async () => {
         let notify: ((n: HarnessNotification) => void) | undefined
-        const host = {
+        const host = Object.assign(new IdeSessionHost(), {
           status: 'connected' as const,
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
@@ -1661,7 +1651,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
           },
           async prompt() { return 'm' },
           async disposeSession() {},
-        } as unknown as IdeSessionHost
+        })
         const controller = new ConversationController(host)
         const tab = controller.newConversation('live')
         const panel = new ChatPanelHost({
@@ -1720,14 +1710,14 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         const registry = new ConversationRegistry()
         const tab = registry.create('s')
         registry.switchTo(tab.tabId)
-        const controller = new ConversationController({
+        const controller = new ConversationController(Object.assign(new IdeSessionHost(), {
           status: 'connected',
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
           onNotification() { return () => {} },
           async prompt() { return 'm' },
           async disposeSession() {},
-        } as unknown as IdeSessionHost)
+        }))
         const panel = new ChatPanelHost({
           registry,
           messages: controller.messages,
@@ -1805,7 +1795,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
     describe('layer-B panel/state decision authority', () => {
       it('CAP-CHAT-PANEL-061 FakeWebview mirrors Host mode only; empty send is Host-rejected', async () => {
         const prompts: string[] = []
-        const registryHost = {
+        const registryHost = Object.assign(new IdeSessionHost(), {
           status: 'connected' as const,
           interactions: { failClosedSession() {}, listPending() { return [] } },
           setConversationRegistry() {},
@@ -1815,7 +1805,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
             return 'msg-1'
           },
           async disposeSession() {},
-        } as unknown as IdeSessionHost
+        })
 
         const controller = new ConversationController(registryHost)
         const tab = controller.newConversation('live')

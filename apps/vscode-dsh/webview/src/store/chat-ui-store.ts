@@ -72,6 +72,24 @@ export interface SpecdevStatusState {
   loopCount: number
   nextAction?: string
   techDebtSummary?: { blocking: number; total: number }
+  /** Per-phase DAG position the runtime reported, or empty when malformed. */
+  plan: Array<{
+    id: string
+    dependencies: string[]
+    status: 'done' | 'active' | 'todo'
+  }>
+  /** Deliverable rows of the workflow, or empty when malformed. */
+  artifacts: Array<{
+    path: string
+    label: string
+    phaseId: string | null
+    status: 'ready' | 'missing'
+  }>
+  /** Latest scope grant the status frame carried; absent when it carried none. */
+  lastApprovedScope?: {
+    decision: 'once' | 'directory' | 'session'
+    paths: string[]
+  }
 }
 
 export interface TabChromeItem {
@@ -293,8 +311,12 @@ export interface SettingsState {
 export interface PermissionState {
   /** Currently active preset name. */
   current: string
-  /** Available preset names. */
-  presets: Array<{ name: string; description?: string }>
+  /** Selectable presets the runtime offered, with the label each shows. */
+  options: Array<{ value: string; name: string; description?: string }>
+  /** Session the selection applies to. */
+  sessionId: string
+  /** Approval policy the active session runs under; absent when the read returned none. */
+  approvalPolicy?: 'ask' | 'never'
 }
 
 /** Redacted credential reference state mirrored from Host `settings/credentials`. */
@@ -477,6 +499,8 @@ export interface ChatUiState {
   deleteConfirm?: DeleteConfirmState
   /** Current model selection state (feature: model-selector). */
   modelState?: ModelState
+  /** Permission preset projection for the in-panel settings page. */
+  permission?: PermissionState
   /** Current token usage (feature: token-status). */
   tokenStatus?: TokenStatus
   /** Route the active session's last request used (feature: model-route). */
@@ -833,6 +857,37 @@ function mapSettingsNamespaces(raw: unknown): SettingsNamespaceState[] | undefin
     })
   }
   return namespaces
+}
+
+/**
+ * Read one `permission/state` frame's preset projection. A frame without the
+ * active preset or the session it applies to cannot drive the selector, so the
+ * caller keeps the projection it already had rather than showing a half-read one.
+ */
+function mapPermissionState(frame: Record<string, unknown>): PermissionState | undefined {
+  if (typeof frame.current !== 'string' || typeof frame.sessionId !== 'string') return undefined
+  const options: PermissionState['options'] = []
+  if (Array.isArray(frame.options)) {
+    for (const entry of frame.options) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const option = entry as Record<string, unknown>
+      if (typeof option.value !== 'string' || typeof option.name !== 'string') continue
+      options.push({
+        value: option.value,
+        name: option.name,
+        ...typeof option.description === 'string' ? { description: option.description } : {},
+      })
+    }
+  }
+  const approvalPolicy = frame.approvalPolicy === 'ask' || frame.approvalPolicy === 'never'
+    ? frame.approvalPolicy
+    : undefined
+  return {
+    current: frame.current,
+    options,
+    sessionId: frame.sessionId,
+    ...approvalPolicy === undefined ? {} : { approvalPolicy },
+  }
 }
 
 function mapModelOption(raw: unknown): ModelOption | undefined {
@@ -1699,9 +1754,11 @@ export function applyHostFrame(raw: unknown): void {
       settingsState: { namespaces },
     }
   } else if (type === 'permission/state') {
+    const permission = mapPermissionState(frame)
+    if (permission === undefined) return
     state = {
       ...state,
-      permission: frame as unknown as PermissionState,
+      permission,
     }
   } else if (type === 'token/status') {
     // A background session's sample must not own this panel's ring (multi-Tab).

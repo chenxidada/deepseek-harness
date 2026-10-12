@@ -5,18 +5,36 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import { Context } from '@deepseek-ai/cordis'
+import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import {
   attachSpecdevMetadata,
+  MemoryInbox,
   parseSpecdevRole,
   readSpecdevMetadata,
   SPECDEV_META,
   SPECDEV_ROLES,
 } from '@deepseek-ai/dsh-specdev'
 
-/** An agent-shaped options bag; metadata helpers touch nothing else. */
-function optionBag(initial: Record<string, unknown> = {}): Agent {
-  return { options: { ...initial } } as unknown as Agent
+/** A live agent whose options bag is the only state the metadata helpers touch. */
+function optionBag(initial: AgentOptions = {}): Agent {
+  const session = Session.create(SessionId('specdev-metadata'))
+  return {
+    id: session.id,
+    options: { ...initial },
+    session,
+    inbox: new MemoryInbox(),
+    ctx: new Context(),
+    status: 'idle',
+    send: () => {},
+    followup: () => {},
+    steer: () => {},
+    inject: () => {},
+    cancel() {},
+    runMaintenance: task => task(new AbortController().signal),
+    whenIdle: () => Promise.resolve(),
+  }
 }
 
 describe('parseSpecdevRole', () => {
@@ -42,7 +60,7 @@ describe('attachSpecdevMetadata', () => {
       .toThrow(/specdev.role must be one of/)
     expect(() => attachSpecdevMetadata(agent, { role: 'verifier', slug: '   ' }))
       .toThrow(/specdev.slug must be a non-empty string/)
-    expect(() => attachSpecdevMetadata(agent, { role: 'verifier', slug: 7 as unknown as string }))
+    expect(() => attachSpecdevMetadata(agent, { role: 'verifier', slug: 7 as never }))
       .toThrow(/specdev.slug must be a non-empty string/)
     expect(() => attachSpecdevMetadata(agent, { role: 'verifier', slug: 'wf', phaseId: ' ' }))
       .toThrow(/specdev.phaseId must be a non-empty string/)
@@ -58,7 +76,7 @@ describe('attachSpecdevMetadata', () => {
 describe('readSpecdevMetadata', () => {
   it('reads each field independently and drops empty ones', () => {
     expect(readSpecdevMetadata(optionBag())).toEqual({})
-    expect(readSpecdevMetadata(optionBag({ [SPECDEV_META.slug]: '', [SPECDEV_META.phaseId]: 7 }))).toEqual({})
+    expect(readSpecdevMetadata(optionBag({ [SPECDEV_META.slug]: '', [SPECDEV_META.phaseId]: 7 as never }))).toEqual({})
     expect(readSpecdevMetadata(optionBag({
       [SPECDEV_META.role]: 'implementer',
       [SPECDEV_META.slug]: 'wf',
@@ -66,7 +84,7 @@ describe('readSpecdevMetadata', () => {
   })
 
   it('refuses a role value that is not a published role', () => {
-    expect(() => readSpecdevMetadata(optionBag({ [SPECDEV_META.role]: 'nope' })))
+    expect(() => readSpecdevMetadata(optionBag({ [SPECDEV_META.role]: 'nope' as never })))
       .toThrow(/specdev.role must be one of/)
   })
 })

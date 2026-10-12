@@ -34,6 +34,7 @@ export interface CompletePhaseGitResult {
 /**
  * Validate that `phaseId` looks like a DAG id (non-empty, no path separators).
  * @param phaseId - DAG `phases[].id`.
+ * @returns the `impl-<phaseId>` branch name.
  */
 export function phaseBranchName(phaseId: string): string {
   const id = phaseId.trim()
@@ -46,6 +47,7 @@ export function phaseBranchName(phaseId: string): string {
 /**
  * Read current branch (`git branch --show-current`). Fail-closed → `null`.
  * @param cwd - project repo root.
+ * @returns the current branch, or `null` when git fails or HEAD is detached.
  */
 export function readCurrentBranch(cwd: string): string | null {
   try {
@@ -68,6 +70,7 @@ export function readCurrentBranch(cwd: string): string | null {
  *
  * @param phaseId - DAG phase id.
  * @param options - cwd + optional mode.
+ * @returns the branch name and whether this call created the branch or stayed on it.
  */
 export function ensurePhaseBranch(
   phaseId: string,
@@ -112,6 +115,7 @@ export function ensurePhaseBranch(
  *
  * @param request - phaseId + explicit file list.
  * @param options - cwd.
+ * @returns the branch, whether a commit was created, and the merge/delete outcomes for the listed files.
  */
 export function completePhaseGit(
   request: { readonly phaseId: string; readonly files: readonly string[] },
@@ -157,6 +161,7 @@ export function completePhaseGit(
 /**
  * Reject empty lists and blind add patterns (AC-41 / AC-45: never `-A` / `.`).
  * @param files - caller-provided paths.
+ * @returns the trimmed paths in their original order.
  */
 export function normalizeExplicitFiles(files: readonly string[]): string[] {
   if (!Array.isArray(files) || files.length === 0) {

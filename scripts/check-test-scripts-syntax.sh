@@ -9,10 +9,10 @@
 # executes those files, so a syntax error in one of them fails a gate that
 # `check:ci:static` runs.
 #
-# The three link assets below are pinned rather than discovered: a pure glob check would
-# pass vacuously after a rename, which is the exact failure mode this gate exists to
-# remove. Files found by the glob but absent from the pinned list are still checked, so a
-# new shell asset is covered the moment it lands.
+# The link asset below is pinned rather than discovered: a pure glob check would pass
+# vacuously after a rename, which is the exact failure mode this gate exists to remove.
+# Files found by the glob but absent from the pinned list are still checked, so a new
+# shell asset is covered the moment it lands.
 #
 # `bash` is already a hard requirement of this repository's other shell gates (e.g.
 # `pnpm run check:windows-wine` -> `bash scripts/wine-windows-gates.sh`), so this adds no
@@ -23,7 +23,6 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scan_dir="apps/vscode-dsh/test-scripts"
 pinned=(
   "${scan_dir}/run-layer-v-smoke.sh"
-  "${scan_dir}/layer-v-shadow-preset.sh"
 )
 
 status=0

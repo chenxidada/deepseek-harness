@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SpecdevService, {
   attachSpecdevMetadata,
@@ -46,6 +46,27 @@ function tempDir(prefix: string): string {
 function writeStatusFixture(path: string, status: CurrentStatusJson): void {
   parseCurrentStatus(status)
   writeFileSync(path, `${JSON.stringify(status, null, 2)}\n`)
+}
+
+/** A registerable agent over a real session; pending input stays in memory. */
+function stubAgent(session: Session): Agent {
+  const inbox = new MemoryInbox()
+  let status: AgentStatus = 'idle'
+  return {
+    id: session.id,
+    options: {},
+    session,
+    inbox,
+    ctx: new Context(),
+    get status() { return status },
+    send: () => {},
+    followup: () => {},
+    steer: () => {},
+    inject(input) { inbox.append('next-step', input) },
+    cancel() { status = 'idle' },
+    runMaintenance: task => task(new AbortController().signal),
+    whenIdle() { return Promise.resolve() },
+  }
 }
 
 async function harness(cwd: string) {
@@ -312,7 +333,7 @@ describe('SpecDev confirmGate → file + event + projection', () => {
 
 describe('SpecDev metadata + dependency contract', () => {
   it('attaches specdev.role / slug / phaseId on AgentOptions', () => {
-    const agent = { options: {} as Record<string, unknown> } as unknown as Agent
+    const agent = stubAgent(Session.create(SessionId('specdev-metadata')))
     attachSpecdevMetadata(agent, {
       role: 'implementer',
       slug: 'demo',
@@ -335,23 +356,7 @@ describe('SpecDev metadata + dependency contract', () => {
     await ctx.plugin(SpecdevService)
 
     const parentSession = ctx.sessions.create(SessionId('orch-parent'), { meta: { cwd: workspace } })
-    const inbox = new MemoryInbox()
-    let status: AgentStatus = 'idle'
-    const parent: Agent = {
-      id: parentSession.id,
-      options: {},
-      session: parentSession,
-      inbox,
-      ctx: new Context(),
-      get status() { return status },
-      send: () => {},
-      followup: () => {},
-      steer: () => {},
-      inject(input) { inbox.append('next-step', input) },
-      cancel() { status = 'idle' },
-      runMaintenance: task => task(new AbortController().signal),
-      whenIdle() { return Promise.resolve() },
-    }
+    const parent = stubAgent(parentSession)
     ctx.agents.register(parent)
 
     const result = await ctx.specdev.dispatchRole(parent, {

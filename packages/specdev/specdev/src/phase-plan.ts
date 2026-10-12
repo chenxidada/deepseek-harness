@@ -35,6 +35,7 @@ function isStringArray(value: unknown): value is string[] {
 /**
  * Extract the first fenced \`\`\`json block that contains a \`phases\` array.
  * @param markdown - phase-plan.md contents.
+ * @returns the parsed JSON value, still unvalidated — pass it to {@link parsePhasePlanDag}.
  */
 export function extractPhasePlanDagJson(markdown: string): unknown {
   const fence = /```json\s*([\s\S]*?)```/i.exec(markdown)
@@ -42,7 +43,8 @@ export function extractPhasePlanDagJson(markdown: string): unknown {
     throw new SpecdevError('phase-plan.md has no ```json fence', 'SPECDEV_PHASE_PLAN_INVALID')
   }
   try {
-    return JSON.parse(fence[1]) as unknown
+    const parsed: unknown = JSON.parse(fence[1])
+    return parsed
   } catch (error: unknown) {
     /* v8 ignore next -- JSON.parse reports a SyntaxError. */
     const detail = error instanceof Error ? error.message : String(error)
@@ -53,6 +55,7 @@ export function extractPhasePlanDagJson(markdown: string): unknown {
 /**
  * Validate and normalize a DAG document.
  * @param raw - JSON-parsed unknown value.
+ * @returns the DAG with trimmed phase ids and dependency ids.
  */
 export function parsePhasePlanDag(raw: unknown): PhasePlanDag {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -99,6 +102,7 @@ export function parsePhasePlanDag(raw: unknown): PhasePlanDag {
  * plan does not carry one.
  * @param dag - parsed DAG.
  * @param phaseId - DAG phase id.
+ * @returns the declared `ui` value, or `undefined` when the plan omits the phase or its declaration.
  */
 export function phaseUiOf(dag: PhasePlanDag, phaseId: string): boolean | undefined {
   return dag.phases.find(phase => phase.id === phaseId.trim())?.ui
@@ -109,6 +113,7 @@ export function phaseUiOf(dag: PhasePlanDag, phaseId: string): boolean | undefin
  * completed dependency set — for HG-2 bootstrap, "ready" means \`dependencies\`
  * is empty (no prior phases required).
  * @param dag - parsed DAG.
+ * @returns the id of the first phase with no dependencies, else the first phase's id, or `null` for an empty DAG.
  */
 export function firstReadyPhaseId(dag: PhasePlanDag): string | null {
   for (const phase of dag.phases) {
@@ -123,6 +128,7 @@ export function firstReadyPhaseId(dag: PhasePlanDag): string | null {
  * itself is not completed.
  * @param dag - parsed DAG.
  * @param completedPhaseIds - phases already finished (HG-3 passed).
+ * @returns the first unfinished phase whose dependencies are all complete, or `null` when none is ready.
  */
 export function nextReadyPhaseId(
   dag: PhasePlanDag,
@@ -142,6 +148,7 @@ export function nextReadyPhaseId(
  * Whether `phaseId` exists in the DAG (AC-42).
  * @param dag - parsed DAG.
  * @param phaseId - candidate id.
+ * @returns true when the trimmed candidate matches a phase id in the DAG.
  */
 export function isDagPhaseId(dag: PhasePlanDag, phaseId: string): boolean {
   const id = phaseId.trim()
@@ -151,6 +158,7 @@ export function isDagPhaseId(dag: PhasePlanDag, phaseId: string): boolean {
 /**
  * Read and parse \`phase-plan.md\` under a slug directory.
  * @param slugDir - \`.specdev/specs/<slug>\`.
+ * @returns the DAG parsed from that file.
  */
 export function readPhasePlanDag(slugDir: string): PhasePlanDag {
   const path = join(slugDir, 'phase-plan.md')
@@ -165,6 +173,7 @@ export function readPhasePlanDag(slugDir: string): PhasePlanDag {
  * Whether a markdown artifact exists and has non-whitespace content.
  * @param slugDir - slug directory.
  * @param fileName - file under the slug directory.
+ * @returns true when the file exists and holds more than whitespace.
  */
 export function artifactNonEmpty(slugDir: string, fileName: string): boolean {
   const path = join(slugDir, fileName)

@@ -53,6 +53,8 @@ const PENDING_GATES = {
  * @param ctx - host context with `specdev` + `sessionProjections`.
  * @param session - session whose projection carries gate-decided events.
  * @param options - workspace resolution options for file comparison.
+ * @returns the projection-backed status, or an all-pending fail-closed view
+ *   when the session carries no SpecDev projection yet.
  */
 export function resolveAuthoritativeStatus(
   ctx: Context,

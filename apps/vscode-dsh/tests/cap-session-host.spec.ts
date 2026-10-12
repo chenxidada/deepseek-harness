@@ -28,6 +28,15 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
+/**
+ * Node's CommonJS resolver hook. `Module._load` is an internal the Node typings do
+ * not declare, and injecting the `vscode` module for a source `activate` is the one
+ * path that has to replace it.
+ */
+interface ModuleWithLoadHook {
+  _load?: (request: unknown, ...rest: unknown[]) => unknown
+}
+
 function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + timeoutMs
@@ -1914,6 +1923,14 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
  */
     const TEXT_RENDER_FIELDS = ['text', 'renderedText', 'summary', 'log'] as const
 
+    /**
+     * The record as the field map its contract is written over: AD-14 asserts the
+     * enumerable key set, which the declared interface does not index.
+     */
+    function fieldsOf(record: HostDiagnosticRecord): Record<string, unknown> {
+      return { ...record }
+    }
+
     function expectFieldShape(record: Record<string, unknown>, field: typeof RECORD_FIELDS[number]): void {
       const value = record[field.name]
       if (value === null) {
@@ -1949,7 +1966,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
           stderrTail: ['one', 'two'],
         })
 
-        const produced = record as unknown as Record<string, unknown>
+        const produced = fieldsOf(record)
         expect(RECORD_FIELDS).toHaveLength(18)
         expect(Object.keys(produced).sort()).toEqual(RECORD_FIELDS.map(field => field.name).sort())
         for (const field of RECORD_FIELDS) expectFieldShape(produced, field)
@@ -1983,7 +2000,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         const recorder = new HostDiagnosticRecorder()
         const record = recorder.record({ kind: 'other' })
 
-        for (const field of RECORD_FIELDS) expectFieldShape(record as unknown as Record<string, unknown>, field)
+        for (const field of RECORD_FIELDS) expectFieldShape(fieldsOf(record), field)
         expect(record.detail).not.toBe('')
         expect(record.hint).not.toBe('')
         expect(record.stderrTail).toEqual([])
@@ -2005,7 +2022,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
 
       it('CAP-SESSION-HOST-054 AD-14: no rendered-text field exists on a record', () => {
         const recorder = new HostDiagnosticRecorder()
-        const record = recorder.record({ kind: 'spawn', detail: 'spawn ENOENT' }) as unknown as Record<string, unknown>
+        const record = fieldsOf(recorder.record({ kind: 'spawn', detail: 'spawn ENOENT' }))
 
         for (const field of TEXT_RENDER_FIELDS) expect(record[field]).toBeUndefined()
         for (const key of Object.keys(record)) expect(TEXT_RENDER_FIELDS).not.toContain(key)
@@ -2042,7 +2059,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
     }
 
     describe('diagnostics reading policy (AD-14 version split)', () => {
-      const known = new HostDiagnosticRecorder().record({ kind: 'other' }) as unknown as Record<string, unknown>
+      const known = fieldsOf(new HostDiagnosticRecorder().record({ kind: 'other' }))
 
       it('CAP-SESSION-HOST-055 accepts an empty store without asserting any version', () => {
         const read = readRecords([])
@@ -3051,8 +3068,8 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       it('CAP-SESSION-HOST-092 with the test gate closed the hook is never registered', async () => {
         // `activate` resolves `vscode` through `createRequire` when no module is
         // injected, which is the only path where the gate can be observed closed.
-        const module = Module as unknown as { _load: (...args: unknown[]) => unknown }
-        const original = module._load
+        const module = Module as ModuleWithLoadHook
+        const original = module._load!
         const fake = makeVscode()
         module._load = function (request: unknown, ...rest: unknown[]): unknown {
           if (request === 'vscode') return fake
@@ -4063,8 +4080,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         // The extension installs its interaction UI only when the window exposes a
         // QuickPick surface, and a card no surface can present settles itself before a
         // driver could answer it: this window exposes one that never answers.
-        ;(vscode.window as unknown as { showQuickPick: () => Promise<undefined> }).showQuickPick
-          = () => new Promise(() => {})
+        Object.assign(vscode.window, { showQuickPick: () => new Promise<undefined>(() => {}) })
         activateWith(vscode)
         await commands.get('dsh.test.setCredentialPresence')!(true)
         await commands.get('dsh.test.requestStart')!('command-start')
@@ -4104,8 +4120,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       it('CAP-SESSION-HOST-169 the webview-frame approval hook posts the panel frame that settles a card', async () => {
         mockConnectedHost()
         const vscode = makeVscode()
-        ;(vscode.window as unknown as { showQuickPick: () => Promise<undefined> }).showQuickPick
-          = () => new Promise(() => {})
+        Object.assign(vscode.window, { showQuickPick: () => new Promise<undefined>(() => {}) })
         activateWith(vscode)
         const answer = commands.get('dsh.test.answerApprovalFromWebview')!
         expect(await answer('', 'allowed-once')).toEqual({ ok: false, reason: 'invalid-id' })

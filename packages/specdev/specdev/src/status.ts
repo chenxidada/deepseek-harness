@@ -23,6 +23,7 @@ const GATE_STATES: ReadonlySet<string> = new Set(['pending', 'passed'])
 
 /** SpecDev domain error with a stable machine code. */
 export class SpecdevError extends Error {
+  /** Stable code identifying the failure, e.g. `SPECDEV_STATUS_INVALID`. */
   readonly code: string
 
   constructor(message: string, code: string) {
@@ -78,6 +79,7 @@ function parseStep(value: unknown, label: string): {
 /**
  * Parse and validate durable `current-status.json` content.
  * @param raw - JSON-parsed unknown value.
+ * @returns the validated status: omitted `hg1_5`/`prototype` default to `pending`, and set v2 fields are kept.
  */
 export function parseCurrentStatus(raw: unknown): CurrentStatusJson {
   const record = asRecord(raw)
@@ -158,6 +160,7 @@ export function parseCurrentStatus(raw: unknown): CurrentStatusJson {
 /**
  * Read durable status from disk.
  * @param path - absolute path to `current-status.json`.
+ * @returns the validated status read from that file.
  */
 export function readCurrentStatusFile(path: string): CurrentStatusJson {
   let text: string
@@ -193,6 +196,7 @@ export async function writeCurrentStatusFile(path: string, status: CurrentStatus
  * Infer the pending Human Gate from durable gate flags and stage.
  * @param status - durable status.
  * @param uiWorkflow - whether the phase plan declares a UI phase, which orders HG-1.5 before HG-2.
+ * @returns the first gate still pending in that order, or `null` when all four are passed.
  */
 export function inferPendingGate(status: CurrentStatusJson, uiWorkflow: boolean): SpecdevGateId | null {
   if (status.human_gates.hg1 === 'pending') return 'hg1'
@@ -207,6 +211,7 @@ export function inferPendingGate(status: CurrentStatusJson, uiWorkflow: boolean)
  * @param status - durable status.
  * @param ui - visual chain declarations read from the phase plan.
  * @param pendingGate - optional override for pending gate.
+ * @returns the snapshot carrying the status gates, steps, and UI view, plus the optional v2 pipeline fields.
  */
 export function snapshotFromStatus(
   status: CurrentStatusJson,
@@ -242,6 +247,7 @@ export function snapshotFromStatus(
  * @param slug - workflow slug.
  * @param description - optional human description (often the command name).
  * @param pipeline - optional initiating command / pipeline mode for schema v2.
+ * @returns status at stage `requirement-analysis`, with every gate pending, no phases, and `loop_count` zero.
  */
 export function createInitialStatus(
   slug: string,
@@ -278,6 +284,7 @@ export function createInitialStatus(
  * status does not carry yet.
  * @param status - durable status.
  * @param phaseId - DAG phase id.
+ * @returns the phase's step record, or an all-pending record when the status omits the phase.
  */
 export function phaseStepsOf(
   status: CurrentStatusJson,

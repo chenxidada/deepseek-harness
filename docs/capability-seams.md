@@ -283,6 +283,8 @@ flowchart LR
   pkg_ide_bridge["ide-bridge"]
   svc_ideBridge["ctx.ideBridge<br/>IDE Host bridge channel"]
   pkg_ide["ide"]
+  svc_ideTerminals["ctx.ideTerminals<br/>IDE Extension-owned terminal executions"]
+  pkg_bash_ide_terminal["bash-ide-terminal"]
   pkg_sdk_jsonrpc_server["sdk-jsonrpc-server"]
   svc_sdkSessionEnsure["ctx.sdkSessionEnsure<br/>SDK session materialization"]
   svc_sdkSessionDispose["ctx.sdkSessionDispose<br/>SDK session teardown"]
@@ -364,6 +366,7 @@ flowchart LR
   pkg_host_product_telemetry_otel --> svc_productTelemetry
   pkg_host_webserver --> svc_webServer
   pkg_ide_bridge --> svc_ideBridge
+  pkg_ide_bridge --> svc_ideTerminals
   pkg_inspector --> svc_inspector
   pkg_invariants --> svc_invariants
   pkg_jobs --> svc_jobs
@@ -500,6 +503,7 @@ flowchart LR
   svc_fs --> pkg_tool_fs
   svc_hmr --> pkg_app_boot
   svc_ideBridge --> pkg_ide
+  svc_ideTerminals --> pkg_bash_ide_terminal
   svc_invariants --> pkg_agent
   svc_invariants --> pkg_agent_loop
   svc_invariants --> pkg_scope
@@ -717,6 +721,7 @@ flowchart LR
 | `ctx.dynamicCordisRunner` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Owns the in-memory definition registry, the vm sandbox for host halves, and the request-run round trip; browser pages reach the same service over the wire through its remote namespace. |
 | `ctx.cordisInspect` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Registers host inspect providers, mirrors the client provider manifest, and routes client queries through the dynamic Cordis transport. |
 | `ctx.ideBridge` | `core` | [`ide-bridge`](../packages/ide/ide-bridge) | - | [`ide`](../packages/bundle/ide) | - | Serves NDJSON frames over DSH_IDE_BRIDGE_SOCK, resolves each frame to its session and service, and relays command, gate, approval, and question traffic to the runtime that owns it. |
+| `ctx.ideTerminals` | `core` | [`ide-bridge`](../packages/ide/ide-bridge) | - | [`bash-ide-terminal`](../packages/shell/bash-ide-terminal) | - | Publishes whether a connected Extension can run a command and starts one execution in a terminal the user can watch, so a caller that cannot reach the Extension fails loud instead of running the command out of sight. |
 | `ctx.sdkSessionEnsure` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Creates the session record a first prompt would create, so a Host command issued from an untouched Tab runs against a live agent. |
 | `ctx.sdkSessionDispose` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Removes the session record before disposing its handle, so a later frame for the same id cannot reach a disposed agent. |
 | `ctx.sdkSessionResume` | `core` | [`sdk-jsonrpc-server`](../packages/sdk/server) | - | [`ide-bridge`](../packages/ide/ide-bridge) | - | Re-registers a resumed or cold session handle in the server session map and replays its projection baseline. |

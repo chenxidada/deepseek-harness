@@ -10,9 +10,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { type Agent, type AgentHandle } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
-import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { mountAgentLoopTestDependencies, unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { Session, SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek-api-key'
 import SubagentRuntime, { type SubagentResult, type SubagentRunEndInfo } from '@deepseek-ai/dsh-subagent'
@@ -108,6 +108,77 @@ async function settleSubagent(
   }
 }
 
+/** Context members a {@link stubContext} caller replaces; the rest stay real. */
+type StubContextMembers = Partial<Record<keyof Context, unknown>>
+
+/**
+ * Build a real Cordis context whose event subscriptions and service reads come
+ * from the test's doubles, so the code under test receives a complete
+ * `Context` rather than a partial literal bridged with an assertion.
+ * @param overrides - the members this test replaces on the real context.
+ * @returns the context carrying those overrides.
+ */
+function stubContext(overrides: StubContextMembers = {}): Context {
+  return Object.assign(new Context(), overrides)
+}
+
+/** Agent members a {@link stubAgent} caller replaces; the rest keep their defaults. */
+interface StubAgentMembers {
+  /** Agent and Session identity. */
+  id: string
+  /** Session cwd recorded on the detached session header. */
+  cwd?: string
+  /** Agent-scoped context; defaults to a fresh real context. */
+  ctx?: Context
+  /** Prompt delivery this test observes. */
+  followup?: Agent['followup']
+  /** Idle observation this test replaces. */
+  whenIdle?: Agent['whenIdle']
+  /** Agent options visible to the code under test. */
+  options?: Agent['options']
+}
+
+/**
+ * Build a complete Agent over a real detached Session, a rejected-mutation
+ * Inbox, and no-op lifecycle operations, so a test replaces only the members it
+ * observes instead of asserting a partial literal into the interface.
+ * @param members - identity plus the members this test replaces.
+ * @returns the complete Agent double.
+ */
+function stubAgent(members: StubAgentMembers): Agent {
+  const id = SessionId(members.id)
+  return {
+    id,
+    options: members.options ?? {},
+    session: Session.create(id, [], {
+      version: SESSION_FORMAT_VERSION,
+      id,
+      createdAt: 0,
+      isSeeded: false,
+      ...members.cwd === undefined ? {} : { cwd: members.cwd },
+    }),
+    inbox: unsupportedInbox(),
+    status: 'idle',
+    ctx: members.ctx ?? new Context(),
+    send: () => undefined,
+    followup: members.followup ?? (() => undefined),
+    steer: () => undefined,
+    inject: () => undefined,
+    cancel: () => undefined,
+    runMaintenance: task => task(new AbortController().signal),
+    whenIdle: members.whenIdle ?? (() => Promise.resolve()),
+  }
+}
+
+/**
+ * Mark one server past its handshake boundary without mounting an LLM adapter,
+ * for tests that isolate a single post-handshake entry point.
+ * @param server - the server whose handshake is skipped.
+ */
+function markInitialized(server: HarnessSdkJsonRpcServer): void {
+  Reflect.set(server, 'initialized', true)
+}
+
 describe('HarnessSdkJsonRpcServer', () => {
   it('creates a harness agent and calls the configured OpenAI-compatible endpoint', { timeout: 15_000 }, async () => {
     const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-'))
@@ -182,28 +253,21 @@ describe('HarnessSdkJsonRpcServer', () => {
 
   it('queues overlapping prompts for one session without blocking other sessions', async () => {
     const mainFollowup = vi.fn<Agent['followup']>()
-    const mainAgent = ({
-      id: SessionId('main'),
-      followup: mainFollowup,
-    } satisfies Pick<Agent, 'id' | 'followup'>) as unknown as Agent
+    const mainAgent = stubAgent({ id: 'main', followup: mainFollowup })
     const otherFollowup = vi.fn<Agent['followup']>()
-    const otherAgent = ({
-      id: SessionId('other'),
-      followup: otherFollowup,
-    } satisfies Pick<Agent, 'id' | 'followup'>) as unknown as Agent
+    const otherAgent = stubAgent({ id: 'other', followup: otherFollowup })
     const mainHandle = { agent: mainAgent, dispose: vi.fn(() => Promise.resolve()) }
     const otherHandle = { agent: otherAgent, dispose: vi.fn(() => Promise.resolve()) }
     const create = vi.fn(async (options: { sessionId: SessionId }) =>
       String(options.sessionId) === 'main' ? mainHandle : otherHandle)
     const liveAgents = new Map<string, Agent>([['main', mainAgent], ['other', otherAgent]])
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: { create, get: (id: SessionId) => liveAgents.get(String(id)) },
-      get: () => undefined,
-    } as unknown as Context
+    })
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
     // This isolated prompt test begins after the handshake boundary.
-    ;(server as unknown as { initialized: boolean }).initialized = true
+    markInitialized(server)
     const prompt = (sessionId: string, text: string) => server.prompt({
       sessionId,
       contentBlocks: [{ type: 'text', text }],
@@ -222,7 +286,7 @@ describe('HarnessSdkJsonRpcServer', () => {
 
   it('admits inline SDK images before the user message enters the session', async () => {
     const followup = vi.fn<Agent['followup']>()
-    const agent = ({ id: SessionId('image'), followup } satisfies Pick<Agent, 'id' | 'followup'>) as unknown as Agent
+    const agent = stubAgent({ id: 'image', followup })
     const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
     const ref = {
       attachmentId: 'sha256:image',
@@ -232,14 +296,14 @@ describe('HarnessSdkJsonRpcServer', () => {
       height: 1,
     }
     const saveImages = vi.fn(async () => [ref])
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: { create: vi.fn(async () => handle), get: () => agent },
       get: (name: string) => name === 'attachments' ? { saveImages } : undefined,
-    } as unknown as Context
+    })
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
     // This isolated prompt test begins after the handshake boundary.
-    ;(server as unknown as { initialized: boolean }).initialized = true
+    markInitialized(server)
 
     await server.prompt({
       sessionId: 'image',
@@ -259,16 +323,15 @@ describe('HarnessSdkJsonRpcServer', () => {
 
   it('rejects inline SDK images when the composition has no attachment store', async () => {
     const followup = vi.fn<Agent['followup']>()
-    const agent = ({ id: SessionId('image'), followup } satisfies Pick<Agent, 'id' | 'followup'>) as unknown as Agent
+    const agent = stubAgent({ id: 'image', followup })
     const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: { create: vi.fn(async () => handle), get: () => agent },
-      get: () => undefined,
-    } as unknown as Context
+    })
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
     // This isolated prompt test begins after the handshake boundary.
-    ;(server as unknown as { initialized: boolean }).initialized = true
+    markInitialized(server)
 
     await expect(server.prompt({
       sessionId: 'image',
@@ -280,7 +343,7 @@ describe('HarnessSdkJsonRpcServer', () => {
 
   it('rechecks agent liveness after asynchronous image admission', async () => {
     const followup = vi.fn<Agent['followup']>()
-    const agent = ({ id: SessionId('image-race'), followup } satisfies Pick<Agent, 'id' | 'followup'>) as unknown as Agent
+    const agent = stubAgent({ id: 'image-race', followup })
     const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
     const admitted = Promise.withResolvers<Array<{
       attachmentId: string
@@ -289,17 +352,17 @@ describe('HarnessSdkJsonRpcServer', () => {
     }>>()
     const saveImages = vi.fn(() => admitted.promise)
     let live = true
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: {
         create: vi.fn(async () => handle),
         get: () => live ? agent : undefined,
       },
       get: (name: string) => name === 'attachments' ? { saveImages } : undefined,
-    } as unknown as Context
+    })
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
     // This isolated prompt test begins after the handshake boundary.
-    ;(server as unknown as { initialized: boolean }).initialized = true
+    markInitialized(server)
 
     const prompting = server.prompt({
       sessionId: 'image-race',
@@ -316,26 +379,21 @@ describe('HarnessSdkJsonRpcServer', () => {
 
   it('rejects a prompt for a session whose agent was disposed outside the server', async () => {
     const followup = vi.fn<Agent['followup']>()
-    const agent = ({
-      id: SessionId('zombie'),
-      followup,
-      whenIdle: vi.fn(() => Promise.resolve()),
-    } satisfies Pick<Agent, 'id' | 'followup' | 'whenIdle'>) as unknown as Agent
+    const agent = stubAgent({ id: 'zombie', followup })
     const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
     // The registry drops the agent after creation, modelling an agent-loop-only
     // reload that leaves the server's SessionRecord pointing at a detached agent.
     let live = true
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: {
         create: vi.fn(async () => handle),
         get: (id: SessionId) => (live && String(id) === 'zombie' ? agent : undefined),
       },
-      get: () => undefined,
-    } as unknown as Context
+    })
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
     // This isolated prompt test begins after the handshake boundary.
-    ;(server as unknown as { initialized: boolean }).initialized = true
+    markInitialized(server)
     const prompt = (text: string) => server.prompt({
       sessionId: 'zombie',
       contentBlocks: [{ type: 'text', text }],
@@ -352,23 +410,18 @@ describe('HarnessSdkJsonRpcServer', () => {
   it('disposeSession clears the Map then dispose so the id can be recreated', async () => {
     const dispose = vi.fn(() => Promise.resolve())
     const followup = vi.fn<Agent['followup']>()
-    const agent = ({
-      id: SessionId('owned'),
-      followup,
-      whenIdle: vi.fn(() => Promise.resolve()),
-    } satisfies Pick<Agent, 'id' | 'followup' | 'whenIdle'>) as unknown as Agent
+    const agent = stubAgent({ id: 'owned', followup })
     const handle = { agent, dispose }
     const create = vi.fn(async () => handle)
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: {
         create,
         get: (id: SessionId) => (String(id) === 'owned' ? agent : undefined),
       },
-      get: () => undefined,
-    } as unknown as Context
+    })
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
-    ;(server as unknown as { initialized: boolean }).initialized = true
+    markInitialized(server)
 
     await server.prompt({ sessionId: 'owned', contentBlocks: [{ type: 'text', text: 'hi' }] })
     await server.disposeSession('owned')
@@ -568,7 +621,17 @@ describe('HarnessSdkJsonRpcServer', () => {
   it('inherits the parent agentPreset when forking a live parent', async () => {
     const composedPreset = vi.fn(() => 'specdev-implementer')
     const composeFrom = vi.fn()
-    const childCtx = { on: vi.fn(() => () => undefined) } as unknown as Context
+    const childCtx = stubContext({ on: vi.fn(() => () => undefined) })
+    const parentCtx = new Context()
+    const parentAgent = stubAgent({ id: 'parent', cwd: '/tmp', ctx: parentCtx })
+    // The composed roster owns the parent's session creation; only the child's
+    // preset inheritance is under test.
+    const presets = {
+      defaultId: 'standard',
+      mount: vi.fn(async () => undefined),
+      composedPreset,
+      composeFrom,
+    }
     const create = vi.fn(async (options: {
       sessionId: string
       meta?: { agentPreset?: string; parentSession?: string; cwd?: string; isSeeded?: boolean }
@@ -576,33 +639,26 @@ describe('HarnessSdkJsonRpcServer', () => {
     }) => {
       if (options.setup !== undefined) options.setup(childCtx)
       return {
-        agent: { id: options.sessionId, session: { id: options.sessionId, header: {} } } as unknown as Agent,
+        agent: options.sessionId === 'parent' ? parentAgent : stubAgent({ id: options.sessionId }),
         dispose: async () => undefined,
       }
     })
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: { create, get: () => undefined },
-      get: (name: string) => (name === 'agentPresets' ? { composedPreset, composeFrom } : undefined),
-    } as unknown as Context
-    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
-    const parentCtx = {} as Context
-    const parentAgent = {
-      id: SessionId('parent'),
-      session: { id: 'parent', header: { cwd: '/tmp' } },
-      ctx: parentCtx,
-    } as unknown as Agent
-    ;(server as unknown as { sessions: Map<string, { handle: AgentHandle }> }).sessions.set('parent', {
-      handle: { agent: parentAgent, dispose: async () => undefined },
+      get: (name: string) => (name === 'agentPresets' ? presets : undefined),
     })
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    // The live parent must exist through the server's own creation path.
+    await server.ensureSession('parent')
 
     const childId = await server.forkSession('parent', { emptySeed: true })
 
     expect(childId).toBeTypeOf('string')
     expect(composedPreset).toHaveBeenCalledWith(parentCtx)
     expect(composeFrom).toHaveBeenCalledWith(childCtx, parentCtx)
-    expect(create).toHaveBeenCalledOnce()
-    expect(create.mock.calls[0]?.[0]).toMatchObject({
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(create.mock.calls.at(-1)?.[0]).toMatchObject({
       meta: {
         cwd: '/tmp',
         parentSession: 'parent',
@@ -1085,11 +1141,12 @@ describe('HarnessSdkJsonRpcServer', () => {
     await ctx.plugin(LlmDeepSeek)
     try {
       const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
-      const inspect = server as unknown as { hasAdapterFor(provider: string): boolean }
-
-      expect(inspect.hasAdapterFor('deepseek-official')).toBe(true)
-      expect(inspect.hasAdapterFor('missing-provider')).toBe(false)
+      // The preinstalled owner is listed before the handshake and is not
+      // registered twice by it; an unowned provider is refused.
+      expect(ctx.get('llm')?.listProviders().filter(provider => provider.id === 'deepseek-official')).toEqual([{ id: 'deepseek-official', name: 'DeepSeek' }])
       await server.initialize({ cwd: storageDir, provider: 'deepseek-official', model: 'preinstalled-model' })
+      await expect(server.initialize({ cwd: storageDir, provider: 'missing-provider', model: 'model' }))
+        .rejects.toThrow('no adapter registered for provider "missing-provider"')
 
       expect(ctx.get('llm')?.listProviders().filter(provider => provider.id === 'deepseek-official')).toEqual([{ id: 'deepseek-official', name: 'DeepSeek' }])
       await server.shutdown()
@@ -1180,7 +1237,7 @@ describe('HarnessSdkJsonRpcServer', () => {
         sessionId: 'invalid-route',
         contentBlocks: [{ type: 'text', text: 'must not run' }],
       })).rejects.toThrow('SDK server is not initialized')
-      expect((server as unknown as { sessions: Map<string, unknown> }).sessions.size).toBe(0)
+      expect(ctx.agents.roots()).toEqual([])
       await server.shutdown()
     } finally {
       disposeAdapter()
@@ -1215,7 +1272,7 @@ describe('HarnessSdkJsonRpcServer', () => {
         sessionId: 'too-early',
         contentBlocks: [{ type: 'text', text: 'must not run' }],
       })).rejects.toThrow('SDK server is not initialized')
-      expect((server as unknown as { sessions: Map<string, unknown> }).sessions.size).toBe(0)
+      expect(ctx.agents.roots()).toEqual([])
 
       resolution.resolve(resolvedModel)
       await initialization
@@ -1240,7 +1297,7 @@ describe('HarnessSdkJsonRpcServer', () => {
         model: 'deepseek-v4-flash',
         reasoningEffort: 'impossible',
       })).rejects.toThrow('does not support reasoning effort "impossible"')
-      expect((server as unknown as { sessions: Map<string, unknown> }).sessions.size).toBe(0)
+      expect(ctx.agents.roots()).toEqual([])
       await server.shutdown()
     } finally {
       await ctx.fiber.dispose()
@@ -1251,12 +1308,10 @@ describe('HarnessSdkJsonRpcServer', () => {
   it('reports no adapter when the LLM service is absent', async () => {
     const ctx = new Context()
     try {
-      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
-        hasAdapterFor(model: string): boolean
-        shutdown(): Promise<Record<string, never>>
-      }
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
 
-      expect(server.hasAdapterFor('missing-model')).toBe(false)
+      await expect(server.initialize({ cwd: '.', provider: 'missing-model', model: 'model' }))
+        .rejects.toThrow('no adapter registered for provider "missing-model"')
       await server.shutdown()
     } finally {
       await ctx.fiber.dispose()
@@ -1320,21 +1375,23 @@ describe('HarnessSdkJsonRpcServer', () => {
     const create = vi.fn<(options: unknown) => Promise<AgentHandle>>()
       .mockResolvedValue({ agent: {} as Agent, dispose: () => Promise.resolve() })
     const resolveCallConfig = vi.fn(async (config: unknown) => config)
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: { create, get: () => undefined },
       get: (name: string) => (name === 'llm'
         ? { listProviders: () => [{ id: 'mock', name: 'Mock' }], resolveCallConfig }
         : undefined),
-    } as unknown as Context
-    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
-      initialize(params: { cwd: string; provider: string; model: string; reasoningEffort?: string; maxTokens?: number }): Promise<unknown>
-      getOrCreateSession(sessionId: string): Promise<unknown>
-      shutdown(): Promise<Record<string, never>>
-    }
+    })
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
 
-    await server.initialize({ cwd: '.', provider: 'mock', model: 'model', reasoningEffort: 'high', maxTokens: 123 })
-    await server.getOrCreateSession('relative')
+    await server.initialize({
+      cwd: '.',
+      provider: 'mock',
+      model: 'model',
+      reasoningEffort: ReasoningEffortId('high'),
+      maxTokens: 123,
+    })
+    await server.ensureSession('relative')
 
     expect(resolveCallConfig).toHaveBeenCalledWith({
       provider: 'mock',
@@ -1357,25 +1414,23 @@ describe('HarnessSdkJsonRpcServer', () => {
   it('mounts the deployment default preset and leaves SpecDev metadata to workflow entry', async () => {
     const mount = vi.fn(async () => ({ id: 'standard' }))
     const attach = vi.fn()
+    const created: Agent[] = []
     const create = vi.fn(async (options: {
       sessionId: string
       meta?: { agentPreset?: string }
       setup?: (agentCtx: Context) => Promise<void>
     }) => {
-      const agent = {
-        id: options.sessionId,
-        options: {} as Record<string, unknown>,
-        session: { id: options.sessionId, header: { cwd: '/tmp' } },
-      } as unknown as Agent
+      const agent = stubAgent({ id: options.sessionId, cwd: '/tmp' })
+      created.push(agent)
       if (options.setup !== undefined) {
-        await options.setup({ on: vi.fn(() => () => undefined) } as unknown as Context)
+        await options.setup(stubContext({ on: vi.fn(() => () => undefined) }))
       }
       return {
         agent,
         dispose: async () => undefined,
       }
     })
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: { create, get: () => undefined },
       get(name: string) {
@@ -1385,17 +1440,20 @@ describe('HarnessSdkJsonRpcServer', () => {
         if (name === 'specdev') {
           return { active: () => ({ slug: 'demo-workflow' }), attachOrchestratorMetadata: attach }
         }
+        if (name === 'llm') {
+          return {
+            listProviders: () => [{ id: 'deepseek-official', name: 'DeepSeek' }],
+            resolveCallConfig: vi.fn(async (config: Record<string, unknown>) => config),
+          }
+        }
         return undefined
       },
-    } as unknown as Context
+    })
 
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
-    const internal = server as unknown as {
-      createSession(sessionId: string): Promise<{ handle: AgentHandle }>
-      cwd: string
-    }
-    internal.cwd = '/tmp'
-    const rec = await internal.createSession('main')
+    // The handshake names the cwd every later session records.
+    await server.initialize({ cwd: '/tmp', provider: 'deepseek-official', model: 'model' })
+    await server.ensureSession('main')
     expect(create).toHaveBeenCalledOnce()
     expect(create.mock.calls[0]?.[0]).toMatchObject({
       meta: { cwd: '/tmp', agentPreset: 'standard' },
@@ -1404,23 +1462,23 @@ describe('HarnessSdkJsonRpcServer', () => {
     // Only a workflow entry attaches specdev.* metadata; a fresh session is not
     // an Orchestrator.
     expect(attach).not.toHaveBeenCalled()
-    expect(rec.handle.agent.options['specdev.role']).toBeUndefined()
+    expect(created[0]?.options['specdev.role']).toBeUndefined()
   })
 
   it('settles every teardown and aggregates multiple failures', async () => {
     const firstDispose = vi.fn(() => { throw new Error('first teardown failed') })
     const secondDispose = vi.fn(() => Promise.reject(new Error('second teardown failed')))
-    const ctx = {
+    const create = vi.fn(async (options: { sessionId: SessionId }) => ({
+      agent: stubAgent({ id: String(options.sessionId) }),
+      dispose: String(options.sessionId) === 'first' ? firstDispose : secondDispose,
+    }))
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
-      agents: { create: vi.fn(), get: () => undefined },
-      get: () => undefined,
-    } as unknown as Context
-    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
-      sessions: Map<string, { handle: AgentHandle; lastTurnEnd: undefined; activePrompt: boolean }>
-      shutdown(): Promise<Record<string, never>>
-    }
-    server.sessions.set('first', { handle: { agent: {} as Agent, dispose: firstDispose }, lastTurnEnd: undefined, activePrompt: false })
-    server.sessions.set('second', { handle: { agent: {} as Agent, dispose: secondDispose }, lastTurnEnd: undefined, activePrompt: false })
+      agents: { create, get: () => undefined },
+    })
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    await server.ensureSession('first')
+    await server.ensureSession('second')
 
     await expect(server.shutdown()).rejects.toThrow('SDK server teardown failed')
     expect(firstDispose).toHaveBeenCalledOnce()
@@ -1434,11 +1492,10 @@ describe('HarnessSdkJsonRpcServer', () => {
       subscription += 1
       return subscription === 1 ? () => { throw listenerFailure } : () => undefined
     })
-    const ctx = {
+    const ctx = stubContext({
       on,
       agents: { create: vi.fn(), get: () => undefined },
-      get: () => undefined,
-    } as unknown as Context
+    })
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
 
     await expect(server.shutdown()).rejects.toBe(listenerFailure)
@@ -1447,17 +1504,17 @@ describe('HarnessSdkJsonRpcServer', () => {
 
   it('adopts the configured default model for sessions created now', async () => {
     const installed: string[] = []
-    const agentCtx = {
+    const agentCtx = stubContext({
       on: vi.fn((event: string) => {
         installed.push(event)
         return () => undefined
       }),
-    } as unknown as Context
+    })
     const create = vi.fn(async (options: { setup?: (agentCtx: Context) => void }) => {
       options.setup?.(agentCtx)
       return { agent: {} as Agent, dispose: () => Promise.resolve() }
     })
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: { create, get: () => undefined },
       get: (name: string) => {
@@ -1472,19 +1529,15 @@ describe('HarnessSdkJsonRpcServer', () => {
         }
         return undefined
       },
-    } as unknown as Context
+    })
     const server = new HarnessSdkJsonRpcServer(
       ctx,
       new FakeTransport(),
       { adoptConfiguredDefaultModel: true },
-    ) as unknown as {
-      initialize(params: { cwd: string; provider: string; model: string }): Promise<unknown>
-      getOrCreateSession(sessionId: string): Promise<unknown>
-      shutdown(): Promise<Record<string, never>>
-    }
+    )
 
     await server.initialize({ cwd: process.cwd(), provider: 'deepseek-official', model: 'deepseek-v4-flash' })
-    await server.getOrCreateSession('configured')
+    await server.ensureSession('configured')
 
     // The configured selection outranks the handshake route for later sessions.
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
@@ -1496,14 +1549,12 @@ describe('HarnessSdkJsonRpcServer', () => {
   })
 
   it('keeps an explicitly named initialize effort on the configured default route', async () => {
-    const agentCtx = {
-      on: vi.fn(() => () => undefined),
-    } as unknown as Context
+    const agentCtx = stubContext({ on: vi.fn(() => () => undefined) })
     const create = vi.fn(async (options: { setup?: (agentCtx: Context) => void }) => {
       options.setup?.(agentCtx)
       return { agent: {} as Agent, dispose: () => Promise.resolve() }
     })
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: { create, get: () => undefined },
       get: (name: string) => {
@@ -1518,24 +1569,20 @@ describe('HarnessSdkJsonRpcServer', () => {
         }
         return undefined
       },
-    } as unknown as Context
+    })
     const server = new HarnessSdkJsonRpcServer(
       ctx,
       new FakeTransport(),
       { adoptConfiguredDefaultModel: true },
-    ) as unknown as {
-      initialize(params: { cwd: string; provider: string; model: string; reasoningEffort?: string }): Promise<unknown>
-      getOrCreateSession(sessionId: string): Promise<unknown>
-      shutdown(): Promise<Record<string, never>>
-    }
+    )
 
     await server.initialize({
       cwd: process.cwd(),
       provider: 'deepseek-official',
       model: 'deepseek-v4-pro',
-      reasoningEffort: 'max',
+      reasoningEffort: ReasoningEffortId('max'),
     })
-    await server.getOrCreateSession('explicit-effort')
+    await server.ensureSession('explicit-effort')
 
     // The configured default names no effort of its own, so the effort named for
     // this same route survives it.
@@ -1546,14 +1593,12 @@ describe('HarnessSdkJsonRpcServer', () => {
   })
 
   it('keeps the initialize handshake route unless the deployment adopts the default model', async () => {
-    const agentCtx = {
-      on: vi.fn(() => () => undefined),
-    } as unknown as Context
+    const agentCtx = stubContext({ on: vi.fn(() => () => undefined) })
     const create = vi.fn(async (options: { setup?: (agentCtx: Context) => void }) => {
       options.setup?.(agentCtx)
       return { agent: {} as Agent, dispose: () => Promise.resolve() }
     })
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: { create, get: () => undefined },
       get: (name: string) => {
@@ -1568,15 +1613,11 @@ describe('HarnessSdkJsonRpcServer', () => {
         }
         return undefined
       },
-    } as unknown as Context
-    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
-      initialize(params: { cwd: string; provider: string; model: string }): Promise<unknown>
-      getOrCreateSession(sessionId: string): Promise<unknown>
-      shutdown(): Promise<Record<string, never>>
-    }
+    })
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
 
     await server.initialize({ cwd: process.cwd(), provider: 'deepseek-official', model: 'deepseek-v4-flash' })
-    await server.getOrCreateSession('handshake-route')
+    await server.ensureSession('handshake-route')
 
     // Without the opt-in the SDK client's validated handshake route is what runs,
     // even though the profile mounts a different default model.
@@ -1589,33 +1630,28 @@ describe('HarnessSdkJsonRpcServer', () => {
   it('selectModel validates the route, adopts it, and hands it to live sessions', async () => {
     type Listener = (...args: unknown[]) => unknown
     const listeners = new Map<string, Listener>()
-    const agentCtx = {
+    const agentCtx = stubContext({
       on: vi.fn((event: string, callback: Listener) => {
         listeners.set(event, callback)
         return () => undefined
       }),
-    } as unknown as Context
+    })
     const create = vi.fn(async (options: { setup?: (agentCtx: Context) => void }) => {
       options.setup?.(agentCtx)
       return { agent: {} as Agent, dispose: () => Promise.resolve() }
     })
     const resolveCallConfig = vi.fn(async (config: Record<string, unknown>) => config)
-    const ctx = {
+    const ctx = stubContext({
       on: vi.fn(() => () => undefined),
       agents: { create, get: () => undefined },
       get: (name: string) => (name === 'llm'
         ? { listProviders: () => [{ id: 'deepseek-official', name: 'DeepSeek' }], resolveCallConfig }
         : undefined),
-    } as unknown as Context
-    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
-      initialize(params: { cwd: string; provider: string; model: string }): Promise<unknown>
-      getOrCreateSession(sessionId: string): Promise<unknown>
-      selectModel(selection: { provider: string; model: string; reasoningEffort?: string }): Promise<{ applied: number }>
-      shutdown(): Promise<Record<string, never>>
-    }
+    })
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
 
     await server.initialize({ cwd: process.cwd(), provider: 'deepseek-official', model: 'deepseek-v4-flash' })
-    await server.getOrCreateSession('live')
+    await server.ensureSession('live')
 
     const applied = await server.selectModel({
       provider: 'deepseek-official',
@@ -1649,7 +1685,7 @@ describe('HarnessSdkJsonRpcServer', () => {
     resolveCallConfig.mockRejectedValueOnce(new Error('no adapter registered for provider "ghost"'))
     await expect(server.selectModel({ provider: 'ghost', model: 'ghost-model' }))
       .rejects.toThrow('no adapter registered for provider "ghost"')
-    await server.getOrCreateSession('after-rejection')
+    await server.ensureSession('after-rejection')
     expect(create.mock.calls.at(-1)?.[0]).toMatchObject({
       agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'low' },
     })

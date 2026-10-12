@@ -83,7 +83,9 @@ export {
 
 /** Error thrown when `dispatchRole` is denied by the gate. */
 export class SpecdevGateDeniedError extends Error {
+  /** Stable denial code, e.g. `SPECDEV_HG2_PENDING`. */
   readonly code: string
+  /** True when the Orchestrator must hand the denial to the user instead of retrying (AC-38). */
   readonly escalate: boolean
 
   constructor(denial: SpecdevGateDenial) {
@@ -256,4 +258,5 @@ function denyToolForRoleAgent(
   return denyForAgent(ctx, agent, gitReader)
 }
 
+/** Cordis plugin entry: the guard's name, injected services, and installer. */
 export default { name, inject, apply }

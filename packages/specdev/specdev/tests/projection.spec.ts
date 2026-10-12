@@ -18,9 +18,9 @@ const EMPTY: SpecdevStatusProjectionState = { status: null, failure: null }
 
 const SNAPSHOT: SpecdevSnapshot = snapshotFromStatus(createInitialStatus('wf'), { workflow: false, phases: {} })
 
-/** One committed-event stand-in for the fold. */
+/** One committed-event stand-in for the fold; `data` is deliberately unchecked. */
 function event(type: string, data: unknown, seq = 1): SessionEvent {
-  return { seq, type, data } as unknown as SessionEvent
+  return { seq, type, data } as SessionEvent
 }
 
 /** Fold one whole-view event carrying `snapshot`. */

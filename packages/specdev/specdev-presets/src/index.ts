@@ -15,7 +15,11 @@ import Schema from '@deepseek-ai/schemastery'
 /** Absolute path to shipped SpecDev `presets/` directory. */
 export const SPECDEV_PRESET_ROOT = fileURLToPath(new URL('../presets/', import.meta.url))
 
-/** Role preset id for a SpecDev role label (e.g. `implementer` → `specdev-implementer`). */
+/**
+ * Role preset id for a SpecDev role label (e.g. `implementer` → `specdev-implementer`).
+ * @param role - role label, or an id that already carries the `specdev-` prefix.
+ * @returns the `specdev-`-prefixed preset id.
+ */
 export function rolePresetId(role: string): string {
   return role.startsWith('specdev-') ? role : `specdev-${role}`
 }

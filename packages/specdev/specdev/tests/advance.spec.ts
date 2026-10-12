@@ -125,13 +125,15 @@ describe('SpecDev advance VP-5', () => {
 
     const events = parentSession.snapshotEvents().filter(event => event.type === 'specdev/advance')
     expect(events.length).toBe(1)
-    const data = events[0]!.data as { nextAction: string; kind: string; version: number }
+    const advance = events[0]
+    if (advance?.type !== 'specdev/advance') throw new Error('expected a specdev/advance event')
+    const data = advance.data
     expect(data.kind).toBe('specdev/advance')
     expect(data.version).toBe(1)
     expect(data.nextAction).toContain('implementer completed')
     expect(data.nextAction).toContain('reviewer-correctness')
     // No confirmGate / projection yet → advance must not embed file snapshot (AC-28).
-    expect((data as unknown as { snapshot: unknown }).snapshot).toBeNull()
+    expect(data.snapshot).toBeNull()
   })
 
   it('AC-28: forge file HG + emitAdvance leaves fail-closed projection (snapshot null)', async () => {

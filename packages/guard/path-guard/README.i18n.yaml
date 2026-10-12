@@ -1,0 +1,64 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/guard/path-guard/README.md
+/:
+  en: b21e88607417e5eb
+  zh: 56f04057ac89b575
+/deepseek-ai-dsh-path-guard:
+  en: 3dc0c2dd2ed3f489
+  zh: 62a14dbc0cdc86db
+/deepseek-ai-dsh-path-guard/summary:
+  en: f65d751e7cec227b
+  zh: 6d03daabede6c5ce
+/deepseek-ai-dsh-path-guard/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-path-guard/use-this-package:
+  en: b3341e679c273c93
+  zh: 2315eea431b5b322
+/deepseek-ai-dsh-path-guard/use-this-package/when-to-choose-it:
+  en: 146953e4e4eda9c9
+  zh: 12b1160f63d65505
+/deepseek-ai-dsh-path-guard/use-this-package/setting-it-up:
+  en: b24e455826abb259
+  zh: fca0a4f9bf72d39e
+/deepseek-ai-dsh-path-guard/use-this-package/what-you-get:
+  en: 607b9922d555e77b
+  zh: 279197c6346d02ea
+/deepseek-ai-dsh-path-guard/understand-the-implementation:
+  en: 51e9de5a80ac8c96
+  zh: e30b3a4ba2ff4fe4
+/deepseek-ai-dsh-path-guard/understand-the-implementation/design-philosophy:
+  en: 59068fc7f2fbad20
+  zh: 8aaf04a41496a19e
+/deepseek-ai-dsh-path-guard/understand-the-implementation/how-a-call-is-classified:
+  en: 4e9908f4be6aa1bb
+  zh: e1910280a244541b
+/deepseek-ai-dsh-path-guard/understand-the-implementation/source-map:
+  en: 97462d27404427f1
+  zh: deea2a7f41d8f8d1
+/deepseek-ai-dsh-path-guard/further-exploration:
+  en: 630d1bb047549f12
+  zh: 7b1fcc449d5ca689
+/deepseek-ai-dsh-path-guard/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-path-guard/model-experience/approval-prompt-instead-of-execution:
+  en: d6b8bffa6794fb73
+  zh: 4187849f87fc3fb4
+/deepseek-ai-dsh-path-guard/model-experience/approval-prompt-instead-of-execution/what-the-model-sees:
+  en: 264d303761728623
+  zh: 7abf1ea09de80b00
+/deepseek-ai-dsh-path-guard/model-experience/approval-prompt-instead-of-execution/token-effect:
+  en: 6eb5d8f8cf4ae10c
+  zh: 9ef79ef820285466
+/deepseek-ai-dsh-path-guard/model-experience/approval-prompt-instead-of-execution/kv-cache-effect:
+  en: 2fbf2175168e8244
+  zh: f681f89596f500f5
+/deepseek-ai-dsh-path-guard/known-limitations-and-deferred-work:
+  en: d123cc1b2c6e1a39
+  zh: bbd08bdd36495498
+/deepseek-ai-dsh-path-guard/known-limitations-and-deferred-work/dev-note:
+  en: 5b0da63dd9c96d63
+  zh: e58073eedd7de1d3

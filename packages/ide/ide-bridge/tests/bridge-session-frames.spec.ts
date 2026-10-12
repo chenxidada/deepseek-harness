@@ -12,6 +12,8 @@ import { join } from 'node:path'
 import { Duplex, PassThrough } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   AGENTS_SERVICE,
@@ -176,9 +178,28 @@ async function awaitReceived(
   return hit
 }
 
-/** The Host frame that settles a pending question request. */
+/**
+ * An agent over a detached session.
+ * @param id - agent identity the bridge falls back to without a session id.
+ * @param sessionId - session identity the bridge forwards.
+ * @returns the agent.
+ */
 function stubAgent(id: string, sessionId: string): Agent {
-  return { id, session: { id: sessionId } } as unknown as Agent
+  return {
+    id: SessionId(id),
+    options: {},
+    session: Session.create(SessionId(sessionId)),
+    inbox: unsupportedInbox(),
+    ctx: new Context(),
+    status: 'idle',
+    send: () => {},
+    followup: () => {},
+    steer: () => {},
+    inject: () => {},
+    cancel() {},
+    runMaintenance: task => task(new AbortController().signal),
+    whenIdle: () => Promise.resolve(),
+  }
 }
 
 /** Answer every Host frame with `respond`, keeping the frames the Host sent. */
@@ -2132,6 +2153,12 @@ describe('ide-bridge Host frame service-failure paths', () => {
 
   it('forwards the event slice of a V4 read result instead of the result object', async () => {
     const offsets: number[] = []
+    // A balanced turn pair: the read path's interrupt repair appends no closer,
+    // so the forwarded slice is exactly what the handle returned.
+    const stored = [
+      { type: 'turn/start', seq: SessionSeq(1), time: 1, data: { turn: 1 } },
+      { type: 'turn/end', seq: SessionSeq(2), time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+    ]
     await withBridge((ctx) => {
       ctx.provide(SESSION_PERSISTENCE_SERVICE, {
         open: async () => ({
@@ -2140,10 +2167,7 @@ describe('ide-bridge Host frame service-failure paths', () => {
           // shipping the stored log.
           read: async (offset: number) => {
             offsets.push(offset)
-            return {
-              eventState: 'shared',
-              events: [{ type: 'user/message' }, { type: 'assistant/message' }],
-            }
+            return { eventState: 'shared', events: stored }
           },
           close: async () => {},
         }),
@@ -2154,7 +2178,7 @@ describe('ide-bridge Host frame service-failure paths', () => {
           kind: 'session/read-log/response',
           id: 'read-v4',
           ok: true,
-          events: [{ type: 'user/message' }, { type: 'assistant/message' }],
+          events: stored,
         })
       expect(offsets).toEqual([0])
     })
@@ -2722,8 +2746,11 @@ describe('ide-bridge interaction answerer failure paths', () => {
         connection.send({ kind: 'approval/response', id: frame.id, outcome: 'allowed-once' })
       })
       const controller = new AbortController()
+      // No live session: the bridge must fall back to the agent id.
+      const agent = stubAgent('agent-without-live-session', 'sess-without-live-agent')
+      Reflect.deleteProperty(agent, 'session')
       const outcome = await harness.ctx.waterfall('approval/request', {
-        agent: { id: 'agent-without-live-session' } as unknown as Agent,
+        agent,
         toolName: 'bash',
         reason: 'writes outside the workspace',
         signal: controller.signal,
@@ -3090,60 +3117,6 @@ describe('ide-bridge transport lifecycle paths', () => {
     }, { timeout: WAIT_MS })
     expect(frames[0]).toEqual({ kind: 'session/read-log/response', id: 'r-1', ok: true, events })
     framing.close()
-  })
-})
-
-describe('ide-bridge session/read-log closer fallbacks', () => {
-  it('returns the raw events when dsh-session exposes no interrupt closers', async () => {
-    vi.doMock('@deepseek-ai/dsh-session', () => ({ interruptedTurnClosers: undefined }))
-    try {
-      await withBridge((ctx) => {
-        ctx.provide(SESSION_PERSISTENCE_SERVICE, {
-          open: async () => ({
-            read: async () => ({ eventState: 'owned', events: [{ type: 'user/message' }] }),
-            close: async () => {},
-          }),
-        })
-      }, async (harness) => {
-        expect(await roundTrip(harness, { kind: 'session/read-log', id: 'closers-absent', sessionId: 'sess-a' }))
-          .toEqual({
-            kind: 'session/read-log/response',
-            id: 'closers-absent',
-            ok: true,
-            events: [{ type: 'user/message' }],
-          })
-      })
-    } finally {
-      vi.doUnmock('@deepseek-ai/dsh-session')
-      vi.resetModules()
-    }
-  })
-
-  it('returns the raw events when dsh-session cannot be loaded', async () => {
-    vi.doMock('@deepseek-ai/dsh-session', () => {
-      throw new Error('session package is not installed')
-    })
-    try {
-      await withBridge((ctx) => {
-        ctx.provide(SESSION_PERSISTENCE_SERVICE, {
-          open: async () => ({
-            read: async () => ({ eventState: 'owned', events: [{ type: 'user/message' }] }),
-            close: async () => {},
-          }),
-        })
-      }, async (harness) => {
-        expect(await roundTrip(harness, { kind: 'session/read-log', id: 'closers-unloadable', sessionId: 'sess-a' }))
-          .toEqual({
-            kind: 'session/read-log/response',
-            id: 'closers-unloadable',
-            ok: true,
-            events: [{ type: 'user/message' }],
-          })
-      })
-    } finally {
-      vi.doUnmock('@deepseek-ai/dsh-session')
-      vi.resetModules()
-    }
   })
 })
 
@@ -4006,6 +3979,16 @@ describe('ide-bridge goal frames', () => {
     })
   })
 
+  it('drops a goal response whose view or error cannot be rendered', () => {
+    const response = (view: unknown): unknown => ({ kind: 'goal/read/response', id: 'gr-1', ok: true, goal: view })
+    expect(validateBridgeFrame(response({ ...goal, objective: '' }))).toBeUndefined()
+    expect(validateBridgeFrame(response({ ...goal, revision: 0 }))).toBeUndefined()
+    expect(validateBridgeFrame(response({ ...goal, roundsStarted: -1 }))).toBeUndefined()
+    expect(validateBridgeFrame(response({ ...goal, blockedReason: 'nope' }))).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'goal/read/response', ok: true, goal })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'goal/read/response', id: 'gr-1', ok: false, error: 7 })).toBeUndefined()
+  })
+
   it('answers a live agent with the service view, including its activation', async () => {
     const session = { id: 'sess-live' }
     const agent = { id: 'sess-live', session }
@@ -4109,6 +4092,124 @@ describe('ide-bridge goal frames', () => {
           id: 'gr-fail',
           ok: false,
           error: 'goal replay failed at session event 12: illegal phase transition',
+        })
+    })
+  })
+
+  it('refuses a durable read when the projection registry or sessions service is absent', async () => {
+    await withBridge(() => {}, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'goal/read', id: 'gr-unavailable', sessionId: 'sess-cold' }))
+        .toEqual({
+          kind: 'goal/read/response',
+          id: 'gr-unavailable',
+          ok: false,
+          error: 'sessionProjections or sessions service is not available',
+        })
+    })
+  })
+
+  it('answers null when the live agent has no current goal', async () => {
+    const agent = { id: 'sess-live', session: { id: 'sess-live' } }
+    await withBridge((ctx) => {
+      ctx.provide(AGENTS_SERVICE, { get: () => agent })
+      ctx.provide(GOAL_SERVICE, { get: () => undefined })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'goal/read', id: 'gr-nogoal', sessionId: 'sess-live' }))
+        .toEqual({ kind: 'goal/read/response', id: 'gr-nogoal', ok: true, goal: null })
+    })
+  })
+
+  it('reports a refusal the goal service throws as a non-Error by its string form', async () => {
+    const agent = { id: 'sess-live', session: { id: 'sess-live' } }
+    await withBridge((ctx) => {
+      ctx.provide(AGENTS_SERVICE, { get: () => agent })
+      ctx.provide(GOAL_SERVICE, {
+        get: () => {
+          throw 'goal projection exploded'
+        },
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'goal/read', id: 'gr-throw', sessionId: 'sess-live' }))
+        .toEqual({
+          kind: 'goal/read/response',
+          id: 'gr-throw',
+          ok: false,
+          error: 'goal projection exploded',
+        })
+    })
+  })
+
+  it('refuses a durable read when the addressed session is not in the corpus', async () => {
+    await withBridge((ctx) => {
+      ctx.provide(AGENTS_SERVICE, { get: () => undefined })
+      ctx.provide(SESSIONS_SERVICE, { get: () => undefined })
+      ctx.provide(SESSION_PROJECTION_REGISTRY_SERVICE, {
+        snapshot: () => ({ asOfSeq: 0, values: { goal: null } }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'goal/read', id: 'gr-missing', sessionId: 'sess-missing' }))
+        .toEqual({
+          kind: 'goal/read/response',
+          id: 'gr-missing',
+          ok: false,
+          error: 'sessionProjections or sessions service is not available',
+        })
+    })
+  })
+
+  it('answers null when the durable projection holds no goal unit', async () => {
+    const session = { id: 'sess-cold' }
+    await withBridge((ctx) => {
+      ctx.provide(AGENTS_SERVICE, { get: () => undefined })
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SESSION_PROJECTION_REGISTRY_SERVICE, {
+        snapshot: () => ({ asOfSeq: 2, values: { goal: { roundsStarted: 0 } } }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'goal/read', id: 'gr-empty', sessionId: 'sess-cold' }))
+        .toEqual({ kind: 'goal/read/response', id: 'gr-empty', ok: true, goal: null })
+    })
+  })
+
+  it('carries the durable blocker onto the disarmed view', async () => {
+    const session = { id: 'sess-blocked' }
+    await withBridge((ctx) => {
+      ctx.provide(AGENTS_SERVICE, { get: () => undefined })
+      ctx.provide(SESSIONS_SERVICE, { get: () => session })
+      ctx.provide(SESSION_PROJECTION_REGISTRY_SERVICE, {
+        snapshot: () => ({
+          asOfSeq: 6,
+          values: {
+            goal: {
+              goal: {
+                id: 'goal-2',
+                revision: 1,
+                objective: 'land the fix',
+                phase: 'blocked',
+                maxGoalRounds: 4,
+                blockedReason: { code: 'model-reported', message: 'needs a token' },
+              },
+              roundsStarted: 1,
+            },
+          },
+        }),
+      })
+    }, async (harness) => {
+      expect(await roundTrip(harness, { kind: 'goal/read', id: 'gr-blocked', sessionId: 'sess-blocked' }))
+        .toEqual({
+          kind: 'goal/read/response',
+          id: 'gr-blocked',
+          ok: true,
+          goal: {
+            id: 'goal-2',
+            revision: 1,
+            objective: 'land the fix',
+            phase: 'blocked',
+            roundsStarted: 1,
+            maxGoalRounds: 4,
+            activation: 'disarmed',
+            blockedReason: { code: 'model-reported', message: 'needs a token' },
+          },
         })
     })
   })
@@ -4363,6 +4464,8 @@ describe('ide-bridge provider-write frame validation (AC-31)', () => {
     expect(validateBridgeFrame({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops: [{ op: 'merge', path }] }))
       .toBeUndefined()
     expect(validateBridgeFrame({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops: 'unset' })).toBeUndefined()
+    // An op that is not an object cannot address a path at all.
+    expect(validateBridgeFrame({ kind: 'settings/mutate', id: 'sm-1', ns: 'llm-pi-ai', ops: ['unset'] })).toBeUndefined()
     // A null value is legal and must survive validation.
     expect(validateBridgeFrame({
       kind: 'settings/mutate',
@@ -4406,6 +4509,11 @@ describe('ide-bridge provider-write frame validation (AC-31)', () => {
     expect(validateBridgeFrame({ kind: 'credential/describe/response', id: 'cd-1', ok: true, credentials: [{ ref: 'A', configured: false, writable: false, source: 7 }] }))
       .toBeUndefined()
     expect(validateBridgeFrame({ kind: 'credential/describe/response', id: 'cd-1', ok: true })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'credential/describe/response', id: '', ok: true, credentials })).toBeUndefined()
+    // A row that is not an object is dropped with the whole response.
+    expect(validateBridgeFrame({ kind: 'credential/describe/response', id: 'cd-1', ok: true, credentials: ['ACME_API_KEY'] }))
+      .toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'credential/describe/response', id: 'cd-1', ok: false, error: 7 })).toBeUndefined()
   })
 
   it('accepts credential/set and credential/unset only with an addressable reference', () => {
@@ -4463,6 +4571,11 @@ describe('ide-bridge provider-write frame validation (AC-31)', () => {
     expect(validateBridgeFrame({ kind: 'model/discover/response', id: 'md-1', ok: true, models: [{ id: 'chat-1', inputModalities: [7] }] }))
       .toBeUndefined()
     expect(validateBridgeFrame({ kind: 'model/discover/response', id: 'md-1', ok: false })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'model/discover/response', id: '', ok: true, models })).toBeUndefined()
+    // A row that is not an object, or a non-string name, is dropped with the whole response.
+    expect(validateBridgeFrame({ kind: 'model/discover/response', id: 'md-1', ok: true, models: ['chat-1'] })).toBeUndefined()
+    expect(validateBridgeFrame({ kind: 'model/discover/response', id: 'md-1', ok: true, models: [{ id: 'chat-1', name: 7 }] }))
+      .toBeUndefined()
   })
 })
 
@@ -4580,6 +4693,7 @@ describe('ide-bridge provider-write handlers', () => {
       ctx.provide('credentials', {
         describe: async (ref: string) => {
           if (ref === 'BROKEN') throw new Error('credential ref "broken" must match the reference grammar')
+          if (ref === 'OPAQUE') throw 'credential source answered with no detail'
           if (ref === 'SHADOWED') return { configured: true, source: 'env', writable: false }
           return { configured: false, writable: true }
         },
@@ -4607,6 +4721,14 @@ describe('ide-bridge provider-write handlers', () => {
           ok: false,
           error: 'credential ref "broken" must match the reference grammar',
         })
+      // A refusal that is not an Error reports its string form.
+      expect(await roundTrip(harness, { kind: 'credential/describe', id: 'cd-opaque', refs: ['OPAQUE'] }))
+        .toEqual({
+          kind: 'credential/describe/response',
+          id: 'cd-opaque',
+          ok: false,
+          error: 'credential source answered with no detail',
+        })
     })
   })
 
@@ -4632,9 +4754,14 @@ describe('ide-bridge provider-write handlers', () => {
     await withBridge((ctx) => {
       ctx.provide('credentials', {
         describe: async () => ({ configured: false, writable: true }),
-        set: async (ref: string, value: string) => { written.push([ref, value]) },
+        set: async (ref: string, value: string) => {
+          if (ref === 'FAILED') throw new Error('credential store is unavailable')
+          if (ref === 'REFUSED') throw 'credential source is read-only'
+          written.push([ref, value])
+        },
         unset: async (ref: string) => {
           if (ref === 'LOCKED') throw new Error('read-only source shadows LOCKED')
+          if (ref === 'SEALED') throw 'credential source is sealed'
         },
       })
     }, async (harness) => {
@@ -4644,6 +4771,13 @@ describe('ide-bridge provider-write handlers', () => {
         .toEqual({ kind: 'credential/unset/response', id: 'cu-ok', ok: true })
       expect(await roundTrip(harness, { kind: 'credential/unset', id: 'cu-locked', ref: 'LOCKED' }))
         .toEqual({ kind: 'credential/unset/response', id: 'cu-locked', ok: false, error: 'read-only source shadows LOCKED' })
+      expect(await roundTrip(harness, { kind: 'credential/set', id: 'cs-refused', ref: 'REFUSED', value: 'sk-live' }))
+        .toEqual({ kind: 'credential/set/response', id: 'cs-refused', ok: false, error: 'credential source is read-only' })
+      expect(await roundTrip(harness, { kind: 'credential/set', id: 'cs-failed', ref: 'FAILED', value: 'sk-live' }))
+        .toEqual({ kind: 'credential/set/response', id: 'cs-failed', ok: false, error: 'credential store is unavailable' })
+      // A refusal that is not an Error reports its string form.
+      expect(await roundTrip(harness, { kind: 'credential/unset', id: 'cu-sealed', ref: 'SEALED' }))
+        .toEqual({ kind: 'credential/unset/response', id: 'cu-sealed', ok: false, error: 'credential source is sealed' })
     })
     // The seam receives the literal exactly once, and only from the store frame.
     expect(written).toEqual([['ACME_API_KEY', 'sk-live']])
@@ -4660,11 +4794,13 @@ describe('ide-bridge provider-write handlers', () => {
         })
     })
 
+    const requests: Array<{ provider?: string; baseURL?: string; api?: string; apiKey?: string }> = []
     await withBridge((ctx) => {
       ctx.provide('llm', {
         listProviders: () => [],
         listModels: async () => [],
         discoverModels: async (settingsNs: string, request: { provider?: string; baseURL?: string; api?: string; apiKey?: string }) => {
+          requests.push(request)
           if (settingsNs === 'other') throw new Error('no model discovery is registered for "other"')
           if (request.baseURL === 'https://refused.example/v1') throw 'listing answered neither data nor models'
           return [
@@ -4708,6 +4844,63 @@ describe('ide-bridge provider-write handlers', () => {
         ok: false,
         error: 'listing answered neither data nor models',
       })
+      // Only the draft fields the frame carries reach the discovery.
+      expect(await roundTrip(harness, {
+        kind: 'model/discover',
+        id: 'md-provider',
+        settingsNs: 'llm-pi-ai',
+        provider: 'acme',
+        api: 'openai-completions',
+      })).toEqual({
+        kind: 'model/discover/response',
+        id: 'md-provider',
+        ok: true,
+        models: [
+          { id: 'chat-1', name: 'Chat One', contextWindow: 128_000, maxTokens: 8_192, inputModalities: ['text'] },
+          { id: 'chat-1' },
+        ],
+      })
+      expect(requests.at(-1)).toEqual({ provider: 'acme', api: 'openai-completions' })
+      expect(requests.at(-2)).toEqual({ baseURL: 'https://refused.example/v1' })
     })
+  })
+})
+
+describe('ide-bridge terminal/exec frames over the bridge', () => {
+  it('runs a command requested through ctx.ideTerminals and routes its frames back', async () => {
+    await withBridge(() => {}, async (harness) => {
+      await vi.waitFor(() => {
+        expect(harness.ctx.ideTerminals.available()).toBe(true)
+      }, { timeout: WAIT_MS })
+
+      const executionPromise = harness.ctx.ideTerminals.execute({
+        command: 'echo hi', cwd: '/work', dedicated: false,
+      })
+      const startFrame = await awaitReceived(harness, frame => frame.kind === 'terminal/exec')
+      if (startFrame.kind !== 'terminal/exec') throw new Error('expected the Host to receive terminal/exec')
+      expect(startFrame.command).toBe('echo hi')
+      expect(startFrame.cwd).toBe('/work')
+      expect(startFrame.dedicated).toBe(false)
+
+      expect(harness.host.broadcast({ kind: 'terminal/exec/started', id: startFrame.id })).toBe(1)
+      expect(harness.host.broadcast({ kind: 'terminal/exec/output', id: startFrame.id, data: 'hi\n' })).toBe(1)
+      expect(harness.host.broadcast({ kind: 'terminal/exec/exit', id: startFrame.id, exitCode: 0 })).toBe(1)
+
+      const execution = await executionPromise
+      const chunks: string[] = []
+      for await (const chunk of execution.output) chunks.push(chunk)
+      expect(chunks).toEqual(['hi\n'])
+      expect(await execution.done).toBe(0)
+    })
+  })
+
+  it('reports the terminal capability unavailable while no Extension is connected', async () => {
+    Reflect.deleteProperty(process.env, IDE_BRIDGE_SOCK_ENV)
+    const ctx = new Context()
+    apply(ctx, {})
+    expect(ctx.ideTerminals.available()).toBe(false)
+    await expect(ctx.ideTerminals.execute({ command: 'ls', cwd: '/work', dedicated: false }))
+      .rejects.toThrow('not connected')
+    await ctx.fiber.dispose()
   })
 })
