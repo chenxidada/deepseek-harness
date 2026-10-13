@@ -521,12 +521,14 @@ describe('cap:code-context — @path resolution, references, and selection conte
         expect(plan.ok).toBe(true)
         if (plan.ok) {
           expect(plan.abs).toBe(resolve(join(root, 'src/x.ts')))
-          expect(plan.selection).toEqual({
+          const selection = plan.selection
+          if (selection === undefined) throw new Error('planReferenceOpen returned no selection for the stored meta')
+          expect(selection).toEqual({
             start: { line: 9, character: 0 },
             end: { line: 19, character: 0 },
           })
           // NL in a message would say 3-40; open must not use that.
-          expect(plan.selection.start.line).not.toBe(2)
+          expect(selection.start.line).not.toBe(2)
         }
       })
 

@@ -82,7 +82,6 @@ function fakeWindow(): TerminalExecWindow & {
   fireEnd: (event: { execution: TerminalExecExecution; exitCode: number | undefined }) => void
 } {
   const created: ReturnType<typeof fakeTerminal>[] = []
-  let _integrationListener: IntegrationListener = () => {}
   let endListener: EndListener = () => {}
   return {
     created,
@@ -92,9 +91,10 @@ function fakeWindow(): TerminalExecWindow & {
       created.push(t)
       return t
     },
-    onDidChangeTerminalShellIntegration(listener: IntegrationListener) {
-      _integrationListener = listener
-      return { dispose() { _integrationListener = () => {} } }
+    onDidChangeTerminalShellIntegration(_listener: IntegrationListener) {
+      // Every fake terminal carries its integration up front, so the controller
+      // never waits on this event; the subscription only has to be disposable.
+      return { dispose() {} }
     },
     onDidEndTerminalShellExecution(listener: EndListener) {
       endListener = listener
@@ -131,7 +131,8 @@ describe('cap:terminal-exec — IDE terminal execution controller', () => {
     const win = fakeWindow()
     const ctrl = new IdeTerminalExecController(win)
     const send = vi.fn<TerminalExecSend>(() => true)
-    const result = ctrl.handle({ kind: 'hello', version: 1 } as BridgeFrame, send)
+    // The runtime's own connect frame, which is not part of the terminal-exec family.
+    const result = ctrl.handle({ kind: 'hello', role: 'runtime' }, send)
     expect(result).toBe(false)
     expect(send).not.toHaveBeenCalled()
     ctrl.dispose()

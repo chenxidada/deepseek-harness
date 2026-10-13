@@ -1551,8 +1551,7 @@ record="$(display_evidence_record_json)"
       it('CAP-TEST-HARNESS-090 a sendPrompt step is always followed by a marker wait/stream assertion', () => {
         for (const id of TARGET_IDS) {
           const steps = stepsOf(id)
-          for (let i = 0; i < steps.length; i += 1) {
-            const step = steps[i]
+          for (const [i, step] of steps.entries()) {
             if (step.command !== 'dsh.test.sendPrompt') continue
             const hasMarkerAfter = steps.slice(i + 1).some(later =>
               (later.kind === 'wait' || later.kind === 'stream') && isMarkerExpect(later.expect),
@@ -1624,6 +1623,19 @@ record="$(display_evidence_record_json)"
   })
 
   describe('layer-v-capability-runner.spec.ts', () => {
+    /** One capability's recorded outcome, mirroring the runner's per-capability result. */
+    interface ManifestRunCapability {
+      id: string
+      conclusion: string
+      steps?: unknown[]
+    }
+
+    /** The runner's aggregate verdict plus one entry per selected capability. */
+    interface ManifestRun {
+      conclusion: string
+      capabilities: ManifestRunCapability[]
+    }
+
     const require = createRequire(import.meta.url)
     const runner = require('../test-scripts/layer-v-capability-driver/capability-runner.cjs') as {
       StageError: new (conclusion: string, detail: { reason: string; evidence?: unknown; step?: string }) => Error & {
@@ -1654,7 +1666,7 @@ record="$(display_evidence_record_json)"
           capture: (fileName: string) => Promise<unknown>
         },
         options?: { selector?: { only?: string[] }; hasCredential?: boolean; stepTimeoutMs?: number; journal?: (entry: object) => void },
-      ) => Promise<{ conclusion: string; capabilities: Array<{ id: string; conclusion: string; steps?: unknown[] }> }>
+      ) => Promise<ManifestRun>
       overallConclusion: (results: Array<{ conclusion: string }>) => string
       resolveStepArgs: (
         args: unknown,
@@ -1677,6 +1689,18 @@ record="$(display_evidence_record_json)"
       assistantStreamingActive,
       linkFailure,
     } = runner
+
+    /**
+     * The run's first capability result. Every case here drives a one-capability
+     * manifest, so an empty list leaves the per-capability assertion nothing to read.
+     * @param result - an awaited `runManifest` verdict.
+     * @returns the first capability entry.
+     */
+    function firstCapability(result: ManifestRun): ManifestRunCapability {
+      const capability = result.capabilities[0]
+      if (capability === undefined) throw new Error('runManifest returned no capability results')
+      return capability
+    }
 
     /** A mock host whose commands answer a fixed map; the capture is a non-degenerate stub PNG. */
     function mockHost(answers: Record<string, unknown>): {
@@ -1785,7 +1809,7 @@ record="$(display_evidence_record_json)"
         // The host must not be touched for a gated capability, so any command is an error.
         const result = await runManifest(manifest, mockHost({}), { hasCredential: false })
         expect(result.conclusion).toBe('SKIPPED_NO_CREDENTIALS')
-        expect(result.capabilities[0].conclusion).toBe('SKIPPED_NO_CREDENTIALS')
+        expect(firstCapability(result).conclusion).toBe('SKIPPED_NO_CREDENTIALS')
       })
 
       it('CAP-TEST-HARNESS-113 passes a capability whose command + assertion + screenshot all succeed', async () => {
@@ -1806,8 +1830,9 @@ record="$(display_evidence_record_json)"
         }
         const result = await runManifest(manifest, mockHost({ 'dsh.showPanel': { viewId: 'dsh.editorChat', panelOpen: true } }), { hasCredential: false })
         expect(result.conclusion).toBe('PASS')
-        expect(result.capabilities[0].conclusion).toBe('PASS')
-        expect((result.capabilities[0].steps as unknown[]).length).toBe(3)
+        const capability = firstCapability(result)
+        expect(capability.conclusion).toBe('PASS')
+        expect(capability.steps).toHaveLength(3)
       })
 
       it('CAP-TEST-HARNESS-114 classifies a failing assertion as LINK_FAILURE, not a pass', async () => {
@@ -1824,7 +1849,7 @@ record="$(display_evidence_record_json)"
         }
         const result = await runManifest(manifest, mockHost({ 'dsh.showPanel': { panelOpen: false } }), { hasCredential: false })
         expect(result.conclusion).toBe('LINK_FAILURE')
-        expect(result.capabilities[0].conclusion).toBe('LINK_FAILURE')
+        expect(firstCapability(result).conclusion).toBe('LINK_FAILURE')
       })
 
       it('CAP-TEST-HARNESS-115 journals every step, including the failure that threw (crash-localisable)', async () => {
@@ -1876,7 +1901,7 @@ record="$(display_evidence_record_json)"
         expect(result.conclusion).toBe('LINK_FAILURE')
         // The failure must name the steps that ran, not just the one that died: a driver
         // diagnosis reads the ids/values those earlier steps returned.
-        const steps = result.capabilities[0].steps as Array<{ step: string; ok: boolean }>
+        const steps = firstCapability(result).steps as Array<{ step: string; ok: boolean }>
         expect(steps.map(step => [step.step, step.ok])).toEqual([['open', true], ['panel-open', false]])
       })
     })
@@ -2071,7 +2096,7 @@ record="$(display_evidence_record_json)"
         }
         const result = await runManifest(manifest, host, { hasCredential: false })
         expect(result.conclusion).toBe('PASS')
-        expect(result.capabilities[0].conclusion).toBe('PASS')
+        expect(firstCapability(result).conclusion).toBe('PASS')
       })
 
       it('CAP-TEST-HARNESS-126 fails the increment gate when only the settled marker is seen (no streaming, no growth)', async () => {
@@ -2094,7 +2119,7 @@ record="$(display_evidence_record_json)"
         }
         const result = await runManifest(manifest, host, { hasCredential: false })
         expect(result.conclusion).toBe('LINK_FAILURE')
-        expect(result.capabilities[0].conclusion).toBe('LINK_FAILURE')
+        expect(firstCapability(result).conclusion).toBe('LINK_FAILURE')
       })
     })
 
@@ -2295,6 +2320,8 @@ record="$(display_evidence_record_json)"
           data: {
             turn: 1,
             step: 1,
+            // Handwritten fixture: the attempt carries the message, not a recorded model stream.
+            stream: [],
             message: freezeMessage({
               id: MessageId('a-with-diff'),
               role: 'assistant',
@@ -2371,6 +2398,8 @@ record="$(display_evidence_record_json)"
           data: {
             turn: 1,
             step: 1,
+            // Handwritten fixture: the attempt carries the message, not a recorded model stream.
+            stream: [],
             message: freezeMessage({
               id: MessageId('a-no-diff'),
               role: 'assistant',

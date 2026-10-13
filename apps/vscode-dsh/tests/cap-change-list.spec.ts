@@ -502,9 +502,10 @@ describe('cap:change-list — change attribution, display, and diff rendering', 
           && (sourceMessageId === undefined
             || m.changeList?.sourceMessageId === sourceMessageId),
             )
+            const messageId = list?.id
             revealed.push({
               sourceMessageId: list?.changeList?.sourceMessageId ?? sourceMessageId ?? '',
-              messageId: list?.id,
+              ...messageId === undefined ? {} : { messageId },
             })
             panel.pushRevealChangeList(
               tab.sessionId,

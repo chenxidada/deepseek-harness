@@ -236,7 +236,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
           messages: controller.messages,
           isHostReady: () => true,
           acceptSend: text => controller.promptActive(text),
-          requestStop: () => controller.cancelActiveTurn(),
+          requestStop: async () => { await controller.cancelActiveTurn() },
         })
         controller.setPanelHost(panel)
         const fake = new FakeWebviewPort()
@@ -881,7 +881,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
           messages: controller.messages,
           isHostReady: () => true,
           acceptSend: text => controller.promptActive(text),
-          requestStop: () => controller.cancelActiveTurn(),
+          requestStop: async () => { await controller.cancelActiveTurn() },
         })
         controller.setPanelHost(panel)
         const fake = new FakeWebviewPort()
@@ -938,7 +938,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
           messages: controller.messages,
           isHostReady: () => true,
           acceptSend: text => controller.promptActive(text),
-          requestStop: () => controller.cancelActiveTurn(),
+          requestStop: async () => { await controller.cancelActiveTurn() },
         })
         controller.setPanelHost(panel)
         const fake = new FakeWebviewPort()
@@ -2296,7 +2296,7 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
       // The command carries free-form arguments, so the `@path` gate must not see them.
       expect(commands).toEqual([{ sessionId: 's-a', line: '/feature 支持按标签过滤' }])
       expect(sent).toEqual([])
-      expect(fake.receivedFromHost.some(m => m.type === 'composer/send-rejected')).toBe(false)
+      expect(fake.receivedFromHost.some(m => m.type === 'ui/reject-send')).toBe(false)
 
       fake.emitFromWebview({ type: 'composer/send', text: '/not-a-command' })
       await waitFor(() => sent.length > 0, 1_000)

@@ -1006,11 +1006,11 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
       })
 
       it('CAP-CONVERSATION-010 empty Tab close skips openTabSet and dispose (VP-1-empty)', async () => {
-        const writes: Array<{ openTabSet: unknown[] }> = []
+        const writes: Array<{ openTabSet: Array<{ sessionId?: string }> }> = []
         const state: WorkspaceStateLike = {
           get() { return undefined },
           update(_key, value) {
-            writes.push(value as { openTabSet: unknown[] })
+            writes.push(value as { openTabSet: Array<{ sessionId?: string }> })
           },
         }
         const host = Object.assign(new IdeSessionHost(), {
@@ -2625,8 +2625,11 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           },
         }, {
           Uri: {
+            parse(value: string) {
+              return { scheme: 'file', path: value, fsPath: value, toString: () => value }
+            },
             file(path: string) {
-              return { fsPath: path, toString: () => `file://${path}` }
+              return { scheme: 'file', path, fsPath: path, toString: () => `file://${path}` }
             },
           },
           window: {
@@ -2772,7 +2775,10 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         acceptSend: text => controller.promptActive(text),
         resolvePanelProjection: () => controller.resolvePanelProjection(),
         requestOpenSubagent: childSessionId => controller.openSubagentContext(childSessionId),
-        requestNavBack: () => controller.navBack(),
+        requestNavBack: () => {
+          controller.navBack()
+          return Promise.resolve()
+        },
         requestPinSubagent: childSessionId => controller.pinSubagent(childSessionId),
         requestDismissSubagent: childSessionId => controller.dismissSubagent(childSessionId),
         requestDismissFinishedSubagents: () => controller.dismissSubagent(),
@@ -2974,7 +2980,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         // The roster rides panel/state, so the bar is rebuilt on every push.
         const state = [...fake.receivedFromHost].reverse()
           .find(m => m.type === 'panel/state' && Array.isArray(m.subagents))
-        expect(state?.subagents).toHaveLength(2)
+        expect(state?.type === 'panel/state' ? state.subagents : undefined).toHaveLength(2)
       })
 
       it('CAP-CONVERSATION-111 the roster follows the Tab root while the panel projects a child', async () => {
@@ -3184,8 +3190,11 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
               // The sidebar view builds its document from `webview/dist`, so the fake
               // offers the URI constructor the provider resolves it with.
               Uri: {
+                parse(value: string) {
+                  return { scheme: 'file', path: value, fsPath: value, toString: () => value }
+                },
                 file(path: string) {
-                  return { fsPath: path, scheme: 'file', toString: () => `file://${path}` }
+                  return { scheme: 'file', path, fsPath: path, toString: () => `file://${path}` }
                 },
               },
             }
@@ -3311,7 +3320,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           { id: 'dsh.history', name: 'History', type: 'webview' },
           { id: 'dsh.todo', name: 'Todo', type: 'tree' },
         ])
-        expect(pkg.default.contributes.viewsWelcome).toBeUndefined()
+        expect(Object.hasOwn(pkg.default.contributes, 'viewsWelcome')).toBe(false)
         expect(pkg.default.contributes.commands.some(
           (c: { command?: string }) => c.command === 'dsh.showPanel',
         )).toBe(true)
@@ -3486,7 +3495,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
         // The runtime side of the delete: this fixture has no bridge, and a delete that
         // cannot drop the live session never reaches the confirmed path it is testing.
         const disposeSpy = vi.spyOn(IdeSessionHost.prototype, 'disposeSession').mockResolvedValue()
-        vi.spyOn(IdeSessionHost.prototype, 'deleteSession').mockResolvedValue(undefined)
+        vi.spyOn(IdeSessionHost.prototype, 'deleteSession').mockResolvedValue(true)
 
         activateWith(makeVscode({ history: true, confirmDelete: true }))
         await commands.get('dsh.test.setCredentialPresence')!(true)
@@ -3514,7 +3523,7 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
           this.status = 'connected'
         })
         const disposeSpy = vi.spyOn(IdeSessionHost.prototype, 'disposeSession').mockResolvedValue()
-        vi.spyOn(IdeSessionHost.prototype, 'deleteSession').mockResolvedValue(undefined)
+        vi.spyOn(IdeSessionHost.prototype, 'deleteSession').mockResolvedValue(true)
 
         activateWith(makeVscode({ history: true, confirmDelete: true }))
         await commands.get('dsh.test.setCredentialPresence')!(true)
@@ -4065,7 +4074,8 @@ describe('cap:conversation — conversation registry, multi-tab, panel lifecycle
               },
             ) {
               for (const el of options.treeDataProvider.getChildren()) {
-                captured.push({ command: options.treeDataProvider.getTreeItem(el).command })
+                const command = options.treeDataProvider.getTreeItem(el).command
+                captured.push(command === undefined ? {} : { command })
               }
               return { dispose() {} }
             },

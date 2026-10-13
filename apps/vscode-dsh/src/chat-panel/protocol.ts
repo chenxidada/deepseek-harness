@@ -271,6 +271,11 @@ export type HostToWebviewMessage =
     type: 'specdev/status'
     sessionId: string
     snapshot: BridgeSpecdevSnapshot | null
+    /**
+     * Latest workspace grant this session recorded, when it recorded one; the
+     * Webview renders it as the card's scope line.
+     */
+    lastScope?: { decision: 'once' | 'directory' | 'session'; paths: string[] }
   }
   | {
     /**

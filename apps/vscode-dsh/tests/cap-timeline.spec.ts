@@ -869,6 +869,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         failMoreReads = true
         const more = await controller.restoreMoreTabs()
         expect(more.outcome).toBe('restored')
+        if (more.outcome !== 'restored') return
         expect(more.hydrated).toHaveLength(0)
         expect(more.deferredSessionIds).toEqual(['sess-more'])
         expect(controller.panelSnapshot().deferredRestoreCount).toBe(1)
@@ -1235,6 +1236,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         })
         const fail = await controller2.revertChange('no-snap', { confirmGate: async () => true })
         expect(fail.ok).toBe(false)
+        if (fail.ok) return
         expect(fail.reason).toBe('snapshot-unavailable')
         expect(controller2.changes.getById('no-snap')!.status).toBe('unreviewed')
         await rm(root, { recursive: true, force: true })
@@ -1282,6 +1284,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
           confirmGate: async () => false,
         })
         expect(cancelled.ok).toBe(false)
+        if (cancelled.ok) return
         expect(cancelled.cancelled).toBe(true)
         expect(await readFile(abs, 'utf8')).toBe(after)
         expect(controller.changes.getById(rec.changeId)!.status).toBe('unreviewed')
@@ -1344,6 +1347,8 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         const cancelled = await controller.revertChange(rec.changeId, {
           confirmGate: async () => false,
         })
+        expect(cancelled.ok).toBe(false)
+        if (cancelled.ok) return
         expect(cancelled.cancelled).toBe(true)
         expect(await readFile(abs, 'utf8')).toBe('user-recreated\n')
 
@@ -1417,6 +1422,8 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         const cancelled = await controller.revertChange(rec.changeId, {
           confirmGate: async gate => gate.kind !== 'confirm-dirty',
         })
+        expect(cancelled.ok).toBe(false)
+        if (cancelled.ok) return
         expect(cancelled.cancelled).toBe(true)
         expect(await readFile(abs, 'utf8')).toBe('user-dirty\n')
         expect(controller.changes.getById(rec.changeId)!.status).toBe('unreviewed')
@@ -1499,6 +1506,8 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         const cancelEarly = await controller.revertChange(early.changeId, {
           confirmGate: async gate => gate.kind !== 'confirm-later-changes',
         })
+        expect(cancelEarly.ok).toBe(false)
+        if (cancelEarly.ok) return
         expect(cancelEarly.cancelled).toBe(true)
         expect(await readFile(abs, 'utf8')).toBe('t2\n')
 
@@ -1581,7 +1590,9 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         const byId = new Map(results.map(r => [r.changeId, r]))
         expect(byId.get(recOk.changeId)?.ok).toBe(true)
         expect(byId.get(recFail.changeId)?.ok).toBe(false)
-        expect(byId.get(recFail.changeId)?.reason).toMatch(/^write-failed:/)
+        const failResult = byId.get(recFail.changeId)
+        if (failResult === undefined || failResult.ok) return
+        expect(failResult.reason).toMatch(/^write-failed:/)
         expect(await readFile(absOk, 'utf8')).toBe('ok-before\n')
         expect(await readFile(absFail, 'utf8')).toBe('fail-after\n')
         expect(controller.changes.getById(recOk.changeId)!.status).toBe('reverted')
@@ -1640,6 +1651,7 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
         controller.setRevertWorkspace(ws)
         const fail = await controller.revertChange(rec.changeId, { confirmGate: async () => true })
         expect(fail.ok).toBe(false)
+        if (fail.ok) return
         expect(fail.reason).toBe('write-failed:io-error')
         expect(fail.reason).not.toContain('SECRET_FILE_BODY_MUST_NOT_APPEAR')
         expect(controller.changes.getById(rec.changeId)!.status).toBe('unreviewed')
@@ -1981,10 +1993,10 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
 
         port.emitFromWebview({ type: 'change/revert', changeId: rec.changeId })
         await waitFor(() => port.receivedFromHost.some(m => m.type === 'change/revert-result'), 2000)
-        const frame = port.receivedFromHost.find(m => m.type === 'change/revert-result') as {
-          results: Array<{ ok: boolean }>
-        }
-        expect(frame.results[0]!.ok).toBe(true)
+        const frame = port.receivedFromHost.find(m => m.type === 'change/revert-result')
+        expect(frame?.type).toBe('change/revert-result')
+        if (frame?.type !== 'change/revert-result') return
+        expect(frame.results[0]?.ok).toBe(true)
         expect(controller.changes.getById(rec.changeId)!.status).toBe('reverted')
         await rm(root, { recursive: true, force: true })
       })
@@ -2150,7 +2162,8 @@ describe('cap:timeline — timeline projection, diff, history, fork, review, and
           parentSessionId: string,
           opts?: { boundarySeq?: number; emptySeed?: boolean; childSessionId?: string },
         ) {
-          forkCalls.push({ parentSessionId, options: opts })
+          // `exactOptionalPropertyTypes`: an omitted options bag stays absent in the record.
+          forkCalls.push(opts === undefined ? { parentSessionId } : { parentSessionId, options: opts })
           if (options?.forkImpl) return options.forkImpl(parentSessionId, opts)
           return opts?.childSessionId ?? randomUUID()
         },

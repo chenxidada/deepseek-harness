@@ -55,6 +55,21 @@ function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
   })
 }
 
+/**
+ * The entry at `index`, which the case proved present by building the list or
+ * asserting its length. A plain `list[index]` is `T | undefined` under
+ * `noUncheckedIndexedAccess`; this turns a missing fixture entry into a harness
+ * error instead of an `undefined` read.
+ * @param list - list the case built or read back.
+ * @param index - position the case's length assertion covers.
+ * @returns the entry at `index`.
+ */
+function entryAt<T>(list: readonly T[], index: number): T {
+  const entry = list[index]
+  if (entry === undefined) throw new Error(`fixture entry ${index} is missing`)
+  return entry
+}
+
 describe('cap:session-host — host lifecycle, start diagnostics, and node env guard', () => {
   describe('session-host.spec.ts', () => {
     const fakeSdkRuntime = fileURLToPath(new URL('./fixtures/fake-sdk-runtime.mjs', import.meta.url))
@@ -482,9 +497,11 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
           }
         }
         // The second attempt is a retry of the first, not a new chain.
-        expect(records[0].phase).toBe('start')
-        expect(records[1].retryOfSeq).toBe(records[0].seq)
-        expect(records[1].seq).toBeGreaterThan(records[0].seq)
+        const opening = entryAt(records, 0)
+        const retry = entryAt(records, 1)
+        expect(opening.phase).toBe('start')
+        expect(retry.retryOfSeq).toBe(opening.seq)
+        expect(retry.seq).toBeGreaterThan(opening.seq)
       })
 
       /**
@@ -524,7 +541,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         const records = recorder.records()
         // One death is one record: the start catch did not also write one.
         expect(records).toHaveLength(1)
-        const [death] = records
+        const death = entryAt(records, 0)
         expect(death).toMatchObject({
           kind: 'child-exited',
           phase: 'post-handshake',
@@ -1279,7 +1296,9 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         })
         failures.push(await failureOf(executableAt(absent, 'process-exec-path')))
 
-        const [fromEnvironment, fromSetting, fromHost] = failures
+        const fromEnvironment = entryAt(failures, 0)
+        const fromSetting = entryAt(failures, 1)
+        const fromHost = entryAt(failures, 2)
         expect(fromEnvironment.source).toBe('dsh-node-bin')
         expect(fromEnvironment.sourceLabel).toBe(`${DSH_NODE_BIN_VARIABLE} environment variable`)
         expect(fromSetting.source).toBe('vscode-setting')
@@ -1329,7 +1348,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       it('CAP-SESSION-HOST-040 pins exactly one machine-readable version that the declared range admits', async () => {
         const lines = (await readFile(pinnedNodePath, 'utf8')).split('\n').filter(line => line.trim() !== '')
         expect(lines).toHaveLength(1)
-        const pinned = lines[0].trim()
+        const pinned = entryAt(lines, 0).trim()
         expect(pinned).toMatch(/^\d+\.\d+\.\d+$/)
         expect(rangeAdmits(EXPECTED_NODE_RANGE, pinned)).toBe(true)
       })
@@ -1533,7 +1552,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         expect(configurationReads).toContain('dsh')
         expect(configurationReads).toContain(NODE_BIN_SETTING)
         expect(starts).toHaveLength(1)
-        expect(starts[0].nodeBinSetting).toBe('/opt/node24/bin/node')
+        expect(entryAt(starts, 0).nodeBinSetting).toBe('/opt/node24/bin/node')
         // Proxy evidence: the extension reads the setting and never writes it back.
         expect(await readFile(settings.path)).toEqual(before)
       })
@@ -1555,7 +1574,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         await commands.get('dsh.test.requestStart')!('command-start')
 
         expect(starts).toHaveLength(1)
-        expect(starts[0].nodeBinSetting).toBe('')
+        expect(entryAt(starts, 0).nodeBinSetting).toBe('')
       })
 
       it('CAP-SESSION-HOST-048 re-reads the setting on every start instead of caching the first value (AD-9)', async () => {
@@ -1858,9 +1877,10 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
 
         const records = recorder.records()
         expect(records).toHaveLength(1)
-        expect(records[0]).toMatchObject({ kind: 'dsh-entry', phase: 'start' })
-        expect(records[0].hint).toContain(CLI_PATH_SETTING)
-        expect(records[0].detail).toContain(absent)
+        const record = entryAt(records, 0)
+        expect(record).toMatchObject({ kind: 'dsh-entry', phase: 'start' })
+        expect(record.hint).toContain(CLI_PATH_SETTING)
+        expect(record.detail).toContain(absent)
       } finally {
         vi.unstubAllEnvs()
       }
@@ -2039,7 +2059,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       if (!Array.isArray(raw)) throw new Error('HARNESS_ERROR: diagnostics hook did not return an array')
       if (raw.length === 0) return { version: null, records: [] }
       const records = raw as readonly Record<string, unknown>[]
-      const version = records[0].schemaVersion
+      const version = entryAt(records, 0).schemaVersion
       if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
         throw new Error(`HARNESS_ERROR: unusable schemaVersion ${JSON.stringify(version)}`)
       }
@@ -2070,7 +2090,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       it('CAP-SESSION-HOST-056 asserts the exact field set for a record of the version the reader knows', () => {
         const read = readRecords([{ ...known }])
         expect(read.version).toBe(HOST_DIAGNOSTIC_SCHEMA_VERSION)
-        expect(Object.keys(read.records[0])).toHaveLength(18)
+        expect(Object.keys(entryAt(read.records, 0))).toHaveLength(18)
       })
 
       it('CAP-SESSION-HOST-057 accepts a future version and only checks the subset it depends on', () => {
@@ -2078,8 +2098,9 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         const read = readRecords([future])
         // The observed version is evidence a driver records, not a failure.
         expect(read.version).toBe(HOST_DIAGNOSTIC_SCHEMA_VERSION + 1)
-        expect(read.records[0].kind).toBe('other')
-        expect(read.records[0].futureField).toBe('added later')
+        const record = entryAt(read.records, 0)
+        expect(record.kind).toBe('other')
+        expect(record.futureField).toBe('added later')
       })
 
       it('CAP-SESSION-HOST-058 treats a missing, null, zero, or non-integer version as a harness error', () => {
@@ -2263,8 +2284,8 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         const records = recorder.records()
 
         expect(records).toHaveLength(HOST_DIAGNOSTIC_RECORD_LIMIT)
-        expect(records[0].seq).toBe(overflow + 1)
-        expect(records[records.length - 1].seq).toBe(HOST_DIAGNOSTIC_RECORD_LIMIT + overflow)
+        expect(entryAt(records, 0).seq).toBe(overflow + 1)
+        expect(entryAt(records, records.length - 1).seq).toBe(HOST_DIAGNOSTIC_RECORD_LIMIT + overflow)
       })
 
       it('CAP-SESSION-HOST-067 returns a copy, so a reader cannot reach into the store', () => {
@@ -2356,13 +2377,14 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         const records = recorder.records()
 
         expect(records).toHaveLength(2)
-        expect(records[0]).toMatchObject({
+        const first = entryAt(records, 0)
+        expect(first).toMatchObject({
           kind: 'missing-credentials',
           detail: 'missing credentials',
           phase: 'start',
           retryOfSeq: null,
         })
-        expect(opening).toMatchObject({ seq: 2, phase: 'retry', retryOfSeq: records[0].seq })
+        expect(opening).toMatchObject({ seq: 2, phase: 'retry', retryOfSeq: first.seq })
       })
 
       it('CAP-SESSION-HOST-073 leaves an invalid-setting refusal to the Extension fallback, not this listener', () => {
@@ -2402,7 +2424,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         const records = recorder.records()
         expect(records).toHaveLength(1)
         // No message supplied: the record still carries the kind's own sentence.
-        expect(records[0].detail).not.toBe('')
+        expect(entryAt(records, 0).detail).not.toBe('')
 
         // Leaving `failed` re-arms the guard — that edge is the attempt boundary, so
         // the next failure of the same class is a new attempt rather than a repeat of
@@ -2410,7 +2432,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         listener({ state: 'started', pendingReasons: [], autoRetryUsed: false })
         listener({ state: 'failed', pendingReasons: [], errorKind: 'missing-credentials', autoRetryUsed: false })
         expect(recorder.records()).toHaveLength(2)
-        expect(recorder.records()[1]).toMatchObject({ phase: 'retry', retryOfSeq: records[0].seq })
+        expect(entryAt(recorder.records(), 1)).toMatchObject({ phase: 'retry', retryOfSeq: entryAt(records, 0).seq })
       })
     })
 
@@ -2459,14 +2481,16 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
 
         const records = recorder.records()
         expect(records).toHaveLength(2)
-        expect(records[0]).toMatchObject({ kind: 'missing-credentials', phase: 'start', retryOfSeq: null })
-        expect(records[1]).toMatchObject({
+        const first = entryAt(records, 0)
+        const second = entryAt(records, 1)
+        expect(first).toMatchObject({ kind: 'missing-credentials', phase: 'start', retryOfSeq: null })
+        expect(second).toMatchObject({
           kind: 'missing-credentials',
           detail: 'missing credentials',
           phase: 'retry',
-          retryOfSeq: records[0].seq,
+          retryOfSeq: first.seq,
         })
-        expect(records[1].seq).toBeGreaterThan(records[0].seq)
+        expect(second.seq).toBeGreaterThan(first.seq)
       })
 
       it('CAP-SESSION-HOST-077 re-arms on a queued retry, so a coalesced second reason also gets a record', async () => {
@@ -2496,18 +2520,20 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         await Promise.resolve()
         expect(starts).toEqual(['command-start'])
 
-        gates[0]()
+        entryAt(gates, 0)()
         while (gates.length < 2) await Promise.resolve()
-        gates[1]()
+        entryAt(gates, 1)()
         await first
         await queued
 
         expect(starts).toEqual(['command-start', 'command-send'])
         const records = recorder.records()
         expect(records).toHaveLength(2)
-        expect(records[0]).toMatchObject({ phase: 'start', retryOfSeq: null })
-        expect(records[1]).toMatchObject({ phase: 'retry', retryOfSeq: records[0].seq })
-        expect(records[1].seq).toBeGreaterThan(records[0].seq)
+        const opening = entryAt(records, 0)
+        const coalesced = entryAt(records, 1)
+        expect(opening).toMatchObject({ phase: 'start', retryOfSeq: null })
+        expect(coalesced).toMatchObject({ phase: 'retry', retryOfSeq: opening.seq })
+        expect(coalesced.seq).toBeGreaterThan(opening.seq)
       })
 
       /**
@@ -2540,8 +2566,9 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
 
         const records = recorder.records()
         expect(records).toHaveLength(1)
-        expect(records[0]).toMatchObject({ kind: 'other', phase: 'start', retryOfSeq: null })
-        expect(records[0].detail).toBe('Host start completed without a live connection')
+        const record = entryAt(records, 0)
+        expect(record).toMatchObject({ kind: 'other', phase: 'start', retryOfSeq: null })
+        expect(record.detail).toBe('Host start completed without a live connection')
 
         // The snapshot can settle more than once within one attempt; the record does not.
         orchestrator.onChange(listener)()
@@ -2567,15 +2594,14 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         expect(orchestrator.getSnapshot()).toMatchObject({ state: 'failed', errorKind: 'process-failed' })
         const records = recorder.records()
         expect(records).toHaveLength(1)
-        expect(records[0].kind).toBe('child-exited')
+        expect(entryAt(records, 0).kind).toBe('child-exited')
       })
     })
 
     describe('ConnectionUi terminal states', () => {
       function statusBarItem(): StatusBarItemLike & { shown: boolean } {
-        const item = {
+        const item: StatusBarItemLike & { shown: boolean } = {
           text: '',
-          command: undefined as StatusBarItemLike['command'],
           shown: false,
           show() { item.shown = true },
           hide() { item.shown = false },
@@ -2698,7 +2724,8 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
 
         const pending = instance.listPending()
         expect(pending).toHaveLength(1)
-        expect(pending[0]).toMatchObject({
+        const approval = entryAt(pending, 0)
+        expect(approval).toMatchObject({
           kind: 'approval',
           id: 'approval-1',
           sessionId: 'session-a',
@@ -2706,7 +2733,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
           reason: 'needs to run the test suite',
         })
         // The projection stays a projection: the queue's settle hook is not exposed.
-        expect(Object.keys(pending[0]).sort()).toEqual(
+        expect(Object.keys(approval).sort()).toEqual(
           ['abort', 'id', 'kind', 'reason', 'sessionId', 'state', 'toolName'],
         )
       })
@@ -2720,8 +2747,9 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         })
 
         const pending = instance.listPending()
-        expect(pending[0]).toMatchObject({ kind: 'approval', toolName: 'read' })
-        expect(Object.keys(pending[0]).sort()).toEqual(
+        const approval = entryAt(pending, 0)
+        expect(approval).toMatchObject({ kind: 'approval', toolName: 'read' })
+        expect(Object.keys(approval).sort()).toEqual(
           ['abort', 'id', 'kind', 'sessionId', 'state', 'toolName'],
         )
       })
@@ -2736,7 +2764,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
 
         const pending = instance.listPending()
         expect(pending).toHaveLength(1)
-        expect(Object.keys(pending[0]).sort()).toEqual(['abort', 'id', 'kind', 'sessionId', 'state'])
+        expect(Object.keys(entryAt(pending, 0)).sort()).toEqual(['abort', 'id', 'kind', 'sessionId', 'state'])
       })
     })
 
@@ -2802,13 +2830,13 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       const executed: string[] = []
       /** Action labels each load-time error message offered, in call order. */
       const errorActions: string[][] = []
-      let statusBar: {
-        text: string
-        command?: string | { command: string }
-        tooltip?: string
+      /** The observable status bar the fake `createStatusBarItem` hands the product. */
+      interface FakeStatusBarItem extends StatusBarItemLike {
         shown: boolean
         hidden: number
-      } | undefined
+      }
+
+      let statusBar: FakeStatusBarItem | undefined
       let nodeBin: unknown
       const dirs: string[] = []
       const secretRestores: Array<() => void> = []
@@ -2867,18 +2895,16 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
             },
             ...opts?.withOutputChannel === false ? {} : { createOutputChannel: fakeOutputChannel },
             createStatusBarItem: () => {
-              statusBar = { text: '', shown: false, hidden: 0 }
-              return {
-                get text() { return statusBar!.text },
-                set text(value: string) { statusBar!.text = value },
-                get command() { return statusBar!.command },
-                set command(value: string | { command: string } | undefined) { statusBar!.command = value },
-                get tooltip() { return statusBar!.tooltip },
-                set tooltip(value: string | undefined) { statusBar!.tooltip = value },
-                show() { statusBar!.shown = true },
-                hide() { statusBar!.shown = false; statusBar!.hidden += 1 },
+              const item: FakeStatusBarItem = {
+                text: '',
+                shown: false,
+                hidden: 0,
+                show() { item.shown = true },
+                hide() { item.shown = false; item.hidden += 1 },
                 dispose() {},
               }
+              statusBar = item
+              return item
             },
             registerWebviewViewProvider(viewId: string, provider: unknown) {
               expect(viewId).toBe('dsh.chat')
@@ -2950,15 +2976,16 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       it('CAP-SESSION-HOST-089 the reveal command shows the channel and appends nothing', async () => {
         activateWith(makeVscode())
         expect(commands.has('dsh.showHostDiagnostics')).toBe(true)
-        expect(channels[0].shown).toBe(0)
+        const channel = entryAt(channels, 0)
+        expect(channel.shown).toBe(0)
 
         // The load-time environment check may have reported the runtime already;
         // the reveal command itself must add nothing to that record (AC-13).
-        const appendedAtActivation = channels[0].lines.length
+        const appendedAtActivation = channel.lines.length
         const shown = await commands.get('dsh.showHostDiagnostics')!() as { ok: boolean }
         expect(shown.ok).toBe(true)
-        expect(channels[0].shown).toBe(1)
-        expect(channels[0].lines.length).toBe(appendedAtActivation)
+        expect(channel.shown).toBe(1)
+        expect(channel.lines.length).toBe(appendedAtActivation)
 
         // A surface with no Output Channel still answers the command rather than throwing.
         await deactivate()
@@ -3008,10 +3035,12 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
 
         // The load-time record names the entry, the source, and the version, so the
         // window's runtime is known before any session starts.
-        expect(channels[0].lines).toHaveLength(1)
-        expect(channels[0].lines[0]).toContain(join(packageDir, 'lib', 'bin.js'))
-        expect(channels[0].lines[0]).toContain(`the workspace ${DSH_PACKAGE_NAME} dependency`)
-        expect(channels[0].lines[0]).toContain('7.1.0')
+        const lines = entryAt(channels, 0).lines
+        expect(lines).toHaveLength(1)
+        const report = entryAt(lines, 0)
+        expect(report).toContain(join(packageDir, 'lib', 'bin.js'))
+        expect(report).toContain(`the workspace ${DSH_PACKAGE_NAME} dependency`)
+        expect(report).toContain('7.1.0')
         expect(executed.filter(entry => entry.startsWith('error:'))).toEqual([])
       })
 
@@ -3026,8 +3055,9 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
           restorePath()
         }
 
-        expect(channels[0].lines).toHaveLength(1)
-        const report = channels[0].lines[0]
+        const lines = entryAt(channels, 0).lines
+        expect(lines).toHaveLength(1)
+        const report = entryAt(lines, 0)
         expect(report).toContain('dsh runtime check failed')
         expect(report).toContain('Probed:')
         expect(report).toContain(DSH_BIN_VARIABLE)
@@ -3138,8 +3168,9 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         expect(startSnapshot()).toMatchObject({ state: 'failed', errorKind: 'invalid-setting' })
         const recorded = records()
         expect(recorded).toHaveLength(1)
-        expect(recorded[0].kind).toBe('other')
-        expect(recorded[0].detail).toContain('dsh.nodeBin')
+        const record = entryAt(recorded, 0)
+        expect(record.kind).toBe('other')
+        expect(record.detail).toContain('dsh.nodeBin')
       })
 
       it('CAP-SESSION-HOST-095 a retry after a pre-Host refusal adds a paired record', async () => {
@@ -3149,7 +3180,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
 
         const opened = records()
         expect(opened).toHaveLength(1)
-        expect(opened[0]).toMatchObject({ kind: 'missing-credentials', phase: 'start', retryOfSeq: null })
+        expect(entryAt(opened, 0)).toMatchObject({ kind: 'missing-credentials', phase: 'start', retryOfSeq: null })
 
         // The retry entry this failure state offers (AC[vscode-dsh-usable-loop]-22c), taken on the very state
         // whose failure never reaches `started`: the record pair used to be suppressed
@@ -3160,12 +3191,14 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
 
         const paired = records()
         expect(paired).toHaveLength(2)
-        expect(paired[1]).toMatchObject({
+        const first = entryAt(paired, 0)
+        const retry = entryAt(paired, 1)
+        expect(retry).toMatchObject({
           kind: 'missing-credentials',
           phase: 'retry',
-          retryOfSeq: paired[0].seq,
+          retryOfSeq: first.seq,
         })
-        expect(paired[1].seq).toBeGreaterThan(paired[0].seq)
+        expect(retry.seq).toBeGreaterThan(first.seq)
         expect(startSnapshot()).toMatchObject({ state: 'failed', errorKind: 'missing-credentials' })
       })
 
@@ -3199,7 +3232,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         expect(serialized).not.toContain(secret)
         expect(serialized).toContain('[redacted:DSH_TEST_TOKEN]')
 
-        const appended = channels[0].lines.join('\n')
+        const appended = entryAt(channels, 0).lines.join('\n')
         expect(appended).not.toContain(secret)
         expect(appended).toContain('[redacted:DSH_TEST_TOKEN]')
 
@@ -3234,7 +3267,8 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         // Retry before/after: one paired addition, traced back to the first record.
         const paired = records()
         expect(paired).toHaveLength(2)
-        const [opening, retry] = paired
+        const opening = entryAt(paired, 0)
+        const retry = entryAt(paired, 1)
         expect(opening.phase).toBe('start')
         expect(opening.retryOfSeq).toBeNull()
         expect(retry.phase).toBe('retry')
@@ -3339,7 +3373,7 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         // Fact 2: record count for one death — exactly one, from the death edge.
         const records = recorder.records()
         expect(records).toHaveLength(1)
-        const [death] = records
+        const death = entryAt(records, 0)
         expect(death).toMatchObject({
           phase: 'post-handshake',
           kind: 'child-exited',
@@ -3396,20 +3430,27 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
         // One death, one record — the retry's own synthesised failure is a separate
         // boundary and links to the death as its retry instead of duplicating it.
         expect(deaths).toHaveLength(1)
-        expect(deaths[0]).toMatchObject({
+        const death = entryAt(deaths, 0)
+        expect(death).toMatchObject({
           resolvedExecutable: process.execPath,
           source: 'vscode-setting',
         })
-        const retry = records.filter(record => record.seq > deaths[0].seq)
+        const retry = records.filter(record => record.seq > death.seq)
         expect(retry).toHaveLength(1)
-        expect(retry[0]).toMatchObject({ phase: 'retry', retryOfSeq: deaths[0].seq })
+        expect(entryAt(retry, 0)).toMatchObject({ phase: 'retry', retryOfSeq: death.seq })
         stopWatch()
       })
     })
   })
 
   describe('auto-start-orchestrator.spec.ts', () => {
-    type SameSet<A extends B, B extends A> = true
+    /**
+     * `true` only when `A` and `B` admit each other's members, so the case's
+     * assignment fails to compile on a drifted vocabulary. Each direction is its
+     * own conditional type because a type parameter cannot name the other's
+     * constraint (TS2313).
+     */
+    type SameSet<A, B> = [A] extends [B] ? [B] extends [A] ? true : never : never
 
     function mockPort(overrides?: Partial<StartHostPort> & {
       connected?: boolean
