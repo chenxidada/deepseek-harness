@@ -416,6 +416,10 @@ export class ConversationController {
         // AC-19: disconnect / Host error while streaming → fail-closed streaming false.
         if (status === 'error' || status === 'disconnected') {
           this.failClosedAllStreaming('Host 连接中断，流式已停止')
+          // Subagents whose finished notification will never arrive must not
+          // leave the UI stuck on "running". Mark every in-flight child as
+          // ended so the bar and Tab state reflect the loss.
+          this.failClosedRunningSubagents()
         }
       })
     }
@@ -3660,6 +3664,29 @@ export class ConversationController {
       if (tab !== undefined) this.registry.setStatus(tab.tabId, 'idle')
     }
     this.panelHost?.pushStatus()
+  }
+
+  /**
+   * Mark every in-flight subagent as ended after a Host disconnect or error.
+   * The runtime will never send `subagent.finished` for these children, so the
+   * UI must not remain stuck on "running".
+   */
+  private failClosedRunningSubagents(): void {
+    let changed = false
+    for (const [childSessionId, state] of this.childRunState) {
+      if (state !== 'running') continue
+      this.childRunState.set(childSessionId, 'ended')
+      const parentSessionId = this.parentSessionIdOf(childSessionId)
+      if (parentSessionId !== undefined) {
+        this.messages.patchWhere(
+          parentSessionId,
+          m => m.kind === 'subagent' && m.childSessionId === childSessionId,
+          { text: '已结束（连接中断）', subagentStatus: 'ended' },
+        )
+      }
+      changed = true
+    }
+    if (changed) this.panelHost?.pushFullState()
   }
 
   /**
