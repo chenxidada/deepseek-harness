@@ -300,6 +300,8 @@ History 是 **WebviewView** 而非 `TreeView`：行的字号与行菜单归本�
 
 - 面板可见时，运行时的审批与提问都在消息流里呈现为卡片，决定就出现在它阻塞的那次调用旁边；面板不可见时，协调器回落到 QuickPick 呈现者（AD-CU-7）。
 - 两种卡片都经 bridge 作答：审批是「允许一次 / 拒绝 / 取消」，提问是「提交回答」，另有「取消」作为 fail-closed 的丢弃路径。决定做到一半切换页签只会把卡片放回队列，不会被误当作已作答。
+- 审批卡会写明它在决定什么：优先显示发起方给出的本地化理由（`displayReason`，随面板语言），否则用其英文 `reason`，并标出它所属的工具调用 id。QuickPick 回落路径显示同一理由，在标题里点出该调用，并把提问的 `detail` 追加到提问文本后，因此在面板之外作答也不会更含糊。两个呈现者还使用同一种语言，同一请求在哪里出现都读起来一致。
+- 两个呈现者的审批决定都是同样四个、同样顺序：允许一次、允许并不再询问、拒绝、取消。只有 Host 接上 `InteractionUi.rememberApproval` 时才有第四个：它放行本次调用，并在本窗口内不再呈现本会话的后续审批（见[可替换性](#replaceability-ad-8)中的「会话授予」行）。
 - 等待过期的卡片——运行时的 `interactionTimeoutMs` 到期仍无人回答——保留它在决定的那件事，并把控件换成「已超时，回答不会再送达」，因为运行时已把那次调用以拒绝方式关闭，迟到的回答无处可去。点「知道了」只在面板内清掉这张卡；运行时不会再为该 id 发任何帧。
 
 ## SpecDev 状态（AD-CU-12）
@@ -363,6 +365,7 @@ Fix: install @deepseek-ai/dsh in the workspace so its "dsh" bin is found automat
 |---|---|---|---|
 | UI presenter | 经 `IdeSessionHost.setInteractionUi` / `InteractionCoordinator.setUi` 的 `InteractionUi` | `createVscodeInteractionUi`（QuickPick / InputBox） | 任何返回合法 `ApprovalOutcome` / `AskUserQuestionAnswer` 的对象；证明：`tests/replaceability-interaction-ui.spec.ts` |
 | Auto-allow | `dsh.selectPermissionPreset` → Host `permission/select` | `workspace-write`；`danger-full-access` 映射为审批 `never` | 只经 `dsh-permission-presets` 切换档位 —— 不要在扩展里存一份平行策略 |
+| 会话授予 | 审批卡或 QuickPick 的「允许并不再询问」→ `InteractionUi` 的 `rememberApproval` / 面板 `resolveApproval` → `IdeSessionHost.rememberAutoApproval`，以及设置页的「本会话审批」控件 | 缺省：每次都呈现审批 | `InteractionCoordinator` 自己为该会话后续审批回 `allowed-once`，不再呈现。仅限本窗口、永不落盘，任何 `approval/policy/set` 或 `permission/select` 都会撤销，也可在设置页撤销或改选「逐次询问」。运行时为该会话记录的策略不变，因此它对模型陈述的策略也不变，被跳过的只是 Host 的呈现 |
 | 传输 | Host 以 `IdeBridgeHostServer` 监听 | UDS / named pipe | 在 ide-bridge 的 duplex / `NdjsonSocket` 层替换（内存证明也在那里） |
 
 把 QuickPick 换成 Webview（或其它 presenter）、替换 bridge duplex、或选择某个 auto-allow preset，都必须留在 `apps/vscode-dsh` + `packages/ide/ide-bridge` 之内（AC-27 / AC-28）。

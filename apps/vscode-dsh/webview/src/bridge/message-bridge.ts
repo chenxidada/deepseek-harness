@@ -48,6 +48,8 @@ export type ChromeIntent =
   | { type: 'settings/credential-unset'; ref: string }
   | { type: 'settings/discover-models'; requestId: string; settingsNs: string; provider?: string; baseURL?: string; api?: string; apiKey?: string }
   | { type: 'action/permission-select'; sessionId: string; preset: string }
+  /** Turn this session's asking on or off; `false` also revokes an active grant. */
+  | { type: 'action/auto-approve-set'; sessionId: string; enabled: boolean }
   | { type: 'ui/tab-select'; tabId: string }
   | { type: 'ui/tab-close'; tabId: string }
   | { type: 'ui/tab-new' }
@@ -97,7 +99,13 @@ export type ChromeIntent =
   | { type: 'action/open-settings' }
   | { type: 'change/reveal-source'; sourceMessageId: string }
   | { type: 'change/revert-many'; changeIds: string[] }
-  | { type: 'interaction/approve'; id: string; outcome: 'allowed-once' | 'rejected' | 'cancelled' }
+  | {
+    type: 'interaction/approve'
+    id: string
+    outcome: 'allowed-once' | 'rejected' | 'cancelled'
+    /** Allow this call and stop the Host presenting this session's later approvals. */
+    remember?: boolean
+  }
   | { type: 'interaction/answer'; id: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }
   | { type: 'interaction/dismiss'; id: string; error: string }
 

@@ -693,6 +693,83 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
         expect(signals).toHaveLength(1)
         expect(signals[0]!.aborted).toBe(true)
       })
+
+      it('CAP-INTERACTION-029 answers a remembered session without presenting, and presents again once forgotten', async () => {
+        const presented: string[] = []
+        const coordinator = new InteractionCoordinator()
+        coordinator.setUi({
+          async presentApproval(request) {
+            presented.push(request.id)
+            return 'rejected'
+          },
+          async presentQuestions() {
+            return { answers: [] }
+          },
+        })
+
+        expect(coordinator.hasAutoApproval('sess-remembered')).toBe(false)
+        coordinator.rememberAutoApproval('sess-remembered')
+        expect(coordinator.hasAutoApproval('sess-remembered')).toBe(true)
+        // A remembered session grants without a queue entry, so no card is ever shown.
+        expect(await coordinator.handleApproval({
+          id: 'auto-1',
+          sessionId: 'sess-remembered',
+          toolName: 'bash',
+        })).toBe('allowed-once')
+        expect(presented).toEqual([])
+        expect(coordinator.listPending()).toEqual([])
+
+        // Another session is unaffected.
+        const other = coordinator.handleApproval({ id: 'other-1', sessionId: 'sess-other', toolName: 'bash' })
+        await waitFor(() => presented.includes('other-1'), 1_000)
+        expect(await other).toBe('rejected')
+
+        // Forgetting the grant restores presentation for that session.
+        coordinator.forgetAutoApproval('sess-remembered')
+        expect(coordinator.hasAutoApproval('sess-remembered')).toBe(false)
+        const rememberedAgain = coordinator.handleApproval({
+          id: 'auto-2',
+          sessionId: 'sess-remembered',
+          toolName: 'bash',
+        })
+        await waitFor(() => presented.includes('auto-2'), 1_000)
+        expect(await rememberedAgain).toBe('rejected')
+      })
+
+      it('CAP-INTERACTION-030 grants the session of one pending approval, and nothing for an unknown id', async () => {
+        const coordinator = new InteractionCoordinator()
+        let answer: (() => void) | undefined
+        coordinator.setUi({
+          async presentApproval() {
+            // The card stays open until the test answers it, so the entry is still
+            // the Host's to decide when the grant is recorded.
+            await new Promise<void>((resolve) => {
+              answer = resolve
+            })
+            return 'rejected'
+          },
+          async presentQuestions() {
+            return { answers: [] }
+          },
+        })
+
+        // An id that never existed grants nothing, so a stale card cannot widen the grant.
+        expect(coordinator.grantSessionOfApproval('absent')).toBeUndefined()
+        expect(coordinator.hasAutoApproval('sess-granted')).toBe(false)
+
+        const pending = coordinator.handleApproval({
+          id: 'grant-1',
+          sessionId: 'sess-granted',
+          toolName: 'bash',
+        })
+        await waitFor(() => answer !== undefined, 1_000)
+        expect(coordinator.grantSessionOfApproval('grant-1')).toBe('sess-granted')
+        expect(coordinator.hasAutoApproval('sess-granted')).toBe(true)
+        // The granted session answers itself, and the ask the card already shows is
+        // still the user's to answer.
+        answer?.()
+        expect(await pending).toBe('rejected')
+      })
     })
 
     describe('free-text questions use InputBox', () => {
@@ -742,7 +819,12 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
 
     describe('approval policy chrome', () => {
       /** A window that replays the approve choice whose label matches, recording what it was offered. */
-      function windowChoosing(label: string, offered: string[], warnings: string[]): InteractionWindow {
+      function windowChoosing(
+        label: string,
+        offered: string[],
+        warnings: string[],
+        infos: string[] = [],
+      ): InteractionWindow {
         return {
           async showQuickPick(items) {
             offered.push(...items.map(item => item.label))
@@ -752,36 +834,42 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
           async showWarningMessage(message) {
             warnings.push(message)
           },
+          async showInformationMessage(message) {
+            infos.push(message)
+          },
         }
       }
 
-      it('CAP-INTERACTION-022 the remember choice grants once, switches the session policy, and only exists with a hook', async () => {
+      it('CAP-INTERACTION-022 the remember choice grants once, stops this session asking again, and only exists with a hook', async () => {
         const offered: string[] = []
         const warnings: string[] = []
+        const infos: string[] = []
         const remembered: string[] = []
         const ui = createVscodeInteractionUi(
-          windowChoosing('Allow, and stop asking', offered, warnings),
+          windowChoosing('允许并不再询问', offered, warnings, infos),
           { rememberApproval: async (sessionId) => { remembered.push(sessionId) } },
         )
 
         const outcome = await ui.presentApproval({ id: 'a1', sessionId: 'sess-policy', toolName: 'bash' })
         expect(outcome).toBe('allowed-once')
         expect(remembered).toEqual(['sess-policy'])
-        expect(offered).toEqual(['Allow once', 'Reject', 'Cancel', 'Allow, and stop asking'])
+        // The same four decisions the panel card lists, in the same order.
+        expect(offered).toEqual(['允许一次', '允许并不再询问', '拒绝', '取消'])
         expect(warnings).toEqual([])
+        expect(infos).toEqual(['本会话后续审批将自动允许，不再弹出询问。'])
 
         // Without the Host action the choice is never offered, so a pick cannot silently do nothing.
         const bare: string[] = []
-        const bareUi = createVscodeInteractionUi(windowChoosing('Allow once', bare, warnings))
+        const bareUi = createVscodeInteractionUi(windowChoosing('允许一次', bare, warnings))
         expect(await bareUi.presentApproval({ id: 'a2', sessionId: 'sess-policy', toolName: 'bash' }))
           .toBe('allowed-once')
-        expect(bare).toEqual(['Allow once', 'Reject', 'Cancel'])
+        expect(bare).toEqual(['允许一次', '拒绝', '取消'])
       })
 
-      it('CAP-INTERACTION-023 a refused policy switch keeps the grant and says so', async () => {
+      it('CAP-INTERACTION-023 a refused remember action keeps the grant and says so', async () => {
         const warnings: string[] = []
         const ui = createVscodeInteractionUi(
-          windowChoosing('Allow, and stop asking', [], warnings),
+          windowChoosing('允许并不再询问', [], warnings),
           {
             rememberApproval: async () => {
               throw new Error('approval service is not available')
@@ -791,7 +879,7 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
 
         expect(await ui.presentApproval({ id: 'a1', sessionId: 'sess-policy', toolName: 'bash' }))
           .toBe('allowed-once')
-        expect(warnings).toEqual(['本会话的审批策略未能切换：approval service is not available'])
+        expect(warnings).toEqual(['本会话的「不再询问」未能生效：approval service is not available'])
       })
 
       it('CAP-INTERACTION-024 the permission picker states the effective policy it was given', async () => {
@@ -809,9 +897,9 @@ describe('cap:interaction — approval resolution and fail-closed interaction UI
         await pickPermissionPreset(policyWindow, options, 'custom', 'never')
         await pickPermissionPreset(policyWindow, options, 'workspace-write')
         expect(titles).toEqual([
-          'DeepSeek Harness Permissions · 本会话审批：不再询问',
+          'DeepSeek Harness 权限 · 本会话审批：自动拒绝',
           // A picker without a policy read keeps its plain title instead of an empty claim.
-          'DeepSeek Harness Permissions',
+          'DeepSeek Harness 权限',
         ])
       })
 

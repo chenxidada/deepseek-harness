@@ -230,8 +230,8 @@ export interface ModelProvidersSectionProps {
   settingsState?: SettingsState
   /** 由 Host `settings/credentials` 镜像的凭据引用状态（永不包含值）。 */
   credentials: CredentialState[]
-  /** 最近一次 `settings/discover-models` 的回复。 */
-  discovery?: DiscoveryReply
+  /** 最近一次 `settings/discover-models` 的回复；尚无回复时为 `undefined`。 */
+  discovery?: DiscoveryReply | undefined
   bridge: MessageBridge
 }
 
@@ -532,7 +532,7 @@ interface ProviderEditorFormProps {
   /** 编辑时解析后的 profile（用于给表单预填）。 */
   resolved: unknown
   credentials: CredentialState[]
-  discovery?: DiscoveryReply
+  discovery?: DiscoveryReply | undefined
   revision: number
   bridge: MessageBridge
   onClose: () => void

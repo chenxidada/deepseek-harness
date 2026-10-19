@@ -20,7 +20,7 @@ import { IDE_BRIDGE_SOCK_ENV } from '@deepseek-ai/dsh-ide-bridge'
 import * as sdkClient from '@deepseek-ai/dsh-sdk-client'
 import { HarnessClient, type ResolvedNodeExecutable, TransportClosedError, resolveNodeExecutableSpec } from '@deepseek-ai/dsh-sdk-client'
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import Module from 'node:module'
 import { homedir, tmpdir } from 'node:os'
@@ -5274,6 +5274,93 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       await host.shutdown()
     })
 
+    it('CAP-SESSION-HOST-170 provider-editor RPCs fail closed while the Host holds no live bridge', async () => {
+      const host = new IdeSessionHost()
+      await expect(host.mutateSetting('fake-settings', [{ op: 'set', path: ['model'], value: 'x' }]))
+        .rejects.toThrow('IdeSessionHost is not connected')
+      await expect(host.describeCredentials(['ACME_API_KEY']))
+        .rejects.toThrow('IdeSessionHost is not connected')
+      await expect(host.setCredential('ACME_API_KEY', 'sk-secret'))
+        .rejects.toThrow('IdeSessionHost is not connected')
+      await expect(host.unsetCredential('ACME_API_KEY'))
+        .rejects.toThrow('IdeSessionHost is not connected')
+      await expect(host.discoverModels({ settingsNs: 'llm-pi-ai', baseURL: 'https://gateway.example/v1' }))
+        .rejects.toThrow('IdeSessionHost is not connected')
+    })
+
+    it('CAP-SESSION-HOST-171 provider-editor RPCs round-trip through the Host bridge without leaking secrets', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-providers-e2e-'))
+      dirs.push(dir)
+      const settingsLog = join(dir, 'settings.ndjson')
+      const credentialLog = join(dir, 'credential.ndjson')
+      const discoverLog = join(dir, 'discover.ndjson')
+      const host = new IdeSessionHost()
+      await host.start({
+        cwd: dir,
+        dshHome: join(dir, '.dsh'),
+        bridgeSockPath: join(dir, 'bridge.sock'),
+        dshBin: fakeSdkRuntime,
+        initializeTimeoutMs: 5_000,
+        credentials: {
+          DEEPSEEK_API_KEY: 'keyless-providers-no-call',
+          DSH_TELEMETRY_DISABLED: '1',
+          FAKE_SETTINGS_LOG: settingsLog,
+          FAKE_CREDENTIAL_LOG: credentialLog,
+          FAKE_MODEL_DISCOVER_LOG: discoverLog,
+        },
+      })
+      await waitFor(() => host.bridgeConnected(), 3_000)
+
+      const mutated = await host.mutateSetting('fake-settings', [
+        { op: 'set', path: ['providers', 'acme', 'baseURL'], value: 'https://gateway.example/v1' },
+        { op: 'set', path: ['providers', 'acme', 'models'], value: [{ id: 'deepseek-v4-pro' }] },
+      ], 1)
+      expect(mutated).toMatchObject({ ns: 'fake-settings', revision: 2 })
+      expect(mutated.value).toMatchObject({
+        providers: { acme: { baseURL: 'https://gateway.example/v1', models: [{ id: 'deepseek-v4-pro' }] } },
+      })
+
+      expect(await host.describeCredentials(['ACME_API_KEY'])).toEqual([
+        { ref: 'ACME_API_KEY', configured: false, writable: true },
+      ])
+      await host.setCredential('ACME_API_KEY', 'sk-secret')
+      expect(await host.describeCredentials(['ACME_API_KEY'])).toEqual([
+        { ref: 'ACME_API_KEY', configured: true, writable: true, source: 'store' },
+      ])
+      await host.unsetCredential('ACME_API_KEY')
+      expect(await host.describeCredentials(['ACME_API_KEY'])).toEqual([
+        { ref: 'ACME_API_KEY', configured: false, writable: true },
+      ])
+
+      expect(await host.discoverModels({
+        settingsNs: 'llm-pi-ai',
+        baseURL: 'https://gateway.example/v1',
+        api: 'openai-completions',
+        apiKey: 'sk-draft-only',
+      })).toEqual([
+        { id: 'fake-discovered-one', name: 'Discovered One', contextWindow: 128_000, maxTokens: 8_192 },
+        { id: 'fake-discovered-two' },
+      ])
+
+      const settingsLines = (await readFile(settingsLog, 'utf8')).trim().split('\n')
+        .map(line => JSON.parse(line) as { kind: string; ns?: string; expectedRevision?: number })
+      expect(settingsLines.some(line =>
+        line.kind === 'mutate' && line.ns === 'fake-settings' && line.expectedRevision === 1)).toBe(true)
+
+      // Neither the stored key nor the draft key may reach a log line: both are
+      // write-only secrets, and the stand-in reports only their presence.
+      expect(await readFile(credentialLog, 'utf8')).not.toContain('sk-secret')
+      const discoverLines = await readFile(discoverLog, 'utf8')
+      expect(discoverLines).not.toContain('sk-draft-only')
+      expect(JSON.parse(discoverLines.trim())).toMatchObject({
+        settingsNs: 'llm-pi-ai',
+        baseURL: 'https://gateway.example/v1',
+        apiKeyPresent: true,
+      })
+
+      await host.shutdown()
+    })
+
     it('CAP-SESSION-HOST-152 session/list round-trips the rows the runtime reports', async () => {
       const dir = await mkdtemp(join(tmpdir(), 'dsh-ide-session-list-e2e-'))
       dirs.push(dir)
@@ -5309,6 +5396,30 @@ describe('cap:session-host — host lifecycle, start diagnostics, and node env g
       await host.listSessions()
       expect((await readFile(listLog, 'utf8')).trim().split('\n')).toHaveLength(2)
 
+      await host.shutdown()
+    })
+
+    it('CAP-SESSION-HOST-172 the runtime process starts in the workspace the Host was started for', async () => {
+      // The stand-in reports its own process cwd as the workspace of one listed
+      // session, so that row is the directory the runtime process really runs in.
+      const dir = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-ide-runtime-cwd-e2e-')))
+      dirs.push(dir)
+      const host = new IdeSessionHost()
+      await host.start({
+        cwd: dir,
+        dshHome: join(dir, '.dsh'),
+        bridgeSockPath: join(dir, 'bridge.sock'),
+        dshBin: fakeSdkRuntime,
+        initializeTimeoutMs: 5_000,
+        credentials: {
+          DEEPSEEK_API_KEY: 'keyless-runtime-cwd-no-call',
+          DSH_TELEMETRY_DISABLED: '1',
+        },
+      })
+      await waitFor(() => host.bridgeConnected(), 3_000)
+
+      const rows = await host.listSessions()
+      expect(rows.find(row => row.sessionId === 'fake-listed-here')?.cwd).toBe(dir)
       await host.shutdown()
     })
   })

@@ -8,10 +8,11 @@
  * profile.
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createMessageBridge } from '../webview/src/bridge/message-bridge.ts'
 import { ModelProvidersSection } from '../webview/src/components/ModelProvidersSection.tsx'
-import type { SettingsState } from '../webview/src/store/chat-ui-store.ts'
+import type { DiscoveryReply, SettingsState } from '../webview/src/store/chat-ui-store.ts'
 
 /** One captured `settings/mutate` intent. */
 interface MutateIntent {
@@ -159,5 +160,88 @@ describe('cap:model-providers — the provider editor round-trip', () => {
     expect(inputTypeBox('image').checked).toBe(true)
     expect(inputTypeBox('image').disabled).toBe(true)
     expect(inputTypeBox('text').disabled).toBe(false)
+  })
+})
+
+describe('cap:model-providers — the endpoint interrogation round-trip', () => {
+  /** One captured Webview→Host intent of any type. */
+  type CapturedIntent = Record<string, unknown> & { type: string }
+
+  /**
+   * Render the section over one route with a captured intent list and a
+   * controllable discovery reply, and open the route's editor.
+   */
+  function renderEditor(): {
+    intents: CapturedIntent[]
+    rerender: (discovery?: DiscoveryReply) => void
+  } {
+    const intents: CapturedIntent[] = []
+    const bridge = createMessageBridge({
+      postToHost: (message) => {
+        intents.push(message as CapturedIntent)
+      },
+      onHostMessage: () => () => {},
+    })
+    const route = { baseURL: 'https://gateway.example/v1', api: 'openai-completions', models: [{ id: 'kept' }] }
+    const element = (discovery?: DiscoveryReply): ReactElement => (
+      <ModelProvidersSection
+        settingsState={stateWithRoute(route)}
+        credentials={[{ ref: 'ACME_API_KEY', configured: true, writable: true }]}
+        discovery={discovery}
+        bridge={bridge}
+      />
+    )
+    const view = render(element())
+    fireEvent.click(screen.getByTestId('settings-provider-edit'))
+    return {
+      intents,
+      rerender: (discovery) => {
+        view.rerender(element(discovery))
+      },
+    }
+  }
+
+  it('CAP-MODEL-PROVIDERS-007 asks the endpoint through the Host and adopts the picked candidates', () => {
+    const { intents, rerender } = renderEditor()
+
+    fireEvent.click(screen.getByTestId('settings-provider-fetch-models'))
+    const request = intents.find(intent => intent.type === 'settings/discover-models')
+    // The request describes the draft: namespace, route, endpoint, and protocol.
+    expect(request).toMatchObject({
+      settingsNs: 'llm-pi-ai',
+      provider: 'acme',
+      baseURL: 'https://gateway.example/v1',
+      api: 'openai-completions',
+    })
+    expect(typeof request?.requestId).toBe('string')
+
+    rerender({
+      requestId: request?.requestId as string,
+      models: [{ id: 'deepseek-v4-pro', name: 'V4 Pro', contextWindow: 1_000_000 }],
+    })
+    fireEvent.click(screen.getByTestId('settings-provider-candidate'))
+    fireEvent.click(screen.getByTestId('settings-provider-adopt-models'))
+    fireEvent.click(screen.getByTestId('settings-provider-save'))
+
+    const mutations = intents.filter(intent => intent.type === 'settings/mutate') as unknown as MutateIntent[]
+    expect(savedModels(mutations)).toEqual([
+      { id: 'kept' },
+      { id: 'deepseek-v4-pro', name: 'V4 Pro', contextWindow: 1_000_000 },
+    ])
+  })
+
+  it('CAP-MODEL-PROVIDERS-008 shows the interrogation refusal in place and keeps the draft', () => {
+    const { intents, rerender } = renderEditor()
+
+    fireEvent.click(screen.getByTestId('settings-provider-fetch-models'))
+    const request = intents.find(intent => intent.type === 'settings/discover-models')
+    rerender({ requestId: request?.requestId as string, error: 'models endpoint answered 401' })
+
+    expect(screen.queryByTestId('settings-provider-candidates')).toBeNull()
+    expect(screen.getByTestId('settings-provider-fetch-error').textContent)
+      .toContain('拉取失败：models endpoint answered 401')
+    // The reference the route already carries is what the key field reports.
+    expect(screen.getByTestId('settings-provider-key-input').getAttribute('placeholder'))
+      .toContain('ACME_API_KEY')
   })
 })

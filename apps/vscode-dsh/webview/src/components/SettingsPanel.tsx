@@ -41,8 +41,8 @@ export interface SettingsPanelProps {
   settingsState?: SettingsState
   /** Credential reference states mirrored from Host `settings/credentials`. */
   credentials?: CredentialState[]
-  /** Latest endpoint interrogation reply for the providers section. */
-  discovery?: DiscoveryReply
+  /** Latest endpoint interrogation reply for the providers section; absent until one arrives. */
+  discovery?: DiscoveryReply | undefined
   /** Permission presets of the active session mirrored from Host `permission/state`. */
   permission?: PermissionState
   bridge: MessageBridge
@@ -915,6 +915,9 @@ function SessionPermissionCard({
   const shown = picked ?? permission.current
   const dirty = shown !== permission.current
   const shownOption = permission.options.find(option => option.value === shown)
+  // Asking is the absence of the Host grant, so both the control and the revoke
+  // row read one fact instead of tracking a second copy of it.
+  const asking = permission.autoApprove !== true
   // The IDE terminal cannot confine anything, so a confined session cannot run
   // there; the page says so where the two settings meet.
   const confinedUnderIdealTerminal = execution === 'ide' && shown !== 'danger-full-access'
@@ -979,11 +982,75 @@ function SessionPermissionCard({
               </label>
             ))}
           </div>
-          <span className="dsh-set-hint">
+          <span className="dsh-set-hint" data-testid="settings-approval-policy">
             {permission.approvalPolicy === undefined
-              ? '本会话审批策略未知 — 运行时未返回读取结果。'
-              : `本会话审批策略：${approvalPolicyLabel(permission.approvalPolicy)}；由预设捆绑，越界请求在该策略下处理。`}
+              ? '运行时审批策略未知 — 未返回读取结果。'
+              : permission.approvalPolicy === 'never'
+                // A rejecting policy answers before this Host's answerer, so the
+                // grant below cannot override it and the escape belongs here.
+                ? '运行时审批策略：自动拒绝（由预设捆绑，已写入会话日志）—— 需要审批的调用直接失败，不会询问。改选下面的「逐次询问」可恢复询问。'
+                : '运行时审批策略：逐次询问（由预设捆绑，已写入会话日志）—— 是否弹出询问还取决于下面的「本会话审批」。'}
           </span>
+        </div>
+        <div className="dsh-set-field" role="radiogroup" aria-label="本会话审批">
+          <span className="dsh-set-label">{'本会话审批'}</span>
+          <div className="dsh-set-radio-cards">
+            <label className="dsh-set-radio-card" data-selected={String(asking)}>
+              <span className="dsh-set-radio-card-head">
+                <input
+                  type="radio"
+                  name="settings-auto-approve"
+                  data-testid="settings-auto-approve-off"
+                  checked={asking}
+                  onChange={() => bridge.emitIntent({
+                    type: 'action/auto-approve-set',
+                    sessionId: permission.sessionId,
+                    enabled: false,
+                  })}
+                />
+                {'逐次询问'}
+              </span>
+              <span className="dsh-set-radio-card-desc">
+                {'每次需要审批时弹出询问，由你决定这一条路径或命令。'}
+              </span>
+            </label>
+            <label className="dsh-set-radio-card" data-selected={String(!asking)}>
+              <span className="dsh-set-radio-card-head">
+                <input
+                  type="radio"
+                  name="settings-auto-approve"
+                  data-testid="settings-auto-approve-on"
+                  checked={!asking}
+                  onChange={() => bridge.emitIntent({
+                    type: 'action/auto-approve-set',
+                    sessionId: permission.sessionId,
+                    enabled: true,
+                  })}
+                />
+                {'自动允许'}
+              </span>
+              <span className="dsh-set-radio-card-desc">
+                {'本窗口内该会话不再询问，Host 直接放行后续审批；随时可切回逐次询问。'}
+              </span>
+            </label>
+          </div>
+          {permission.autoApprove === true ? (
+            <span className="dsh-set-hint" data-testid="settings-auto-approve-active">
+              {'已授予自动允许（仅本窗口，重载窗口即失效）。'}
+              <button
+                type="button"
+                data-testid="settings-auto-approve-revoke"
+                className="dsh-ghost-btn"
+                onClick={() => bridge.emitIntent({
+                  type: 'action/auto-approve-set',
+                  sessionId: permission.sessionId,
+                  enabled: false,
+                })}
+              >
+                {'撤销'}
+              </button>
+            </span>
+          ) : null}
         </div>
       </div>
       <div className="dsh-set-card-foot">
@@ -1037,11 +1104,6 @@ const PRESET_DESCRIPTIONS: Record<string, string> = {
   'read-only': '只读：命令仍可执行，但写入文件与临时目录都不会发生。',
   'workspace-write': '仅工作区内可写（含允许的临时目录）；更宽的越界请求逐次询问。',
   'danger-full-access': '不受限：所有文件与命令直接执行，不再询问。',
-}
-
-/** Approval policy copy; the runtime vocabulary is `ask` | `never`. */
-function approvalPolicyLabel(policy: 'ask' | 'never'): string {
-  return policy === 'ask' ? '逐次询问' : '不再询问'
 }
 
 /** Marks a field the user layer overrides, so an inherited value stays visible as such. */

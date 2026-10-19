@@ -11,7 +11,7 @@ import type { ExtensionIndex } from '../extension-index.ts'
 import type { InteractionCoordinator } from '../interaction-coordinator.ts'
 import type { ConnectionUiState } from '../connection-ui.ts'
 import type { SettingsNamespaceView } from '../session-host.ts'
-import type { BridgeApprovalPolicy, BridgeGoalView, BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
+import type { BridgeApprovalPolicy, BridgeCredentialState, BridgeDiscoveredModel, BridgeGoalView, BridgeSpecdevSnapshot } from '@deepseek-ai/dsh-ide-bridge'
 import {
   formatOfficialAtPath,
   normalizePathKey,
@@ -30,6 +30,7 @@ import {
   type PanelSubagent,
   type PromptImage,
   type RejectSendReason,
+  type SettingsMutationOp,
   type SlashCandidate,
   type SpecdevGateDecision,
   type GoalUpdateAction,
@@ -347,8 +348,10 @@ export interface ChatPanelHostDeps {
    * Resolve an in-panel approval (phase-5 panel interaction).
    * @param id - interaction correlation id.
    * @param outcome - user decision.
+   * @param remember - the card's fourth choice: stop presenting this session's
+   *   later approvals too, the decision the native presenter also offers.
    */
-  resolveApproval?: (id: string, outcome: 'allowed-once' | 'rejected' | 'cancelled') => void
+  resolveApproval?: (id: string, outcome: 'allowed-once' | 'rejected' | 'cancelled', remember?: boolean) => void
   /**
    * Resolve an in-panel question (phase-5 panel interaction).
    * @param id - interaction correlation id.
@@ -427,6 +430,51 @@ export interface ChatPanelHostDeps {
     expectedRevision?: number,
   ) => Promise<SettingsNamespaceView[] | undefined>
   /**
+   * Apply path-addressed edits to one settings namespace, then store the
+   * credential the same save carried (feature: model-providers).
+   * Resolves the whole namespace list after the write, or `undefined` when no
+   * live Host could answer; a refusal rejects with its message, which the panel
+   * surfaces as a banner.
+   * @param ns - registered namespace key.
+   * @param ops - ordered set/unset edits against the user section.
+   * @param expectedRevision - revision the page read; omitted writes unconditionally.
+   * @param credential - key to store after the configuration write succeeded.
+   */
+  requestSettingsMutate?: (
+    ns: string,
+    ops: SettingsMutationOp[],
+    expectedRevision?: number,
+    credential?: { ref: string; value: string },
+  ) => Promise<SettingsNamespaceView[] | undefined>
+  /**
+   * Read presence and writability of credential references (feature: model-providers).
+   * Resolves `undefined` when no live Host could answer.
+   * @param refs - references to describe, never values.
+   */
+  requestCredentialDescribe?: (refs: string[]) => Promise<BridgeCredentialState[] | undefined>
+  /**
+   * Remove one credential reference from the writable source (feature: model-providers).
+   * Resolves `undefined` when no live Host could answer; a refusal rejects.
+   * @param ref - reference to remove; absent is a no-op.
+   */
+  requestCredentialUnset?: (ref: string) => Promise<void | undefined>
+  /**
+   * Interrogate one provider endpoint for the models it advertises
+   * (feature: model-providers). Rejects with the runtime's refusal text, which
+   * the editor shows next to the fetch button.
+   * @param settingsNs - namespace whose registered discovery answers.
+   * @param request - draft endpoint, protocol, and one-shot key.
+   */
+  requestDiscoverModels?: (
+    settingsNs: string,
+    request: {
+      provider?: string
+      baseURL?: string
+      api?: string
+      apiKey?: string
+    },
+  ) => Promise<BridgeDiscoveredModel[] | undefined>
+  /**
    * List permission presets for a session (feature: permission-selector).
    * Resolves `undefined` when the bridge cannot answer.
    * @param sessionId - Tab-bound SDK session identity.
@@ -447,6 +495,19 @@ export interface ChatPanelHostDeps {
    * @param sessionId - Tab-bound SDK session identity.
    */
   requestApprovalPolicy?: (sessionId: string) => Promise<BridgeApprovalPolicy | undefined>
+  /**
+   * Whether the Host answers a session's approvals itself for this window, which
+   * is what the settings page shows as an active grant (feature: permission-selector).
+   * @param sessionId - Tab-bound SDK session identity.
+   */
+  isAutoApproved?: (sessionId: string) => boolean
+  /**
+   * Turn that grant on or off. Enabling it also clears a runtime policy that would
+   * reject the asks before the Host ever sees them (feature: permission-selector).
+   * @param sessionId - Tab-bound SDK session identity.
+   * @param enabled - true to stop asking, false to present approvals again.
+   */
+  requestAutoApproveSet?: (sessionId: string, enabled: boolean) => Promise<void>
   /**
    * Reveal message-attached change-list (AC-30 primary / AD-CCD-4).
    * @param sourceMessageId - optional assistant id from the summary bubble's turn.
@@ -572,6 +633,11 @@ export class ChatPanelHost {
    * catalog is the session's, so a different active session refetches.
    */
   private slashCatalog: { sessionId: string; candidates: SlashCandidate[] } | undefined
+  /**
+   * References the provider editor last asked about. A key write or removal
+   * re-reads exactly this set, because the page only renders these rows.
+   */
+  private credentialRefs: string[] = []
 
   /**
    * @param deps - registry / store / send gate callbacks.
@@ -1018,6 +1084,41 @@ export class ChatPanelHost {
   }
 
   /**
+   * Push redacted credential reference states to the provider editor.
+   * @param credentials - one state per reference, in request order.
+   */
+  pushCredentialState(credentials: BridgeCredentialState[]): void {
+    this.post({ type: 'settings/credentials', credentials })
+  }
+
+  /**
+   * Push the answer to one endpoint interrogation, paired by its request id.
+   * @param reply - request id plus either the advertised models or the failure text.
+   */
+  pushDiscoveryReply(reply: {
+    requestId: string
+    models?: BridgeDiscoveredModel[]
+    error?: string
+  }): void {
+    this.post({
+      type: 'settings/discovery',
+      requestId: reply.requestId,
+      ...reply.models === undefined ? {} : { models: reply.models },
+      ...reply.error === undefined ? {} : { error: reply.error },
+    })
+  }
+
+  /**
+   * Re-read the references the page last asked about and push the fresh states,
+   * so a key that was just written or removed stops showing its old label.
+   */
+  private async refreshCredentialState(): Promise<void> {
+    if (this.credentialRefs.length === 0) return
+    const credentials = await this.deps.requestCredentialDescribe?.(this.credentialRefs)
+    if (credentials !== undefined) this.pushCredentialState(credentials)
+  }
+
+  /**
    * Push the permission preset projection to the Webview settings page.
    * @param sessionId - session the presets apply to.
    * @param current - effective preset value.
@@ -1030,11 +1131,28 @@ export class ChatPanelHost {
     options: Array<{ value: string; name: string; description?: string }>,
     approvalPolicy?: BridgeApprovalPolicy,
   ): void {
-    this.post(
-      approvalPolicy === undefined
-        ? { type: 'permission/state', sessionId, current, options }
-        : { type: 'permission/state', sessionId, current, options, approvalPolicy },
-    )
+    const autoApprove = this.deps.isAutoApproved?.(sessionId) === true
+    this.post({
+      type: 'permission/state',
+      sessionId,
+      current,
+      options,
+      ...approvalPolicy === undefined ? {} : { approvalPolicy },
+      ...autoApprove ? { autoApprove: true } : {},
+    })
+  }
+
+  /**
+   * Re-read one session's preset, approval policy, and grant, then push them. A
+   * read the Host cannot answer leaves the page as it was, because presenting a
+   * stale grant is worse than presenting none.
+   * @param sessionId - session whose permission state the page shows.
+   */
+  async refreshPermissionState(sessionId: string): Promise<void> {
+    const perm = await this.deps.requestPermissionList?.(sessionId)
+    if (perm === undefined) return
+    const policy = await this.deps.requestApprovalPolicy?.(sessionId)
+    this.pushPermissionState(sessionId, perm.current, perm.options, policy)
   }
 
   /**
@@ -1523,11 +1641,7 @@ export class ChatPanelHost {
       // Also push permission state when the settings page opens.
       const sessionId = this.projectedSessionId()
       if (sessionId !== undefined) {
-        const perm = await this.deps.requestPermissionList?.(sessionId)
-        if (perm !== undefined) {
-          const policy = await this.deps.requestApprovalPolicy?.(sessionId)
-          this.pushPermissionState(sessionId, perm.current, perm.options, policy)
-        }
+        await this.refreshPermissionState(sessionId)
       }
       return
     }
@@ -1563,11 +1677,7 @@ export class ChatPanelHost {
           this.pushBanner('权限切换失败：Host 未就绪', 'settings')
           return
         }
-        const perm = await this.deps.requestPermissionList?.(message.sessionId)
-        if (perm !== undefined) {
-          const policy = await this.deps.requestApprovalPolicy?.(message.sessionId)
-          this.pushPermissionState(message.sessionId, perm.current, perm.options, policy)
-        }
+        await this.refreshPermissionState(message.sessionId)
       } catch (error) {
         this.pushBanner(
           `权限切换失败：${error instanceof Error ? error.message : String(error)}`,
@@ -1576,8 +1686,103 @@ export class ChatPanelHost {
       }
       return
     }
+    if (message.type === 'action/auto-approve-set') {
+      try {
+        await this.deps.requestAutoApproveSet?.(message.sessionId, message.enabled)
+        await this.refreshPermissionState(message.sessionId)
+      } catch (error) {
+        this.pushBanner(
+          `审批策略切换失败：${error instanceof Error ? error.message : String(error)}`,
+          'settings',
+        )
+      }
+      return
+    }
     if (message.type === 'action/compact') {
       void this.sendPrompt('/compact')
+      return
+    }
+    if (message.type === 'settings/mutate') {
+      let namespaces: SettingsNamespaceView[] | undefined
+      try {
+        namespaces = await this.deps.requestSettingsMutate?.(
+          message.ns,
+          message.ops,
+          message.expectedRevision,
+          message.credential,
+        )
+      } catch (error) {
+        // The refusal text is what the page has to show — a stale-revision
+        // conflict among them — and dropping the rejection would leave the
+        // save looking pending.
+        this.pushBanner(
+          `设置保存失败：${error instanceof Error ? error.message : String(error)}`,
+          'settings',
+        )
+        return
+      }
+      if (namespaces === undefined) {
+        this.pushBanner('设置保存失败：Host 未就绪', 'settings')
+        return
+      }
+      this.pushSettingsState(namespaces)
+      // A key carried by the save landed with it, so the label the page renders
+      // must come from the store the write reached, not from before it.
+      await this.refreshCredentialState()
+      return
+    }
+    if (message.type === 'settings/credential-describe') {
+      this.credentialRefs = [...message.refs]
+      const credentials = await this.deps.requestCredentialDescribe?.(this.credentialRefs)
+      if (credentials === undefined) return
+      this.pushCredentialState(credentials)
+      return
+    }
+    if (message.type === 'settings/credential-unset') {
+      // A successful removal resolves to nothing, so the absent dependency — not an
+      // absent result — is what means the Host cannot serve the request.
+      const unset = this.deps.requestCredentialUnset
+      if (unset === undefined) {
+        this.pushBanner('密钥移除失败：Host 未就绪', 'settings')
+        return
+      }
+      try {
+        await unset(message.ref)
+      } catch (error) {
+        this.pushBanner(
+          `密钥移除失败：${error instanceof Error ? error.message : String(error)}`,
+          'settings',
+        )
+        return
+      }
+      await this.refreshCredentialState()
+      return
+    }
+    if (message.type === 'settings/discover-models') {
+      if (this.deps.requestDiscoverModels === undefined) {
+        this.pushDiscoveryReply({ requestId: message.requestId, error: 'Host 未就绪' })
+        return
+      }
+      try {
+        const models = await this.deps.requestDiscoverModels(message.settingsNs, {
+          ...message.provider === undefined ? {} : { provider: message.provider },
+          ...message.baseURL === undefined ? {} : { baseURL: message.baseURL },
+          ...message.api === undefined ? {} : { api: message.api },
+          ...message.apiKey === undefined ? {} : { apiKey: message.apiKey },
+        })
+        if (models === undefined) {
+          this.pushDiscoveryReply({ requestId: message.requestId, error: 'Host 未就绪' })
+          return
+        }
+        this.pushDiscoveryReply({ requestId: message.requestId, models })
+      } catch (error) {
+        // The endpoint's own refusal text is the only actionable part of a failed
+        // interrogation, so it rides the reply instead of becoming a banner.
+        this.pushDiscoveryReply({
+          requestId: message.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
       return
     }
     if (message.type === 'composer/send-rich') {
@@ -1660,7 +1865,7 @@ export class ChatPanelHost {
       return
     }
     if (message.type === 'interaction/approve') {
-      this.deps.resolveApproval?.(message.id, message.outcome)
+      this.deps.resolveApproval?.(message.id, message.outcome, message.remember)
       return
     }
     if (message.type === 'interaction/answer') {

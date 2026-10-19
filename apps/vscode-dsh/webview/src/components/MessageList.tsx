@@ -192,10 +192,18 @@ export function MessageList({
                 id={interaction.id}
                 toolName={interaction.toolName ?? ''}
                 reason={interaction.reason}
+                displayReason={interaction.displayReason}
+                callId={interaction.callId}
+                canRemember={interaction.canRemember}
                 expiredReason={interaction.expiredReason}
                 onAcknowledge={dismissPendingInteraction}
-                onResolve={(id, outcome) => {
-                  bridge.emitIntent({ type: 'interaction/approve', id, outcome })
+                onResolve={(id, outcome, remember) => {
+                  bridge.emitIntent({
+                    type: 'interaction/approve',
+                    id,
+                    outcome,
+                    ...remember === true ? { remember: true } : {},
+                  })
                 }}
               />
             ) : (

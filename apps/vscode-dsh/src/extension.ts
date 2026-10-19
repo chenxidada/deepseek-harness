@@ -50,6 +50,7 @@ import {
   type HostDiagnosticRecord,
 } from './host-diagnostics.ts'
 import {
+  APPROVAL_GRANT_NOTICE,
   confirmDeleteConversation,
   confirmDeleteConversations,
   confirmRevertDeleteCreated,
@@ -243,7 +244,11 @@ interface VsCodeLike {
       listener: (event: { terminal: TerminalExecTerminal; shellIntegration: TerminalExecShellIntegration }) => void,
     ): { dispose(): void }
     onDidEndTerminalShellExecution?(
-      listener: (event: { execution: TerminalExecExecution; exitCode: number | undefined }) => void,
+      listener: (event: {
+        terminal: TerminalExecTerminal
+        execution: TerminalExecExecution
+        exitCode: number | undefined
+      }) => void,
     ): { dispose(): void }
   }
   workspace: {
@@ -2607,10 +2612,12 @@ function pushActiveTheme(vscode: VsCodeLike): void {
 /**
  * Interaction UI that pushes to the Webview panel when visible, falling back to native QuickPick.
  * @param nativeUi - VS Code QuickPick / InputBox presenter.
+ * @param options - what the Host can do beyond returning the picked outcome.
  * @returns panel-first presenter.
  */
 function createPanelFirstInteractionUi(
   nativeUi: import('./interaction-coordinator.ts').InteractionUi,
+  options: { canRememberApproval?: boolean } = {},
 ): import('./interaction-coordinator.ts').InteractionUi {
   return {
     async presentApproval(request, signal) {
@@ -2623,6 +2630,9 @@ function createPanelFirstInteractionUi(
           sessionId: request.sessionId,
           toolName: request.toolName,
           ...request.reason === undefined ? {} : { reason: request.reason },
+          ...request.displayReason === undefined ? {} : { displayReason: request.displayReason },
+          ...request.callId === undefined ? {} : { callId: request.callId },
+          ...options.canRememberApproval === true ? { canRemember: true } : {},
         })
         // Wait for the coordinator to settle this entry (via deps.resolveApproval).
         // The abort signal fires when the coordinator settles or fail-closes.
@@ -3036,6 +3046,36 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       await liveHost.updateSetting(ns, patch, expectedRevision)
       return await liveHost.describeSettings()
     },
+    requestSettingsMutate: async (ns, ops, expectedRevision, credential) => {
+      const liveHost = host
+      if (liveHost === undefined || liveHost.status !== 'connected') return undefined
+      await liveHost.mutateSetting(ns, ops, expectedRevision)
+      // The key lands only after the configuration write succeeded: a refused
+      // write must not leave a credential behind for a route that does not exist.
+      if (credential !== undefined) await liveHost.setCredential(credential.ref, credential.value)
+      return await liveHost.describeSettings()
+    },
+    requestCredentialDescribe: async (refs) => {
+      const liveHost = host
+      if (liveHost === undefined || liveHost.status !== 'connected') return undefined
+      try {
+        return await liveHost.describeCredentials(refs)
+      } catch {
+        // An unanswerable read leaves the page showing the unknown-status label,
+        // which is what a Host that cannot describe credentials really means.
+        return undefined
+      }
+    },
+    requestCredentialUnset: async (ref) => {
+      const liveHost = host
+      if (liveHost === undefined || liveHost.status !== 'connected') return undefined
+      await liveHost.unsetCredential(ref)
+    },
+    requestDiscoverModels: async (settingsNs, request) => {
+      const liveHost = host
+      if (liveHost === undefined || liveHost.status !== 'connected') return undefined
+      return await liveHost.discoverModels({ settingsNs, ...request })
+    },
     requestPermissionList: async (sessionId) => {
       const liveHost = host
       if (liveHost === undefined || liveHost.status !== 'connected') return undefined
@@ -3061,11 +3101,37 @@ function createPanelHost(vscode: VsCodeLike): ChatPanelHost {
       if (liveHost === undefined || liveHost.status !== 'connected') return undefined
       return await liveHost.readApprovalPolicy(sessionId)
     },
+    isAutoApproved: sessionId => host?.interactions.hasAutoApproval(sessionId) === true,
+    requestAutoApproveSet: async (sessionId, enabled) => {
+      const liveHost = host
+      if (liveHost === undefined) throw new Error('no live IDE session host')
+      if (!enabled) {
+        liveHost.interactions.forgetAutoApproval(sessionId)
+        return
+      }
+      // A runtime policy that rejects asks never reaches this Host, so a grant
+      // under it would be a promise the settings page could not keep.
+      const policy = await liveHost.readApprovalPolicy(sessionId)
+      if (policy === 'never') await liveHost.setApprovalPolicy(sessionId, 'ask')
+      liveHost.rememberAutoApproval(sessionId)
+    },
     resolveContinueChrome: () => conversations?.continueChromeForTab(),
     resolveTabParentHint: sessionId => conversations?.parentLineageLabel(sessionId),
     resolveDeferredRestoreCount: () => conversations?.panelSnapshot().deferredRestoreCount ?? 0,
-    resolveApproval: (id, outcome) => {
-      host?.interactions.resolveApproval(id, outcome)
+    resolveApproval: (id, outcome, remember) => {
+      const interactions = host?.interactions
+      if (interactions === undefined) return
+      // The card's fourth decision means what the native presenter's fourth item
+      // means, so both record the same grant, confirm it the same way, and leave
+      // the settings page showing it.
+      if (remember === true && outcome === 'allowed-once') {
+        const granted = interactions.grantSessionOfApproval(id)
+        if (granted !== undefined) {
+          void vscode.window.showInformationMessage(APPROVAL_GRANT_NOTICE)
+          void panelHost?.refreshPermissionState(granted)
+        }
+      }
+      interactions.resolveApproval(id, outcome)
     },
     resolveQuestion: (id, answer) => {
       host?.interactions.resolveQuestions(id, answer)
@@ -4510,13 +4576,15 @@ function createStartHostPort(
       if (terminalExec !== undefined) next.setTerminalExec(terminalExec)
       if (vscode.window.showQuickPick !== undefined) {
         const nativeUi = createVscodeInteractionUi(vscode.window as InteractionWindow, {
-          // The user allowed one call and asked not to be asked again in this session;
-          // the runtime logs the switch and states it to the model on its next step.
-          rememberApproval: async (sessionId) => {
-            await next.setApprovalPolicy(sessionId, 'never')
+          // The user allowed one call and asked not to be asked again in this
+          // session: the Host answers this session's approvals itself from now on.
+          rememberApproval: (sessionId) => {
+            next.rememberAutoApproval(sessionId)
+            void panelHost?.refreshPermissionState(sessionId)
+            return Promise.resolve()
           },
         })
-        next.setInteractionUi(createPanelFirstInteractionUi(nativeUi))
+        next.setInteractionUi(createPanelFirstInteractionUi(nativeUi, { canRememberApproval: true }))
       }
       stopErrorWatch = next.onError((message) => {
         // Secondary diagnostic — ConnectionUi remains the primary carrier (AC-2 / AD-CR-4).

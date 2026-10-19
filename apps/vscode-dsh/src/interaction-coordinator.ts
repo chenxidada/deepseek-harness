@@ -38,6 +38,10 @@ export interface HostApprovalRequest {
   toolName: string
   /** Optional asker reason. */
   reason?: string
+  /** Localized presentation of `reason`, keyed by locale, when the asker sent one. */
+  displayReason?: { readonly en: string; readonly [locale: string]: string }
+  /** Tool call under decision, when the runtime named one. */
+  callId?: string
   /** Tab id resolved via {@link ConversationRegistry.getBySessionId}, when known. */
   tabId?: string
 }
@@ -114,6 +118,10 @@ export type PendingHostInteraction =
     toolName: string
     /** Runtime-supplied reason for the request, when it sent one. */
     reason?: string
+    /** Localized presentation of `reason`, when the runtime sent one. */
+    displayReason?: { readonly en: string; readonly [locale: string]: string }
+    /** Tool call under decision, when the runtime named one. */
+    callId?: string
   }
   | {
     kind: 'questions'
@@ -135,6 +143,8 @@ type ApprovalEntry = {
   settled: boolean
   toolName: string
   reason?: string
+  displayReason?: { readonly en: string; readonly [locale: string]: string }
+  callId?: string
   resolve: (outcome: ApprovalOutcome) => void
 }
 
@@ -180,6 +190,8 @@ export class InteractionCoordinator {
   private lastError: string | undefined
   private lastFailClosed: InteractionCoordinatorDebug['lastFailClosed']
   private readonly listeners = new Set<() => void>()
+  /** Sessions whose approvals this Host answers itself, because the user asked not to be asked again. */
+  private readonly autoApproved = new Set<string>()
 
   /**
    * Install the UI presenter (Extension QuickPick panels or test doubles).
@@ -187,6 +199,55 @@ export class InteractionCoordinator {
    */
   setUi(ui: InteractionUi): void {
     this.ui = ui
+  }
+
+  /**
+   * Answer this session's approvals with `allowed-once` without presenting them,
+   * because the user granted one call and asked not to be asked again in that
+   * session. The runtime still audits every ask and its outcome; only this Host's
+   * presentation is skipped, so the model-facing record is unchanged.
+   * @param sessionId - session whose approvals this Host answers itself.
+   */
+  rememberAutoApproval(sessionId: string): void {
+    if (this.autoApproved.has(sessionId)) return
+    this.autoApproved.add(sessionId)
+    this.emit()
+  }
+
+  /**
+   * Drop one session's grant so its approvals are presented again. An explicit
+   * approval-policy write or permission-preset switch supersedes the grant.
+   * @param sessionId - session whose grant is dropped.
+   */
+  forgetAutoApproval(sessionId: string): void {
+    if (!this.autoApproved.delete(sessionId)) return
+    this.emit()
+  }
+
+  /**
+   * Whether this Host answers one session's approvals without presenting them.
+   * @param sessionId - session to read.
+   * @returns whether the user asked not to be asked again in that session.
+   */
+  hasAutoApproval(sessionId: string): boolean {
+    return this.autoApproved.has(sessionId)
+  }
+
+  /**
+   * Grant the session of one pending approval, then let the caller answer it. The
+   * card's fourth decision and the native presenter's fourth item mean this.
+   * @param id - interaction id of the approval the user decided.
+   * @returns the session the grant now covers, or `undefined` when no approval
+   *   with that id is pending, in which case nothing was granted.
+   */
+  grantSessionOfApproval(id: string): string | undefined {
+    const entry = this.queue.find(
+      (candidate): candidate is ApprovalEntry =>
+        candidate.id === id && candidate.kind === 'approval',
+    )
+    if (entry === undefined) return undefined
+    this.rememberAutoApproval(entry.sessionId)
+    return entry.sessionId
   }
 
   /**
@@ -303,6 +364,8 @@ export class InteractionCoordinator {
       toolName: entry.toolName,
       ...entry.tabId === undefined ? {} : { tabId: entry.tabId },
       ...entry.reason === undefined ? {} : { reason: entry.reason },
+      ...entry.displayReason === undefined ? {} : { displayReason: entry.displayReason },
+      ...entry.callId === undefined ? {} : { callId: entry.callId },
     }
   }
 
@@ -426,7 +489,13 @@ export class InteractionCoordinator {
     sessionId: string
     toolName: string
     reason?: string
+    displayReason?: { readonly en: string; readonly [locale: string]: string }
+    callId?: string
   }): Promise<ApprovalOutcome> {
+    // A session the user asked not to be asked about again answers without a
+    // queue entry or a presenter: the runtime's audit pair still records this
+    // ask and its grant, so replay shows the same decision the model saw.
+    if (this.autoApproved.has(frame.sessionId)) return Promise.resolve('allowed-once')
     return new Promise((resolve) => {
       const tabId = this.resolveTabId(frame.sessionId)
       const entry: ApprovalEntry = {
@@ -441,6 +510,8 @@ export class InteractionCoordinator {
         resolve,
         ...tabId === undefined ? {} : { tabId },
         ...frame.reason === undefined ? {} : { reason: frame.reason },
+        ...frame.displayReason === undefined ? {} : { displayReason: frame.displayReason },
+        ...frame.callId === undefined ? {} : { callId: frame.callId },
       }
       this.enqueue(entry)
       this.syncApprovalBadges()
@@ -610,6 +681,8 @@ export class InteractionCoordinator {
           sessionId: entry.sessionId,
           toolName: entry.toolName,
           ...entry.reason === undefined ? {} : { reason: entry.reason },
+          ...entry.displayReason === undefined ? {} : { displayReason: entry.displayReason },
+          ...entry.callId === undefined ? {} : { callId: entry.callId },
           ...entry.tabId === undefined ? {} : { tabId: entry.tabId },
         }
         const aborted = new Promise<ApprovalOutcome>((resolve) => {

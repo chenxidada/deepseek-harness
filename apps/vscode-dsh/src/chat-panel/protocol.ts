@@ -416,6 +416,35 @@ export type HostToWebviewMessage =
     }>
   }
   | {
+    /** Redacted credential reference states for the provider editor. Values never ride here. */
+    type: 'settings/credentials'
+    credentials: Array<{
+      ref: string
+      /** Whether resolving the reference would currently return a value. */
+      configured: boolean
+      /** Whether the runtime's credential store can write this reference now. */
+      writable: boolean
+      /** Supplying layer of a configured value. */
+      source?: string
+    }>
+  }
+  | {
+    /** Answer to one `settings/discover-models`, paired by its request id. */
+    type: 'settings/discovery'
+    requestId: string
+    /** Advertised models in endpoint order; present when the interrogation succeeded. */
+    models?: Array<{
+      id: string
+      name?: string
+      contextWindow?: number
+      maxTokens?: number
+      /** Accepted input modalities, when the endpoint disclosed them. */
+      inputModalities?: string[]
+    }>
+    /** Failure text; exactly one of `models` and `error` is present. */
+    error?: string
+  }
+  | {
     /** Present an interaction (approval or question) in-panel (phase-5). */
     type: 'interaction/present'
     interactionType: 'approval' | 'question'
@@ -425,6 +454,15 @@ export type HostToWebviewMessage =
     toolName?: string
     /** Approval: optional asker reason. */
     reason?: string
+    /** Approval: localized presentation of `reason`, keyed by locale. */
+    displayReason?: { readonly en: string; readonly [locale: string]: string }
+    /** Approval: tool call under decision, so the card names the call it decides. */
+    callId?: string
+    /**
+     * Approval: the Host can also stop presenting this session's later approvals,
+     * so the card offers the same fourth decision the native presenter does.
+     */
+    canRemember?: boolean
     /** Question: items to present. */
     questions?: Array<{
       id: string
@@ -468,6 +506,11 @@ export type HostToWebviewMessage =
     sessionId: string
     /** Approval policy that session runs under; absent when the Host read none. */
     approvalPolicy?: BridgeApprovalPolicy
+    /**
+     * The Host is answering that session's approvals itself for the rest of this
+     * window, so the page shows the grant as active and offers to revoke it.
+     */
+    autoApprove?: boolean
   }
 
 /** One image attached to a composer send (feature: image-upload). */
@@ -479,6 +522,11 @@ export interface PromptImage {
   /** Original file name, when the Webview knows one. */
   name?: string
 }
+
+/** One path-addressed edit a `settings/mutate` frame carries. */
+export type SettingsMutationOp =
+  | { op: 'set'; path: string[]; value: unknown }
+  | { op: 'unset'; path: string[] }
 
 /** Webview → Host frames (Phase 1–4 + change protocol + editor chrome). */
 export type WebviewToHostMessage =
@@ -588,14 +636,59 @@ export type WebviewToHostMessage =
   | { type: 'settings/open' }
   /** Merge a partial patch into one settings namespace's user layer. */
   | { type: 'settings/update'; ns: string; patch: Record<string, unknown>; expectedRevision?: number }
+  /**
+   * Apply path-addressed edits to one settings namespace's user layer, then store
+   * the credential the same save carried. The provider editor rewrites only the
+   * fields it owns, so a hand-written profile keeps its other keys.
+   */
+  | {
+    type: 'settings/mutate'
+    ns: string
+    ops: SettingsMutationOp[]
+    expectedRevision?: number
+    /** Credential to store once the configuration write succeeds. */
+    credential?: { ref: string; value: string }
+  }
+  /** Read presence and writability of credential references; values never ride back. */
+  | { type: 'settings/credential-describe'; refs: string[] }
+  /** Remove one credential reference from the writable source. */
+  | { type: 'settings/credential-unset'; ref: string }
+  /**
+   * Interrogate one provider endpoint for the models it advertises. The request
+   * describes an unsaved draft, so its `apiKey` rides this call alone.
+   */
+  | {
+    type: 'settings/discover-models'
+    requestId: string
+    settingsNs: string
+    provider?: string
+    baseURL?: string
+    api?: string
+    apiKey?: string
+  }
   /** Approve or reject an in-panel interaction (phase-5). */
-  | { type: 'interaction/approve'; id: string; outcome: 'allowed-once' | 'rejected' | 'cancelled' }
+  | {
+    type: 'interaction/approve'
+    id: string
+    outcome: 'allowed-once' | 'rejected' | 'cancelled'
+    /**
+     * The decision also stops the Host presenting this session's later approvals —
+     * the fourth choice the native presenter offers. Sending it with any other
+     * outcome asks for nothing, because the grant is what `allowed-once` means here.
+     */
+    remember?: boolean
+  }
   /** Answer an in-panel question interaction (phase-5). */
   | { type: 'interaction/answer'; id: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }
   /** Dismiss an in-panel question interaction with an error (phase-5). */
   | { type: 'interaction/dismiss'; id: string; error: string }
   /** Select a permission preset for a session. */
   | { type: 'action/permission-select'; sessionId: string; preset: string }
+  /**
+   * Turn this session's asking on or off: `false` presents every approval again,
+   * `true` has the Host answer them itself for the rest of this window.
+   */
+  | { type: 'action/auto-approve-set'; sessionId: string; enabled: boolean }
   /** Host-side render-detection response (DEBT-7). */
   | { type: 'probe/render-state'; testIds: string[]; renderState: Record<string, boolean> }
   /** Ask the Host for `@` completion candidates; the Host answers with the same `requestId`. */
@@ -604,6 +697,40 @@ export type WebviewToHostMessage =
   | { type: 'composer/slash-query'; requestId: string; query: string }
   /** Files dropped on the composer; the Host turns them into `@` mentions and re-prefills. */
   | { type: 'composer/drop-paths'; paths: string[]; text: string }
+
+/**
+ * Narrow one `settings/mutate` op. A path is a list of non-empty segments; the
+ * empty path addresses the section root, so an empty list is legal there.
+ * @param value - raw op payload.
+ * @returns typed op, or undefined when unrecognized.
+ */
+function parseSettingsMutationOp(value: unknown): SettingsMutationOp | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (!Array.isArray(record.path)) return undefined
+  const path = record.path.filter((segment): segment is string => typeof segment === 'string')
+  if (path.length !== record.path.length) return undefined
+  if (record.op === 'unset') return { op: 'unset', path }
+  if (record.op === 'set') {
+    return { op: 'set', path, value: record.value }
+  }
+  return undefined
+}
+
+/**
+ * Narrow a mutation's optional credential write. A frame that carries one must
+ * carry both halves, because a value without a reference has nowhere to go.
+ * @param value - raw credential payload.
+ * @returns the write, omitted when the frame carried none.
+ */
+function parseCredentialWrite(value: unknown): { credential: { ref: string; value: string } } | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (typeof record.ref !== 'string' || record.ref === '') return undefined
+  if (typeof record.value !== 'string') return undefined
+  return { credential: { ref: record.ref, value: record.value } }
+}
 
 /**
  * Narrow an unknown postMessage payload to a Webview→Host frame.
@@ -864,11 +991,65 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
         : {},
     }
   }
+  if (type === 'settings/mutate') {
+    if (typeof record.ns !== 'string' || record.ns === '') return undefined
+    if (!Array.isArray(record.ops)) return undefined
+    const ops: SettingsMutationOp[] = []
+    for (const raw of record.ops as unknown[]) {
+      const op = parseSettingsMutationOp(raw)
+      if (op === undefined) return undefined
+      ops.push(op)
+    }
+    return {
+      type: 'settings/mutate',
+      ns: record.ns,
+      ops,
+      ...typeof record.expectedRevision === 'number' && Number.isSafeInteger(record.expectedRevision)
+        ? { expectedRevision: record.expectedRevision }
+        : {},
+      ...parseCredentialWrite(record.credential) ?? {},
+    }
+  }
+  if (type === 'settings/credential-describe') {
+    if (!Array.isArray(record.refs)) return undefined
+    const refs = record.refs.filter((ref): ref is string => typeof ref === 'string' && ref !== '')
+    if (refs.length === 0 || refs.length !== record.refs.length) return undefined
+    return { type: 'settings/credential-describe', refs: [...new Set(refs)] }
+  }
+  if (type === 'settings/credential-unset') {
+    if (typeof record.ref !== 'string' || record.ref === '') return undefined
+    return { type: 'settings/credential-unset', ref: record.ref }
+  }
+  if (type === 'settings/discover-models') {
+    if (typeof record.requestId !== 'string' || record.requestId === '') return undefined
+    if (typeof record.settingsNs !== 'string' || record.settingsNs === '') return undefined
+    const text = (field: 'provider' | 'baseURL' | 'api' | 'apiKey'): string | undefined =>
+      typeof record[field] === 'string' ? record[field] : undefined
+    const provider = text('provider')
+    const baseURL = text('baseURL')
+    const api = text('api')
+    const apiKey = text('apiKey')
+    return {
+      type: 'settings/discover-models',
+      requestId: record.requestId,
+      settingsNs: record.settingsNs,
+      ...provider === undefined ? {} : { provider },
+      ...baseURL === undefined ? {} : { baseURL },
+      ...api === undefined ? {} : { api },
+      ...apiKey === undefined ? {} : { apiKey },
+    }
+  }
   if (type === 'interaction/approve') {
     if (typeof record.id !== 'string' || record.id === '') return undefined
     const outcome = record.outcome
     if (outcome !== 'allowed-once' && outcome !== 'rejected' && outcome !== 'cancelled') return undefined
-    return { type: 'interaction/approve', id: record.id, outcome }
+    if (record.remember !== undefined && typeof record.remember !== 'boolean') return undefined
+    return {
+      type: 'interaction/approve',
+      id: record.id,
+      outcome,
+      ...record.remember === true ? { remember: true } : {},
+    }
   }
   if (type === 'interaction/answer') {
     if (typeof record.id !== 'string' || record.id === '') return undefined
@@ -896,6 +1077,11 @@ export function parseWebviewToHostMessage(value: unknown): WebviewToHostMessage 
     if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
     if (typeof record.preset !== 'string' || record.preset === '') return undefined
     return { type: 'action/permission-select', sessionId: record.sessionId, preset: record.preset }
+  }
+  if (type === 'action/auto-approve-set') {
+    if (typeof record.sessionId !== 'string' || record.sessionId === '') return undefined
+    if (typeof record.enabled !== 'boolean') return undefined
+    return { type: 'action/auto-approve-set', sessionId: record.sessionId, enabled: record.enabled }
   }
   return undefined
 }

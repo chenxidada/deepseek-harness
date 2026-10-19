@@ -3574,6 +3574,23 @@ describe('cap:webview — editor chat shell React rendering', () => {
       const settingsUpdates = (): SettingsUpdatePost[] => posts.filter(p =>
         (p as { type?: string }).type === 'settings/update') as SettingsUpdatePost[]
 
+      /** One captured `action/auto-approve-set` intent from the settings page. */
+      const autoApprovePosts = (): Array<{ sessionId: string; enabled: boolean }> => posts.filter(p =>
+        (p as { type?: string }).type === 'action/auto-approve-set') as Array<{ sessionId: string; enabled: boolean }>
+
+      /** Open the settings page and its 执行与权限 tab on a session's permission state. */
+      const openPermissionPane = async (frame: Record<string, unknown>): Promise<void> => {
+        render(<App bridge={bridge} />)
+        fireEvent.click(screen.getByTestId('btn-settings'))
+        await waitFor(() => {
+          expect(screen.getByTestId('settings-panel')).toBeTruthy()
+        })
+        act(() => {
+          applyHostFrame(frame)
+        })
+        fireEvent.click(screen.getByTestId('settings-tab-permission'))
+      }
+
       it('CAP-WEBVIEW-048 opens the settings page from chrome and closes it without inventing data', async () => {
         render(<App bridge={bridge} />)
         expect(screen.queryByTestId('settings-panel')).toBeNull()
@@ -3592,6 +3609,42 @@ describe('cap:webview — editor chat shell React rendering', () => {
         await waitFor(() => {
           expect(screen.queryByTestId('settings-panel')).toBeNull()
         })
+      })
+
+      it('CAP-WEBVIEW-122 the settings page shows the grant state and writes 逐次询问 / 自动允许', async () => {
+        await openPermissionPane({
+          type: 'permission/state',
+          sessionId: 'sess-1',
+          current: 'workspace-write',
+          options: [{ value: 'workspace-write', name: '工作区写入' }],
+          approvalPolicy: 'ask',
+        })
+        // No grant yet: asking is the shown state, and no revoke row exists.
+        expect(screen.getByTestId<HTMLInputElement>('settings-auto-approve-off').checked).toBe(true)
+        expect(screen.queryByTestId('settings-auto-approve-active')).toBeNull()
+
+        fireEvent.click(screen.getByTestId('settings-auto-approve-on'))
+        expect(autoApprovePosts()).toEqual([{ type: 'action/auto-approve-set', sessionId: 'sess-1', enabled: true }])
+      })
+
+      it('CAP-WEBVIEW-123 an active grant is visible and revocable, and a rejecting runtime policy is named', async () => {
+        await openPermissionPane({
+          type: 'permission/state',
+          sessionId: 'sess-2',
+          current: 'workspace-write',
+          options: [{ value: 'workspace-write', name: '工作区写入' }],
+          approvalPolicy: 'never',
+          autoApprove: true,
+        })
+        expect(screen.getByTestId<HTMLInputElement>('settings-auto-approve-on').checked).toBe(true)
+        expect(screen.getByTestId('settings-auto-approve-active').textContent)
+          .toContain('已授予自动允许')
+        // The runtime policy is stated where it would otherwise make the control a lie.
+        expect(screen.getByTestId('settings-approval-policy').textContent)
+          .toContain('自动拒绝')
+
+        fireEvent.click(screen.getByTestId('settings-auto-approve-revoke'))
+        expect(autoApprovePosts()).toEqual([{ type: 'action/auto-approve-set', sessionId: 'sess-2', enabled: false }])
       })
 
       it('CAP-WEBVIEW-049 seeds both sections from model/state and settings/state', async () => {
@@ -3723,6 +3776,53 @@ describe('cap:webview — editor chat shell React rendering', () => {
           applyHostFrame({ type: 'settings/state', namespaces: 'nope' })
         })
         expect(getChatUiState().settingsState?.namespaces.map(ns => ns.ns)).toEqual(['llm-deepseek'])
+      })
+
+      it('CAP-WEBVIEW-117 mirrors credential and discovery replies, dropping unusable entries', async () => {
+        render(<App bridge={bridge} />)
+        expect(getChatUiState().credentials).toEqual([])
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'settings/credentials',
+            credentials: [
+              { ref: 'BAILIAN_GATEWAY_API_KEY', configured: true, writable: true, source: 'store' },
+              { ref: 'KIRO_GATEWAY_API_KEY', configured: false, writable: false },
+              { ref: '', configured: true, writable: true },
+              { ref: 'no-flags' },
+            ],
+          })
+        })
+        expect(getChatUiState().credentials).toEqual([
+          { ref: 'BAILIAN_GATEWAY_API_KEY', configured: true, writable: true, source: 'store' },
+          { ref: 'KIRO_GATEWAY_API_KEY', configured: false, writable: false },
+        ])
+
+        await act(async () => {
+          applyHostFrame({
+            type: 'settings/discovery',
+            requestId: 'discover-1',
+            models: [
+              { id: 'deepseek-v4-pro', name: 'V4 Pro', contextWindow: 1_000_000 },
+              { id: '' },
+            ],
+          })
+        })
+        expect(getChatUiState().discovery).toEqual({
+          requestId: 'discover-1',
+          models: [{ id: 'deepseek-v4-pro', name: 'V4 Pro', contextWindow: 1_000_000 }],
+        })
+
+        await act(async () => {
+          applyHostFrame({ type: 'settings/discovery', requestId: 'discover-2', error: '模型端点返回 401' })
+        })
+        expect(getChatUiState().discovery).toEqual({ requestId: 'discover-2', error: '模型端点返回 401' })
+
+        // A frame the Webview cannot pair with an interrogation is ignored whole.
+        await act(async () => {
+          applyHostFrame({ type: 'settings/discovery', models: [] })
+        })
+        expect(getChatUiState().discovery).toEqual({ requestId: 'discover-2', error: '模型端点返回 401' })
       })
     })
   })
@@ -3863,6 +3963,75 @@ describe('cap:webview — editor chat shell React rendering', () => {
       expect(screen.getByTestId('interaction-expired').textContent).toBe('已超时，回答不会再送达')
       expect(screen.queryByTestId('approval-allow')).toBeNull()
       expect(screen.queryByTestId('approval-reject')).toBeNull()
+    })
+
+    it('CAP-WEBVIEW-118 an approval card shows the localized reason and the call it decides', () => {
+      render(
+        <ApprovalCard
+          id="a2"
+          toolName="bash"
+          reason="Tool &quot;bash&quot; accesses a path outside the workspace"
+          displayReason={{
+            en: 'Tool "bash" accesses a path outside the workspace',
+            zh: 'bash 访问了工作区之外的路径',
+          }}
+          callId="call-abcdef123456"
+          onResolve={vi.fn()}
+        />,
+      )
+      // The Chinese presentation wins over the asker's English text, and the card
+      // reports which call the decision belongs to.
+      expect(screen.getByTestId('approval-reason').textContent).toBe('bash 访问了工作区之外的路径')
+      expect(screen.getByTestId('approval-call-id').textContent).toBe('#call-abc')
+      expect(screen.getByTestId('approval-card').getAttribute('data-call-id')).toBe('call-abcdef123456')
+    })
+
+    it('CAP-WEBVIEW-119 an approval card falls back to the asker reason without a display reason', () => {
+      render(
+        <ApprovalCard
+          id="a3"
+          toolName="bash"
+          reason="run the test suite"
+          onResolve={vi.fn()}
+        />,
+      )
+      expect(screen.getByTestId('approval-reason').textContent).toBe('run the test suite')
+      expect(screen.queryByTestId('approval-call-id')).toBeNull()
+    })
+
+    it('CAP-WEBVIEW-120 an approval card offers the same fourth decision as the native presenter', () => {
+      const onResolve = vi.fn()
+      render(
+        <ApprovalCard
+          id="a4"
+          toolName="bash"
+          canRemember={true}
+          onResolve={onResolve}
+        />,
+      )
+      // The card lists what the QuickPick lists: 允许一次, 允许并不再询问, 拒绝, 取消.
+      const buttons = screen.getByTestId('approval-card').querySelectorAll('button')
+      expect([...buttons].map(button => button.textContent)).toEqual([
+        '允许一次',
+        '允许并不再询问',
+        '拒绝',
+        '取消',
+      ])
+      fireEvent.click(screen.getByTestId('approval-allow-remember'))
+      expect(onResolve).toHaveBeenCalledWith('a4', 'allowed-once', true)
+    })
+
+    it('CAP-WEBVIEW-121 an approval card without the Host grant offers only the three outcomes', () => {
+      render(
+        <ApprovalCard
+          id="a5"
+          toolName="bash"
+          onResolve={vi.fn()}
+        />,
+      )
+      expect(screen.queryByTestId('approval-allow-remember')).toBeNull()
+      const buttons = screen.getByTestId('approval-card').querySelectorAll('button')
+      expect([...buttons].map(button => button.textContent)).toEqual(['允许一次', '拒绝', '取消'])
     })
 
     it('CAP-WEBVIEW-060 InlineDiff available renders add/del lines', () => {

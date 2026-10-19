@@ -72,31 +72,75 @@ export interface InteractionWindow {
 
 /** Default approval choices mapped to {@link ApprovalOutcome}. */
 const APPROVAL_CHOICES: readonly { label: string; value: ApprovalOutcome; description: string }[] = [
-  { label: 'Allow once', value: 'allowed-once', description: 'Grant this tool call once' },
-  { label: 'Reject', value: 'rejected', description: 'Deny this tool call' },
-  { label: 'Cancel', value: 'cancelled', description: 'Withdraw the approval request' },
+  { label: '允许一次', value: 'allowed-once', description: '只放行这次工具调用' },
+  { label: '拒绝', value: 'rejected', description: '否决这次工具调用' },
+  { label: '取消', value: 'cancelled', description: '撤回这次审批请求' },
 ]
 
 /**
- * Choice whose grant also switches this session's policy to `never`. The value is
- * not an {@link ApprovalOutcome}: picking it grants once and runs the hook.
+ * What the Host tells the user once it records a session's grant. The panel card
+ * and the native presenter both answer that decision, so the confirmation is one
+ * sentence with one home rather than one per presenter.
+ */
+export const APPROVAL_GRANT_NOTICE = '本会话后续审批将自动允许，不再弹出询问。'
+
+/**
+ * Choice that grants this call and runs {@link InteractionUiHooks.rememberApproval},
+ * which stops this window presenting the session's later approvals. Its value is
+ * not an {@link ApprovalOutcome}, and it is offered second so both presenters list
+ * the same four decisions in the same order.
  */
 const REMEMBER_CHOICE_VALUE = 'allowed-once-remember'
+
+/** The fourth decision, as the native presenter offers it. */
+const REMEMBER_CHOICE: { label: string; value: string; description: string } = {
+  label: '允许并不再询问',
+  value: REMEMBER_CHOICE_VALUE,
+  description: '允许这次调用，并在本窗口内不再弹出本会话的后续审批',
+}
 
 /** Host actions an answer triggers beyond the returned outcome. */
 export interface InteractionUiHooks {
   /**
-   * Switch one session to `never` after the user granted a call and asked not to be
-   * asked again in that session. A failure keeps the one-shot grant, which the
-   * presenter reports as a warning rather than undoing the approval.
-   * @param sessionId - session whose approval policy changes.
+   * Stop presenting this session's approvals and answer them `allowed-once`
+   * instead, because the user granted one call and asked not to be asked again in
+   * that session. A failure keeps the one-shot grant, which the presenter reports
+   * as a warning rather than undoing the approval.
+   * @param sessionId - session whose approvals the Host answers itself.
    */
   rememberApproval?: (sessionId: string) => Promise<void>
 }
 
 /** User-facing sentence for the effective approval policy of one session. */
 function approvalPolicyLabel(policy: string): string {
-  return policy === 'never' ? '不再询问' : '询问'
+  return policy === 'never' ? '自动拒绝' : '逐次询问'
+}
+
+/**
+ * The asker's text for one request, preferring the Chinese presentation this
+ * extension's copy is written in.
+ * @param reason - the asker's own reason.
+ * @param displayReason - locale-keyed presentation of that reason, when sent.
+ * @returns the text the prompt shows, or `undefined` when the asker sent none.
+ */
+function shownReason(
+  reason?: string,
+  displayReason?: { readonly en: string; readonly [locale: string]: string },
+): string | undefined {
+  return displayReason?.zh ?? displayReason?.en ?? reason
+}
+
+/**
+ * The question text a fallback prompt shows. The detail is part of the question
+ * the asker sent, so a QuickPick that dropped it would ask with less context
+ * than the panel card.
+ * @param question - one requested question.
+ * @returns the question with its detail appended after an em dash.
+ */
+function questionPrompt(question: { question: string; detail?: string }): string {
+  return question.detail === undefined || question.detail === ''
+    ? question.question
+    : `${question.question} — ${question.detail}`
 }
 
 /**
@@ -115,34 +159,43 @@ export function createVscodeInteractionUi(
       signal?: AbortSignal,
     ): Promise<ApprovalOutcome> {
       const tabHint = request.tabId === undefined
-        ? `session ${shortId(request.sessionId)}`
-        : `Tab ${shortId(request.tabId)} / session ${shortId(request.sessionId)}`
+        ? `会话 ${shortId(request.sessionId)}`
+        : `页签 ${shortId(request.tabId)} / 会话 ${shortId(request.sessionId)}`
       const items: InteractionQuickPickItem[] = [
         ...APPROVAL_CHOICES.map(choice => ({
           label: choice.label,
           description: choice.description,
           value: choice.value,
         })),
-        ...hooks.rememberApproval === undefined ? [] : [{
-          label: 'Allow, and stop asking',
-          description: '本次允许，并让本会话后续操作不再询问',
-          value: REMEMBER_CHOICE_VALUE,
-        }],
       ]
-      const placeHolder = request.reason === undefined
-        ? `Approve ${request.toolName}? (${tabHint})`
-        : `Approve ${request.toolName}? ${request.reason} (${tabHint})`
+      // Both presenters offer the same decisions in the same order: 允许一次,
+      // 允许并不再询问, 拒绝, 取消.
+      if (hooks.rememberApproval !== undefined) {
+        items.splice(1, 0, {
+          label: REMEMBER_CHOICE.label,
+          description: REMEMBER_CHOICE.description,
+          value: REMEMBER_CHOICE.value,
+        })
+      }
+      const reason = shownReason(request.reason, request.displayReason)
+      // The call id is what pairs this prompt with the call the panel rendered;
+      // without it a fallback prompt names only the tool.
+      const callHint = request.callId === undefined ? '' : ` · 调用 ${shortId(request.callId)}`
+      const placeHolder = reason === undefined
+        ? `是否允许 ${request.toolName}？（${tabHint}）`
+        : `是否允许 ${request.toolName}？${reason}（${tabHint}）`
       const picked = await pickItems(window, items, {
         placeHolder,
-        title: 'DeepSeek Harness Approval',
+        title: `DeepSeek Harness 审批${callHint}`,
       }, signal)
       if (picked === undefined || Array.isArray(picked)) return 'cancelled'
       if (picked.value === REMEMBER_CHOICE_VALUE) {
         try {
           await hooks.rememberApproval?.(request.sessionId)
+          await window.showInformationMessage?.(APPROVAL_GRANT_NOTICE)
         } catch (error) {
           await window.showWarningMessage?.(
-            `本会话的审批策略未能切换：${error instanceof Error ? error.message : String(error)}`,
+            `本会话的「不再询问」未能生效：${error instanceof Error ? error.message : String(error)}`,
           )
         }
         return 'allowed-once'
@@ -156,19 +209,20 @@ export function createVscodeInteractionUi(
       signal?: AbortSignal,
     ): Promise<AskUserQuestionAnswer> {
       const tabHint = request.tabId === undefined
-        ? `session ${shortId(request.sessionId)}`
-        : `Tab ${shortId(request.tabId)}`
+        ? `会话 ${shortId(request.sessionId)}`
+        : `页签 ${shortId(request.tabId)}`
       const answers: AskUserQuestionAnswer['answers'] = []
       for (const question of request.questions) {
         if (signal?.aborted) {
           throw new Error('interaction cancelled by Host shutdown')
         }
         const options = question.options ?? []
+        const prompt = questionPrompt(question)
         if (options.length === 0) {
           const custom = await promptFreeText(window, {
-            prompt: question.question,
-            title: question.header ?? 'DeepSeek Harness Question',
-            placeHolder: `Free-text answer (${tabHint})`,
+            prompt,
+            title: question.header ?? 'DeepSeek Harness 提问',
+            placeHolder: `自由文本回答（${tabHint}）`,
           }, signal)
           answers.push({
             id: question.id,
@@ -184,8 +238,8 @@ export function createVscodeInteractionUi(
         }))
         if (question.multiSelect) {
           const picked = await pickItems(window, items, {
-            placeHolder: `${question.question} (${tabHint})`,
-            title: question.header ?? 'DeepSeek Harness Question',
+            placeHolder: `${prompt}（${tabHint}）`,
+            title: question.header ?? 'DeepSeek Harness 提问',
             canPickMany: true,
           }, signal)
           const selected = Array.isArray(picked)
@@ -196,8 +250,8 @@ export function createVscodeInteractionUi(
           answers.push({ id: question.id, selected })
         } else {
           const picked = await pickItems(window, items, {
-            placeHolder: `${question.question} (${tabHint})`,
-            title: question.header ?? 'DeepSeek Harness Question',
+            placeHolder: `${prompt}（${tabHint}）`,
+            title: question.header ?? 'DeepSeek Harness 提问',
           }, signal)
           if (picked === undefined || Array.isArray(picked)) {
             answers.push({ id: question.id, selected: [] })
@@ -227,11 +281,11 @@ export async function pickPermissionPreset(
   approvalPolicy?: string,
 ): Promise<string | undefined> {
   if (options.length === 0) {
-    await window.showErrorMessage('No permission presets are available from the DSH runtime.')
+    await window.showErrorMessage('DSH 运行时没有可用的权限预设。')
     return undefined
   }
   const items: InteractionQuickPickItem[] = options.map((option) => {
-    const description = [option.value === current ? 'current' : undefined, option.description]
+    const description = [option.value === current ? '当前' : undefined, option.description]
       .filter(part => part !== undefined && part !== '')
       .join(' · ')
     return {
@@ -244,10 +298,10 @@ export async function pickPermissionPreset(
     }
   })
   const picked = await pickItems(window, items, {
-    placeHolder: 'Select a permission preset (dsh-permission-presets)',
+    placeHolder: '选择权限预设（dsh-permission-presets）',
     title: approvalPolicy === undefined
-      ? 'DeepSeek Harness Permissions'
-      : `DeepSeek Harness Permissions · 本会话审批：${approvalPolicyLabel(approvalPolicy)}`,
+      ? 'DeepSeek Harness 权限'
+      : `DeepSeek Harness 权限 · 本会话审批：${approvalPolicyLabel(approvalPolicy)}`,
   })
   if (picked === undefined || Array.isArray(picked)) return undefined
   return picked.value

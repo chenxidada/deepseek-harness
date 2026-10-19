@@ -212,6 +212,8 @@ export function App({ bridge }: AppProps) {
           open={ui.settingsOpen}
           modelState={ui.modelState}
           settingsState={ui.settingsState}
+          credentials={ui.credentials}
+          discovery={ui.discovery}
           permission={ui.permission}
           bridge={bridge}
           onClose={() => setSettingsOpen(false)}

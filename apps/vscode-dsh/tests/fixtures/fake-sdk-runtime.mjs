@@ -64,7 +64,16 @@
  *   the post-change status (HG-2 passed, `FAKE_SPECDEV_STAGE_AFTER` as the stage).
  * - `FAKE_SPECDEV_GATE_ERROR`: answer `specdev/confirm-gate` with this failure text.
  * - `FAKE_SETTINGS_LOG`: append settings RPC lines; `settings/describe` answers
- *   one `fake-settings` namespace whose revision moves on each `settings/update`.
+ *   one `fake-settings` namespace whose revision moves on each write, and
+ *   `settings/mutate` applies its ops to that namespace.
+ * - `FAKE_CREDENTIAL_LOG`: append credential RPC lines (references only — the
+ *   stand-in never logs a value).
+ * - `FAKE_MODEL_DISCOVER_LOG`: append `model/discover` lines (the one-shot key is
+ *   reported as a boolean presence, never as text).
+ * - `FAKE_MODEL_DISCOVER_ERROR`: answer `model/discover` with this failure text,
+ *   standing in for an endpoint that refuses the interrogation.
+ * - `FAKE_CREDENTIAL_WRITE_ERROR`: answer `credential/set` / `credential/unset`
+ *   with this failure text, standing in for an unwritable credential store.
  * - `FAKE_SESSION_LIST_CWD`: `session/list` reports this directory as the listed
  *   session's workspace, so a caller's workspace filter has something to match.
  * - `FAKE_SESSION_LIST_LOG`: append session RPC lines.
@@ -173,17 +182,59 @@ let bridgeBuffer = ''
 
 /**
  * Settings state the runtime answers `settings/describe` with. `settings/update`
- * moves the revision, so a Host round-trip observes the write.
+ * and `settings/mutate` move the revision, so a Host round-trip observes the write.
  */
 let fakeSettingsRevision = 1
+let fakeSettingsValue = { model: 'fake-model' }
 function fakeSettingsNamespaces() {
   return [{
     ns: 'fake-settings',
-    value: { model: 'fake-model' },
+    value: { ...fakeSettingsValue },
     revision: fakeSettingsRevision,
     secretFields: ['apiKey'],
   }]
 }
+
+/**
+ * Approach the stand-in takes for one `settings/mutate` op. `set` writes the value
+ * at the path (creating intermediate objects) and `unset` removes it; the empty
+ * path addresses the section root, matching the runtime's own contract.
+ */
+function applySettingsPathOp(ops) {
+  for (const op of ops) {
+    const path = Array.isArray(op.path) ? op.path : []
+    if (op.op === 'set') {
+      if (path.length === 0) {
+        fakeSettingsValue = op.value
+        continue
+      }
+      let cursor = fakeSettingsValue
+      for (const segment of path.slice(0, -1)) {
+        if (typeof cursor[segment] !== 'object' || cursor[segment] === null) cursor[segment] = {}
+        cursor = cursor[segment]
+      }
+      cursor[path[path.length - 1]] = op.value
+      continue
+    }
+    if (op.op === 'unset') {
+      let cursor = fakeSettingsValue
+      for (const segment of path.slice(0, -1)) {
+        if (typeof cursor[segment] !== 'object' || cursor[segment] === null) cursor = undefined
+        else cursor = cursor[segment]
+        if (cursor === undefined) break
+      }
+      if (cursor === undefined) continue
+      if (path.length === 0) fakeSettingsValue = {}
+      else delete cursor[path[path.length - 1]]
+    }
+  }
+}
+
+/**
+ * Credential references the stand-in holds. Values live here only; every answer
+ * below reports presence and writability, never a value.
+ */
+const fakeCredentials = new Map()
 
 /**
  * Deterministic `session/list` answer: one session in the workspace the knob names,
@@ -625,6 +676,103 @@ function connectBridge() {
           id: frame.id,
           ok: true,
           namespace: { ns: frame.ns, value: frame.patch, revision: fakeSettingsRevision },
+        })
+        continue
+      }
+      if (frame?.kind === 'settings/mutate' && typeof frame.id === 'string') {
+        logLine('FAKE_SETTINGS_LOG', {
+          kind: 'mutate',
+          ns: frame.ns,
+          ops: frame.ops,
+          expectedRevision: frame.expectedRevision,
+        })
+        applySettingsPathOp(Array.isArray(frame.ops) ? frame.ops : [])
+        fakeSettingsRevision += 1
+        sendBridge({
+          kind: 'settings/mutate/response',
+          id: frame.id,
+          ok: true,
+          namespace: {
+            ns: frame.ns,
+            value: { ...fakeSettingsValue },
+            revision: fakeSettingsRevision,
+          },
+        })
+        continue
+      }
+      if (frame?.kind === 'credential/describe' && typeof frame.id === 'string') {
+        const refs = Array.isArray(frame.refs) ? frame.refs : []
+        logLine('FAKE_CREDENTIAL_LOG', { kind: 'describe', refs })
+        sendBridge({
+          kind: 'credential/describe/response',
+          id: frame.id,
+          ok: true,
+          credentials: refs.map(ref => ({
+            ref,
+            configured: fakeCredentials.has(ref),
+            writable: true,
+            ...fakeCredentials.has(ref) ? { source: 'store' } : {},
+          })),
+        })
+        continue
+      }
+      if (frame?.kind === 'credential/set' && typeof frame.id === 'string') {
+        // The value is deliberately absent from the log: a stand-in that echoed it
+        // would let a leak pass a test that only reads these lines.
+        logLine('FAKE_CREDENTIAL_LOG', { kind: 'set', ref: frame.ref })
+        if (process.env.FAKE_CREDENTIAL_WRITE_ERROR !== undefined) {
+          sendBridge({
+            kind: 'credential/set/response',
+            id: frame.id,
+            ok: false,
+            error: process.env.FAKE_CREDENTIAL_WRITE_ERROR,
+          })
+          continue
+        }
+        fakeCredentials.set(frame.ref, frame.value)
+        sendBridge({ kind: 'credential/set/response', id: frame.id, ok: true })
+        continue
+      }
+      if (frame?.kind === 'credential/unset' && typeof frame.id === 'string') {
+        logLine('FAKE_CREDENTIAL_LOG', { kind: 'unset', ref: frame.ref })
+        if (process.env.FAKE_CREDENTIAL_WRITE_ERROR !== undefined) {
+          sendBridge({
+            kind: 'credential/unset/response',
+            id: frame.id,
+            ok: false,
+            error: process.env.FAKE_CREDENTIAL_WRITE_ERROR,
+          })
+          continue
+        }
+        fakeCredentials.delete(frame.ref)
+        sendBridge({ kind: 'credential/unset/response', id: frame.id, ok: true })
+        continue
+      }
+      if (frame?.kind === 'model/discover' && typeof frame.id === 'string') {
+        logLine('FAKE_MODEL_DISCOVER_LOG', {
+          settingsNs: frame.settingsNs,
+          provider: frame.provider,
+          baseURL: frame.baseURL,
+          api: frame.api,
+          apiKeyPresent: typeof frame.apiKey === 'string' && frame.apiKey !== '',
+        })
+        if (process.env.FAKE_MODEL_DISCOVER_ERROR !== undefined) {
+          sendBridge({
+            kind: 'model/discover/response',
+            id: frame.id,
+            ok: false,
+            error: process.env.FAKE_MODEL_DISCOVER_ERROR,
+          })
+          continue
+        }
+        sendBridge({
+          kind: 'model/discover/response',
+          id: frame.id,
+          ok: true,
+          models: [
+            { id: 'fake-discovered-one', name: 'Discovered One', contextWindow: 128_000, maxTokens: 8_192 },
+            { id: 'fake-discovered-two' },
+          ],
         })
       }
     }

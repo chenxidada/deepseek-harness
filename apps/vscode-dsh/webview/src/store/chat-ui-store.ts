@@ -317,6 +317,11 @@ export interface PermissionState {
   sessionId: string
   /** Approval policy the active session runs under; absent when the read returned none. */
   approvalPolicy?: 'ask' | 'never'
+  /**
+   * The Host answers this session's approvals itself for the rest of this window,
+   * so the page shows the grant as active and offers to revoke it.
+   */
+  autoApprove?: boolean
 }
 
 /** Redacted credential reference state mirrored from Host `settings/credentials`. */
@@ -409,6 +414,16 @@ export interface PendingInteraction {
   sessionId: string
   toolName?: string
   reason?: string
+  /** Localized presentation of `reason`, keyed by locale; preferred over it for display. */
+  displayReason?: Record<string, string>
+  /** Tool call the approval decides, so the card names the call it belongs to. */
+  callId?: string
+  /**
+   * The Host can stop presenting this session's later approvals, so the card
+   * offers that decision too. Absent means presenting the three legal outcomes
+   * is all this Host does.
+   */
+  canRemember?: boolean
   /**
    * Stable lower-kebab-case code the runtime gave up with. Present means the card
    * keeps its question but accepts no answer, because a late one reaches nothing.
@@ -512,6 +527,10 @@ export interface ChatUiState {
   settingsOpen: boolean
   /** Redacted settings namespaces mirrored from Host `settings/state`. */
   settingsState?: SettingsState
+  /** Redacted credential reference states mirrored from Host `settings/credentials`. */
+  credentials: CredentialState[]
+  /** Latest Host reply to a provider-editor model interrogation (feature: model-providers). */
+  discovery?: DiscoveryReply
   /** After history open, auto-fire Continue once Host chrome is ready. */
   pendingContinueSessionId?: string
   /** Pending change-list reveal from Host. */
@@ -558,6 +577,7 @@ const initialState: ChatUiState = {
   todoItems: [],
   overflowOpen: false,
   settingsOpen: false,
+  credentials: [],
   deferredRestoreCount: 0,
   settingsDeepLinkAvailable: false,
   pendingChangeListReveal: null,
@@ -860,6 +880,67 @@ function mapSettingsNamespaces(raw: unknown): SettingsNamespaceState[] | undefin
 }
 
 /**
+ * Parse the `settings/credentials` list. `undefined` means the frame itself is
+ * unusable and the caller keeps the previous states; an entry without a reference
+ * or the two flags is dropped alone.
+ */
+function mapCredentialStates(raw: unknown): CredentialState[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const credentials: CredentialState[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+    const rec = entry as Record<string, unknown>
+    if (typeof rec.ref !== 'string' || rec.ref === '') continue
+    if (typeof rec.configured !== 'boolean' || typeof rec.writable !== 'boolean') continue
+    credentials.push({
+      ref: rec.ref,
+      configured: rec.configured,
+      writable: rec.writable,
+      ...typeof rec.source === 'string' ? { source: rec.source } : {},
+    })
+  }
+  return credentials
+}
+
+/**
+ * Whether one frame field is a locale-keyed text map. The Host validates it on
+ * its own wire, so this only keeps an unreadable field out of the store.
+ * @param raw - the `displayReason` field of an `interaction/present`.
+ */
+function isLocalizedReason(raw: unknown): raw is Record<string, string> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return false
+  const record = raw as Record<string, unknown>
+  if (typeof record.en !== 'string') return false
+  return Object.values(record).every(entry => typeof entry === 'string')
+}
+
+/**
+ * Read one `settings/discovery` reply. A frame without a request id cannot be
+ * paired with the interrogation it answers, so the caller ignores it.
+ * @param frame - the `settings/discovery` frame.
+ */
+function mapDiscoveryReply(frame: Record<string, unknown>): DiscoveryReply | undefined {
+  if (typeof frame.requestId !== 'string' || frame.requestId === '') return undefined
+  if (typeof frame.error === 'string') {
+    return { requestId: frame.requestId, error: frame.error }
+  }
+  if (!Array.isArray(frame.models)) return undefined
+  const models: DiscoveredModelState[] = []
+  for (const entry of frame.models) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+    const rec = entry as Record<string, unknown>
+    if (typeof rec.id !== 'string' || rec.id === '') continue
+    models.push({
+      id: rec.id,
+      ...typeof rec.name === 'string' ? { name: rec.name } : {},
+      ...typeof rec.contextWindow === 'number' ? { contextWindow: rec.contextWindow } : {},
+      ...typeof rec.maxTokens === 'number' ? { maxTokens: rec.maxTokens } : {},
+    })
+  }
+  return { requestId: frame.requestId, models }
+}
+
+/**
  * Read one `permission/state` frame's preset projection. A frame without the
  * active preset or the session it applies to cannot drive the selector, so the
  * caller keeps the projection it already had rather than showing a half-read one.
@@ -887,6 +968,7 @@ function mapPermissionState(frame: Record<string, unknown>): PermissionState | u
     options,
     sessionId: frame.sessionId,
     ...approvalPolicy === undefined ? {} : { approvalPolicy },
+    ...frame.autoApprove === true ? { autoApprove: true } : {},
   }
 }
 
@@ -1753,6 +1835,20 @@ export function applyHostFrame(raw: unknown): void {
       ...state,
       settingsState: { namespaces },
     }
+  } else if (type === 'settings/credentials') {
+    const credentials = mapCredentialStates(frame.credentials)
+    if (credentials === undefined) return
+    state = {
+      ...state,
+      credentials,
+    }
+  } else if (type === 'settings/discovery') {
+    const discovery = mapDiscoveryReply(frame)
+    if (discovery === undefined) return
+    state = {
+      ...state,
+      discovery,
+    }
   } else if (type === 'permission/state') {
     const permission = mapPermissionState(frame)
     if (permission === undefined) return
@@ -1880,6 +1976,9 @@ export function applyHostFrame(raw: unknown): void {
       sessionId: frame.sessionId,
       ...typeof frame.toolName === 'string' ? { toolName: frame.toolName } : {},
       ...typeof frame.reason === 'string' ? { reason: frame.reason } : {},
+      ...isLocalizedReason(frame.displayReason) ? { displayReason: frame.displayReason } : {},
+      ...typeof frame.callId === 'string' && frame.callId !== '' ? { callId: frame.callId } : {},
+      ...frame.canRemember === true ? { canRemember: true } : {},
       ...Array.isArray(frame.questions) ? { questions: frame.questions as PendingInteraction['questions'] } : {},
     }
     state = {

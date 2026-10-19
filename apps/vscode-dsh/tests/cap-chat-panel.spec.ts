@@ -1974,6 +1974,275 @@ describe('cap:chat-panel — activity stream, streaming follow, and chat chassis
         expect(banner).toMatchObject({ kind: 'settings' })
         expect(banner?.type === 'ui/banner' ? banner.text : '').toContain('expected revision 4, now 6')
       })
+
+      it('CAP-CHAT-PANEL-113 settings/mutate forwards ops with the save credential and refreshes the key label', async () => {
+        const mutations: Array<{
+          ns: string
+          ops: unknown
+          expectedRevision?: number
+          credential?: { ref: string; value: string }
+        }> = []
+        const described: string[][] = []
+        let configured = false
+        const panel = createPanel({
+          requestSettingsMutate: async (ns, ops, expectedRevision, credential) => {
+            mutations.push({
+              ns,
+              ops,
+              ...expectedRevision === undefined ? {} : { expectedRevision },
+              ...credential === undefined ? {} : { credential },
+            })
+            configured = true
+            return [namespace(6)]
+          },
+          requestCredentialDescribe: async (refs) => {
+            described.push([...refs])
+            return refs.map(ref => ({ ref, configured, writable: true }))
+          },
+        })
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+
+        expect(parseWebviewToHostMessage({
+          type: 'settings/mutate',
+          ns: 'llm-pi-ai',
+          ops: [
+            { op: 'set', path: ['providers', 'acme', 'baseURL'], value: 'https://gateway.example/v1' },
+            { op: 'unset', path: ['providers', 'acme', 'displayName'] },
+          ],
+          expectedRevision: 5,
+          credential: { ref: 'ACME_API_KEY', value: 'sk-secret' },
+        })).toEqual({
+          type: 'settings/mutate',
+          ns: 'llm-pi-ai',
+          ops: [
+            { op: 'set', path: ['providers', 'acme', 'baseURL'], value: 'https://gateway.example/v1' },
+            { op: 'unset', path: ['providers', 'acme', 'displayName'] },
+          ],
+          expectedRevision: 5,
+          credential: { ref: 'ACME_API_KEY', value: 'sk-secret' },
+        })
+
+        // The page describes the reference it renders before it can save a key for it.
+        fake.emitFromWebview({ type: 'settings/credential-describe', refs: ['ACME_API_KEY'] })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'settings/credentials'), 1_000)
+        expect(fake.receivedFromHost.find(m => m.type === 'settings/credentials')).toMatchObject({
+          credentials: [{ ref: 'ACME_API_KEY', configured: false, writable: true }],
+        })
+
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+        fake.emitFromWebview({
+          type: 'settings/mutate',
+          ns: 'llm-pi-ai',
+          ops: [{ op: 'set', path: ['providers', 'acme', 'baseURL'], value: 'https://gateway.example/v1' }],
+          expectedRevision: 5,
+          credential: { ref: 'ACME_API_KEY', value: 'sk-secret' },
+        })
+        await waitFor(
+          () => fake.receivedFromHost.some(m => m.type === 'settings/credentials'),
+          1_000,
+        )
+
+        expect(mutations).toEqual([{
+          ns: 'llm-pi-ai',
+          ops: [{ op: 'set', path: ['providers', 'acme', 'baseURL'], value: 'https://gateway.example/v1' }],
+          expectedRevision: 5,
+          credential: { ref: 'ACME_API_KEY', value: 'sk-secret' },
+        }])
+        expect(fake.receivedFromHost.find(m => m.type === 'settings/state')).toMatchObject({
+          namespaces: [{ ns: 'llm-deepseek', revision: 6 }],
+        })
+        // The label follows the store the write reached, so it flips to configured.
+        expect(fake.receivedFromHost.find(m => m.type === 'settings/credentials')).toMatchObject({
+          credentials: [{ ref: 'ACME_API_KEY', configured: true, writable: true }],
+        })
+        expect(described).toEqual([['ACME_API_KEY'], ['ACME_API_KEY']])
+      })
+
+      it('CAP-CHAT-PANEL-114 credential unset re-reads the described references and banners a refusal', async () => {
+        const unset: string[] = []
+        const unsetState: { error?: Error } = {}
+        const panel = createPanel({
+          requestCredentialDescribe: async refs =>
+            refs.map(ref => ({ ref, configured: !unset.includes(ref), writable: true })),
+          requestCredentialUnset: async (ref) => {
+            if (unsetState.error !== undefined) throw unsetState.error
+            unset.push(ref)
+          },
+        })
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+
+        expect(parseWebviewToHostMessage({ type: 'settings/credential-unset', ref: 'ACME_API_KEY' }))
+          .toEqual({ type: 'settings/credential-unset', ref: 'ACME_API_KEY' })
+
+        fake.emitFromWebview({ type: 'settings/credential-describe', refs: ['ACME_API_KEY'] })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'settings/credentials'), 1_000)
+        fake.receivedFromHost.length = 0
+
+        fake.emitFromWebview({ type: 'settings/credential-unset', ref: 'ACME_API_KEY' })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'settings/credentials'), 1_000)
+
+        expect(unset).toEqual(['ACME_API_KEY'])
+        expect(fake.receivedFromHost.find(m => m.type === 'settings/credentials')).toMatchObject({
+          credentials: [{ ref: 'ACME_API_KEY', configured: false, writable: true }],
+        })
+
+        unsetState.error = new Error('credential store is read-only')
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+        fake.emitFromWebview({ type: 'settings/credential-unset', ref: 'ACME_API_KEY' })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
+
+        expect(fake.receivedFromHost.filter(m => m.type === 'settings/credentials').length).toBe(0)
+        const banner = fake.receivedFromHost.find(m => m.type === 'ui/banner')
+        expect(banner).toMatchObject({ kind: 'settings' })
+        expect(banner?.type === 'ui/banner' ? banner.text : '').toContain('credential store is read-only')
+      })
+
+      it('CAP-CHAT-PANEL-115 model discovery answers by request id, and a refusal rides the reply', async () => {
+        const requests: Array<{ settingsNs: string; request: Record<string, unknown> }> = []
+        const panel = createPanel({
+          requestDiscoverModels: async (settingsNs, request) => {
+            requests.push({ settingsNs, request })
+            if (request.baseURL === 'https://refusing.example/v1') {
+              throw new Error('models endpoint answered 401')
+            }
+            return [{ id: 'deepseek-v4-pro', name: 'V4 Pro', contextWindow: 1_000_000 }]
+          },
+        })
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+
+        expect(parseWebviewToHostMessage({
+          type: 'settings/discover-models',
+          requestId: 'r1',
+          settingsNs: 'llm-pi-ai',
+          baseURL: 'https://gateway.example/v1',
+          api: 'openai-completions',
+          apiKey: 'sk-draft',
+        })).toEqual({
+          type: 'settings/discover-models',
+          requestId: 'r1',
+          settingsNs: 'llm-pi-ai',
+          baseURL: 'https://gateway.example/v1',
+          api: 'openai-completions',
+          apiKey: 'sk-draft',
+        })
+
+        fake.emitFromWebview({
+          type: 'settings/discover-models',
+          requestId: 'r1',
+          settingsNs: 'llm-pi-ai',
+          baseURL: 'https://gateway.example/v1',
+          api: 'openai-completions',
+          apiKey: 'sk-draft',
+        })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'settings/discovery'), 1_000)
+
+        expect(requests).toEqual([{
+          settingsNs: 'llm-pi-ai',
+          request: { baseURL: 'https://gateway.example/v1', api: 'openai-completions', apiKey: 'sk-draft' },
+        }])
+        expect(fake.receivedFromHost.find(m => m.type === 'settings/discovery')).toEqual({
+          type: 'settings/discovery',
+          requestId: 'r1',
+          models: [{ id: 'deepseek-v4-pro', name: 'V4 Pro', contextWindow: 1_000_000 }],
+        })
+
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+        fake.emitFromWebview({
+          type: 'settings/discover-models',
+          requestId: 'r2',
+          settingsNs: 'llm-pi-ai',
+          baseURL: 'https://refusing.example/v1',
+        })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'settings/discovery'), 1_000)
+
+        // The endpoint's own refusal text is the actionable part, so it is the reply
+        // rather than a page-level banner the editor cannot attribute to the fetch.
+        expect(fake.receivedFromHost).toEqual([{
+          type: 'settings/discovery',
+          requestId: 'r2',
+          error: 'models endpoint answered 401',
+        }])
+      })
+
+      it('CAP-CHAT-PANEL-116 discovery with no handler and an unanswered mutate banner instead of hanging', async () => {
+        const panel = createPanel()
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+
+        fake.emitFromWebview({
+          type: 'settings/discover-models',
+          requestId: 'r1',
+          settingsNs: 'llm-pi-ai',
+        })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'settings/discovery'), 1_000)
+        expect(fake.receivedFromHost.find(m => m.type === 'settings/discovery')).toEqual({
+          type: 'settings/discovery',
+          requestId: 'r1',
+          error: 'Host 未就绪',
+        })
+
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+        fake.emitFromWebview({ type: 'settings/mutate', ns: 'llm-pi-ai', ops: [], expectedRevision: 1 })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'ui/banner'), 1_000)
+        expect(fake.receivedFromHost.filter(m => m.type === 'settings/state').length).toBe(0)
+        expect(fake.receivedFromHost.find(m => m.type === 'ui/banner')).toMatchObject({ kind: 'settings' })
+      })
+
+      it('CAP-CHAT-PANEL-117 action/auto-approve-set forwards the choice and re-pushes the grant state', async () => {
+        const applied: Array<{ sessionId: string; enabled: boolean }> = []
+        let granted = false
+        const panel = createPanel({
+          requestPermissionList: async () => ({
+            current: 'workspace-write',
+            options: [{ value: 'workspace-write', name: '工作区写入' }],
+          }),
+          requestApprovalPolicy: async () => 'ask',
+          isAutoApproved: () => granted,
+          requestAutoApproveSet: async (sessionId, enabled) => {
+            applied.push({ sessionId, enabled })
+            granted = enabled
+          },
+        })
+        const fake = new FakeWebviewPort()
+        panel.attach(fake)
+        panel.clearOutboundLog()
+        fake.receivedFromHost.length = 0
+
+        // A malformed flag asks for nothing, so a greedy frame cannot grant by accident.
+        expect(parseWebviewToHostMessage({ type: 'action/auto-approve-set', sessionId: 's', enabled: 'yes' }))
+          .toBeUndefined()
+        expect(parseWebviewToHostMessage({ type: 'action/auto-approve-set', sessionId: 's', enabled: true }))
+          .toEqual({ type: 'action/auto-approve-set', sessionId: 's', enabled: true })
+
+        fake.emitFromWebview({ type: 'action/auto-approve-set', sessionId: 'sess-9', enabled: true })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'permission/state'
+          && m.autoApprove === true), 1_000)
+        expect(applied).toEqual([{ sessionId: 'sess-9', enabled: true }])
+
+        fake.receivedFromHost.length = 0
+        fake.emitFromWebview({ type: 'action/auto-approve-set', sessionId: 'sess-9', enabled: false })
+        await waitFor(() => fake.receivedFromHost.some(m => m.type === 'permission/state'
+          && m.autoApprove === undefined), 1_000)
+        expect(applied).toEqual([
+          { sessionId: 'sess-9', enabled: true },
+          { sessionId: 'sess-9', enabled: false },
+        ])
+      })
     })
   })
 
