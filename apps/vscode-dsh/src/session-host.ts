@@ -5,8 +5,9 @@
  * @module @deepseek-ai/dsh-vscode-dsh/session-host
  */
 
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import {
   DEFAULT_INITIALIZE_TIMEOUT_MS,
@@ -27,6 +28,8 @@ import {
   type BridgeApprovalPolicy,
   type BridgeAttachmentRef,
   type BridgeCommandSummary,
+  type BridgeCredentialState,
+  type BridgeDiscoveredModel,
   type BridgeFrame,
   type BridgeGoalView,
   type BridgePermissionPreset,
@@ -36,11 +39,12 @@ import {
   type BridgeSubagentEntry,
   type IdeBridgeHostConnection,
   type SettingsNamespaceView,
+  type SettingsPathOp,
 } from '@deepseek-ai/dsh-ide-bridge'
 import type { IdeTerminalExecController } from './terminal-exec.ts'
 import type { StartErrorKind } from './auto-start-orchestrator.ts'
 import { buildIdeChildEnv } from './env.ts'
-import { assertNodeExecutable, NodeEnvironmentError, type NodeEnvironmentFailure } from './node-env-guard.ts'
+import { assertNodeExecutable, validateNodeEnvironment, NodeEnvironmentError, type NodeEnvironmentFailure } from './node-env-guard.ts'
 import { DshEntryError, resolveDshEntry, type DshEntryFailure } from './dsh-entry-guard.ts'
 import {
   startErrorKindForFailure,
@@ -394,6 +398,22 @@ export class IdeSessionHost {
     resolve: (namespace: SettingsNamespaceView) => void
     reject: (error: Error) => void
   }>()
+  private readonly pendingSettingsMutate = new Map<string, {
+    resolve: (namespace: SettingsNamespaceView) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingCredentialDescribe = new Map<string, {
+    resolve: (credentials: BridgeCredentialState[]) => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingCredentialWrite = new Map<string, {
+    resolve: () => void
+    reject: (error: Error) => void
+  }>()
+  private readonly pendingModelDiscover = new Map<string, {
+    resolve: (models: BridgeDiscoveredModel[]) => void
+    reject: (error: Error) => void
+  }>()
   private readonly pendingCommandList = new Map<string, {
     resolve: (commands: BridgeCommandSummary[]) => void
     reject: (error: Error) => void
@@ -590,6 +610,17 @@ export class IdeSessionHost {
       nodeExecutable = options.nodeExecutable ?? resolveNodeExecutableSpec(
         options.nodeBinSetting === undefined ? {} : { nodeBinSetting: options.nodeBinSetting },
       )
+      // In Electron hosts, the resolved executable is Electron's own binary run
+      // as Node via ELECTRON_RUN_AS_NODE. Even when the Electron Node passes the
+      // API pre-flight, native addons (node-addon-require-builtin) may reject its
+      // runtime fingerprint at boot. Prefer a real system Node on PATH; fall back
+      // to Electron only when no compatible system Node is available.
+      if (nodeExecutable.electronRunAsNode) {
+        const pathNode = await this.findCompatibleNodeOnPath()
+        if (pathNode !== undefined) {
+          nodeExecutable = pathNode
+        }
+      }
       this.nodeExecutable = nodeExecutable
       stage = 'preflight'
       await assertNodeExecutable(nodeExecutable)
@@ -614,6 +645,11 @@ export class IdeSessionHost {
         profile: 'ide',
         env,
         nodeExecutable,
+        // The runtime process starts in the workspace the IDE opened, not in the
+        // Extension Host's own launch directory. Consumers that read the process
+        // cwd as "the workspace" (notably path-guard) then see the project the
+        // user is working in.
+        processCwd: options.cwd,
         ...options.dshHome === undefined ? {} : { dshHome: options.dshHome },
         dshBin: entry.entry.path,
         initializeTimeoutMs,
@@ -1312,6 +1348,25 @@ export class IdeSessionHost {
   }
 
   /**
+   * Answer this session's approvals automatically from now on, because the user
+   * granted one call and asked not to be asked again in that session. The grant
+   * lives in this window: a reloaded window presents approvals again.
+   * @param sessionId - Tab-bound SDK session identity.
+   */
+  rememberAutoApproval(sessionId: string): void {
+    this.interactions.rememberAutoApproval(sessionId)
+  }
+
+  /**
+   * Whether this Host answers one session's approvals without presenting them.
+   * @param sessionId - Tab-bound SDK session identity.
+   * @returns whether the user asked not to be asked again in that session.
+   */
+  hasAutoApproval(sessionId: string): boolean {
+    return this.interactions.hasAutoApproval(sessionId)
+  }
+
+  /**
    * Read one session's effective approval policy via Host bridge `approval/policy`.
    * @param sessionId - Tab-bound SDK session identity.
    * @returns the policy every ask for this session resolves under right now.
@@ -1376,7 +1431,11 @@ export class IdeSessionHost {
       if (sent === 0) {
         throw new Error('no ide-bridge runtime connection to receive approval/policy/set')
       }
-      return await response
+      const applied = await response
+      // An explicit policy write is a fresh decision about who answers this
+      // session's approvals, so a "do not ask me again" grant must not outlive it.
+      this.interactions.forgetAutoApproval(sessionId)
+      return applied
     } finally {
       clearTimeout(timer)
       this.pendingApprovalPolicySet.delete(id)
@@ -1396,6 +1455,9 @@ export class IdeSessionHost {
     })
     if (!result.ok) throw new Error(result.error)
     if (!('preset' in result)) throw new Error('unexpected permission/list response for select')
+    // A preset switch is a fresh decision about what this session may do without
+    // asking, so a "do not ask me again" grant must not survive it.
+    this.interactions.forgetAutoApproval(sessionId)
     return result.preset
   }
 
@@ -1766,6 +1828,185 @@ export class IdeSessionHost {
   }
 
   /**
+   * Apply path-addressed edits to one settings namespace via Host bridge `settings/mutate`.
+   * One call is one write, so the provider editor's `set`/`unset` batch is atomic.
+   * @param ns - registered namespace key.
+   * @param ops - ordered edits against the namespace's user section.
+   * @param expectedRevision - revision the caller read; omitted writes unconditionally.
+   * @returns the namespace's redacted view after the write.
+   */
+  async mutateSetting(
+    ns: string,
+    ops: readonly SettingsPathOp[],
+    expectedRevision?: number,
+  ): Promise<SettingsNamespaceView> {
+    const bridge = this.requireBridge('settings/mutate')
+    const id = randomUUID()
+    const response = new Promise<SettingsNamespaceView>((resolve, reject) => {
+      this.pendingSettingsMutate.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingSettingsMutate.get(id)
+      if (pending === undefined) return
+      this.pendingSettingsMutate.delete(id)
+      pending.reject(new Error(`settings/mutate timed out after ${this.settingsTimeoutMs}ms`))
+    }, this.settingsTimeoutMs)
+    try {
+      const sent = bridge.broadcast({
+        kind: 'settings/mutate',
+        id,
+        ns,
+        ops: [...ops],
+        ...expectedRevision === undefined ? {} : { expectedRevision },
+      })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive settings/mutate')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingSettingsMutate.delete(id)
+    }
+  }
+
+  /**
+   * Read presence and writability of credential references via Host bridge
+   * `credential/describe`. Values never ride back.
+   * @param refs - references to describe.
+   * @returns one state per reference, in request order.
+   */
+  async describeCredentials(refs: readonly string[]): Promise<BridgeCredentialState[]> {
+    const bridge = this.requireBridge('credential/describe')
+    const id = randomUUID()
+    const response = new Promise<BridgeCredentialState[]>((resolve, reject) => {
+      this.pendingCredentialDescribe.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingCredentialDescribe.get(id)
+      if (pending === undefined) return
+      this.pendingCredentialDescribe.delete(id)
+      pending.reject(new Error(`credential/describe timed out after ${this.settingsTimeoutMs}ms`))
+    }, this.settingsTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ kind: 'credential/describe', id, refs: [...refs] })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive credential/describe')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingCredentialDescribe.delete(id)
+    }
+  }
+
+  /**
+   * Store one credential value via Host bridge `credential/set`. The value is
+   * write-only: no response ever carries it back.
+   * @param ref - reference to write.
+   * @param value - secret value to store.
+   */
+  async setCredential(ref: string, value: string): Promise<void> {
+    await this.credentialWrite('credential/set', { kind: 'credential/set', ref, value })
+  }
+
+  /**
+   * Remove one credential reference via Host bridge `credential/unset`; an absent
+   * reference is a no-op.
+   * @param ref - reference to remove.
+   */
+  async unsetCredential(ref: string): Promise<void> {
+    await this.credentialWrite('credential/unset', { kind: 'credential/unset', ref })
+  }
+
+  /**
+   * Interrogate one provider endpoint for the models it advertises via Host
+   * bridge `model/discover`. The request describes a draft, so its one-shot
+   * `apiKey` is never stored.
+   * @param request - settings namespace plus the draft endpoint it interrogates.
+   * @returns advertised models in endpoint order.
+   */
+  async discoverModels(request: {
+    settingsNs: string
+    provider?: string
+    baseURL?: string
+    api?: string
+    apiKey?: string
+  }): Promise<BridgeDiscoveredModel[]> {
+    const bridge = this.requireBridge('model/discover')
+    const id = randomUUID()
+    const response = new Promise<BridgeDiscoveredModel[]>((resolve, reject) => {
+      this.pendingModelDiscover.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingModelDiscover.get(id)
+      if (pending === undefined) return
+      this.pendingModelDiscover.delete(id)
+      pending.reject(new Error(`model/discover timed out after ${this.settingsTimeoutMs}ms`))
+    }, this.settingsTimeoutMs)
+    try {
+      const sent = bridge.broadcast({
+        kind: 'model/discover',
+        id,
+        settingsNs: request.settingsNs,
+        ...request.provider === undefined ? {} : { provider: request.provider },
+        ...request.baseURL === undefined ? {} : { baseURL: request.baseURL },
+        ...request.api === undefined ? {} : { api: request.api },
+        ...request.apiKey === undefined ? {} : { apiKey: request.apiKey },
+      })
+      if (sent === 0) {
+        throw new Error('no ide-bridge runtime connection to receive model/discover')
+      }
+      return await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingModelDiscover.delete(id)
+    }
+  }
+
+  /** Shared one-way credential write: `credential/set` and `credential/unset` differ only in payload. */
+  private async credentialWrite(
+    label: string,
+    frame: { kind: 'credential/set'; ref: string; value: string } | { kind: 'credential/unset'; ref: string },
+  ): Promise<void> {
+    const bridge = this.requireBridge(label)
+    const id = randomUUID()
+    const response = new Promise<void>((resolve, reject) => {
+      this.pendingCredentialWrite.set(id, { resolve, reject })
+    })
+    const timer = setTimeout(() => {
+      const pending = this.pendingCredentialWrite.get(id)
+      if (pending === undefined) return
+      this.pendingCredentialWrite.delete(id)
+      pending.reject(new Error(`${label} timed out after ${this.settingsTimeoutMs}ms`))
+    }, this.settingsTimeoutMs)
+    try {
+      const sent = bridge.broadcast({ ...frame, id })
+      if (sent === 0) {
+        throw new Error(`no ide-bridge runtime connection to receive ${label}`)
+      }
+      await response
+    } finally {
+      clearTimeout(timer)
+      this.pendingCredentialWrite.delete(id)
+    }
+  }
+
+  /**
+   * The connected bridge, or a fail-closed error naming the RPC that needed it.
+   * @param label - bridge RPC the caller was about to send.
+   */
+  private requireBridge(label: string): IdeBridgeHostServer {
+    const bridge = this.bridge
+    if (this.status !== 'connected' || bridge === undefined) {
+      throw new Error('IdeSessionHost is not connected')
+    }
+    if (!this.bridgeHello) {
+      throw new Error(`ide-bridge runtime is not connected; cannot call ${label}`)
+    }
+    return bridge
+  }
+
+  /**
    * Ordered shutdown: protocol close, then bridge (AC-3). Fail-closes pending UI (AC-30).
    */
   async shutdown(): Promise<void> {
@@ -1960,6 +2201,22 @@ export class IdeSessionHost {
     }
     for (const [id, pending] of this.pendingSettingsUpdate) {
       this.pendingSettingsUpdate.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingSettingsMutate) {
+      this.pendingSettingsMutate.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingCredentialDescribe) {
+      this.pendingCredentialDescribe.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingCredentialWrite) {
+      this.pendingCredentialWrite.delete(id)
+      pending.reject(new Error(reason))
+    }
+    for (const [id, pending] of this.pendingModelDiscover) {
+      this.pendingModelDiscover.delete(id)
       pending.reject(new Error(reason))
     }
     this.notifyError(this.errorMessage)
@@ -2367,6 +2624,50 @@ export class IdeSessionHost {
       pending.reject(new Error(frame.error))
       return
     }
+    if (frame.kind === 'settings/mutate/response') {
+      const pending = this.pendingSettingsMutate.get(frame.id)
+      if (pending === undefined) return
+      this.pendingSettingsMutate.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.namespace)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'credential/describe/response') {
+      const pending = this.pendingCredentialDescribe.get(frame.id)
+      if (pending === undefined) return
+      this.pendingCredentialDescribe.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.credentials)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'credential/set/response' || frame.kind === 'credential/unset/response') {
+      const pending = this.pendingCredentialWrite.get(frame.id)
+      if (pending === undefined) return
+      this.pendingCredentialWrite.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve()
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
+    if (frame.kind === 'model/discover/response') {
+      const pending = this.pendingModelDiscover.get(frame.id)
+      if (pending === undefined) return
+      this.pendingModelDiscover.delete(frame.id)
+      if (frame.ok) {
+        pending.resolve(frame.models)
+        return
+      }
+      pending.reject(new Error(frame.error))
+      return
+    }
     if (frame.kind === 'approval/expired' || frame.kind === 'user-questions/expired') {
       // The runtime gave up on this id: retire the wait so a card on screen stops
       // accepting an answer that could no longer reach the call.
@@ -2461,6 +2762,29 @@ export class IdeSessionHost {
       throw new Error('IdeSessionHost has no resolved Node executable; a start never reached its pre-flight')
     }
     return resolved
+  }
+
+  /**
+   * Search PATH for a `node` executable that passes the environment pre-flight.
+   * Skips candidates that lack required APIs (zstd, withResolvers). Returns the
+   * first one that passes, or `undefined` when none does.
+   */
+  private async findCompatibleNodeOnPath(): Promise<ResolvedNodeExecutable | undefined> {
+    const pathValue = process.env.PATH ?? ''
+    const suffixes = process.platform === 'win32'
+      ? ['', ...(process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(s => s !== '').map(s => s.toLowerCase())]
+      : ['']
+    for (const dir of pathValue.split(delimiter)) {
+      if (dir === '') continue
+      for (const suffix of suffixes) {
+        const candidate = join(dir, `node${suffix}`)
+        if (!existsSync(candidate)) continue
+        const spec: ResolvedNodeExecutable = { path: candidate, source: 'process-exec-path', electronRunAsNode: false }
+        const validation = await validateNodeEnvironment(spec)
+        if (validation.ok) return spec
+      }
+    }
+    return undefined
   }
 
   private async shutdownInternal(reason: string): Promise<void> {
@@ -2564,6 +2888,22 @@ export class IdeSessionHost {
     for (const [id, pending] of this.pendingSettingsUpdate) {
       this.pendingSettingsUpdate.delete(id)
       pending.reject(new Error(`${reason} during settings/update`))
+    }
+    for (const [id, pending] of this.pendingSettingsMutate) {
+      this.pendingSettingsMutate.delete(id)
+      pending.reject(new Error(`${reason} during settings/mutate`))
+    }
+    for (const [id, pending] of this.pendingCredentialDescribe) {
+      this.pendingCredentialDescribe.delete(id)
+      pending.reject(new Error(`${reason} during credential/describe`))
+    }
+    for (const [id, pending] of this.pendingCredentialWrite) {
+      this.pendingCredentialWrite.delete(id)
+      pending.reject(new Error(`${reason} during a credential write`))
+    }
+    for (const [id, pending] of this.pendingModelDiscover) {
+      this.pendingModelDiscover.delete(id)
+      pending.reject(new Error(`${reason} during model/discover`))
     }
     this.transportWatch?.()
     this.transportWatch = undefined
