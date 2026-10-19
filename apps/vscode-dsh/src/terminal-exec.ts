@@ -3,9 +3,15 @@
  * `bash` command to this controller, which writes it into a real integrated
  * terminal, streams the terminal's output back, and reports the exit code the
  * shell reported. Terminals stay visible to the user for the whole run.
+ *
+ * Completion is read from the terminal's own output: every command line ends by
+ * printing a per-execution status sentinel, so an execution settles even when
+ * the shell integration never delivers its end event. The end event and the
+ * drained output stream stay as the fallbacks for a sentinel that never prints.
  * @module @deepseek-ai/dsh-vscode-dsh/terminal-exec
  */
 
+import { randomUUID } from 'node:crypto'
 import type { BridgeFrame } from '@deepseek-ai/dsh-ide-bridge'
 
 /** How long one terminal command may produce terminal output before a batch is sent. */
@@ -29,17 +35,45 @@ const DEDICATED_TERMINAL_LIMIT = 6
 /** One terminal name component; a longer session id or command is truncated to it. */
 const NAME_SNIPPET = 40
 
+/** Literal the status sentinel prints before its marker. */
+const SENTINEL_PREFIX = '__DSH_DONE_'
+
+/** Literal the status sentinel prints after the status digits. */
+const SENTINEL_END = '__'
+
+/** ANSI escape sequences (CSI, OSC, single-character escapes) that carry no visible text. */
+const ANSI_ESCAPE = /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\)|[@-Z\\-_])/gu
+
+/**
+ * Strip ANSI/OSC escape sequences from terminal output so sentinel parsing and
+ * echo stripping operate on visible text. VS Code shell integration injects
+ * OSC 633 markers around command output, and those sequences can split or wrap
+ * the status sentinel, preventing detection on the raw stream.
+ * @param text - raw terminal output chunk.
+ * @returns the chunk with escape sequences removed.
+ */
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_ESCAPE, '')
+}
+
 /**
  * Build the command line for one runtime command. The working directory travels
  * as an explicit `cd` instead of `executeCommand`'s own `cwd` argument: VS Code
  * writes that argument into the terminal as a character-separated path, and the
  * shell then reads every character as another argument to the command.
+ *
+ * The line closes by printing `<prefix><marker>:<status><end>`, so the
+ * controller reads completion and the exit code from terminal output that the
+ * shell itself produced. The marker travels as a quoted argument, so the
+ * terminal's echo of this line never contains that literal sentinel.
  * @param command - the shell source the runtime asked to run.
  * @param cwd - the directory the command must start in.
- * @returns one command line that enters the directory before running.
+ * @param marker - per-execution sentinel marker (alphanumeric).
+ * @returns one command line that enters the directory, runs the command, and reports its status.
  */
-function commandLineIn(command: string, cwd: string): string {
-  return `cd ${quoteForShell(cwd)} && ${command}`
+function commandLineIn(command: string, cwd: string, marker: string): string {
+  const sentinel = `printf '\\n%s%s:%s%s\\n' '${SENTINEL_PREFIX}' '${marker}' "$?" '${SENTINEL_END}'`
+  return `cd ${quoteForShell(cwd)} && { ${command}\n}; ${sentinel}`
 }
 
 /**
@@ -50,6 +84,23 @@ function commandLineIn(command: string, cwd: string): string {
  */
 function quoteForShell(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+/**
+ * Drop the command line a terminal echoes ahead of its output.
+ * @param text - output received so far for one execution.
+ * @param line - the exact command line handed to the terminal.
+ * @returns the text without that leading echo, or `undefined` while `text` may
+ *   still be an incomplete echo and must be held back.
+ */
+function stripLeadingEcho(text: string, line: string): string | undefined {
+  if (text.startsWith(line)) {
+    const rest = text.slice(line.length)
+    if (rest.startsWith('\r\n')) return rest.slice(2)
+    if (rest.startsWith('\n') || rest.startsWith('\r')) return rest.slice(1)
+    return rest
+  }
+  return line.startsWith(text) ? undefined : text
 }
 
 /** The terminal surface this controller drives; the real `vscode.Terminal` satisfies it. */
@@ -85,13 +136,28 @@ export interface TerminalExecWindow {
     listener: (event: { terminal: TerminalExecTerminal; shellIntegration: TerminalExecShellIntegration }) => void,
   ): { dispose(): void }
   onDidEndTerminalShellExecution(
-    listener: (event: { execution: TerminalExecExecution; exitCode: number | undefined }) => void,
+    listener: (event: {
+      terminal: TerminalExecTerminal
+      execution: TerminalExecExecution
+      exitCode: number | undefined
+    }) => void,
   ): { dispose(): void }
 }
 
-/** One in-flight execution: its terminal plus the interrupt grace timer, if any. */
+/** One in-flight execution: its terminal, its single settlement, and the interrupt grace timer. */
 interface RunningTerminalExec {
   readonly terminal: TerminalExecTerminal
+  /**
+   * Send this execution's single exit frame; later calls are ignored.
+   * @param exitCode - the shell's status, or `null` when none was reported.
+   */
+  settle(exitCode: number | null): void
+  /**
+   * Fail this execution instead of settling it, so the runtime reports the
+   * cause to the model rather than reading a silent truncation as success.
+   * @param error - the failure the runtime reads.
+   */
+  fail(error: string): void
   /** Disposes the terminal when an interrupt did not stop the command in time. */
   graceTimer?: ReturnType<typeof setTimeout>
 }
@@ -113,7 +179,7 @@ export class IdeTerminalExecController {
     (terminal: TerminalExecTerminal, integration: TerminalExecShellIntegration) => void
   >()
   private readonly endListeners = new Set<
-    (execution: TerminalExecExecution, exitCode: number | undefined) => void
+    (terminal: TerminalExecTerminal, execution: TerminalExecExecution, exitCode: number | undefined) => void
   >()
   private integrationSubscription: { dispose(): void } | undefined
   private endSubscription: { dispose(): void } | undefined
@@ -144,11 +210,11 @@ export class IdeTerminalExecController {
 
   /**
    * Stop tracking every execution after its runtime connection dropped. The
-   * runtime fails its own waits closed on the same edge, so this controller only
-   * releases bookkeeping; terminals stay for the user to read.
+   * runtime fails its own waits closed on the same edge, so each execution is
+   * settled only so no waiter is left holding a terminal nobody drives.
    */
   abandonAll(): void {
-    for (const running of this.running.values()) this.clearGrace(running)
+    for (const running of [...this.running.values()]) running.settle(null)
     this.running.clear()
   }
 
@@ -172,7 +238,14 @@ export class IdeTerminalExecController {
     frame: Extract<BridgeFrame, { kind: 'terminal/exec' }>,
     send: TerminalExecSend,
   ): void {
-    if (this.disposed) return
+    if (this.disposed) {
+      send({
+        kind: 'terminal/exec/refused',
+        id: frame.id,
+        error: 'the IDE terminal controller has shut down, so this command cannot run',
+      })
+      return
+    }
     const terminal = frame.dedicated ? this.dedicatedTerminal(frame.command) : this.sharedTerminal(frame)
     // Foreground commands queue behind the session's previous one: an
     // interactive shell runs one command at a time, and the queue keeps execution
@@ -190,20 +263,40 @@ export class IdeTerminalExecController {
   ): Promise<void> {
     const integration = await this.awaitIntegration(terminal)
     if (integration === undefined) {
-      if (!this.disposed) {
-        send({
-          kind: 'terminal/exec/refused',
-          id: frame.id,
-          error: 'this VS Code terminal has no shell integration, so its output and exit code cannot be read',
-        })
-      }
+      send({
+        kind: 'terminal/exec/refused',
+        id: frame.id,
+        error: 'this VS Code terminal has no shell integration, so its output and exit code cannot be read',
+      })
       return
     }
     terminal.show(true)
-    let execution: TerminalExecExecution
+    const marker = randomUUID().replaceAll('-', '')
+    const line = commandLineIn(frame.command, frame.cwd, marker)
+
+    // The end listener is registered before the command starts: an end event
+    // that lands between starting the command and waiting on it would otherwise
+    // be lost and leave the execution settling on its sentinel alone.
+    let execution: TerminalExecExecution | undefined
+    const endListener = (
+      candidate: TerminalExecTerminal,
+      ended: TerminalExecExecution,
+      exitCode: number | undefined,
+    ): void => {
+      if (candidate !== terminal) return
+      if (execution !== undefined && ended !== execution) return
+      releaseEnd()
+      endedWith.resolve(exitCode ?? null)
+    }
+    const releaseEnd = (): void => { this.endListeners.delete(endListener) }
+    const endedWith = Promise.withResolvers<number | null>()
+    this.endListeners.add(endListener)
+    this.ensureEndSubscription()
+
     try {
-      execution = integration.executeCommand(commandLineIn(frame.command, frame.cwd))
+      execution = integration.executeCommand(line)
     } catch (error) {
+      releaseEnd()
       send({
         kind: 'terminal/exec/refused',
         id: frame.id,
@@ -212,71 +305,159 @@ export class IdeTerminalExecController {
       return
     }
 
-    const entry: RunningTerminalExec = { terminal }
+    const entry: RunningTerminalExec = {
+      terminal,
+      settle: (exitCode) => {
+        if (!close()) return
+        send({ kind: 'terminal/exec/exit', id: frame.id, exitCode })
+      },
+      fail: (error) => {
+        if (!close()) return
+        send({ kind: 'terminal/exec/refused', id: frame.id, error })
+      },
+    }
+    const close = (): boolean => {
+      if (settled) return false
+      settled = true
+      releaseEnd()
+      this.running.delete(frame.id)
+      this.clearGrace(entry)
+      return true
+    }
+    let settled = false
     this.running.set(frame.id, entry)
-    const read = this.pumpOutput(frame.id, execution, send)
-    send({ kind: 'terminal/exec/started', id: frame.id })
 
-    const exitCode = await this.awaitEnd(execution, read)
-    await read
-    this.running.delete(frame.id)
-    this.clearGrace(entry)
-    send({ kind: 'terminal/exec/exit', id: frame.id, exitCode })
+    // An AbortController lets the end event or a dispose stop pumpOutput's
+    // for-await loop: VS Code shell integration may never close execution.read()
+    // on its own, and the sentinel printf may land outside the command's output
+    // region (inside the prompt region), so pumpOutput cannot rely on either
+    // signal arriving through the stream.
+    const pumpAbort = new AbortController()
+    const read = this.pumpOutput(frame.id, execution, send, line, marker, pumpAbort.signal)
+    send({ kind: 'terminal/exec/started', id: frame.id })
+    try {
+      entry.settle(await this.awaitEnd(endedWith.promise, read, pumpAbort))
+    } catch (error) {
+      pumpAbort.abort()
+      entry.fail(`the terminal stopped reporting this command: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
-  /** Stream one execution's output to the runtime in bounded batches. */
+  /**
+   * Stream one execution's output to the runtime in bounded batches, stopping at
+   * the status sentinel that command line prints, or when the abort signal fires
+   * (the shell execution end event arrived through a different path).
+   * @param id - the executing frame's id.
+   * @param execution - the execution whose output is read.
+   * @param send - sink for the output frames.
+   * @param line - the exact command line handed to the terminal, for echo removal.
+   * @param marker - this execution's sentinel marker.
+   * @param signal - abort signal that stops the output loop when the end event arrives.
+   * @returns the sentinel's exit code, or `null` when the stream ended without one.
+   */
   private async pumpOutput(
     id: string,
     execution: TerminalExecExecution,
     send: TerminalExecSend,
-  ): Promise<void> {
+    line: string,
+    marker: string,
+    signal: AbortSignal,
+  ): Promise<number | null> {
+    const prefix = `${SENTINEL_PREFIX}${marker}:`
     let batch = ''
     let timer: ReturnType<typeof setTimeout> | undefined
+    let held = ''
+    let echoPending = true
+    let status: number | null = null
     const flush = (): void => {
       if (batch === '') return
       send({ kind: 'terminal/exec/output', id, data: batch })
       batch = ''
     }
+    const push = (text: string): void => {
+      if (text === '') return
+      batch += text
+      if (batch.length >= OUTPUT_FLUSH_CHARS) {
+        if (timer !== undefined) clearTimeout(timer)
+        timer = undefined
+        flush()
+        return
+      }
+      timer ??= setTimeout(() => {
+        timer = undefined
+        flush()
+      }, OUTPUT_FLUSH_MS)
+    }
     try {
-      for await (const chunk of execution.read()) {
-        if (this.disposed) return
-        batch += chunk
-        if (batch.length >= OUTPUT_FLUSH_CHARS) {
-          if (timer !== undefined) clearTimeout(timer)
-          timer = undefined
-          flush()
-          continue
+      for await (const raw of execution.read()) {
+        if (this.disposed || signal.aborted) break
+        const chunk = stripAnsi(raw)
+        held += chunk
+        if (echoPending) {
+          const stripped = stripLeadingEcho(held, line)
+          if (stripped === undefined) continue
+          held = stripped
+          echoPending = false
         }
-        timer ??= setTimeout(() => {
-          timer = undefined
-          flush()
-        }, OUTPUT_FLUSH_MS)
+        // Only the last `prefix.length - 1` characters can begin a sentinel
+        // split across chunks; everything before them is command output.
+        let holdFrom = Math.max(0, held.length - (prefix.length - 1))
+        const at = held.indexOf(prefix)
+        if (at >= 0) {
+          const rest = held.slice(at + prefix.length)
+          const digits = /^\d+/.exec(rest)?.[0]
+          if (digits !== undefined && rest.startsWith(SENTINEL_END, digits.length)) {
+            push(held.slice(0, at))
+            status = Number(digits)
+            held = ''
+            break
+          }
+          // A status line still arriving: nothing past its start may go out.
+          holdFrom = at
+        }
+        if (holdFrom > 0) {
+          push(held.slice(0, holdFrom))
+          held = held.slice(holdFrom)
+        }
       }
     } finally {
       if (timer !== undefined) clearTimeout(timer)
+      // A stream that ended without its sentinel still forwards what arrived.
+      if (status === null && held !== '') push(held)
       flush()
     }
+    return status
   }
 
-  /** Wait for the exit code, bounded by the drained stream plus a short lag. */
-  private async awaitEnd(execution: TerminalExecExecution, read: Promise<void>): Promise<number | null> {
-    const ended = new Promise<number | null>((resolve) => {
-      const listener = (candidate: TerminalExecExecution, exitCode: number | undefined): void => {
-        if (candidate !== execution) return
-        this.endListeners.delete(listener)
-        resolve(exitCode ?? null)
-      }
-      this.endListeners.add(listener)
-    })
-    this.ensureEndSubscription()
-    // Shell integration reports the end event; a terminal whose integration lost
-    // the marker still ends the output stream, so the drained stream plus one lag
-    // window settles the execution with an unreported exit code.
-    const lagged = read.then(async () => {
+  /**
+   * Wait for the exit code: the sentinel when it printed, the end event when it
+   * arrived first, and the drained stream plus one lag window otherwise. When the
+   * end event wins the race, the pump abort signal is fired so `pumpOutput` can
+   * break out of a stream that VS Code shell integration never closes.
+   * @param ended - resolution carrying the end event's exit code.
+   * @param read - pending output pump, resolving to the sentinel's exit code or `null`.
+   * @param pumpAbort - controller whose signal stops the output loop.
+   * @returns the exit code, or `null` when the terminal never reported one.
+   */
+  private async awaitEnd(
+    ended: Promise<number | null>,
+    read: Promise<number | null>,
+    pumpAbort: AbortController,
+  ): Promise<number | null> {
+    // A sentinel already carries the status; a stream that drained without one
+    // gives the end event one lag window to arrive with the real code.
+    const lagged = read.then(async (status): Promise<number | null> => {
+      if (status !== null) return status
       await new Promise((resolve) => { setTimeout(resolve, EXIT_LAG_MS) })
-      return null as number | null
+      return null
     })
-    return await Promise.race([ended, lagged])
+    const endedCode = ended.then((code): number | null => {
+      // The end event arrived: stop the pump so it does not block on a stream
+      // that shell integration may never close.
+      pumpAbort.abort()
+      return code
+    })
+    return await Promise.race([endedCode, lagged])
   }
 
   /** Interrupt one running execution; a shell that ignores the key loses its terminal. */
@@ -285,7 +466,10 @@ export class IdeTerminalExecController {
     if (running === undefined) return
     running.terminal.sendText('\u0003', false)
     running.graceTimer ??= setTimeout(() => {
+      // A shell interrupted at the prompt never prints its status sentinel, so
+      // the grace expiry is that execution's last settlement point.
       running.terminal.dispose()
+      running.settle(null)
     }, KILL_GRACE_MS)
   }
 
@@ -332,7 +516,7 @@ export class IdeTerminalExecController {
   private ensureEndSubscription(): void {
     if (this.endSubscription !== undefined) return
     this.endSubscription = this.window.onDidEndTerminalShellExecution((event) => {
-      for (const listener of [...this.endListeners]) listener(event.execution, event.exitCode)
+      for (const listener of [...this.endListeners]) listener(event.terminal, event.execution, event.exitCode)
     })
   }
 
