@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Use this package to keep file-touching tool calls inside the workspace unless the user approves otherwise. One `tools/pre-execute` listener resolves the path arguments it recognizes against the workspace root and lets a call through when every resolved path sits inside that root or `Config.allowedPaths`; any path outside becomes an approval prompt naming the tool and the first offending path. The guard asks rather than blocks, checks only a fixed table of tool argument names, and fixes the workspace root when the plugin loads. The `packages/bundle/ide` profile mounts it with an empty whitelist.
+Use this package to keep file-touching tool calls inside the workspace unless the user approves otherwise. One `tools/pre-execute` listener resolves the path arguments it recognizes and lets a call through when every path sits inside the workspace root or `Config.allowedPaths`; any path outside becomes an approval prompt naming the tool and the first offending path. It asks rather than blocks, checks a fixed table of tool argument names, and reads the workspace root from the calling session's cwd, falling back to the process working directory only for a call without one. The `packages/bundle/ide` profile mounts it with an empty whitelist.
 
 ## Table of Contents
 
@@ -65,11 +65,11 @@ The guard is built on four commitments:
 - **Ask, never deny.** The listener either delegates with `next()` or returns `ask`; denial, cancellation, and approval resolution stay with the tools runtime.
 - **A fixed table of known arguments.** `TOOL_PATH_ARGS` names the path arguments of each recognized tool, so a tool the table does not list contributes no paths instead of guessed ones.
 - **Shell text out of scope.** `bash` and `pwsh` contribute only `workdir` and `cwd`; the command string is not parsed because the paths inside it cannot be read reliably.
-- **Two lifetimes.** The workspace root is captured once from `process.cwd()` when the plugin loads, while `allowedPaths` is read through `Volatile` on every call, so a deployment that rewrites the whitelist takes effect on the next tool call rather than at load.
+- **Per-call inputs.** The workspace root comes from the calling session's cwd and `allowedPaths` is read through `Volatile`, so neither is fixed at load: a rewritten whitelist and a different calling session take effect on the next tool call.
 
 ### How a call is classified
 
-One `tools/pre-execute` listener sees every dispatched call. It takes `exec.arguments` when that value is a plain object and otherwise no arguments at all, then selects path arguments by tool name: the `TOOL_PATH_ARGS` entry for a known tool — `file_path` for `read`, `read_image`, `write`, `edit`, and `lsp`; `path` for `str_replace_editor`, `glob`, and `grep` — or `workdir` and `cwd` for `bash` and `pwsh`. Only non-empty strings count. Each path is resolved against the captured workspace root, so a relative argument resolves there rather than against a shell call's own `workdir`, and an absolute argument stays as written. The listener reads the current `allowedPaths` snapshot and keeps every resolved path that is neither the workspace root nor a descendant of it, comparing normalized strings where inside means equality or a `base` prefix followed by the platform path separator. With nothing left outside it returns `next()`; otherwise it returns `ask` with the reason described in [Use this package](#use-this-package).
+One `tools/pre-execute` listener sees every dispatched call. It takes `exec.arguments` when that value is a plain object and otherwise no arguments at all, then selects path arguments by tool name: the `TOOL_PATH_ARGS` entry for a known tool — `file_path` for `read`, `read_image`, `write`, `edit`, and `lsp`; `path` for `str_replace_editor`, `glob`, and `grep` — or `workdir` and `cwd` for `bash` and `pwsh`. Only non-empty strings count. The call's workspace root is the calling agent's session cwd, or `process.cwd()` when that cwd is absent, and each path is resolved against it, so a relative argument resolves there rather than against a shell call's own `workdir`, and an absolute argument stays as written. The listener reads the current `allowedPaths` snapshot and keeps every resolved path that is neither that workspace root nor a descendant of it, comparing normalized strings where inside means equality or a `base` prefix followed by the platform path separator. With nothing left outside it returns `next()`; otherwise it returns `ask` with the reason described in [Use this package](#use-this-package).
 
 ### Source map
 
@@ -117,7 +117,7 @@ Append-only; newly visible content follows the reusable request prefix and does 
 
 These limits define when the guard is a poor fit. They are current package constraints, not a task backlog.
 
-- **One workspace root for the whole process** — the root is `process.cwd()` captured when the plugin loads, so it is not per-session or per-agent and does not follow a later working-directory change; a session that should treat another directory as its workspace needs that directory in `allowedPaths` or a process started there.
+- **The workspace root follows the calling session** — a call is judged against the calling session's cwd, so a session that should treat another directory as its workspace needs that directory as its session cwd or in `allowedPaths`; only a call without a session cwd falls back to the runtime process's working directory, which may not be the project folder.
 - **Shell command text is never parsed** — `bash` and `pwsh` contribute only their `workdir`/`cwd` arguments, so a path written inside the command string is unchecked, and such a call is caught only when its working directory is outside the workspace root.
 - **Only the listed tool names are checked** — the guard reads path arguments from `TOOL_PATH_ARGS`, so any other tool's paths, a known tool mounted under a different name, and a known tool's newly added path argument are all unchecked.
 - **Containment is string containment** — paths are compared after `node:path` normalization, so a symlink inside the workspace that points outside is allowed.

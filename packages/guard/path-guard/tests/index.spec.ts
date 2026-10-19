@@ -7,17 +7,24 @@
  * approval text without an approval channel in the composition.
  */
 
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import ToolRuntime, { defineContentToolFixture, type PreToolDecision } from '@deepseek-ai/dsh-tools'
+import ToolRuntime, { defineContentToolFixture, type PreToolDecision, type ToolExecutionInput } from '@deepseek-ai/dsh-tools'
 import * as pathGuard from '@deepseek-ai/dsh-path-guard'
 
 const testSignal = new AbortController().signal
 
 /** A path outside the workspace root, used as the denied case in every form. */
 const OUTSIDE = '/etc/hosts'
+
+/** A session workspace deliberately unrelated to the runtime process's own cwd. */
+const SESSION_CWD = resolve('/virtual/session-workspace')
+
+/** `../elsewhere` resolved against {@link SESSION_CWD}: outside both it and every whitelist. */
+const OUTSIDE_SESSION = resolve(SESSION_CWD, '..', 'elsewhere')
 
 /** A tool that echoes the path argument the guard knows how to inspect. */
 function pathTool(name: string) {
@@ -29,6 +36,17 @@ function pathTool(name: string) {
       return Promise.resolve([{ type: 'text' as const, text: `ran:${JSON.stringify(args)}` }])
     },
   })
+}
+
+/**
+ * The calling agent as the guard observes it: only the session cwd it reads is
+ * present, so a case pins the workspace root without the agent runtime. An
+ * omitted cwd stands for a session header without one.
+ * @param cwd - session cwd to expose, including the empty string.
+ * @returns the agent value one tool call carries.
+ */
+function callerIn(cwd?: string): ToolExecutionInput['agent'] {
+  return { session: { header: cwd === undefined ? {} : { cwd } } } as never
 }
 
 /** Mount the registry, a decision recorder, and the guard under test. */
@@ -46,9 +64,15 @@ async function setup(allowedPaths: string[] = []) {
   return { ctx, decisions }
 }
 
-/** Drive one tool call to completion through the real registry. */
-function run(ctx: Context, name: string, args: unknown) {
-  return ctx.tools.execute({ callId: ToolCallId('c1'), name, arguments: args, signal: testSignal })
+/** Drive one tool call to completion through the real registry, optionally as a session-bound caller. */
+function run(ctx: Context, name: string, args: unknown, agent?: ToolExecutionInput['agent']) {
+  return ctx.tools.execute({
+    callId: ToolCallId('c1'),
+    name,
+    arguments: args,
+    ...agent === undefined ? {} : { agent },
+    signal: testSignal,
+  })
 }
 
 describe('path-guard namespace', () => {
@@ -112,6 +136,49 @@ describe('path-guard path arguments', () => {
     expect((await run(ctx, 'read', { file_path: 42 })).isError).toBe(false)
     expect((await run(ctx, 'read', { file_path: '' })).isError).toBe(false)
     expect((await run(ctx, 'read', {})).isError).toBe(false)
+  })
+})
+
+describe('path-guard session workspace root', () => {
+  it('resolves a relative path inside the session cwd when process.cwd() is elsewhere', async () => {
+    const { ctx, decisions } = await setup()
+    ctx.tools.register(pathTool('read'))
+    const result = await run(ctx, 'read', { file_path: 'src/index.ts' }, callerIn(SESSION_CWD))
+    expect(result.isError).toBe(false)
+    expect(decisions).toEqual([{ kind: 'allow' }])
+  })
+
+  it('allows an absolute path under a session cwd that differs from process.cwd()', async () => {
+    const { ctx, decisions } = await setup()
+    ctx.tools.register(pathTool('read'))
+    const underSession = resolve(SESSION_CWD, 'src/index.ts')
+    expect((await run(ctx, 'read', { file_path: underSession }, callerIn(SESSION_CWD))).isError).toBe(false)
+    expect(decisions).toEqual([{ kind: 'allow' }])
+  })
+
+  it('asks for a path outside both the session cwd and the whitelist, naming the session-resolved path', async () => {
+    const { ctx, decisions } = await setup(['/usr'])
+    ctx.tools.register(pathTool('glob'))
+    const result = await run(ctx, 'glob', { path: '../elsewhere' }, callerIn(SESSION_CWD))
+    expect(result.isError).toBe(true)
+    expect(decisions).toEqual([{
+      kind: 'ask',
+      reason: `Tool "glob" accesses path outside workspace: ${OUTSIDE_SESSION}`,
+      displayReason: {
+        en: `Tool "glob" accesses path outside workspace: ${OUTSIDE_SESSION}`,
+        zh: `工具 glob 访问工作空间外路径：${OUTSIDE_SESSION}`,
+      },
+    }])
+  })
+
+  it('falls back to process.cwd() without a session cwd', async () => {
+    const { ctx, decisions } = await setup()
+    ctx.tools.register(pathTool('read'))
+    const insideProcessCwd = resolve(process.cwd(), 'src/index.ts')
+    expect((await run(ctx, 'read', { file_path: insideProcessCwd })).isError).toBe(false)
+    expect((await run(ctx, 'read', { file_path: insideProcessCwd }, callerIn())).isError).toBe(false)
+    expect((await run(ctx, 'read', { file_path: insideProcessCwd }, callerIn(''))).isError).toBe(false)
+    expect(decisions).toEqual([{ kind: 'allow' }, { kind: 'allow' }, { kind: 'allow' }])
   })
 })
 

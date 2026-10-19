@@ -9,8 +9,8 @@
   en: 3dc0c2dd2ed3f489
   zh: 62a14dbc0cdc86db
 /deepseek-ai-dsh-path-guard/summary:
-  en: f65d751e7cec227b
-  zh: 6d03daabede6c5ce
+  en: 2827ea33232bc322
+  zh: c838c4f457b33a67
 /deepseek-ai-dsh-path-guard/table-of-contents:
   en: d152484eb41ac6b4
   zh: 09388d293f9be9cb
@@ -30,11 +30,11 @@
   en: 51e9de5a80ac8c96
   zh: e30b3a4ba2ff4fe4
 /deepseek-ai-dsh-path-guard/understand-the-implementation/design-philosophy:
-  en: 59068fc7f2fbad20
-  zh: 8aaf04a41496a19e
+  en: e4d3ad8b5474424c
+  zh: 6b5d1a69c6c11a1b
 /deepseek-ai-dsh-path-guard/understand-the-implementation/how-a-call-is-classified:
-  en: 4e9908f4be6aa1bb
-  zh: e1910280a244541b
+  en: f315b35f9b548cc9
+  zh: eae0dae53bb009be
 /deepseek-ai-dsh-path-guard/understand-the-implementation/source-map:
   en: 97462d27404427f1
   zh: deea2a7f41d8f8d1
@@ -57,8 +57,8 @@
   en: 2fbf2175168e8244
   zh: f681f89596f500f5
 /deepseek-ai-dsh-path-guard/known-limitations-and-deferred-work:
-  en: d123cc1b2c6e1a39
-  zh: bbd08bdd36495498
+  en: da5ba4005b89827d
+  zh: 68b23c970ed8865c
 /deepseek-ai-dsh-path-guard/known-limitations-and-deferred-work/dev-note:
   en: 5b0da63dd9c96d63
   zh: e58073eedd7de1d3

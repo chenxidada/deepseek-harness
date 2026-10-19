@@ -1,7 +1,8 @@
 /**
  * Path-level approval guard: tool calls that access paths outside the workspace
- * and the configured whitelist require user approval. Workspace-internal and
- * whitelisted paths are auto-approved.
+ * and the configured whitelist require user approval. The workspace root of a
+ * call is the calling session's cwd, and `process.cwd()` is the fallback for a
+ * call without one. Workspace-internal and whitelisted paths are auto-approved.
  * @module @deepseek-ai/dsh-path-guard
  */
 
@@ -107,15 +108,26 @@ function extractShellPaths(args: Record<string, unknown>): string[] {
 }
 
 /**
+ * The workspace root for one call: the calling agent's session cwd when it is
+ * non-empty, and `process.cwd()` otherwise (an agent-less execution or a session
+ * without a cwd). Both the relative-path base and the containment check use this
+ * single per-call root.
+ * @param exec - the tool execution carrying the optional calling agent.
+ * @returns the normalized absolute workspace root for this call.
+ */
+function workspaceRootOf(exec: ToolExecution): string {
+  return normalize(exec.agent?.session.header.cwd || process.cwd())
+}
+
+/**
  * Register the path guard: a `tools/pre-execute` listener that asks the user to
  * approve a call whose resolved path arguments fall outside the workspace root
- * and the configured whitelist, and delegates every other call unchanged.
+ * of the calling session and the configured whitelist, and delegates every other
+ * call unchanged.
  * @param ctx - host context carrying the approval channel.
  * @param config - validated {@link Config}.
  */
 export function apply(ctx: Context, config: Config): void {
-  const workspaceRoot = normalize(process.cwd())
-
   ctx.on('tools/pre-execute', async (exec: ToolExecution, next): Promise<PreToolDecision> => {
     const args = (typeof exec.arguments === 'object' && exec.arguments !== null && !Array.isArray(exec.arguments))
       ? exec.arguments as Record<string, unknown>
@@ -128,7 +140,8 @@ export function apply(ctx: Context, config: Config): void {
       paths = extractToolPaths(exec.name, args)
     }
 
-    // Resolve relative paths against cwd
+    // Resolve relative paths against this call's workspace root
+    const workspaceRoot = workspaceRootOf(exec)
     const resolved = paths.map(p => resolve(workspaceRoot, p))
 
     // Check each path against workspace + whitelist
