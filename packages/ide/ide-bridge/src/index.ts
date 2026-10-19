@@ -127,6 +127,8 @@ export {
   type BridgeAttachmentRef,
   type BridgeCommandOutcome,
   type BridgeCommandSummary,
+  type BridgeCredentialState,
+  type BridgeDiscoveredModel,
   type BridgeAgentPresetSummary,
   type BridgeFrame,
   type BridgeGoalView,
@@ -158,6 +160,7 @@ export {
   type SessionQueryListCapability,
   type SessionQuerySearchCapability,
   type SettingsNamespaceView,
+  type SettingsPathOp,
   type SubagentInterruptCapability,
   type SubagentListCapability,
   type SubagentPromptCapability,
@@ -306,6 +309,8 @@ export function apply(ctx: Context, config: Config = {}): void {
       sessionId: resolveBridgeSessionId(request.agent),
       toolName: request.toolName,
       ...request.reason === undefined ? {} : { reason: request.reason },
+      ...request.displayReason === undefined ? {} : { displayReason: request.displayReason },
+      ...request.callId === undefined ? {} : { callId: String(request.callId) },
       ...request.signal === undefined ? {} : { signal: request.signal },
       timeoutMs: interactionTimeoutMs,
     })
@@ -345,6 +350,8 @@ async function awaitHostApproval(
     sessionId: string
     toolName: string
     reason?: string
+    displayReason?: { readonly en: string; readonly [locale: string]: string }
+    callId?: string
     signal?: AbortSignal
     timeoutMs: number
   },
@@ -363,6 +370,8 @@ async function awaitHostApproval(
     sessionId: options.sessionId,
     toolName: options.toolName,
     ...options.reason === undefined ? {} : { reason: options.reason },
+    ...options.displayReason === undefined ? {} : { displayReason: options.displayReason },
+    ...options.callId === undefined ? {} : { callId: options.callId },
   })
   if (!sent) {
     pending.delete(id)

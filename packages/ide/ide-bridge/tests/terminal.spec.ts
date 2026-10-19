@@ -196,6 +196,26 @@ describe('terminal.ts — runtime-side IDE terminal provider', () => {
       await expect(execution.done).rejects.toThrow('bridge dropped')
     })
 
+    it('done rejects with the refusal text when the Extension gives up mid-execution', async () => {
+      const transport = fakeTransport()
+      const pending: IdeTerminalExecutions = new Map()
+      const execPromise = startIdeTerminalExecution(transport, pending, {
+        command: 'ls', cwd: '/w', dedicated: false,
+      })
+
+      const id = (transport.sent[0] as { id: string }).id
+      const state = pending.get(id)!
+      state.start()
+      const execution = await execPromise
+      // The Extension drives a started command and then stops reporting it; no
+      // exit frame follows, so the refusal is the only account of the failure.
+      state.output('partial')
+      state.refuse(new Error('the terminal stopped reporting this command'))
+
+      await expect(execution.done).rejects.toThrow('the terminal stopped reporting this command')
+      expect(await collectOutput(execution.output)).toEqual(['partial'])
+    })
+
     it('hands a chunk to a consumer that already awaits the next one', async () => {
       const transport = fakeTransport()
       const pending: IdeTerminalExecutions = new Map()

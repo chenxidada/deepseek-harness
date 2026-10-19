@@ -823,7 +823,11 @@ export interface IdeTerminalExecution {
    * settles. Decoding and terminal-control normalization belong to the caller.
    */
   readonly output: AsyncIterable<string>
-  /** Exit code the terminal reported, or null when it reported none; rejects when the bridge failed mid-execution. */
+  /**
+   * Exit code the terminal reported, or null when it reported none; rejects when
+   * the bridge failed mid-execution, or when the Extension stopped driving a
+   * command it had accepted (its refusal text is the rejection).
+   */
   readonly done: Promise<number | null>
   /**
    * Interrupt the running command. Idempotent; the exit frame still follows, so
@@ -1134,6 +1138,14 @@ export type BridgeFrame =
     sessionId: string
     toolName: string
     reason?: string
+    /**
+     * Localized presentation of `reason`, keyed by locale, so the Host renders
+     * the text its own UI language needs instead of the asker's prose. Localized
+     * presentation only; the runtime never persists it.
+     */
+    displayReason?: { readonly en: string; readonly [locale: string]: string }
+    /** The exact tool call under decision, so the Host can pair the prompt with the call it rendered. */
+    callId?: string
   }
   | { kind: 'approval/response'; id: string; outcome: ApprovalOutcome }
   | {

@@ -14,6 +14,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { ApprovalRequestEvent } from '@deepseek-ai/dsh-user-approval/types'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   AGENTS_SERVICE,
@@ -503,6 +504,49 @@ describe('ide-bridge remaining frame-kind validation (AC-31)', () => {
       sessionId: 'sess-1',
       toolName: 'bash',
       reason: 3,
+    })).toBeUndefined()
+  })
+
+  it('accepts approval/request with a localized presentation and its call id', () => {
+    expect(validateBridgeFrame({
+      kind: 'approval/request',
+      id: 'a-2',
+      sessionId: 'sess-1',
+      toolName: 'bash',
+      reason: 'accesses a path outside the workspace',
+      displayReason: { en: 'accesses a path outside the workspace', zh: '访问了工作区之外的路径' },
+      callId: 'call-1',
+    })).toEqual({
+      kind: 'approval/request',
+      id: 'a-2',
+      sessionId: 'sess-1',
+      toolName: 'bash',
+      reason: 'accesses a path outside the workspace',
+      displayReason: { en: 'accesses a path outside the workspace', zh: '访问了工作区之外的路径' },
+      callId: 'call-1',
+    })
+    // A presentation without its English text, a non-text locale, and a call id
+    // that is not an id are all illegal frames, not silently dropped fields.
+    expect(validateBridgeFrame({
+      kind: 'approval/request',
+      id: 'a-3',
+      sessionId: 'sess-1',
+      toolName: 'bash',
+      displayReason: { zh: '访问了工作区之外的路径' },
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'approval/request',
+      id: 'a-4',
+      sessionId: 'sess-1',
+      toolName: 'bash',
+      displayReason: { en: 'accesses a path outside the workspace', zh: 3 },
+    })).toBeUndefined()
+    expect(validateBridgeFrame({
+      kind: 'approval/request',
+      id: 'a-5',
+      sessionId: 'sess-1',
+      toolName: 'bash',
+      callId: '',
     })).toBeUndefined()
   })
 
@@ -2762,6 +2806,32 @@ describe('ide-bridge interaction answerer failure paths', () => {
         sessionId: 'agent-without-live-session',
         toolName: 'bash',
         reason: 'writes outside the workspace',
+      })
+    })
+  })
+
+  it('forwards the localized reason and the call id of an approval request', async () => {
+    await withBridge(() => {}, async (harness) => {
+      const sent = hostResponder(harness, (frame, connection) => {
+        if (frame.kind !== 'approval/request') return
+        connection.send({ kind: 'approval/response', id: frame.id, outcome: 'rejected' })
+      })
+      // The runtime brands call ids; the bridge only carries the id string across.
+      const callId = 'call-7' as NonNullable<ApprovalRequestEvent['callId']>
+      const outcome = await harness.ctx.waterfall('approval/request', {
+        agent: stubAgent('a', 'sess-a'),
+        toolName: 'bash',
+        callId,
+        displayReason: { en: 'writes outside the workspace', zh: '写入工作区之外的路径' },
+      }, () => Promise.resolve('allowed-once' as const))
+      expect(outcome).toBe('rejected')
+      expect(sent).toHaveLength(1)
+      expect(sent[0]).toMatchObject({
+        kind: 'approval/request',
+        sessionId: 'sess-a',
+        toolName: 'bash',
+        callId: 'call-7',
+        displayReason: { en: 'writes outside the workspace', zh: '写入工作区之外的路径' },
       })
     })
   })

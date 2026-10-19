@@ -135,10 +135,17 @@ export async function startIdeTerminalExecution(
       if (ended) return
       ended = true
       pending.delete(id)
-      // A refused start is delivered as the execute() rejection; `finished` still
-      // settles so no observer sees an unhandled rejection.
-      start.reject(error)
-      finished.resolve(null)
+      if (started) {
+        // The Extension accepted the command and then gave up driving it (its own
+        // failure, with no exit frame following): the running execution's consumer
+        // takes the refusal text instead of a bare unknown exit code.
+        finished.reject(error)
+      } else {
+        // A refusal before the handshake is the caller's rejection; `finished` still
+        // settles so no observer sees an unhandled rejection.
+        start.reject(error)
+        finished.resolve(null)
+      }
       wake()
     },
     output: (data) => {

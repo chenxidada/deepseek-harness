@@ -605,6 +605,13 @@ function isCredentialStateArray(value: unknown): value is WireCredentialState[] 
   return Array.isArray(value) && value.every(isCredentialState)
 }
 
+/** Whether `value` is a localized reason: an English text plus optional other locales. */
+function isDisplayReason(value: unknown): value is { readonly en: string; readonly [locale: string]: string } {
+  if (!isJsonObject(value)) return false
+  if (!isNonEmptyString(value.en)) return false
+  return Object.values(value).every(entry => typeof entry === 'string')
+}
+
 /** Whether `value` is a non-empty array of non-empty reference names. */
 function isCredentialRefArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.length > 0 && value.every(isNonEmptyString)
@@ -652,12 +659,16 @@ export function validateBridgeFrame(value: unknown): BridgeFrame | undefined {
       if (!isNonEmptyString(record.id) || !isNonEmptyString(record.sessionId)) return undefined
       if (!isNonEmptyString(record.toolName)) return undefined
       if (record.reason !== undefined && typeof record.reason !== 'string') return undefined
+      if (record.displayReason !== undefined && !isDisplayReason(record.displayReason)) return undefined
+      if (record.callId !== undefined && !isNonEmptyString(record.callId)) return undefined
       return {
         kind,
         id: record.id,
         sessionId: record.sessionId,
         toolName: record.toolName,
         ...record.reason === undefined ? {} : { reason: record.reason },
+        ...record.displayReason === undefined ? {} : { displayReason: record.displayReason },
+        ...record.callId === undefined ? {} : { callId: record.callId },
       }
     }
     case 'approval/response': {
