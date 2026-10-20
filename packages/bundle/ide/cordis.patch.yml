@@ -66,6 +66,12 @@
     - id: file-reference-local
       name: '@deepseek-ai/dsh-file-reference-local'
 
+    # Precise text replacement tool: view/create/str_replace/insert with
+    # unique-match enforcement and optimistic concurrency, complementing the
+    # standard read/write/edit tools.
+    - id: tool-str-replace-editor
+      name: '@deepseek-ai/dsh-tool-str-replace-editor'
+
     # Whole-log turn/step counts for the IDE chat stats (the sessionStats projection
     # key); the projection registry itself is a base-layer row.
     - id: session-stats
