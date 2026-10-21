@@ -812,6 +812,13 @@ export interface IdeTerminalExecRequest {
    * until stopped, so it must not queue behind the session's shared terminal.
    */
   dedicated: boolean
+  /**
+   * The caller's own execution deadline. The Extension uses it to reset a
+   * terminal that accepted a foreground command but produced no output by the
+   * time the caller would have given up, so a dead execution never blocks the
+   * session's queue indefinitely.
+   */
+  timeoutMs?: number
   /** Cancels the execution when it fires; the provider sends one cancel frame. */
   signal?: AbortSignal
 }
@@ -1437,6 +1444,12 @@ export type BridgeFrame =
      * dedicated one.
      */
     dedicated: boolean
+    /**
+     * The caller's execution deadline in milliseconds, when it named one. A
+     * foreground execution that produces no output by this deadline is reset
+     * by the Extension instead of queueing later commands behind it forever.
+     */
+    timeoutMs?: number
   }
   | {
     /** Interrupt one running execution; the Extension reports its exit afterwards. */

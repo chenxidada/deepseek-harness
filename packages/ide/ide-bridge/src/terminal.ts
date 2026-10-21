@@ -16,6 +16,9 @@ export interface IdeTerminalTransport {
   readonly connected: boolean
 }
 
+/** How long the start handshake may take before the caller stops waiting. */
+const START_HANDSHAKE_TIMEOUT_MS = 30_000
+
 /**
  * One in-flight execution: the streams a frame router feeds, plus the state an
  * output iterator reads. `ended` marks that no further chunk can arrive.
@@ -101,6 +104,7 @@ export async function startIdeTerminalExecution(
   transport: IdeTerminalTransport,
   pending: IdeTerminalExecutions,
   request: IdeTerminalExecRequest,
+  startTimeoutMs = START_HANDSHAKE_TIMEOUT_MS,
 ): Promise<IdeTerminalExecution> {
   if (!transport.connected) {
     throw new Error('IDE terminal execution is unavailable: the IDE bridge is not connected')
@@ -110,10 +114,20 @@ export async function startIdeTerminalExecution(
   const finished = Promise.withResolvers<number | null>()
   const queue: string[] = []
   const waiters: Array<() => void> = []
+  // A command that named its own deadline should not sit in the terminal queue
+  // much past it: the caller has already returned the promoted job by then.
+  const handshakeTimeoutMs = Math.min(startTimeoutMs, (request.timeoutMs ?? startTimeoutMs) + 2_000)
   let started = false
   let ended = false
   /** Set when the caller cancelled before the start handshake completed. */
   let deferredCancel: string | undefined
+  /** The handshake deadline, cleared by the first frame that settles the start. */
+  let handshakeTimer: ReturnType<typeof setTimeout> | undefined
+  const clearHandshake = (): void => {
+    if (handshakeTimer === undefined) return
+    clearTimeout(handshakeTimer)
+    handshakeTimer = undefined
+  }
   const wake = (): void => {
     for (const waiter of waiters.splice(0)) waiter()
   }
@@ -123,6 +137,7 @@ export async function startIdeTerminalExecution(
     waiters,
     get ended() { return ended },
     start: () => {
+      clearHandshake()
       started = true
       start.resolve()
       if (deferredCancel !== undefined) {
@@ -133,6 +148,7 @@ export async function startIdeTerminalExecution(
     },
     refuse: (error) => {
       if (ended) return
+      clearHandshake()
       ended = true
       pending.delete(id)
       if (started) {
@@ -155,6 +171,7 @@ export async function startIdeTerminalExecution(
     },
     exit: (exitCode) => {
       if (ended) return
+      clearHandshake()
       ended = true
       pending.delete(id)
       finished.resolve(exitCode)
@@ -162,6 +179,7 @@ export async function startIdeTerminalExecution(
     },
     fail: (error) => {
       if (ended) return
+      clearHandshake()
       ended = true
       pending.delete(id)
       // Before the handshake this is the caller's rejection; after it, `done`
@@ -177,6 +195,7 @@ export async function startIdeTerminalExecution(
     kind: 'terminal/exec',
     id,
     ...request.sessionId === undefined ? {} : { sessionId: request.sessionId },
+    ...request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs },
     command: request.command,
     cwd: request.cwd,
     dedicated: request.dedicated,
@@ -185,6 +204,20 @@ export async function startIdeTerminalExecution(
     pending.delete(id)
     throw new Error('IDE terminal execution could not reach the Extension: the bridge write was refused')
   }
+  // A frame the Extension never answers must not keep the shell execution (and
+  // its job) in preparation forever: a queued command behind a dead terminal is
+  // exactly that case, and `job_kill` has no process to reach until this
+  // handshake settles.
+  handshakeTimer = setTimeout(() => {
+    if (ended) return
+    handshakeTimer = undefined
+    ended = true
+    pending.delete(id)
+    transport.send({ kind: 'terminal/exec/cancel', id, reason: 'start-timeout' })
+    start.reject(new Error(`the IDE terminal did not accept the command within ${handshakeTimeoutMs}ms`))
+    finished.resolve(null)
+    wake()
+  }, handshakeTimeoutMs)
 
   const cancel = (reason: string): void => {
     if (ended) return

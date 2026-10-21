@@ -242,6 +242,7 @@ export class IdeTerminalBashExecutor extends SandboxBashExecutor {
         // A background command runs until stopped, so it takes a terminal of its
         // own instead of queueing behind the session's foreground commands.
         dedicated: spec.onExpiry === 'none',
+        timeoutMs: spec.timeoutMs,
         ...spawnSignal === undefined ? {} : { signal: spawnSignal },
       })
     } catch (error) {

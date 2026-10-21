@@ -142,6 +142,18 @@ describe('terminal.ts — runtime-side IDE terminal provider', () => {
       await expect(execPromise).rejects.toThrow('no shell integration')
     })
 
+    it('rejects when the Extension never answers the start handshake', async () => {
+      const transport = fakeTransport()
+      const pending: IdeTerminalExecutions = new Map()
+      const execPromise = startIdeTerminalExecution(transport, pending, {
+        command: 'echo hi', cwd: '/w', dedicated: false,
+      }, 20)
+
+      await expect(execPromise).rejects.toThrow('did not accept the command within 20ms')
+      expect(transport.sent.some(f => f.kind === 'terminal/exec/cancel')).toBe(true)
+      expect(pending.size).toBe(0)
+    })
+
     it('sends terminal/exec with sessionId when provided', async () => {
       const transport = fakeTransport()
       const pending: IdeTerminalExecutions = new Map()
