@@ -41,7 +41,7 @@ import {
   type ModelListResult,
   type SettingsNamespaceView,
 } from './session-host.ts'
-import { IdeTerminalExecController, type TerminalExecExecution, type TerminalExecShellIntegration, type TerminalExecTerminal, type TerminalExecWindow } from './terminal-exec.ts'
+import { IdeTerminalExecController, type TerminalExecTerminal, type TerminalExecWindow } from './terminal-exec.ts'
 import {
   HOST_DIAGNOSTICS_CHANNEL_NAME,
   HostDiagnosticRecorder,
@@ -130,6 +130,7 @@ import {
 import type { FileReferenceCandidate } from '@deepseek-ai/dsh-file-reference/types'
 import type {
   AskUserQuestionItem,
+  BridgeFrame,
   BridgeSessionSearchHit,
   BridgeSpecdevSnapshot,
   BridgeSubagentEntry,
@@ -238,18 +239,8 @@ interface VsCodeLike {
         preview?: boolean
       },
     ): Promise<unknown>
-    createTerminal?(options: { name: string }): TerminalExecTerminal
+    createTerminal?(options: { name: string; shellPath?: string }): TerminalExecTerminal
     readonly terminals?: readonly TerminalExecTerminal[]
-    onDidChangeTerminalShellIntegration?(
-      listener: (event: { terminal: TerminalExecTerminal; shellIntegration: TerminalExecShellIntegration }) => void,
-    ): { dispose(): void }
-    onDidEndTerminalShellExecution?(
-      listener: (event: {
-        terminal: TerminalExecTerminal
-        execution: TerminalExecExecution
-        exitCode: number | undefined
-      }) => void,
-    ): { dispose(): void }
   }
   workspace: {
     workspaceFolders?: readonly { uri: { fsPath: string; scheme?: string } }[]
@@ -464,22 +455,20 @@ const TEST_COMPACTION_SUMMARY_BODY = 'LAYER-V-CAP-COMPACTION-OK'
 const TEST_REASONING_BODY = 'LAYER-V-CAP-REASONING-OK'
 
 /**
- * Build the terminal execution window surface when VS Code exposes terminal
- * shell integration APIs (stable since 1.93). Returns `undefined` when any
- * required capability is missing, so the caller skips terminal registration.
+ * Build the terminal execution window surface. Terminal execution no longer
+ * depends on VS Code shell integration: the controller types a bash wrapper into
+ * the terminal and reads files the wrapper writes, so a host that exposes only
+ * `createTerminal` and `terminals` is sufficient.
+ * @param vscode - the Extension host surface.
+ * @returns the terminal surface, or `undefined` when terminals are unavailable.
  */
 function terminalExecWindow(vscode: VsCodeLike): TerminalExecWindow | undefined {
   const w = vscode.window
   const ct = w.createTerminal?.bind(w)
-  const ts = w.terminals
-  const si = w.onDidChangeTerminalShellIntegration?.bind(w)
-  const ee = w.onDidEndTerminalShellExecution?.bind(w)
-  if (ct === undefined || ts === undefined || si === undefined || ee === undefined) return undefined
+  if (ct === undefined || w.terminals === undefined) return undefined
   return {
     createTerminal: opts => ct(opts),
-    get terminals() { return ts },
-    onDidChangeTerminalShellIntegration: l => si(l),
-    onDidEndTerminalShellExecution: l => ee(l),
+    get terminals() { return w.terminals ?? [] },
   }
 }
 
@@ -2119,6 +2108,72 @@ export function activate(context: ExtensionContextLike, vscodeArg?: VsCodeLike):
           return { ok: true as const, ...compactionSettingsSummary(namespaces) }
         } catch (error) {
           return { ok: false as const, reason: testHookReason(error) }
+        }
+      }),
+      /**
+       * Drive one real command through the IDE terminal controller and return
+       * its frames, output, and exit code. This is the real-host counterpart of
+       * `cap-terminal-exec`: it uses the same controller and the same VS Code
+       * terminal API the product uses, so a green result proves the terminal
+       * actually ran the command rather than that a fake did.
+       */
+      vscode.commands.registerCommand('dsh.test.terminalExec', async (command?: unknown, timeoutMs?: unknown) => {
+        const window = terminalExecWindow(vscode)
+        const controller = terminalExec ?? (window === undefined ? undefined : new IdeTerminalExecController(window))
+        if (controller === undefined) {
+          return { ok: false as const, reason: 'terminal-shell-integration-unavailable' }
+        }
+        const ownsController = terminalExec === undefined
+        const cmd = typeof command === 'string' && command.trim() !== '' ? command : 'ls -al'
+        const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd()
+        // A terminal that cannot execute a one-line probe cannot execute the
+        // wrapper either; reporting both distinguishes a dead host terminal from
+        // a wrapper failure when this capability is red.
+        const probePath = `/tmp/dsh-terminal-probe-${Date.now()}.txt`
+        const probe = vscode.window.createTerminal?.({ name: 'DSH probe', shellPath: '/bin/bash' })
+        probe?.show(true)
+        probe?.sendText(`printf 'OK' > '${probePath}'`, true)
+        await new Promise((resolve) => { setTimeout(resolve, 1000) })
+        const terminalProbe = existsSync(probePath)
+        probe?.dispose()
+        const id = `terminal-exec-test-${Date.now()}`
+        const frames: BridgeFrame[] = []
+        const settled = Promise.withResolvers<{ ok: true; exitCode: number | null } | { ok: false; error: string }>()
+        const timer = setTimeout(() => { settled.resolve({ ok: false, error: 'test-timeout' }) }, 45_000)
+        controller.handle(
+          {
+            kind: 'terminal/exec',
+            id,
+            sessionId: id,
+            command: cmd,
+            cwd,
+            dedicated: false,
+            timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : 30_000,
+          },
+          (frame) => {
+            frames.push(frame)
+            if (frame.kind === 'terminal/exec/exit') {
+              clearTimeout(timer)
+              settled.resolve({ ok: true, exitCode: frame.exitCode })
+            } else if (frame.kind === 'terminal/exec/refused') {
+              clearTimeout(timer)
+              settled.resolve({ ok: false, error: frame.error })
+            }
+            return true
+          },
+        )
+        const outcome = await settled.promise
+        clearTimeout(timer)
+        if (ownsController) controller.dispose()
+        return {
+          ...outcome,
+          output: frames
+            .filter(frame => frame.kind === 'terminal/exec/output')
+            .map(frame => (frame as { data: string }).data)
+            .join(''),
+          frameKinds: frames.map(frame => frame.kind),
+          terminalProbe,
+          terminalNames: (vscode.window.terminals ?? []).map(terminal => terminal.name),
         }
       }),
       vscode.commands.registerCommand(
