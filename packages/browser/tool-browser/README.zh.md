@@ -163,6 +163,26 @@ Screenshot of {the visible viewport|the whole scrollable page}: image/png image,
 <a id="model-experience"></a>
 ## 模型体验
 
+### System prompt 引导
+
+#### 模型看到的内容
+
+浏览器工具注册期间，有一个 `tool:browser` system prompt 段落说明共享流程：
+
+##### tool:browser
+
+```markdown
+Use browser tools for interactive pages and web_fetch for static or public content. Navigate first, then act only on the ARIA role and accessible name shown in the snapshot; use browser_snapshot when the page changes outside an interaction. Keep one browser and one page per conversation, inspect browser_console and browser_network on failure, and call browser_close when done. Navigation is limited by the origin allowlist: do not bypass a denied origin, and do not use trace tools unless the deployment configured a trace directory.
+```
+
+#### Token 影响
+
+工具注册期间，每个请求都承担固定的文本开销。
+
+#### KV Cache 影响
+
+前缀稳定：段落文本恒定，不会使已有缓存失效。
+
 ### 工具定义
 
 #### 模型看到的内容

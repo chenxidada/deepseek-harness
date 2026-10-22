@@ -163,6 +163,26 @@ Read these pages when the package-level contract is not enough. They move from t
 <a id="model-experience"></a>
 ## Model Experience
 
+### System prompt guidance
+
+#### What the model sees
+
+While the browser tools are registered, one `tool:browser` system-prompt section states the shared workflow:
+
+##### tool:browser
+
+```markdown
+Use browser tools for interactive pages and web_fetch for static or public content. Navigate first, then act only on the ARIA role and accessible name shown in the snapshot; use browser_snapshot when the page changes outside an interaction. Keep one browser and one page per conversation, inspect browser_console and browser_network on failure, and call browser_close when done. Navigation is limited by the origin allowlist: do not bypass a denied origin, and do not use trace tools unless the deployment configured a trace directory.
+```
+
+#### Token effect
+
+Fixed text cost in every request while the tools are registered.
+
+#### KV Cache effect
+
+Prefix-stable: the section text never varies, so it does not invalidate cache reuse.
+
 ### Tool definitions
 
 #### What the model sees

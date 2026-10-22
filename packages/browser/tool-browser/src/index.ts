@@ -13,6 +13,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-browser'
+import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import {
   clickTool,
@@ -94,6 +95,19 @@ export const Config: z<Config> = z.object({
 /** Complete config after schemastery applies every field default. */
 type ResolvedConfig = Required<Config>
 
+/**
+ * Cross-tool guidance for the browser surface. Tool descriptions explain one
+ * call; this section states the workflow and the boundaries shared by every
+ * browser tool.
+ */
+const BROWSER_GUIDANCE = 'Use browser tools for interactive pages and web_fetch for static or public content. '
+  + 'Navigate first, then act only on the ARIA role and accessible name shown in the snapshot; '
+  + 'use browser_snapshot when the page changes outside an interaction. '
+  + 'Keep one browser and one page per conversation, inspect browser_console and browser_network on failure, '
+  + 'and call browser_close when done. '
+  + 'Navigation is limited by the origin allowlist: do not bypass a denied origin, and do not use trace tools '
+  + 'unless the deployment configured a trace directory.'
+
 /** A read bound must be a positive integer; a fraction or a zero would silently drop rows. */
 function assertPositiveInteger(label: string, value: number): void {
   if (!Number.isInteger(value) || value < 1) {
@@ -115,6 +129,16 @@ export function apply(ctx: Context, config: Config): void {
     maxConsoleEntries: resolved.maxConsoleEntries,
     maxNetworkEntries: resolved.maxNetworkEntries,
   }
+  // The guidance follows the browser tools without making the prompt service a
+  // hard activation dependency: a composition without systemPrompt still runs
+  // the tools, and this child fiber simply never activates.
+  ctx.inject(['systemPrompt'], (scope) => {
+    scope.systemPrompt.section({
+      name: 'tool:browser',
+      order: scope.systemPrompt.getSectionOrder('TOOL_COMPUTER_USE'),
+      text: BROWSER_GUIDANCE,
+    })
+  })
   ctx.tools.register(navigateTool(ctx))
   ctx.tools.register(snapshotTool(ctx))
   ctx.tools.register(consoleTool(ctx, limits))

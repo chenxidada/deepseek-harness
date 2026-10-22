@@ -65,6 +65,21 @@
 /deepseek-ai-dsh-tool-browser/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
+/deepseek-ai-dsh-tool-browser/model-experience/system-prompt-guidance:
+  en: 53782a305dcf507d
+  zh: dab5a61ebf88a8f9
+/deepseek-ai-dsh-tool-browser/model-experience/system-prompt-guidance/what-the-model-sees:
+  en: 6db351ee10f42f1e
+  zh: 8967b3ba6043ac75
+/deepseek-ai-dsh-tool-browser/model-experience/system-prompt-guidance/what-the-model-sees/tool-browser:
+  en: fb4430bd8406ac55
+  zh: fb4430bd8406ac55
+/deepseek-ai-dsh-tool-browser/model-experience/system-prompt-guidance/token-effect:
+  en: a5ad514c9699faed
+  zh: 4a06b77cb4dfb052
+/deepseek-ai-dsh-tool-browser/model-experience/system-prompt-guidance/kv-cache-effect:
+  en: 90c60adb1a809935
+  zh: 0c7d8ddd69a1fbb4
 /deepseek-ai-dsh-tool-browser/model-experience/tool-definitions:
   en: 5cf98046cb6eda53
   zh: d18677364e8fe82c

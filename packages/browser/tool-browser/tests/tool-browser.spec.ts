@@ -223,6 +223,14 @@ describe('tool-browser registration', () => {
     ])
   })
 
+  it('registers browser workflow guidance in the system prompt', async () => {
+    const { ctx } = await mountTools()
+    const assembly = await ctx.systemPrompt.assemble({})
+    const section = assembly.sections.find(section => section.name === 'tool:browser')
+    expect(section?.text).toContain('Use browser tools for interactive pages')
+    expect(section?.text).toContain('browser_close')
+  })
+
   it('omits the interaction tools when the deployment disables them', async () => {
     const { ctx } = await mountTools({ config: { interact: false } })
     expect(ctx.tools.schemas().map(schema => schema.name).sort()).toEqual([
