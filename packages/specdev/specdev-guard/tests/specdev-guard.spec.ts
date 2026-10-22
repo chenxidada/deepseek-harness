@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { agentEvents, type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { agentEvents, assembleContextFor, type Agent, type AgentStatus } from '@deepseek-ai/dsh-agent'
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId, type Session } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
@@ -105,6 +105,22 @@ function writeTool(): ToolDefinition {
   }
 }
 
+function bashTool(): ToolDefinition {
+  return {
+    name: 'bash',
+    description: 'bash',
+    parameters: { type: 'object', properties: { command: { type: 'string' } } },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: value as string }],
+    },
+    execute: (args): Promise<string> => {
+      const command = (args as { command?: unknown }).command
+      return Promise.resolve(`ran:${typeof command === 'string' ? command : ''}`)
+    },
+  }
+}
+
 async function gateHarness(
   workspace: string,
   gitBranch: string | null = 'impl-phase-1-p0-core',
@@ -124,6 +140,7 @@ async function gateHarness(
     },
   })
   ctx.tools.register(writeTool())
+  ctx.tools.register(bashTool())
   const session = ctx.sessions.create(SessionId(`gate-${Math.random()}`), { meta: { cwd: workspace } })
   const agent = stubAgent(session)
   ctx.agents.register(agent)
@@ -187,6 +204,40 @@ function projectHg2(ctx: Context, session: Session, workspace: string): void {
     snapshot: snap,
   })
 }
+
+describe('SpecDev prompt policy', () => {
+  it('adds the policy while a workflow is active', async () => {
+    const workspace = tempDir('specdev-policy-')
+    seedWorkflow(workspace, createInitialStatus('wf-policy', 'policy'))
+    const { ctx, agent } = await gateHarness(workspace)
+    const assembly = await ctx.systemPrompt.assemble(assembleContextFor(agent))
+    const section = assembly.sections.find(section => section.name === 'specdev:policy')
+    expect(section?.text).toContain('workflow.jsonl')
+    expect(section?.text).toContain('impl-<current_phase>')
+  })
+
+  it('emits nothing without an active workflow', async () => {
+    const workspace = tempDir('specdev-policy-none-')
+    const { ctx, agent } = await gateHarness(workspace)
+    const assembly = await ctx.systemPrompt.assemble(assembleContextFor(agent))
+    expect(assembly.sections.find(section => section.name === 'specdev:policy')?.text ?? '').toBe('')
+  })
+})
+
+describe('SpecDev shell policy', () => {
+  it('asks before git commit and allows an ordinary command', async () => {
+    const workspace = tempDir('specdev-shell-')
+    const { ctx, agent } = await gateHarness(workspace)
+
+    const commit = await callTool(ctx, agent, 'bash', { command: 'git commit -m test' }, 'shell-commit')
+    expect(commit.isError).toBe(true)
+    expect(textOf(commit)).toContain('requires explicit user approval')
+
+    const status = await callTool(ctx, agent, 'bash', { command: 'git status' }, 'shell-status')
+    expect(status.isError).toBe(false)
+    expect(textOf(status)).toBe('ran:git status')
+  })
+})
 
 describe('SpecDev gate VP matrix', () => {
   it('VP-1: dispatch implementer with hg2 pending is denied', async () => {

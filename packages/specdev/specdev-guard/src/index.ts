@@ -9,6 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
+import type {} from '@deepseek-ai/dsh-system-prompt'
 import {
   parseSpecdevRole,
   readSpecdevMetadata,
@@ -30,6 +31,7 @@ import {
   type SpecdevGateDenial,
 } from './check.ts'
 import { readGitBranch, type GitBranchReader } from './git-branch.ts'
+import { shellPolicy } from './shell-policy.ts'
 
 export const name = 'specdev-guard'
 export const inject = ['specdev', 'tools', 'sessionProjections']
@@ -96,6 +98,17 @@ export class SpecdevGateDeniedError extends Error {
   }
 }
 
+/**
+ * Cross-role guidance for an active SpecDev workflow: the durable authority,
+ * the Human Gate path, and the scope/branch rules every dispatched role shares.
+ */
+const SPECDEV_POLICY = 'SpecDev workflow is active. '
+  + '`.specdev/specs/<slug>/workflow.jsonl` is the source of truth and `current-status.json` is a generated mirror; '
+  + 'never hand-edit either. '
+  + 'Human Gates are applied only through the UI, and role dispatch must respect gate order, role write scopes, '
+  + 'and the `impl-<current_phase>` branch. '
+  + 'Do not start SpecDev for ordinary tasks; use `/status` to inspect the workflow and escalate to the user when blocked.'
+
 /** Optional test hook: override git branch reader. */
 export interface SpecdevGateConfig {
   /** Branch reader the implementer check reads the current branch from; defaults to {@link readGitBranch}. */
@@ -112,6 +125,18 @@ export interface SpecdevGateConfig {
 export function apply(ctx: Context, config: SpecdevGateConfig = {}): void {
   const gitReader = config.gitBranchReader ?? readGitBranch
   const scope = installScopeGuard(ctx, config.home)
+
+  ctx.inject(['systemPrompt'], (prompt) => {
+    prompt.systemPrompt.section({
+      name: 'specdev:policy',
+      order: prompt.systemPrompt.getSectionOrder('TEAM_POLICY'),
+      text: (context) => {
+        const cwd = context.agent?.session.header.cwd
+        if (cwd === undefined || ctx.specdev.active({ cwd }) === null) return ''
+        return SPECDEV_POLICY
+      },
+    })
+  })
 
   wrapDispatchRole(ctx, gitReader)
 
@@ -133,6 +158,8 @@ export function apply(ctx: Context, config: SpecdevGateConfig = {}): void {
     if (roleDeny !== undefined) {
       return { kind: 'deny', reason: formatGateDenial(roleDeny) }
     }
+    const shellDecision = shellPolicy(exec)
+    if (shellDecision !== undefined) return shellDecision
     const scoped = await scope.evaluate(exec)
     if (scoped.kind === 'deny') {
       return { kind: 'deny', reason: scoped.reason }

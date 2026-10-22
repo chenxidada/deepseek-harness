@@ -3,29 +3,56 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/specdev/specdev-guard/README.md
 /:
-  en: 3e420bc453cc67e7
-  zh: 5554dcb981f8b132
+  en: 3cf63b1d605eacc8
+  zh: 3314458b838290a8
 /deepseek-ai-dsh-specdev-guard:
   en: 8ee623fca8df867d
   zh: 27aff22ed9d97d62
 /deepseek-ai-dsh-specdev-guard/summary:
-  en: 2bed2d763ec87247
-  zh: a8e43c68cfe8b1bd
+  en: e2fb2e1821189499
+  zh: 8245864e769aaff8
 /deepseek-ai-dsh-specdev-guard/table-of-contents:
   en: d152484eb41ac6b4
   zh: 725b47765ee8f30b
 /deepseek-ai-dsh-specdev-guard/use-this-package:
-  en: 367d9d9ae4a7fab3
-  zh: bb7cb03af8b9ef99
+  en: 7fdfd9dd452517a1
+  zh: 9fa34e8e40b91665
 /deepseek-ai-dsh-specdev-guard/understand-the-implementation:
-  en: 24b6fe6cd9cdb12d
-  zh: c274523899cf2da8
+  en: f97891a7a7bb2b99
+  zh: 1eaf9c4e0c9224fa
 /deepseek-ai-dsh-specdev-guard/further-exploration:
   en: 92cb7c60ae60eb51
   zh: e5a02b0bdeeeb7af
 /deepseek-ai-dsh-specdev-guard/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
+/deepseek-ai-dsh-specdev-guard/model-experience/system-prompt-policy:
+  en: e4181c280014ac1e
+  zh: 9a0f311b9df5abcd
+/deepseek-ai-dsh-specdev-guard/model-experience/system-prompt-policy/what-the-model-sees:
+  en: 39c1004be67e7f50
+  zh: 17c243c95f1dd52c
+/deepseek-ai-dsh-specdev-guard/model-experience/system-prompt-policy/what-the-model-sees/specdev-policy:
+  en: 3a30f15625578047
+  zh: 3a30f15625578047
+/deepseek-ai-dsh-specdev-guard/model-experience/system-prompt-policy/token-effect:
+  en: f1188f8fc3221f3e
+  zh: 432c4ebdc76e7d63
+/deepseek-ai-dsh-specdev-guard/model-experience/system-prompt-policy/kv-cache-effect:
+  en: ddfced48e060acdf
+  zh: 84d79185047450fc
+/deepseek-ai-dsh-specdev-guard/model-experience/shell-commands:
+  en: cbf74c461e16bfcb
+  zh: 10d9d095f214ce1c
+/deepseek-ai-dsh-specdev-guard/model-experience/shell-commands/what-the-model-sees:
+  en: 6cf5642c307628dc
+  zh: bcb34e82b5f8a21a
+/deepseek-ai-dsh-specdev-guard/model-experience/shell-commands/token-effect:
+  en: 94ec17c116c6a0a2
+  zh: fc20b1651e396c69
+/deepseek-ai-dsh-specdev-guard/model-experience/shell-commands/kv-cache-effect:
+  en: 302aa8e34d0512aa
+  zh: b5d9adc658a7e59e
 /deepseek-ai-dsh-specdev-guard/model-experience/gate-denials:
   en: 742521ff4d6e252f
   zh: b293c20790d499d3
@@ -51,8 +78,8 @@
   en: 302aa8e34d0512aa
   zh: b5d9adc658a7e59e
 /deepseek-ai-dsh-specdev-guard/known-limitations-and-deferred-work:
-  en: ed4282f350cfe605
-  zh: d5fe1bbcf0b89d1a
+  en: 4465babca7636e31
+  zh: 4b2e148913438f6d
 /deepseek-ai-dsh-specdev-guard/known-limitations-and-deferred-work/dev-note:
-  en: c37a0da96d82ff7e
-  zh: 8dbc2d67d7d3b8f1
+  en: e4bb2eaddb577d32
+  zh: c671b92b3e9de552

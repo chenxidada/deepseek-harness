@@ -1632,7 +1632,7 @@ export interface Config {
 
 ## `@deepseek-ai/dsh-ide-bridge`
 
-- `source`: [`packages/ide/ide-bridge/src/index.ts:198`](../packages/ide/ide-bridge/src/index.ts)
+- `source`: [`packages/ide/ide-bridge/src/index.ts:201`](../packages/ide/ide-bridge/src/index.ts)
 
 ```ts config-catalog
 /** ide-bridge configuration. */
@@ -2300,7 +2300,7 @@ export interface Config {
 
 - `inject`: `tools`
 - `refs`: `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/guard/path-guard/src/index.ts:38`](../packages/guard/path-guard/src/index.ts)
+- `source`: [`packages/guard/path-guard/src/index.ts:39`](../packages/guard/path-guard/src/index.ts)
 
 ```ts config-catalog
 /**
@@ -3080,7 +3080,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-specdev-guard`
 
 - `inject`: `specdev` · `tools` · `sessionProjections`
-- `source`: [`packages/specdev/specdev-guard/src/index.ts:100`](../packages/specdev/specdev-guard/src/index.ts)
+- `source`: [`packages/specdev/specdev-guard/src/index.ts:113`](../packages/specdev/specdev-guard/src/index.ts)
 
 ```ts config-catalog
 /** Optional test hook: override git branch reader. */
@@ -3723,7 +3723,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-tool-browser`
 
 - `inject`: `tools` · `browser`
-- `source`: [`packages/browser/tool-browser/src/index.ts:61`](../packages/browser/tool-browser/src/index.ts)
+- `source`: [`packages/browser/tool-browser/src/index.ts:62`](../packages/browser/tool-browser/src/index.ts)
 
 ```ts config-catalog
 /** Plugin config: which tools register and the deployment's read bounds. */

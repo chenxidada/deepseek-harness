@@ -1,5 +1,5 @@
 ---
-description: "SpecDev fail-closed guard: Cordis pre-step, pre-execute, and tools.guard enforcement for Human Gates, role dispatch, git branch, the durable status mirror, and workspace scope."
+description: "SpecDev fail-closed guard: Cordis pre-step, pre-execute, and tools.guard enforcement for Human Gates, role dispatch, git branch, the durable status mirror, workspace scope, and shell commands."
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-specdev-guard` enforces SpecDev gates natively in Cordis: it wraps `ctx.specdev.dispatchRole`, denies gated roles on `agent/pre-step`, rejects writes to the generated `current-status.json` mirror, and reads Human Gate authority from the workflow log, so a hand-edited mirror is reported as divergence rather than honored as a pass. A second `tools/pre-execute` check asks the user, through `ctx.userQuestions`, about calls whose paths reach outside the session workspace or the calling role's write scope; credential paths are refused without asking. Requests and decisions are appended to the owning session as `specdev/scope-requested` / `specdev/scope-decided`.
+`dsh-specdev-guard` enforces SpecDev gates natively in Cordis: it wraps `ctx.specdev.dispatchRole`, denies gated roles on `agent/pre-step`, rejects writes to the generated `current-status.json` mirror, and reads Human Gate authority from the workflow log, so a hand-edited mirror is reported as divergence rather than a pass. A second `tools/pre-execute` check asks the user, through `ctx.userQuestions`, before calls whose paths leave the session workspace or the calling role's write scope, and refuses credential paths without asking. It also reads shell command lines: `git commit` and `git push` need approval, while `git stash` and destructive commands are refused.
 
 ## Table of Contents
 
@@ -41,6 +41,8 @@ English | [中文](README.zh.md)
 | Workspace scope | Ask before any call whose paths reach outside the workspace; deny when no interactive session can answer |
 | Role write scope | Ask before a `write` / `edit` / `str_replace_editor` call writes outside the calling role's scope (implementer: the workspace; analysis / exploration / review / verification: their workflow directory and `test-scripts/`; wiki: `docs/wiki/` and `.wiki-work/`) |
 | Credential paths | Deny reads and writes under `~/.ssh`, `~/.aws`, `~/.config/gh` and to `.env*` files, with no request offered |
+| Git commit / push | Ask before `git commit` or `git push` on `bash` / `pwsh`, so the user decides every commit and push |
+| Destructive commands | Deny `git stash`, `rm -rf /`, and the classic fork bomb on `bash` / `pwsh`; other commands continue to the scope checks |
 | Approved scopes | A directory or session grant covers later calls in the same session tree until the runtime drops it |
 
 Config: `gitBranchReader` (test hook for the branch reader) and `home` (the account home scope classification uses; defaults to the host home).
@@ -61,6 +63,7 @@ Config: `gitBranchReader` (test hook for the branch reader) and `home` (the acco
 | [`src/git-branch.ts`](src/git-branch.ts) | `git branch --show-current` reader |
 | [`src/scope.ts`](src/scope.ts) | Pure path extraction, workspace containment, credential list, role write scopes, allow / deny / ask |
 | [`src/enforce.ts`](src/enforce.ts) | Grant store, the workspace and role-scope questions, and the decided event |
+| [`src/shell-policy.ts`](src/shell-policy.ts) | Pure shell rules: deny `git stash` and destructive commands, ask for `git commit` / `git push` |
 | [`src/events.ts`](src/events.ts) | `specdev/scope-requested` / `specdev/scope-decided` payloads |
 
 </details>
@@ -78,6 +81,40 @@ Config: `gitBranchReader` (test hook for the branch reader) and `home` (the acco
 
 <a id="model-experience"></a>
 ## Model Experience
+
+### System prompt policy
+
+#### What the model sees
+
+While a SpecDev workflow is active in the session workspace, one `specdev:policy` system-prompt section states the durable authority and the rules every dispatched role shares:
+
+##### specdev:policy
+
+```markdown
+SpecDev workflow is active. `.specdev/specs/<slug>/workflow.jsonl` is the source of truth and `current-status.json` is a generated mirror; never hand-edit either. Human Gates are applied only through the UI, and role dispatch must respect gate order, role write scopes, and the `impl-<current_phase>` branch. Do not start SpecDev for ordinary tasks; use `/status` to inspect the workflow and escalate to the user when blocked.
+```
+
+#### Token effect
+
+Fixed text cost in each request of a session whose workspace has an active workflow; an inactive workspace adds nothing.
+
+#### KV Cache effect
+
+Prefix-stable while the workflow stays active; the section text never varies within a session, so it does not invalidate cache reuse.
+
+### Shell commands
+
+#### What the model sees
+
+`git commit` and `git push` block on an approval card; an approved command runs and returns its own result, and a refusal returns an error block naming the rule. `git stash` and destructive commands return a denial error instead of running. These rules apply wherever this guard is mounted, whether or not a workflow is active.
+
+#### Token effect
+
+One error block per denied call; an approved command costs nothing extra.
+
+#### KV Cache effect
+
+Independent of the model cache: the question is answered out of band, so the conversation prefix is unchanged.
 
 ### Gate denials
 
@@ -113,7 +150,7 @@ Independent of the model cache: the question is answered out of band, so the con
 
 - **Branch create/merge** — this package only denies wrong/missing branches; `ensurePhaseBranch` / HG-3 git merge is Phase 4.
 - **Artifact prechecks** — the Cursor gate checked `repo-exploration.md` / `implementation.md` / `review.md`; the current matrix covers stage/gates/branch/loop, and deeper artifact checks land with the guard scope work.
-- **Invisible paths** — a path assembled inside a script, an interpreter one-liner, or a shell variable never appears on the command line the guard reads; writes stay governed by the sandbox, and prompts state the limit.
+- **Invisible paths and commands** — a path or command assembled inside a script, an interpreter one-liner, or an alias never appears on the command line the guard reads; writes stay governed by the sandbox and commits stay visible to the user through the resulting worktree, and prompts state the limit.
 - **Grants are runtime state** — a directory or session grant lives in memory, ends with the runtime process, and has no revoke path in a UI yet.
 - **Orchestrator writes** — the root agent's write restriction stays with the orchestrator preset (AC-22); this package's role matrix governs dispatched roles, and skips an agent whose role carries no write scope.
 - **Credential list is fixed** — the `~/.ssh`, `~/.aws`, and `~/.config/gh` directories and `.env*` names are a security invariant rather than configuration; the list grows only by changing this package.
@@ -124,6 +161,6 @@ Independent of the model cache: the question is answered out of band, so the con
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-**Runtime invariant:** No companion is published. This package only decides deny vs allow vs ask for tool calls and role dispatch; gate order, artifact preconditions, and the durable append belong to the `specdev` runtime, and scope grants are session-tree memory rather than durable state. `tests/specdev-guard.spec.ts` covers each gate denial, `tests/scope.spec.ts` the pure path extraction, classification, and role write scopes, `tests/scope-enforce.spec.ts` the asked, granted, refused, cancelled, fail-closed, and role-scope paths, and `tests/loader-composition.spec.ts` the same checks booted from a `cordis.yml` through the real Loader.
+**Runtime invariant:** No companion is published. This package only decides deny vs allow vs ask for tool calls and role dispatch; gate order, artifact preconditions, and the durable append belong to the `specdev` runtime, and scope grants are session-tree memory rather than durable state. `tests/specdev-guard.spec.ts` covers each gate denial, `tests/shell-policy.spec.ts` the pure shell rules, `tests/scope.spec.ts` the pure path extraction, classification, and role write scopes, `tests/scope-enforce.spec.ts` the asked, granted, refused, cancelled, fail-closed, and role-scope paths, and `tests/loader-composition.spec.ts` the same checks booted from a `cordis.yml` through the real Loader.
 
 </details>

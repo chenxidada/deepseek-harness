@@ -1,5 +1,5 @@
 ---
-description: "SpecDev 失败关闭式守卫：以 Cordis pre-step / pre-execute / tools.guard 强制 Human Gate、角色调度、git 分支、状态镜像与工作区范围。"
+description: "SpecDev 失败关闭式守卫：以 Cordis pre-step / pre-execute / tools.guard 强制 Human Gate、角色调度、git 分支、状态镜像、工作区范围与 shell 命令策略。"
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-specdev-guard` 在 Cordis 内原生强制 SpecDev 门禁：包装 `ctx.specdev.dispatchRole`、在 `agent/pre-step` 拒绝未就绪角色、拒绝写入由工作流日志生成的 `current-status.json` 镜像，并以工作流日志为 Human Gate 权威，因此手改镜像只会被报为偏离，绝不被当作通过。第二个 `tools/pre-execute` 检查会通过 `ctx.userQuestions`，就路径超出会话工作区或调用角色写入范围的调用向用户提问；凭据类路径直接拒绝，不提供申请。每次申请与决定都以 `specdev/scope-requested` / `specdev/scope-decided` 追加到拥有该调用树的会话。
+`dsh-specdev-guard` 在 Cordis 内原生强制 SpecDev 门禁：包装 `ctx.specdev.dispatchRole`、在 `agent/pre-step` 拒绝未就绪角色、拒绝写入由工作流日志生成的 `current-status.json` 镜像，并以工作流日志为 Human Gate 权威，因此手改镜像只会被报为偏离，绝不被当作通过。第二个 `tools/pre-execute` 检查会通过 `ctx.userQuestions`，在路径越出会话工作区或调用角色写入范围前向用户提问，并直接拒绝凭据类路径。它同样读取 shell 命令行：`git commit` 与 `git push` 需要批准，`git stash` 与危险命令直接拒绝。
 
 ## 目录
 
@@ -41,6 +41,8 @@ kind: "package-reference"
 | 工作区范围 | 任何路径越出工作区的调用先申请；没有可交互会话可应答时直接拒绝 |
 | 角色写入范围 | `write` / `edit` / `str_replace_editor` 写出调用角色的范围时先申请（implementer：整个工作区；分析 / 探索 / 审查 / 验证：自己的工作流目录与 `test-scripts/`；wiki：`docs/wiki/` 与 `.wiki-work/`） |
 | 凭据路径 | 拒绝 `~/.ssh`、`~/.aws`、`~/.config/gh` 下的读写与 `.env*` 文件，不提供申请 |
+| Git 提交 / 推送 | `bash` / `pwsh` 上的 `git commit` 与 `git push` 先申请，由用户决定每次提交与推送 |
+| 危险命令 | `bash` / `pwsh` 上的 `git stash`、`rm -rf /` 与经典 fork bomb 直接拒绝；其余命令继续走范围检查 |
 | 已批范围 | 目录或会话级批准在运行时持有期间覆盖同一会话树中的后续调用 |
 
 配置项：`gitBranchReader`（分支读取器的测试钩子）与 `home`（范围判定使用的账号主目录，默认取宿主主目录）。
@@ -61,6 +63,7 @@ kind: "package-reference"
 | [`src/git-branch.ts`](src/git-branch.ts) | `git branch --show-current` 读取 |
 | [`src/scope.ts`](src/scope.ts) | 纯函数：路径提取、工作区包含判定、凭据清单、角色写入范围、放行 / 拒绝 / 申请 |
 | [`src/enforce.ts`](src/enforce.ts) | 范围授权表、工作区与角色范围提问、决定事件 |
+| [`src/shell-policy.ts`](src/shell-policy.ts) | 纯函数 shell 规则：拒绝 `git stash` 与危险命令，`git commit` / `git push` 先申请 |
 | [`src/events.ts`](src/events.ts) | `specdev/scope-requested` / `specdev/scope-decided` 载荷 |
 
 </details>
@@ -78,6 +81,40 @@ kind: "package-reference"
 
 <a id="model-experience"></a>
 ## 模型体验
+
+### System prompt 策略
+
+#### 模型看到什么
+
+会话工作区存在活跃 SpecDev 工作流时，有一个 `specdev:policy` system prompt 段落说明持久权威与所有派发角色共享的规则：
+
+##### specdev:policy
+
+```markdown
+SpecDev workflow is active. `.specdev/specs/<slug>/workflow.jsonl` is the source of truth and `current-status.json` is a generated mirror; never hand-edit either. Human Gates are applied only through the UI, and role dispatch must respect gate order, role write scopes, and the `impl-<current_phase>` branch. Do not start SpecDev for ordinary tasks; use `/status` to inspect the workflow and escalate to the user when blocked.
+```
+
+#### Token 影响
+
+工作区有活跃工作流的会话中，每个请求承担固定文本开销；工作区没有活跃工作流时不增加任何内容。
+
+#### KV Cache 影响
+
+工作流活跃期间前缀稳定：段落文本在会话内恒定，不会使已有缓存失效。
+
+### Shell 命令
+
+#### 模型看到什么
+
+`git commit` 与 `git push` 阻塞在批准卡片上；获批的命令照常执行并返回自身结果，拒绝则返回写明规则的错误块。`git stash` 与危险命令不执行，直接返回拒绝错误。这些规则在挂载本包的组合中始终生效，与工作流是否活跃无关。
+
+#### Token 影响
+
+每次被拒绝的调用以一个错误块代替工具输出；获批命令不额外消耗 token。
+
+#### KV Cache 影响
+
+与模型缓存无关：提问在带外完成，对话前缀不变。
 
 ### Gate 拒绝
 
@@ -113,7 +150,7 @@ kind: "package-reference"
 
 - **分支创建/合并** — 本包只拒绝错误/缺失分支；`ensurePhaseBranch` / HG-3 git 合并属于 Phase 4。
 - **产物预检** — Cursor gate 会检查 `repo-exploration.md` / `implementation.md` / `review.md`；当前矩阵覆盖阶段/gates/分支/回炉，更深产物校验随守卫范围工作落地。
-- **不可见路径** — 在脚本、解释器一行式或 shell 变量中拼出的路径不会出现在守卫读取的命令行上；写仍由沙盒兜底，提示词也声明了这一限制。
+- **不可见路径与命令** — 在脚本、解释器一行式或别名中拼出的路径或命令不会出现在守卫读取的命令行上；写仍由沙盒兜底，提交在结果工作区中对用户可见，提示词也声明了这一限制。
 - **范围授权是运行时状态** — 目录或会话级批准只存在于内存，随运行时进程结束失效，UI 目前没有撤销入口。
 - **Orchestrator 的写入** — 根 agent 的写限制仍由 orchestrator preset 执行（AC-22）；本包的角色矩阵管辖派发出去的角色，角色没有写入范围时跳过。
 - **凭据清单是固定的** — `~/.ssh`、`~/.aws`、`~/.config/gh` 目录与 `.env*` 名称是安全不变量而不是配置项，扩充只能改本包。
@@ -124,6 +161,6 @@ kind: "package-reference"
 <details>
 <summary>维护者工作上下文 — 点击展开</summary>
 
-**运行时不变式：** 不发布伴生入口。本包只对工具调用与角色调度做拒绝/放行/申请判定；门禁次序、产物前置条件与持久追加属于 `specdev` 运行时，范围授权是会话树内存而非持久状态。`tests/specdev-guard.spec.ts` 覆盖各条 gate 拒绝路径，`tests/scope.spec.ts` 覆盖纯路径提取、判定与角色写入范围，`tests/scope-enforce.spec.ts` 覆盖申请、批准、拒绝、取消、失败关闭与角色范围路径，`tests/loader-composition.spec.ts` 覆盖同一批检查经真实 Loader 从 `cordis.yml` 启动的情形。
+**运行时不变式：** 不发布伴生入口。本包只对工具调用与角色调度做拒绝/放行/申请判定；门禁次序、产物前置条件与持久追加属于 `specdev` 运行时，范围授权是会话树内存而非持久状态。`tests/specdev-guard.spec.ts` 覆盖各条 gate 拒绝路径，`tests/shell-policy.spec.ts` 覆盖纯 shell 规则，`tests/scope.spec.ts` 覆盖纯路径提取、判定与角色写入范围，`tests/scope-enforce.spec.ts` 覆盖申请、批准、拒绝、取消、失败关闭与角色范围路径，`tests/loader-composition.spec.ts` 覆盖同一批检查经真实 Loader 从 `cordis.yml` 启动的情形。
 
 </details>
